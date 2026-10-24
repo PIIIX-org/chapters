@@ -394,8 +394,19 @@ describe('doctor', () => {
   it('links-differ: rederives the link rows from the body', async () => {
     await db.execute(sql`DELETE FROM note_links WHERE source_note_id = ${ids.unlinked}`)
     await db.execute(sql`INSERT INTO note_links (source_note_id, target_path) VALUES (${ids.unlinked}, 'nowhere')`)
-    expect((await doctor()).problems[0]!.detail).toBe('missing [checks/healthy], extra [nowhere]')
+    // Rows carry the link's body line (#558); a row written without one says so.
+    expect((await doctor()).problems[0]!.detail).toBe('missing [checks/healthy#L1], extra [nowhere (no line)]')
     await expectRepaired('unlinked', 'links-differ')
+  })
+
+  it('links-differ: one target linked twice from the same line (one stored row) is no problem', async () => {
+    // The second link starts on line 1 too but ends on line 2: `linkRows` keeps the first, and so does the check.
+    const twice = await createNote(vaultId, { path: 'checks/twice', body: 'see [[checks/healthy]] and [[checks/healthy|two\nlines]]\n' })
+    await flushProjections()
+    await flushEmbeddings()
+    expect((await doctor()).problems.filter((p) => p.noteId === twice.id)).toEqual([])
+    await softDeleteNote(vaultId, 'checks/twice')
+    await flushProjections()
   })
 
   it('checks trashed notes against .trash/<id>.md', async () => {

@@ -127,6 +127,13 @@ async function refused(tool: string, args: Args, why: RegExp): Promise<void> {
 const ids = (pages: Answer[], key: string, id: (item: Record<string, unknown>) => string = (x) => x.id as string) =>
   pages.flatMap((p) => ((p[key] as Array<Record<string, unknown>> | undefined) ?? []).map(id))
 
+/** A graph edge row (#558) as `from -> to`, also in its one-line form down the ladder. */
+const edge = (e: unknown) => {
+  if (typeof e === 'string') return e.split(' ').slice(0, 3).join(' ')
+  const row = e as { from: { path: string }; to: { path: string }; directed: boolean }
+  return `${row.from.path} ${row.directed ? '->' : '--'} ${row.to.path}`
+}
+
 const HISTORY = 'docs/history'
 const BIG = 'docs/big'
 /** ~150 KB over 2,500 numbered lines, so even the largest budget pages it. */
@@ -234,12 +241,15 @@ describe('list_trash', () => {
 })
 
 describe('browse_vault and browse_repository', () => {
-  it('browse_vault: the default answer stays within 2,000 tokens; paging lists every note once, by path', async () => {
-    const first = await page('browse_vault', { vaultId })
+  it('browse_vault: the whole vault (`recursive: true`) stays within the budget; paging lists every note once, by path', async () => {
+    // Every field (#425): the default `{path, title}` items of 48 notes fit one page.
+    const args = { vaultId, recursive: true, fields: ['id', 'title', 'type', 'name', 'tags', 'updatedAt'] }
+    const first = await page('browse_vault', args)
     expect(first.truncated).not.toBe(false)
-    const pages = await walk('browse_vault', { vaultId, budget_tokens: LIST_PAGE })
+    const pages = await walk('browse_vault', { ...args, budget_tokens: LIST_PAGE })
+    expect(pages.length).toBeGreaterThan(1)
     const paths = pages.flatMap((p) => (p.notes as Array<{ path: string }>).map((n) => n.path))
-    const all = await page('browse_vault', { vaultId, budget_tokens: 25_000 })
+    const all = await page('browse_vault', { ...args, budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
     const allPaths = (all.notes as Array<{ path: string }>).map((n) => n.path)
     expect(allPaths).toHaveLength(48)
@@ -250,13 +260,13 @@ describe('browse_vault and browse_repository', () => {
   it('browse_vault of a directory pages subdirectories, notes and the index text; a cursor of the whole-vault view is refused', async () => {
     const all = await page('browse_vault', { vaultId, path: 'docs', budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
-    const pages = await walk('browse_vault', { vaultId, path: 'docs', budget_tokens: LIST_PAGE })
+    const pages = await walk('browse_vault', { vaultId, path: 'docs', budget_tokens: 256 })
     expect(pages.length).toBeGreaterThan(2)
     expect(pages.flatMap((p) => p.subdirectories as unknown[])).toEqual(all.subdirectories)
     expect(ids(pages, 'notes', (n) => n.path as string)).toEqual(ids([all], 'notes', (n) => n.path as string))
     expect(pages.map((p) => p.indexContent ?? '').join('')).toBe(all.indexContent)
-    const whole = await page('browse_vault', { vaultId, budget_tokens: LIST_PAGE })
-    await refused('browse_vault', { vaultId, path: 'docs', budget_tokens: LIST_PAGE, cursor: cursorOf(whole) }, /invalid cursor/)
+    const whole = await page('browse_vault', { vaultId, recursive: true, budget_tokens: 256 })
+    await refused('browse_vault', { vaultId, path: 'docs', budget_tokens: 256, cursor: cursorOf(whole) }, /invalid cursor/)
   })
 
   it('browse_repository is {files, truncated}; paging lists every file once', async () => {
@@ -292,7 +302,7 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     await updateNote(vaultId, BIG, { body })
   })
 
-  it('read_note records the last read (#864) only when it returned the whole body', async () => {
+  it('read_note records the rev it reports as the last read (#864, #961), on a paged read too', async () => {
     const recorded = async (path: string) => {
       const [read] = await db
         .select({ rev: noteReads.rev })
@@ -301,8 +311,9 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
         .where(and(eq(noteReads.connectionId, agentConnectionId), eq(notes.vaultId, vaultId), eq(notes.path, path)))
       return read
     }
-    await page('read_note', { vaultId, path: BIG })
-    expect(await recorded(BIG)).toBeUndefined()
+    const paged = await page('read_note', { vaultId, path: BIG })
+    expect(paged.truncated).not.toBe(false)
+    expect(await recorded(BIG)).toMatchObject({ rev: paged.rev })
     const small = await page('read_note', { vaultId, path: 'docs/small' })
     expect(small.truncated).toBe(false)
     expect(small.body).toBe('A small note.\n')
@@ -330,7 +341,7 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     }
   })
 
-  it('a paged read drops an older base: read, a person grows the note, paged read, whole-body edit is applied', async () => {
+  it('a paged read replaces an older base: read, a person grows the note, paged read, whole-body edit is not conflicted', async () => {
     const path = 'docs/grows'
     await createNote(vaultId, { path, body: 'short\n' })
     const first = await page('read_note', { vaultId, path })
@@ -341,11 +352,33 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     expect(pages.length).toBeGreaterThan(1)
     const body = pages.map((p) => p.body).join('')
     expect(body).toBe(grown)
-    const [note] = await db.select({ id: notes.id }).from(notes).where(and(eq(notes.vaultId, vaultId), eq(notes.path, path)))
-    expect(await db.select().from(noteReads).where(and(eq(noteReads.connectionId, agentConnectionId), eq(noteReads.noteId, note!.id)))).toEqual([])
     const edit = await call('edit_note', { vaultId, path, body: `${body}agent line\n` })
     expect(edit.isError, edit.text.slice(0, 300)).toBe(false)
-    expect(JSON.parse(edit.text)).toMatchObject({ status: 'applied', body: `${grown}agent line\n` })
+    const result = JSON.parse(edit.text) as { status: string; body: string; baseRev?: number }
+    expect(['applied', 'merged']).toContain(result.status)
+    expect(result).toMatchObject({ body: `${grown}agent line\n`, baseRev: pages[0]!.rev })
+  })
+
+  it('a paged read is a merge base (#961): paged read, a person edits line 5, a whole-body edit keeps both edits', async () => {
+    const path = 'docs/sixty'
+    const lines = Array.from({ length: 60 }, (_, i) => `line ${i + 1} of the note, with enough words to fill a page quickly`)
+    await createNote(vaultId, { path, body: `${lines.join('\n')}\n` })
+    const pages = await walk('read_note', { vaultId, path, budget_tokens: 256 })
+    expect(pages.length).toBeGreaterThan(1)
+    const read = pages.map((p) => p.body).join('')
+    expect(read).toBe(`${lines.join('\n')}\n`)
+    // A person edits line 5 after the agent's read.
+    const theirs = [...lines]
+    theirs[4] = 'line 5 rewritten by a person'
+    await updateNote(vaultId, path, { body: `${theirs.join('\n')}\n` }, { type: 'user', id: ownerId })
+    // The agent sends its whole body with its own change at line 50, without base_rev.
+    const mine = [...lines]
+    mine[49] = 'line 50 rewritten by the agent'
+    const edit = await call('edit_note', { vaultId, path, body: `${mine.join('\n')}\n` })
+    expect(edit.isError, edit.text.slice(0, 300)).toBe(false)
+    const both = [...theirs]
+    both[49] = 'line 50 rewritten by the agent'
+    expect(JSON.parse(edit.text)).toMatchObject({ status: 'merged', baseRev: pages[0]!.rev, body: `${both.join('\n')}\n` })
   })
 
   it('get_revision pages the revision body the same way', async () => {
@@ -386,16 +419,16 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
 
 describe('graph, find_graph_path and find_symbols page a stable ranking', () => {
   it('graph: paging shows every node and edge once; a cursor for other filters is refused', async () => {
-    const all = await page('graph', { vaultId: graphVaultId, budget_tokens: 25_000 })
+    const all = await page('graph', { vaultId: graphVaultId, aggregate: 'none', budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
     // The fixture: the 9 chain links and nothing else (no semantic or structural edge).
     expect(ids([all], 'edges', (e) => e.kind as string)).toEqual(Array.from({ length: 9 }, () => 'extracted'))
-    const pages = await walk('graph', { vaultId: graphVaultId, budget_tokens: LIST_PAGE })
+    const pages = await walk('graph', { vaultId: graphVaultId, aggregate: 'none', budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(1)
     expect(ids(pages, 'nodes').sort()).toEqual(ids([all], 'nodes').sort())
-    const edge = (e: Record<string, unknown>) => `${e.source}>${e.target}:${e.kind}`
     expect(ids(pages, 'edges', edge).sort()).toEqual(ids([all], 'edges', edge).sort())
-    await refused('graph', { vaultId: graphVaultId, types: ['c1'], budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
+    expect(new Set(ids([all], 'edges', edge)).size).toBe(9)
+    await refused('graph', { vaultId: graphVaultId, aggregate: 'none', types: ['c1'], budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
   })
 
   it('find_graph_path: a path cut by the budget continues with the cursor', async () => {
@@ -405,7 +438,8 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     const pages = await walk('find_graph_path', { ...args, budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(1)
     expect(ids(pages, 'nodes')).toEqual(ids([all], 'nodes'))
-    expect(ids(pages, 'edges', (e) => `${e.source}>${e.target}`)).toEqual(ids([all], 'edges', (e) => `${e.source}>${e.target}`))
+    expect(ids(pages, 'edges', edge)).toEqual(ids([all], 'edges', edge))
+    expect(ids([all], 'edges', edge)).toEqual(Array.from({ length: 9 }, (_, i) => `c${i}/link -> c${i + 1}/link`))
   })
 
   it('find_symbols is {results, truncated}: ">limit" from limit+1, paging keeps the ranking, other queries refuse the cursor', async () => {

@@ -223,7 +223,7 @@ describe('find_symbols steps down when whole hits leave too little', () => {
 
 describe('browse_vault steps down to counts, then to the total', () => {
   it('locations: paths only, as long as 5 of them fit', async () => {
-    const json = await page('browse_vault', { vaultId: longPathsVault, budget_tokens: 500 })
+    const json = await page('browse_vault', { vaultId: longPathsVault, recursive: true, budget_tokens: 500 })
     expect(truncatedOf(json).level).toBe('locations')
     const notes = json.notes as string[]
     expect(notes.length).toBeGreaterThanOrEqual(5)
@@ -231,7 +231,7 @@ describe('browse_vault steps down to counts, then to the total', () => {
   })
 
   it('counts: fewer than 5 paths fit, so the notes are counted per folder; no cursor, everything counted as dropped', async () => {
-    const json = await page('browse_vault', { vaultId: longPathsVault, budget_tokens: 256 })
+    const json = await page('browse_vault', { vaultId: longPathsVault, recursive: true, budget_tokens: 256 })
     const t = truncatedOf(json)
     expect(t.level).toBe('counts')
     expect(json.notes).toEqual({ alpha: 15, beta: 15 })
@@ -241,7 +241,7 @@ describe('browse_vault steps down to counts, then to the total', () => {
   })
 
   it('total: when not even the counts per folder fit, the answer is the number', async () => {
-    const json = await page('browse_vault', { vaultId: manyFoldersVault, budget_tokens: 256 })
+    const json = await page('browse_vault', { vaultId: manyFoldersVault, recursive: true, budget_tokens: 256 })
     const t = truncatedOf(json)
     expect(t.level).toBe('total')
     expect(json.notes).toBe(30)
@@ -263,9 +263,9 @@ describe('a budget sweep steps down in order', () => {
     const budgets = [25_000, 8_000, 4_000, 2_000, 1_500, 1_000, 700, 500, 400, 300, 256]
     const calls: Array<[string, Args]> = [
       ['find_symbols', { repositoryId: repoId, query: 'ladderStep', limit: 30 }],
-      ['browse_vault', { vaultId: longPathsVault }],
-      ['browse_vault', { vaultId: manyFoldersVault }],
-      ['graph', { vaultId: graphVault }],
+      ['browse_vault', { vaultId: longPathsVault, recursive: true }],
+      ['browse_vault', { vaultId: manyFoldersVault, recursive: true }],
+      ['graph', { vaultId: graphVault, aggregate: 'none' }],
     ]
     for (const [tool, args] of calls) {
       const levels: string[] = []
@@ -280,10 +280,10 @@ describe('a budget sweep steps down in order', () => {
 
 describe('graph and reads', () => {
   it('graph: a 256-token page steps below full; paging still shows every node and edge once', async () => {
-    const all = await page('graph', { vaultId: graphVault, budget_tokens: 25_000 })
+    const all = await page('graph', { vaultId: graphVault, aggregate: 'none', budget_tokens: 25_000 })
     expect(levelOf(all)).toBe('full')
     const nodeIds = (all.nodes as Array<{ id: string }>).map((n) => n.id).sort()
-    const pages = await walk('graph', { vaultId: graphVault, budget_tokens: 256 })
+    const pages = await walk('graph', { vaultId: graphVault, aggregate: 'none', budget_tokens: 256 })
     expect(pages.some((p) => levelOf(p) === 'no_context' || levelOf(p) === 'locations')).toBe(true)
     for (const p of pages) {
       for (const n of p.nodes as Array<Record<string, unknown>>) {

@@ -1142,11 +1142,11 @@ const repoShares = [
 ]
 
 const mcpConnections = [
-  { id: uuid(), userId: ME.id, name: 'Claude Desktop', scope: 'account', vaultId: null, repositoryId: null, access: 'admin', allowedTools: null, createdAt: ago(33), lastUsedAt: ago(0, 1), expiresAt: null, revokedAt: null },
-  { id: uuid(), userId: ME.id, name: 'Research agent', scope: 'vault', vaultId: RESEARCH.id, repositoryId: null, access: 'read', allowedTools: ['read_note', 'search', 'browse_vault'], createdAt: ago(14), lastUsedAt: ago(1), expiresAt: ago(-76), revokedAt: null },
-  { id: uuid(), userId: ME.id, name: 'Code indexer', scope: 'repository', vaultId: null, repositoryId: CHAPTERS_REPO.id, access: 'write', allowedTools: null, createdAt: ago(9), lastUsedAt: ago(0, 3), expiresAt: null, revokedAt: null },
-  { id: uuid(), userId: ME.id, name: 'Old laptop', scope: 'account', vaultId: null, repositoryId: null, access: 'admin', allowedTools: null, createdAt: ago(80), lastUsedAt: ago(41), expiresAt: null, revokedAt: ago(40) },
-  { id: uuid(), userId: ADA.id, name: 'Ada — Cursor', scope: 'vault', vaultId: PRODUCT.id, repositoryId: null, access: 'write', allowedTools: null, createdAt: ago(5), lastUsedAt: ago(0, 6), expiresAt: null, revokedAt: null },
+  { id: uuid(), userId: ME.id, name: 'Claude Desktop', scope: 'account', vaultId: null, repositoryId: null, access: 'admin', profile: 'admin', allowedTools: null, createdAt: ago(33), lastUsedAt: ago(0, 1), expiresAt: null, revokedAt: null },
+  { id: uuid(), userId: ME.id, name: 'Research agent', scope: 'vault', vaultId: RESEARCH.id, repositoryId: null, access: 'read', profile: 'reader', allowedTools: ['read_note', 'search', 'browse_vault'], createdAt: ago(14), lastUsedAt: ago(1), expiresAt: ago(-76), revokedAt: null },
+  { id: uuid(), userId: ME.id, name: 'Code indexer', scope: 'repository', vaultId: null, repositoryId: CHAPTERS_REPO.id, access: 'write', profile: 'writer', allowedTools: null, createdAt: ago(9), lastUsedAt: ago(0, 3), expiresAt: null, revokedAt: null },
+  { id: uuid(), userId: ME.id, name: 'Old laptop', scope: 'account', vaultId: null, repositoryId: null, access: 'admin', profile: 'admin', allowedTools: null, createdAt: ago(80), lastUsedAt: ago(41), expiresAt: null, revokedAt: ago(40) },
+  { id: uuid(), userId: ADA.id, name: 'Ada — Cursor', scope: 'vault', vaultId: PRODUCT.id, repositoryId: null, access: 'write', profile: 'writer', allowedTools: null, createdAt: ago(5), lastUsedAt: ago(0, 6), expiresAt: null, revokedAt: null },
 ]
 
 const notifications = [
@@ -2043,9 +2043,15 @@ put('/repositories/:id/graph-preference', ({ params, body }) => {
 
 // --- mcp connections --------------------------------------------------------
 // Mirrors listMcpTools() on the server: [name, scope, capability], plus the
-// permission on a pinned vault or repository each tool needs (pinPermission).
+// permission on a pinned vault or repository each tool needs (pinPermission)
+// and the smallest tool profile it is in (#428), and its MCP annotations (#434:
+// readOnlyHint on reads, destructiveHint and idempotentHint on writes).
 const MCP_PIN_OWNER = ['update_vault', 'delete_vault', 'list_vault_shares', 'share_vault', 'revoke_vault_share', 'purge_note', 'purge_revision', 'update_repository', 'delete_repository', 'list_repository_shares', 'share_repository', 'revoke_repository_share']
 const MCP_PIN_EDIT = ['create_note', 'edit_note', 'rename_note', 'delete_note', 'list_trash', 'restore_note', 'note_history', 'get_revision', 'revert_note', 'export_vault', 'save_graph_perspective', 'delete_graph_perspective']
+const MCP_PROFILE_READER = ['list_vaults', 'list_repositories', 'browse_vault', 'browse_repository', 'search', 'read_note', 'read_file', 'find_symbols', 'graph', 'find_graph_path']
+const MCP_PROFILE_WRITER = ['create_note', 'edit_note', 'append_note']
+const MCP_DESTRUCTIVE = ['delete_graph_perspective', 'delete_note', 'delete_repository', 'delete_team', 'delete_vault', 'purge_note', 'purge_revision', 'purge_vault', 'remove_team_member', 'revoke_repository_share', 'revoke_vault_share', 'update_vault_preferences']
+const MCP_IDEMPOTENT = ['delete_graph_perspective', 'delete_repository', 'delete_team', 'delete_vault', 'mark_notification_read', 'purge_note', 'purge_revision', 'purge_vault', 'remove_team_member', 'restore_vault', 'revoke_repository_share', 'revoke_vault_share', 'set_repository_graph_preference', 'set_vault_graph_preference', 'share_repository', 'update_repository', 'update_vault', 'update_vault_preferences']
 const MCP_TOOLS = [
   ['list_vaults', 'account', 'read'], ['create_vault', 'account', 'write'], ['browse_vault', 'vault', 'read'],
   ['update_vault', 'vault', 'admin'], ['get_vault_graph_preference', 'vault', 'read'],
@@ -2078,6 +2084,11 @@ const MCP_TOOLS = [
   scope,
   capability,
   pinPermission: MCP_PIN_OWNER.includes(name) ? 'owner' : MCP_PIN_EDIT.includes(name) ? 'edit' : 'read',
+  profile: MCP_PROFILE_READER.includes(name) ? 'reader' : MCP_PROFILE_WRITER.includes(name) ? 'writer' : 'admin',
+  annotations:
+    capability === 'read'
+      ? { readOnlyHint: true }
+      : { destructiveHint: MCP_DESTRUCTIVE.includes(name), ...(MCP_IDEMPOTENT.includes(name) ? { idempotentHint: true } : {}) },
 }))
 get('/mcp-connections', () => mcpConnections.filter((c) => c.userId === ME.id).map(publicMcp))
 get('/mcp-connections/tools', () => MCP_TOOLS)
@@ -2087,10 +2098,12 @@ post('/mcp-connections', ({ body }) => {
   if (body.scope === 'repository') repoOr404(body.repositoryId)
   const access = body.access ?? (body.scope === 'account' ? 'admin' : 'write')
   if (!['read', 'write', 'admin'].includes(access)) throw bad('access must be read, write or admin')
+  const profile = body.profile ?? 'admin'
+  if (!['reader', 'writer', 'admin'].includes(profile)) throw bad('profile must be reader, writer or admin')
   const unknown = (body.allowedTools ?? []).filter((t) => !MCP_TOOLS.some((x) => x.name === t))
   if (unknown.length) throw bad(`unknown MCP tools: ${unknown.join(', ')}`)
   if (body.expiresAt && new Date(body.expiresAt) <= new Date()) throw bad('expiresAt must be in the future')
-  const c = { id: randomUUID(), userId: ME.id, name: body.name.trim(), scope: body.scope, vaultId: body.scope === 'vault' ? body.vaultId : null, repositoryId: body.scope === 'repository' ? body.repositoryId : null, access, allowedTools: body.allowedTools ?? null, createdAt: now(), lastUsedAt: null, expiresAt: body.expiresAt ?? null, revokedAt: null }
+  const c = { id: randomUUID(), userId: ME.id, name: body.name.trim(), scope: body.scope, vaultId: body.scope === 'vault' ? body.vaultId : null, repositoryId: body.scope === 'repository' ? body.repositoryId : null, access, profile, allowedTools: body.allowedTools ?? null, createdAt: now(), lastUsedAt: null, expiresAt: body.expiresAt ?? null, revokedAt: null }
   mcpConnections.push(c)
   return { ...publicMcp(c), token: `mcp_${randomBytes(32).toString('base64url')}` }
 })
@@ -2208,7 +2221,7 @@ del('/admin/shares/:id', ({ params }) => {
   shares.splice(i, 1)
   return { status: 'revoked' }
 })
-get('/admin/mcp-connections', () => (requireAdmin(), mcpConnections.map((c) => ({ id: c.id, name: c.name, scope: c.scope, userEmail: emailOf(c.userId), vaultId: c.vaultId, repositoryId: c.repositoryId, lastUsedAt: c.lastUsedAt, revokedAt: c.revokedAt, createdAt: c.createdAt }))))
+get('/admin/mcp-connections', () => (requireAdmin(), mcpConnections.map((c) => ({ id: c.id, name: c.name, scope: c.scope, profile: c.profile, userEmail: emailOf(c.userId), vaultId: c.vaultId, repositoryId: c.repositoryId, lastUsedAt: c.lastUsedAt, revokedAt: c.revokedAt, createdAt: c.createdAt }))))
 post('/admin/mcp-connections/:id/revoke', ({ params }) => {
   requireAdmin()
   const c = mcpConnections.find((x) => x.id === params.id)

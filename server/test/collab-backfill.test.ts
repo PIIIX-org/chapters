@@ -322,8 +322,15 @@ describe('roll-forward after a code-only rollback (§9)', () => {
       texts.push(`${texts.at(-1)!}Line ${i}.\n`)
       await updateNote(vaultId, note.path, { body: texts.at(-1)! })
     }
-    const compacted = await compactNoteRevisions(note.id)
-    expect(compacted.examined).toBeGreaterThan(0)
+    // Writes 25 and 50 queued `compact_revisions` jobs; when the worker's run covers every revision, a direct
+    // run examines nothing (#962). Drain the worker, then run once more: between them the history is compacted,
+    // the durable mark is set, and nothing is left to examine.
+    await flushRevisionCompaction()
+    await compactNoteRevisions(note.id)
+    const [mark] = (await db.execute(sql`
+      SELECT examined_through::int AS through FROM note_revision_compaction WHERE note_id = ${note.id}`)) as unknown as Array<{ through: number }>
+    expect(mark?.through).toBeGreaterThan(0)
+    expect((await compactNoteRevisions(note.id)).examined).toBe(0)
     const [deltas] = (await db.execute(sql`
       SELECT count(*)::int AS n FROM note_revisions WHERE note_id = ${note.id} AND body_delta IS NOT NULL`)) as unknown as Array<{ n: number }>
     expect(deltas!.n).toBeGreaterThan(0)

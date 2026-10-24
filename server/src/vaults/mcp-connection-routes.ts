@@ -4,7 +4,7 @@ import { db } from '../db/client.js'
 import { mcpConnections, users } from '../db/schema.js'
 import { generateToken, hashToken } from '../auth/tokens.js'
 import { logSecurityEvent } from '../auth/security-events.js'
-import { ACCESS_RANK, listMcpTools, type ToolCapability } from '../mcp/server.js'
+import { ACCESS_RANK, listMcpTools, type ToolCapability, type ToolProfile } from '../mcp/server.js'
 import { resolveAccess, type Access } from './permissions.js'
 import { resolveRepositoryAccess, type RepoAccess } from '../repositories/permissions.js'
 
@@ -30,6 +30,7 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
       vaultId?: string
       repositoryId?: string
       access?: ToolCapability
+      profile?: ToolProfile
       allowedTools?: string[]
       expiresAt?: string
     }
@@ -46,6 +47,7 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
             vaultId: { type: 'string', format: 'uuid' },
             repositoryId: { type: 'string', format: 'uuid' },
             access: { enum: ['read', 'write', 'admin'] },
+            profile: { enum: ['reader', 'writer', 'admin'] },
             allowedTools: {
               type: 'array',
               minItems: 1,
@@ -64,6 +66,9 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
       // explicit level an account token keeps every tool, as before; a pinned
       // token gets `write`: no share, update, delete or purge on its pin (#549).
       let access: ToolCapability = req.body.access ?? (scope === 'account' ? 'admin' : 'write')
+      // The tool profile (#428) only narrows what the access level allows.
+      // Without one a token gets every tool, as before profiles: `admin`.
+      const profile: ToolProfile = req.body.profile ?? 'admin'
       let pinAccess: Access | RepoAccess | null = null
       if (scope === 'vault') {
         if (!vaultId) return reply.code(400).send({ error: 'vaultId required for vault scope' })
@@ -111,6 +116,7 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
           repositoryId: scope === 'repository' ? repositoryId : null,
           tokenHash: hashToken(token),
           access,
+          profile,
           allowedTools: allowedTools ?? null,
           expiresAt,
         })
@@ -119,7 +125,7 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
         type: 'mcp_connection_created',
         actorUserId: req.user!.id,
         mcpConnectionId: connection!.id,
-        detail: { scope, vaultId, repositoryId, access, allowedTools: allowedTools ?? null, expiresAt },
+        detail: { scope, vaultId, repositoryId, access, profile, allowedTools: allowedTools ?? null, expiresAt },
       })
       // The raw token is returned exactly once and stored only as a hash.
       return { ...connectionView(connection!), token }
@@ -134,7 +140,7 @@ export function mcpConnectionRoutes(app: FastifyInstance) {
     return rows.map(connectionView)
   })
 
-  // The tools a connection can be limited to, with the access level each needs.
+  // The tools a connection can be limited to, with the access level and the smallest profile each needs.
   app.get('/mcp-connections/tools', async () => listMcpTools())
 
   app.post<{ Params: { id: string } }>('/mcp-connections/:id/revoke', async (req, reply) => {
@@ -167,6 +173,7 @@ function connectionView(c: typeof mcpConnections.$inferSelect) {
     vaultId: c.vaultId,
     repositoryId: c.repositoryId,
     access: c.access,
+    profile: c.profile,
     allowedTools: c.allowedTools,
     createdAt: c.createdAt,
     lastUsedAt: c.lastUsedAt,
