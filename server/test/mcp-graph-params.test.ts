@@ -268,13 +268,13 @@ describe('graph: neighborsOf and depth (#426)', () => {
     expect(nodesOf(tagged).map((n) => n.path).sort()).toEqual(['p2/b', 'p7/t'])
   })
 
-  it('refuses an unknown node, an ambiguous path, and depth outside 1..3 or without neighborsOf', async () => {
+  it('refuses an unknown node and depth outside 1..3 or without neighborsOf; an ambiguous path lists its candidates', async () => {
     await refused({ neighborsOf: 'p9/nowhere' }, /p9\/nowhere/)
-    // The note docs/dup and the file docs/dup: both ids are named, either one works.
-    const r = await call({ neighborsOf: 'docs/dup' })
-    expect(r.isError).toBe(true)
-    expect(r.text).toContain(idOf['docs/dup']!)
-    expect(r.text).toContain(idOf['file:docs/dup']!)
+    // The note docs/dup and the file docs/dup (#447): both are candidates, either id works.
+    expect((await page({ neighborsOf: 'docs/dup' })).candidates).toEqual([
+      { path: 'docs/dup', kind: 'note', id: idOf['docs/dup'] },
+      { path: 'docs/dup', kind: 'code', id: idOf['file:docs/dup'] },
+    ].sort((a, b) => (a.id! < b.id! ? -1 : 1)))
     expect(nodesOf(await page({ neighborsOf: idOf['file:docs/dup'] })).map((n) => n.id)).toEqual([idOf['file:docs/dup']])
     await refused({ neighborsOf: 'p0/c', depth: 4 }, /depth/)
     await refused({ neighborsOf: 'p0/c', depth: 0 }, /depth/)

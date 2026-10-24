@@ -211,21 +211,31 @@ describe('find_graph_path resolves both ends (#447)', () => {
 })
 
 describe('candidates and suggestions stay in the caller’s reach (#447)', () => {
-  it('never lists another account’s nodes, even with everywhere: true', async () => {
-    for (const scope of [both(), { everywhere: true }]) {
+  it('never lists another account’s nodes as candidates or suggestions', async () => {
+    for (const scope of [both(), { vaultId }]) {
       const json = await answer('graph', { ...scope, neighborsOf: 'readme' })
-      expect(candidatesOf(json).map((c) => c.id)).toEqual([idOf['notes/readme'], idOf['file:pkg/readme.md'], idOf['docs/guides/readme']])
+      const mine = [idOf['notes/readme'], ...('repositoryId' in scope ? [idOf['file:pkg/readme.md']] : []), idOf['docs/guides/readme']]
+      expect(candidatesOf(json).map((c) => c.id)).toEqual(mine)
+      for (const id of strangerIds) expect(JSON.stringify(json)).not.toContain(id)
       // The stranger's note titled "Storage Roadmap" is not a second match.
       expect((await centerOf('Storage Roadmap', scope)).id).toBe(idOf['projects/store-plan'])
       // Only the stranger has ledger/quarterly: the refusal is a plain not-found, without suggestions.
       const { error } = await refusal('graph', { ...scope, neighborsOf: 'quarterly' })
       expect(error.code).toBe('NOT_FOUND')
       expect(error).not.toHaveProperty('suggestions')
+      expect((await refusal('find_graph_path', { ...scope, source: 'quarterly', target: 'readme' })).error).not.toHaveProperty('suggestions')
       const near = await refusal('graph', { ...scope, neighborsOf: 'concepts/stor' })
       expect(near.error.suggestions ?? []).not.toContain('concepts/store')
     }
-    const text = JSON.stringify(await answer('graph', { everywhere: true, neighborsOf: 'readme' }))
-    for (const id of strangerIds) expect(text).not.toContain(id)
+    // Another account's node id answers as an id that does not exist.
+    const missing = await call('graph', { ...both(), neighborsOf: '00000000-0000-4000-8000-000000000000' })
+    const theirs = await call('graph', { ...both(), neighborsOf: strangerIds[0]! })
+    expect(theirs.text.replace(strangerIds[0]!, '00000000-0000-4000-8000-000000000000')).toBe(missing.text)
+    expect(JSON.parse(theirs.text)).not.toHaveProperty('error.suggestions')
+    // The stranger's vault itself is the plain not-found of a missing id, byte for byte.
+    const NOT_FOUND = '{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}'
+    expect(await call('graph', { vaultId: strangerVaultId, neighborsOf: 'quarterly' })).toEqual({ isError: true, text: NOT_FOUND })
+    expect(await call('find_graph_path', { vaultId: strangerVaultId, source: 'quarterly', target: 'readme' })).toEqual({ isError: true, text: NOT_FOUND })
   })
 })
 
