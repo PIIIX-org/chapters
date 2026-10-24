@@ -62,7 +62,6 @@
     },
     {
       "test": "export-roundtrip",
-
       "check": "non-ASCII attachment name kept",
       "issue": 619
     },
