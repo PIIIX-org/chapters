@@ -50,13 +50,35 @@ export const VERIFICATION_TIERS: readonly VerificationTier[] = [
   'human-reviewed',
 ] as const
 
-export const STRUCTURED_KEYS = new Set([
-  'generated',
-  'sources',
-  'verified',
-  'usage_window',
-  'properties',
-])
+/**
+ * The most lists and mappings a frontmatter value may nest (#970): OKF lets
+ * producers nest any key (§4.1, §10 `parameters`/`executor`/`attester`); the
+ * bound keeps a hostile document from exhausting the stack in the recursive
+ * code that measures, compares and writes frontmatter.
+ */
+export const MAX_FRONTMATTER_DEPTH = 8
+
+/** Whether `value` nests at most `levels` lists or mappings; stops at the bound, so its own recursion is bounded too. */
+function nestsWithin(value: unknown, levels: number): boolean {
+  if (value === null || typeof value !== 'object') return true
+  if (levels === 0) return false
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
+    if (!nestsWithin(item, levels - 1)) return false
+  }
+  return true
+}
+
+/**
+ * Throws unless every top-level value nests at most MAX_FRONTMATTER_DEPTH
+ * lists or mappings. Runs before anything walks the whole value.
+ */
+export function assertFrontmatterDepth(frontmatter: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (!nestsWithin(value, MAX_FRONTMATTER_DEPTH)) {
+      throw new OkfValidationError(`frontmatter key "${key}" nests more than ${MAX_FRONTMATTER_DEPTH} levels of lists or mappings`)
+    }
+  }
+}
 
 const SLUG = /^[a-z0-9][a-z0-9-]*$/
 
@@ -98,7 +120,9 @@ export function withType(frontmatter: Record<string, unknown>, folder: string): 
  * row or the file is written, so it is also where a note that its own file
  * could not reproduce is refused (see `assertRoundTrips`). `type` is the
  * folder (the path's first segment); the frontmatter `type` may be any
- * non-empty string (#444).
+ * non-empty string (#444). Any top-level key may hold a scalar, a list or a
+ * mapping, nested at most MAX_FRONTMATTER_DEPTH levels (#970); the known keys
+ * below keep their shapes.
  */
 export function validateNote(
   type: string,
@@ -111,6 +135,7 @@ export function validateNote(
   if (nameSegments.length === 0 || nameSegments.some((seg) => !isSlug(seg))) {
     throw new OkfValidationError(`invalid name slug: ${name}`, 'invalid', SLUG_RULE)
   }
+  assertFrontmatterDepth(frontmatter)
   if (typeof frontmatter.type !== 'string' || frontmatter.type.trim() === '') {
     throw new OkfValidationError('frontmatter type must be a non-empty string')
   }
@@ -180,29 +205,24 @@ export function validateNote(
     }
   }
   if (frontmatter.verified !== undefined) {
-    if (
-      typeof frontmatter.verified !== 'object' ||
-      frontmatter.verified === null
-    ) {
-      throw new OkfValidationError(
-        `verified must be an object or array of objects with tier in: ${VERIFICATION_TIERS.join(', ')}`,
-      )
+    // OKF §5.2: verification events `{ by, at }`, the tier derived from `by`
+    // (§5.3), so `tier` is optional (#563). Elara's own `{ tier }` entries
+    // stay valid; an entry with neither a tier nor `by` and `at` says nothing.
+    const message = `verified must be a { by, at } object or a list of them (by an actor string, at an ISO 8601 datetime with explicit UTC/offset; optional tier in: ${VERIFICATION_TIERS.join(', ')})`
+    if (typeof frontmatter.verified !== 'object' || frontmatter.verified === null) {
+      throw new OkfValidationError(message)
     }
-    const items = Array.isArray(frontmatter.verified)
-      ? frontmatter.verified
-      : [frontmatter.verified]
+    const items: unknown[] = Array.isArray(frontmatter.verified) ? frontmatter.verified : [frontmatter.verified]
     for (const item of items) {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) throw new OkfValidationError(message)
+      const { tier, by, at } = item as Record<string, unknown>
       if (
-        typeof item !== 'object' ||
-        item === null ||
-        Array.isArray(item) ||
-        !VERIFICATION_TIERS.includes(item.tier as VerificationTier) ||
-        (item.by !== undefined && typeof item.by !== 'string') ||
-        (item.at !== undefined && !isValidIsoDateTime(item.at))
+        (tier !== undefined && !VERIFICATION_TIERS.includes(tier as VerificationTier)) ||
+        (by !== undefined && typeof by !== 'string') ||
+        (at !== undefined && !isValidIsoDateTime(at)) ||
+        (tier === undefined && (by === undefined || at === undefined))
       ) {
-        throw new OkfValidationError(
-          `verified must be an object or array of objects with valid tier (${VERIFICATION_TIERS.join(', ')})`,
-        )
+        throw new OkfValidationError(message)
       }
     }
   }
@@ -226,11 +246,6 @@ export function validateNote(
       Array.isArray(frontmatter.properties)
     ) {
       throw new OkfValidationError('properties must be an object')
-    }
-  }
-  for (const [key, value] of Object.entries(frontmatter)) {
-    if (!isValidOkfValue(value, key)) {
-      throw new OkfValidationError(`frontmatter key "${key}" must be a scalar or list of scalars`)
     }
   }
   if (typeof body !== 'string') throw new OkfValidationError('body must be a string')
@@ -258,21 +273,6 @@ function assertRoundTrips(frontmatter: Frontmatter, body: string): void {
   if (parsed.body !== body) {
     throw new OkfValidationError('note cannot be stored: its body does not survive serialization')
   }
-}
-
-export function isValidOkfValue(valueOrKey: unknown, keyOrValue?: unknown): boolean {
-  let value = valueOrKey
-  let key: string | undefined = typeof keyOrValue === 'string' ? keyOrValue : undefined
-  if (typeof valueOrKey === 'string' && keyOrValue !== undefined && typeof keyOrValue !== 'string') {
-    key = valueOrKey
-    value = keyOrValue
-  }
-  if (key !== undefined && STRUCTURED_KEYS.has(key)) {
-    return true
-  }
-  const scalar = (v: unknown) =>
-    v === null || ['string', 'number', 'boolean'].includes(typeof v)
-  return scalar(value) || (Array.isArray(value) && value.every(scalar))
 }
 
 export function serializeNote(note: OkfNote): string {

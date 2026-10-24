@@ -17,7 +17,7 @@ import { db } from '../src/db/client.js'
 import { noteRevisions, notes } from '../src/db/schema.js'
 import { restoreBackup } from '../src/export/restore.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { serializeNote } from '../src/notes/okf.js'
+import { parseNote, serializeNote } from '../src/notes/okf.js'
 import { createNote, getLiveNote, readNote, renameNote, revertNote } from '../src/notes/store.js'
 import { createActiveUser, loginCookie, uniqueEmail, wipeInstance } from './helpers.js'
 
@@ -147,7 +147,7 @@ describe('frontmatter type is free; notes.type stays the folder (#444)', () => {
     expect(await getLiveNote(vaultId, 'notes/bad-type')).toBeNull()
   })
 
-  it('imports the OKF sample bundle with no note refused for its type', async () => {
+  it('imports all 9 concepts of the OKF sample bundle (plus log), nested keys and tierless verified intact', async () => {
     const zip = new AdmZip()
     for (const f of bundleFiles()) zip.addFile(f, readFileSync(join(BUNDLE, f)))
     zip.addFile('manifest.json', Buffer.from(JSON.stringify({ name: 'acme_retail (OKF sample)', mergeable: false, shares: [] })))
@@ -165,34 +165,38 @@ describe('frontmatter type is free; notes.type stays the folder (#444)', () => {
     expect(res.statusCode).toBe(200)
     const result = res.json<{ vaultId: string; imported: number; skipped: string[] }>()
 
-    // No note is refused for its type (dev before #444 skipped all 10).
-    expect(result.skipped.filter((s) => /type/.test(s))).toEqual([])
-    // The 9 concepts become 9/9 once #563 (`verified` as the spec writes
-    // it, {by, at} without `tier`) and #970 (nested producer keys:
-    // `parameters`, `executor`, `attester`, `not`) land. Until then the rest
-    // of the bundle is refused for those reasons only; the validator reports
-    // `verified` first, so the 3 notes with nested keys show #563 today.
-    const verified = 'verified must be an object or array of objects with valid tier'
-    expect(result.skipped.map((s) => s.replace(/: .*/, '')).sort()).toEqual([
-      'computations/gross-margin-period',
-      'computations/revenue-ytd',
-      'metrics/gross-margin',
-      'metrics/gross-margin-legacy',
-      'metrics/revenue',
-      'policies/margin-standard',
-      'policies/revenue-recognition',
-      'tables/orders',
-    ])
-    for (const skip of result.skipped) expect(skip).toContain(verified)
-    expect(result.imported).toBe(2)
+    // Nothing is refused: not for its type (dev before #444 skipped all 10),
+    // not for `verified` as the spec writes it ({by, at} without `tier`,
+    // #563), not for nested producer keys (`parameters`, `executor`,
+    // `attester`, `not`, #970).
+    expect(result.skipped).toEqual([])
+    // 9 concepts plus the reserved log.md, which imports as the note `log`.
+    expect(result.imported).toBe(10)
 
     const imported = await db
       .select({ path: notes.path, type: notes.type, frontmatter: notes.frontmatter })
       .from(notes)
       .where(eq(notes.vaultId, result.vaultId))
     expect(imported.map(({ path, type, frontmatter }) => ({ path, type, okfType: (frontmatter as Record<string, unknown>).type })).sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: 'computations/gross-margin-period', type: 'computations', okfType: 'Attested Computation' },
+      { path: 'computations/revenue-ytd', type: 'computations', okfType: 'Attested Computation' },
       { path: 'log', type: 'log', okfType: 'Log' },
+      { path: 'metrics/gross-margin', type: 'metrics', okfType: 'Metric' },
+      { path: 'metrics/gross-margin-legacy', type: 'metrics', okfType: 'Metric' },
+      { path: 'metrics/revenue', type: 'metrics', okfType: 'Metric' },
+      { path: 'policies/margin-standard', type: 'policies', okfType: 'Policy' },
+      { path: 'policies/revenue-recognition', type: 'policies', okfType: 'Policy' },
       { path: 'skills/run-on-bq', type: 'skills', okfType: 'Skill' },
+      { path: 'tables/orders', type: 'tables', okfType: 'BigQuery Table' },
+    ])
+    // Every value of the bundle's frontmatter is kept (import adds `timestamp` when absent).
+    for (const { path } of imported) {
+      const source = parseNote(readFileSync(join(BUNDLE, `${path}.md`), 'utf8')).frontmatter
+      expect((await readNote(result.vaultId, path))?.frontmatter, path).toMatchObject(source)
+    }
+    expect((await readNote(result.vaultId, 'computations/gross-margin-period'))?.frontmatter.parameters).toEqual([
+      { name: 'period_start', type: 'date', required: true },
+      { name: 'period_end', type: 'date', required: true },
     ])
   })
 

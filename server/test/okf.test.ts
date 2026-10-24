@@ -40,13 +40,11 @@ describe('OKF validation', () => {
     }
   })
 
-  it('rejects malformed tags and nested values', () => {
+  it('rejects malformed tags; accepts nested values on other keys (#970)', () => {
     expect(() =>
       validateNote('a', 'b', { type: 'a', tags: 'not-array' as unknown as string[] }, ''),
     ).toThrow(OkfValidationError)
-    expect(() => validateNote('a', 'b', { type: 'a', nested: { deep: true } }, '')).toThrow(
-      'frontmatter key "nested" must be a scalar or list of scalars',
-    )
+    expect(() => validateNote('a', 'b', { type: 'a', nested: { deep: true } }, '')).not.toThrow()
   })
 
   it('validates ISO 8601 timestamps with explicit UTC/offset strictly', () => {
