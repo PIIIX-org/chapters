@@ -11,6 +11,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  smallint,
   text,
   real,
   timestamp,
@@ -551,8 +552,14 @@ export const jobs = pgTable(
     leaseUntil: timestamp('lease_until', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     doneAt: timestamp('done_at', { withTimezone: true }),
+    /** jobs/durable.ts `JOB_PRIORITY` (#453, migration 0033): 0 a write's job, 1 catch-up; claims take the lowest first. */
+    priority: smallint('priority').notNull().default(0),
   },
-  (t) => [index('jobs_pending').on(t.kind, t.createdAt).where(sql`done_at is null`)],
+  (t) => [
+    index('jobs_pending').on(t.kind, t.createdAt).where(sql`done_at is null`),
+    // claimJob's order: the next claimable job is the first index entry that passes the lease and attempts checks.
+    index('jobs_claim').on(t.kind, t.priority, t.id).where(sql`done_at is null`),
+  ],
 )
 
 /** The first result of an MCP write sent with an `idempotency_key` (#477, migration 0025), per connection and key. */

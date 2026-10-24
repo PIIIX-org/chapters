@@ -11,6 +11,7 @@ import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type Extracti
 import { resolveImportPath } from './import-resolution.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
+  JOB_PRIORITY,
   MAX_JOB_ATTEMPTS,
   catchUpLimits,
   claimJob,
@@ -21,6 +22,7 @@ import {
   jobDrainer,
   jobExists,
   onJobConflict,
+  type JobPriority,
   type JobRerun,
 } from '../jobs/durable.js'
 
@@ -106,15 +108,22 @@ async function getRepoSiblings(repositoryId: string) {
   return cached
 }
 
-/** Inserts extraction jobs for these files at their current content, in this order (a repeated id counts once). */
-export async function enqueueExtractions(fileIds: string[], rerun: JobRerun = 'succeeded'): Promise<void> {
+/**
+ * Inserts extraction jobs for these files at their current content, in this
+ * order (a repeated id counts once), at `priority` (a push's are `write`).
+ */
+export async function enqueueExtractions(
+  fileIds: string[],
+  rerun: JobRerun = 'succeeded',
+  priority: JobPriority = JOB_PRIORITY.write,
+): Promise<void> {
   if (fileIds.length === 0) return
   // A push may list one path twice; ON CONFLICT DO UPDATE refuses a key twice in one statement.
   const ids = [...new Set(fileIds)]
   await db.execute(sql`
-    INSERT INTO jobs (kind, payload, idempotency_key)
+    INSERT INTO jobs (kind, payload, idempotency_key, priority)
     SELECT ${EXTRACTION_JOB}, jsonb_build_object('fileId', f.id::text, 'repositoryId', f.repository_id::text),
-      ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}
+      ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}, ${priority}::smallint
     FROM unnest(${`{${ids.join(',')}}`}::uuid[]) WITH ORDINALITY AS u(id, ord)
     JOIN repository_files f ON f.id = u.id
     ORDER BY u.ord
@@ -222,6 +231,7 @@ export async function scheduleMissingExtractions(): Promise<number> {
     await enqueueExtractions(
       page.map((r) => r.id),
       'errored',
+      JOB_PRIORITY.catchUp,
     )
     found += page.length
     if (page.length < batchSize) break
@@ -268,31 +278,51 @@ export async function extractionFailures(
   }
 }
 
-/** The next repository to get a turn: least recently served, then oldest claimable job. */
-async function nextRepository(): Promise<string | null> {
+/** Claimable `extract` jobs (row alias `jobs`). */
+const claimable = sql`kind = ${EXTRACTION_JOB} AND done_at IS NULL AND (lease_until IS NULL OR lease_until < now())
+  AND attempts < ${MAX_JOB_ATTEMPTS}`
+
+/**
+ * The next turn: among the repositories with claimable jobs of the lowest
+ * priority present (a push's before catch-up, #453), the least recently
+ * served, then the one with the oldest such job.
+ */
+async function nextRepository(): Promise<{ repositoryId: string; priority: JobPriority } | null> {
   const rows = (await db.execute(sql`
-    SELECT payload->>'repositoryId' AS "repositoryId", min(id) AS first
+    SELECT payload->>'repositoryId' AS "repositoryId", priority, min(id) AS first
     FROM jobs
-    WHERE kind = ${EXTRACTION_JOB} AND done_at IS NULL AND (lease_until IS NULL OR lease_until < now())
-      AND attempts < ${MAX_JOB_ATTEMPTS}
-    GROUP BY 1`)) as unknown as Array<{ repositoryId: string; first: string | number }>
-  let best: { repositoryId: string; turn: number; first: number } | null = null
+    WHERE ${claimable} AND priority = (SELECT min(priority) FROM jobs WHERE ${claimable})
+    GROUP BY 1, 2`)) as unknown as Array<{ repositoryId: string; priority: JobPriority; first: string | number }>
+  let best: { repositoryId: string; priority: JobPriority; turn: number; first: number } | null = null
   for (const row of rows) {
-    const candidate = { repositoryId: row.repositoryId, turn: lastTurn.get(row.repositoryId) ?? 0, first: Number(row.first) }
+    const candidate = { ...row, turn: lastTurn.get(row.repositoryId) ?? 0, first: Number(row.first) }
     if (!best || candidate.turn < best.turn || (candidate.turn === best.turn && candidate.first < best.first)) best = candidate
   }
-  return best?.repositoryId ?? null
+  return best && { repositoryId: best.repositoryId, priority: best.priority }
+}
+
+/** Whether a push's job is waiting: a catch-up turn then ends, so pushes never wait behind one. */
+async function writeJobWaiting(): Promise<boolean> {
+  const [row] = (await db.execute(sql`
+    SELECT EXISTS (SELECT 1 FROM jobs WHERE ${claimable} AND priority = ${JOB_PRIORITY.write}) AS waiting`)) as unknown as Array<{
+    waiting: boolean
+  }>
+  return row?.waiting === true
 }
 
 async function drainOnce(): Promise<void> {
   try {
     await failCrashedJobs(EXTRACTION_JOB, 'extraction', 'fileId')
     for (;;) {
-      const repositoryId = await nextRepository()
-      if (!repositoryId) return
-      lastTurn.set(repositoryId, ++turn)
+      const next = await nextRepository()
+      if (!next) return
+      lastTurn.set(next.repositoryId, ++turn)
       for (let n = 0; n < EXTRACTION_TURN_FILES; n++) {
-        const job = await claimJob<{ fileId: string }>(EXTRACTION_JOB, sql`payload->>'repositoryId' = ${repositoryId}`)
+        if (n > 0 && next.priority !== JOB_PRIORITY.write && (await writeJobWaiting())) break
+        const job = await claimJob<{ fileId: string }>(
+          EXTRACTION_JOB,
+          sql`payload->>'repositoryId' = ${next.repositoryId} AND priority = ${next.priority}`,
+        )
         if (!job) break
         const { fileId } = job.payload
         try {
@@ -469,6 +499,7 @@ async function processFile(fileId: string): Promise<void> {
     failpoint('extract.before-commit')
     return true
   })
-  // The file's semantic neighbours are those of its file-level block (the first, always embedded).
-  if (written) await recomputeSemanticEdges('code', fileId, vectors.get(0)!)
+  // The file's semantic neighbours are those of its file-level block (the first, always embedded);
+  // a file-level vector kept as it was has the edges it had.
+  if (written && toEmbed.includes(0)) await recomputeSemanticEdges('code', fileId, vectors.get(0)!)
 }
