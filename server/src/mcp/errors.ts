@@ -152,7 +152,7 @@ export function toErrorEnvelope(err: unknown): ErrorEnvelope {
   if (err instanceof NoteEditConflictError || err instanceof IdempotencyKeyReusedError) return envelope('CONFLICT', err.message)
   const failure = databaseFailure(err)
   if (failure) {
-    console.error('[mcp] tool failed:', failure.logged)
+    console.error('[mcp] tool failed:', failure.logged, { query: failure.query })
     return envelope('INTERNAL', `${DATABASE_FAILED}${failure.code ? ` (${failure.code})` : ''}`)
   }
   if (err instanceof Error && 'syscall' in err && typeof err.syscall === 'string') {

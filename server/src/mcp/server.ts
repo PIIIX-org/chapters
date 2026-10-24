@@ -467,7 +467,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       } catch (err) {
         const failure = databaseFailure(err)
         if (!failure) throw err
-        console.error('[mcp] request failed:', failure.logged)
+        console.error('[mcp] request failed:', failure.logged, { query: failure.query })
         throw new McpError(ErrorCode.InternalError, DATABASE_FAILED)
       }
     })

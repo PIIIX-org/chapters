@@ -9,6 +9,8 @@ export interface DatabaseFailure {
   code: string | null
   /** What the server log prints: the driver error, since drizzle's wrapper message carries every parameter. */
   logged: unknown
+  /** The failed statement without its parameters, for the server log, when drizzle wrapped the error. */
+  query: string | null
 }
 
 /**
@@ -22,18 +24,19 @@ export function databaseFailure(err: unknown): DatabaseFailure | undefined {
   let failed = false
   let code: string | null = null
   let logged: unknown
+  let query: string | null = null
   const seen = new Set<unknown>()
   for (let current = err; current instanceof Error && !seen.has(current); current = current.cause) {
     seen.add(current)
     if (current instanceof DrizzleQueryError) {
       failed = true
-      // Without a driver error, the statement alone (no parameters).
-      logged ??= current.cause ?? `DrizzleQueryError: ${current.query}`
+      query ??= current.query
+      logged ??= current.cause ?? 'DrizzleQueryError without a driver error'
     } else if (current instanceof postgres.PostgresError) {
       failed = true
       logged = current
     }
     if (code === null && 'code' in current && typeof current.code === 'string') code = current.code
   }
-  return failed ? { code, logged } : undefined
+  return failed ? { code, logged, query } : undefined
 }

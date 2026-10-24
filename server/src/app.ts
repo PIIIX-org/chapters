@@ -22,7 +22,7 @@ import { noteRoutes } from './notes/routes.js'
 import { graphRoutes } from './graph/routes.js'
 import { searchRoutes } from './search/routes.js'
 import { syncRoutes } from './sync/routes.js'
-import { MCP_PATHS, mcpRoutes } from './mcp/routes.js'
+import { mcpRoutes } from './mcp/routes.js'
 import { exportRoutes } from './export/routes.js'
 import { teamRoutes } from './vaults/team-routes.js'
 import { mcpConnectionRoutes } from './vaults/mcp-connection-routes.js'
@@ -76,7 +76,7 @@ export async function buildApp(
     const failure = databaseFailure(error)
     if (failure) {
       serverErrors.set(req, error)
-      req.log.error({ err: failure.logged }, DATABASE_FAILED)
+      req.log.error({ err: failure.logged, query: failure.query }, DATABASE_FAILED)
       return reply.code(500).send({ statusCode: 500, error: DATABASE_FAILED, message: DATABASE_FAILED })
     }
     const statusCode = error.statusCode ?? 500
@@ -101,17 +101,20 @@ export async function buildApp(
 
   // A NUL byte (U+0000) never reaches a query (#443): refused in every
   // route's path parameters (`params.<name>`), query string (`query.<name>`)
-  // and parsed body (the body's own field path), before the route's schema
-  // check. The MCP routes answer one in their JSON-RPC body themselves, as
-  // an MCP error (mcp/server.ts).
+  // and parsed body (the body's own field path; a key by its own path),
+  // before the route's schema check. A route that handles a NUL in its body
+  // itself names those body paths in `config.nulBytesAllowed`: the MCP
+  // routes (the whole JSON-RPC body, answered as an MCP error by
+  // mcp/server.ts) and agent push (`files.*.content`, stripped by
+  // syncRepositoryFiles).
   app.addHook('preValidation', async (req, reply) => {
     // Path parameters are a per-route class instance, not a plain object: walked as a copy.
     const inParams = findNulByte({ ...(req.params as object) })
     const inQuery = inParams ? undefined : findNulByte({ ...(req.query as object) })
-    const found = inParams ?? inQuery ?? (MCP_PATHS.includes(req.routeOptions.url ?? '') ? undefined : findNulByte(req.body))
+    const found = inParams ?? inQuery ?? findNulByte(req.body, req.routeOptions.config?.nulBytesAllowed)
     if (!found) return
     const prefix = inParams ? 'params' : inQuery ? 'query' : ''
-    const field = [prefix, found.field].filter(Boolean).join('.') || 'body'
+    const field = [prefix, found.field].filter(Boolean).join('.') || '(request body)'
     const message = nulByteMessage(field, found.inKey)
     return reply.code(400).send({ statusCode: 400, error: message, message, code: 'INVALID_ARGUMENT', field })
   })
