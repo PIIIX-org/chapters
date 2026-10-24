@@ -279,12 +279,15 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
       'export default function Page() { return <Card /> }',
       'export interface PageProps { id: string }',
     ].join('\n')
+    // Pushed and extracted while version 1 ran: the row and its job key carry 1.
+    versions.extractor = 1
     await syncRepositoryFiles(repo!.id, [{ path: 'src/Page.tsx', content }], ['src/Page.tsx'])
     await flushExtraction()
     const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
-    // What version 1 left on the row: no symbols past the JSX, stamped 1.
+    expect((await fileVersions(file!.id)).extractor_version).toBe(1)
+    // Stand-in for the broken outline version 1's TypeScript grammar left.
     await db.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
-    await db.execute(sql`UPDATE repository_files SET extractor_version = 1 WHERE id = ${file!.id}`)
+    versions.extractor = shipped.extractor
     await othersCurrent(repo!.id, null)
 
     expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)

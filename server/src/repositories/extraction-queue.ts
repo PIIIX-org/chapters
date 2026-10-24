@@ -317,7 +317,7 @@ async function processFile(fileId: string): Promise<void> {
   // An unsupported or minified file gets its file vector only, and still loses the imports/symbols an earlier content left.
   const { imports, symbols }: ExtractionResult =
     isSupportedLanguage(row.language) && !looksMinified(row.content)
-      ? await extractStructure(row.language, row.content)
+      ? await extractStructure(row.language, row.content, row.path)
       : { imports: [], symbols: [] }
 
   const importRows: Array<typeof repositoryFileImports.$inferInsert> = []
