@@ -55,7 +55,9 @@ export function mcpRoutes(app: FastifyInstance) {
   }
 
   // Room for a note body at the cap (#491); create_note/edit_note check the body itself.
-  const options = { bodyLimit: noteTransportLimit() }
+  // A NUL byte in the JSON-RPC body is the MCP server's to answer, as an
+  // MCP error (mcp/server.ts), not app.ts's REST 400 (#443).
+  const options = { bodyLimit: noteTransportLimit(), config: { nulBytesAllowed: [''] } }
   app.post('/mcp', options, handler)
   app.post('/elara/mcp', options, handler)
 

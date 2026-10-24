@@ -174,7 +174,7 @@ describe('search', () => {
       url: `/api/vaults/${vaultId}/search?q=rocket&types=people`,
       headers: { cookie: ownerCookie },
     })
-    const results = res.json() as Array<{ path: string }>
+    const results = res.json<{ results: Array<{ path: string }> }>().results
     expect(results.length).toBeGreaterThan(0)
     const paths = results.map((r) => r.path)
     expect(paths).toContain('people/wernher')
@@ -187,27 +187,31 @@ describe('search', () => {
       url: `/api/vaults/${vaultId}/search?q=rocket&tags=engineering`,
       headers: { cookie: ownerCookie },
     })
-    const results = res.json() as Array<{ path: string }>
+    const results = res.json<{ results: Array<{ path: string }> }>().results
     expect(results.length).toBeGreaterThan(0)
     const paths = results.map((r) => r.path)
     expect(paths).toContain('people/wernher')
     expect(paths).not.toContain('projects/apollo')
   })
 
-  it('filters by since/until date range', async () => {
+  it('filters by since/until on the last change, not frontmatter timestamp (#446)', async () => {
     const paths = async (qs: string) => {
       const res = await app.inject({
         method: 'GET',
         url: `/api/vaults/${vaultId}/search?q=zeppelin&${qs}`,
         headers: { cookie: ownerCookie },
       })
-      return (res.json() as Array<{ path: string }>).map((r) => r.path)
+      return res.json<{ results: Array<{ path: string }> }>().results.map((r) => r.path)
     }
-
-    expect(await paths('since=2026-01-01')).toContain('notes/zeppelin-log')
-    expect(await paths('since=2026-06-01')).not.toContain('notes/zeppelin-log')
-    expect(await paths('until=2026-12-01')).toContain('notes/zeppelin-log')
-    expect(await paths('until=2026-01-01')).not.toContain('notes/zeppelin-log')
+    // Written just now, with a frontmatter timestamp of 2026-03-01: the write counts.
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString()
+    const inAnHour = new Date(Date.now() + 3_600_000).toISOString()
+    expect(await paths(`since=${hourAgo}`)).toContain('notes/zeppelin-log')
+    expect(await paths(`since=${inAnHour}`)).not.toContain('notes/zeppelin-log')
+    expect(await paths(`until=${inAnHour}`)).toContain('notes/zeppelin-log')
+    expect(await paths('until=2021-01-01')).not.toContain('notes/zeppelin-log')
+    // A bound that is no date matches nothing.
+    expect(await paths('since=yesterday')).not.toContain('notes/zeppelin-log')
   })
 
   it('per-vault and everywhere search filter identically', async () => {
@@ -216,7 +220,7 @@ describe('search', () => {
       url: '/api/search?q=rocket&types=people',
       headers: { cookie: ownerCookie },
     })
-    const results = res.json() as Array<{ path: string }>
+    const results = res.json<{ results: Array<{ path: string }> }>().results
     expect(results.length).toBeGreaterThan(0)
     const paths = results.map((r) => r.path)
     expect(paths).toContain('people/wernher')
@@ -230,7 +234,7 @@ describe('search', () => {
       headers: { cookie: ownerCookie },
     })
     expect(res.statusCode).toBe(200)
-    const results = res.json() as Array<{ path: string; snippet: string }>
+    const results = res.json<{ results: Array<{ path: string; snippet: string }> }>().results
     expect(results[0]?.path).toBe('people/margaret')
     expect(results[0]?.snippet).toContain('<b>')
   })
@@ -241,7 +245,7 @@ describe('search', () => {
       url: `/api/vaults/${vaultId}/search?q=rocket engine`,
       headers: { cookie: ownerCookie },
     })
-    const paths = (res.json() as Array<{ path: string }>).map((r) => r.path)
+    const paths = res.json<{ results: Array<{ path: string }> }>().results.map((r) => r.path)
     expect(paths).toContain('projects/apollo')
     expect(paths).toContain('people/wernher')
   })
@@ -256,7 +260,7 @@ describe('search', () => {
       url: '/api/search?q=rocket',
       headers: { cookie: readerCookie },
     })
-    expect(res.json()).toEqual([])
+    expect(res.json()).toMatchObject({ status: 'no_match', results: [] })
 
     const share = await app.inject({
       method: 'POST',
@@ -270,7 +274,7 @@ describe('search', () => {
       url: '/api/search?q=rocket',
       headers: { cookie: readerCookie },
     })
-    expect((res.json() as unknown[]).length).toBeGreaterThan(0)
+    expect(res.json<{ results: unknown[] }>().results.length).toBeGreaterThan(0)
 
     await app.inject({
       method: 'DELETE',
@@ -282,6 +286,6 @@ describe('search', () => {
       url: '/api/search?q=rocket',
       headers: { cookie: readerCookie },
     })
-    expect(res.json()).toEqual([])
+    expect(res.json()).toMatchObject({ status: 'no_match', results: [] })
   })
 })

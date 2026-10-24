@@ -53,6 +53,9 @@ export async function syncRepositoryFiles(
       result.unchanged += 1
       continue
     }
+    // Pushed content is text the client chose to send, so a stray NUL is
+    // stripped. Git and local-path scans skip a file with a NUL as binary
+    // before it gets here (readRepositoryFiles in fs-scan.ts, #923).
     const cleanContent = file.content.replace(/\0/g, '')
     const values = {
       repositoryId,
