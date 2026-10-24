@@ -212,4 +212,42 @@ describe('since/until and recency use updated_at (#446)', () => {
     expect((await searchPaths('kowari', `since=${after}`)).includes(path)).toBe(false)
     expect((await graphPaths(`since=${after}`)).includes(path)).toBe(false)
   })
+
+  it('a bound is a date (YYYY-MM-DD) or an ISO date-time; anything else matches nothing', async () => {
+    const path = 'docs/quoll-format'
+    await oldNote(path, 'quoll')
+    // 5-digit and extended years, formats only the JS engine's legacy parser reads, and a day that does not exist.
+    for (const bound of ['20201-01-01', '+020201-01-01', '2030/01/01', 'Jan 1 2030', '2030-1-1', '2030-02-30']) {
+      const qs = `until=${encodeURIComponent(bound)}`
+      expect((await searchPaths('quoll', qs)).includes(path), qs).toBe(false)
+      expect((await graphPaths(qs)).includes(path), qs).toBe(false)
+    }
+    for (const bound of ['2030-01-01', '2030-01-01T00:00', '2030-01-01T00:00:00.123456+03:30']) {
+      const qs = `until=${encodeURIComponent(bound)}`
+      expect((await searchPaths('quoll', qs)).includes(path), qs).toBe(true)
+      expect((await graphPaths(qs)).includes(path), qs).toBe(true)
+    }
+  })
+
+  it('a bound without an offset is UTC, whatever the server time zone', async () => {
+    const path = 'docs/potoroo-utc'
+    const id = await oldNote(path, 'potoroo')
+    await db.execute(sql`UPDATE notes SET updated_at = '2024-05-01T12:00:00Z'::timestamptz WHERE id = ${id}`)
+    const zone = process.env.TZ
+    process.env.TZ = 'Asia/Tehran' // +03:30: read as local time, 12:00 would be 08:30Z
+    try {
+      for (const [qs, found] of [
+        ['since=2024-05-01T12:00:00', true],
+        ['until=2024-05-01T12:00:00', true],
+        ['since=2024-05-01T12:00:01', false],
+        ['until=2024-05-01T11:59', false],
+      ] as const) {
+        expect((await searchPaths('potoroo', qs)).includes(path), qs).toBe(found)
+        expect((await graphPaths(qs)).includes(path), qs).toBe(found)
+      }
+    } finally {
+      if (zone === undefined) delete process.env.TZ
+      else process.env.TZ = zone
+    }
+  })
 })
