@@ -320,7 +320,7 @@ const test: LabTest = {
       actual: specVerified.ok ? 'created' : specVerified.text.slice(0, 160),
       ok: specVerified.ok,
       severity: 'medium',
-      detail: { code: 'okf.ts:171 requires item.tier; vendor/okf/schemas/concept.schema.json:97 "required": ["tier"]; SPEC.md:383-407 has no tier field — consumers derive it' },
+      detail: { code: 'okf.ts validateNote: tier is optional since #563 (SPEC.md §5.2 { by, at }, §5.3 consumers derive the tier); vendor/okf/schemas/concept.schema.json matches' },
     })
     const freeType = await mcp.call('create_note', { vaultId: V, path: 'concepts/free-type', frontmatter: { type: 'BigQuery Table' }, body: 'x\n' })
     if (freeType.ok) await mcp.call('delete_note', { vaultId: V, path: 'concepts/free-type' })
@@ -830,6 +830,8 @@ const test: LabTest = {
     }
     if (acmeFiles.length === ACME_FILES.length) {
       const acmeConcepts = ACME_FILES.filter((f) => !/(^|\/)(index|log)\.md$/.test(f))
+      // The reserved log.md (OKF §9) imports too, as the note `log`; index.md files never do.
+      const acmeNotes = acmeConcepts.length + ACME_FILES.filter((f) => /(^|\/)log\.md$/.test(f)).length
       const zip = writeZip([...acmeFiles, { name: 'manifest.json', data: enc.encode(JSON.stringify({ name: 'acme_retail (OKF sample)', mergeable: false, shares: [] })) }])
       const r = await postFile(base, '/api/import', admin.cookie, 'acme.zip', zip, 'application/zip')
       const res = r.json as ImportResult | undefined
@@ -843,11 +845,11 @@ const test: LabTest = {
       crafted.acme = { status: r.status, result: res, types: acmeTypes }
       checks.push({
         name: 'import a real OKF v0.2 bundle (open-knowledge-format bundles/acme_retail)',
-        expected: `${acmeConcepts.length} concepts imported`,
+        expected: `${acmeConcepts.length} concepts imported (${acmeNotes} notes with log.md), none skipped`,
         actual: res ? `${res.imported} imported, ${res.skipped.length} skipped: ${res.skipped.slice(0, 3).join(' | ')}` : `${r.status} ${r.text.slice(0, 160)}`,
-        ok: res ? res.imported === acmeConcepts.length : false,
+        ok: res ? res.imported === acmeNotes && res.skipped.length === 0 : false,
         severity: 'high',
-        detail: { result: res, acmeTypes, code: 'type is free since #444; still refused: verified {by, at} without tier (#563), nested producer keys parameters/executor/attester/not (#970)' },
+        detail: { result: res, acmeTypes, code: 'type is free (#444); verified {by, at} without tier (#563) and nested producer keys parameters/executor/attester/not (#970) are accepted' },
       })
       if (res?.vaultId) {
         const acmeRows = await noteSnapshot(null, [res.vaultId])
