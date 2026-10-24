@@ -1,7 +1,9 @@
 /**
  * Full derived-index rebuild from the DB note index: wikilink rows and
  * embeddings for every live note. Run manually (`pnpm reindex`) after
- * changing the embedder or restoring files out-of-band.
+ * restoring files out-of-band. A changed embedder or embed text needs no
+ * reindex: bump `EMBEDDER_ID` (search/embeddings.ts) and the next boot
+ * re-embeds every note and file (#453).
  */
 import { isNull } from 'drizzle-orm'
 import { db, sql } from '../db/client.js'
