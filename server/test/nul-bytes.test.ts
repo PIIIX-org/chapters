@@ -12,6 +12,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { buildApp } from '../src/app.js'
 import { sql } from '../src/db/client.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
+import { getRepositoryFile } from '../src/repositories/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 type Args = Record<string, unknown>
@@ -104,11 +105,12 @@ describe('MCP: a NUL byte in a string argument is INVALID_ARGUMENT naming the fi
 
   it('a frontmatter value and a frontmatter key', async () => {
     await expectNulRefused('create_note', { vaultId, path: 'concepts/nul-fm', frontmatter: { title: `${SECRET}\u0000` }, body: 'x' }, 'frontmatter.title')
+    // A key is named by its own path, the NUL shown as `\0`: not mistaken for the object that holds it.
     await expectNulRefused(
       'edit_note',
-      { vaultId, path: 'concepts/clean', frontmatter: { [`k\u0000${SECRET}`]: 'v' } },
-      'frontmatter',
-      'frontmatter: NUL bytes (U+0000) are not allowed (in a key)',
+      { vaultId, path: 'concepts/clean', frontmatter: { 'k\u0000x': 'v' } },
+      'frontmatter.k\\0x',
+      'frontmatter.k\\0x: NUL bytes (U+0000) are not allowed (in a key)',
     )
   })
 
@@ -136,10 +138,10 @@ describe('MCP: a NUL byte in a string argument is INVALID_ARGUMENT naming the fi
 })
 
 describe('REST: a NUL byte in the body, a path parameter or the query string is a 400 naming the field (#443)', () => {
-  async function expectRestRefused(res: { statusCode: number; body: string }, field: string): Promise<void> {
+  async function expectRestRefused(res: { statusCode: number; body: string }, field: string, inKey = false): Promise<void> {
     expectClean(res.body)
     expect(res.statusCode, res.body.slice(0, 300)).toBe(400)
-    const message = `${field}: NUL bytes (U+0000) are not allowed`
+    const message = `${field}: NUL bytes (U+0000) are not allowed${inKey ? ' (in a key)' : ''}`
     expect(JSON.parse(res.body)).toEqual({ statusCode: 400, error: message, message, code: 'INVALID_ARGUMENT', field })
   }
 
@@ -153,15 +155,39 @@ describe('REST: a NUL byte in the body, a path parameter or the query string is 
     await expectRestRefused(res, 'body')
   })
 
-  it('note update with a NUL in the body and in a frontmatter value', async () => {
+  it('note update with a NUL in the body, in a frontmatter value and in a key', async () => {
     const url = `/api/vaults/${vaultId}/notes/concepts/clean`
     await expectRestRefused(await app.inject({ method: 'PUT', url, headers: { cookie }, body: { body: `${SECRET}\u0000` } }), 'body')
     await expectRestRefused(await app.inject({ method: 'PUT', url, headers: { cookie }, body: { frontmatter: { title: `\u0000${SECRET}` } } }), 'frontmatter.title')
+    // A top-level key is its own name, never `body`, the note's body field.
+    await expectRestRefused(await app.inject({ method: 'PUT', url, headers: { cookie }, body: { 'bo\u0000dy': 'x' } }), 'bo\\0dy', true)
+    await expectRestRefused(await app.inject({ method: 'PUT', url, headers: { cookie }, body: { frontmatter: { 'k\u0000': 'v' } } }), 'frontmatter.k\\0', true)
   })
 
   it('a NUL in a path parameter and in the query string', async () => {
     await expectRestRefused(await app.inject({ method: 'GET', url: `/api/vaults/${vaultId}/notes/concepts/a%00b`, headers: { cookie } }), 'params.*')
     await expectRestRefused(await app.inject({ method: 'GET', url: `/api/vaults/${vaultId}/search?q=a%00b`, headers: { cookie } }), 'query.q')
+  })
+
+  it('agent push keeps a file whose content holds a NUL (stored without it, as before); its path is still checked', async () => {
+    const { token } = (
+      await app.inject({ method: 'POST', url: `/api/repositories/${repositoryId}/sync-tokens`, headers: { cookie } })
+    ).json<{ token: string }>()
+    const push = (body: unknown) =>
+      app.inject({ method: 'POST', url: '/repositories/sync', headers: { authorization: `Bearer ${token}` }, body: body as Record<string, unknown> })
+    const res = await push({
+      files: [
+        { path: 'src/a.ts', content: 'const a = 1;\u0000const b = 2;' },
+        { path: 'src/b.ts', content: 'ok' },
+      ],
+      currentPaths: ['src/a.ts', 'src/b.ts'],
+    })
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.json()).toMatchObject({ created: 2 })
+    expect((await getRepositoryFile(repositoryId, 'src/a.ts'))?.content).toBe('const a = 1;const b = 2;')
+    expect((await getRepositoryFile(repositoryId, 'src/b.ts'))?.content).toBe('ok')
+    await expectRestRefused(await push({ files: [{ path: 'src/c\u0000.ts', content: 'x' }], currentPaths: [] }), 'files.0.path')
+    await expectRestRefused(await push({ files: [], currentPaths: ['src/a.ts', 'src/\u0000'] }), 'currentPaths.1')
   })
 })
 
