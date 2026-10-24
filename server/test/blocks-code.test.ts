@@ -56,7 +56,7 @@ async function fileRow(repositoryId: string, path = PATH) {
 async function symbolIds(repositoryId: string, names: string[]) {
   const ids: Record<string, string> = {}
   for (const name of names) {
-    const [hit] = (await findSymbols([repositoryId], name, { limit: 1 })).filter((s) => s.name === name)
+    const [hit] = (await findSymbols([repositoryId], name, { limit: 1 })).results.filter((s) => s.name === name)
     if (hit) ids[name] = hit.id
   }
   return ids
@@ -94,7 +94,7 @@ const V1 = [
 ].join('\n')
 
 describe('a symbol block keeps its id (#413)', () => {
-  it('lines inserted above every symbol: same ids, and only the file text is embedded again', async () => {
+  it('lines inserted above every symbol: same ids; the file and the moved symbols are embedded again', async () => {
     const repo = await makeRepo('blocks-line-shift')
     await sync(repo.id, V1)
     const before = await symbolIds(repo.id, ['alpha', 'beta', 'gamma'])
@@ -104,8 +104,8 @@ describe('a symbol block keeps its id (#413)', () => {
     const texts = await embeddedDuring(() => sync(repo.id, shifted))
 
     expect(await symbolIds(repo.id, ['alpha', 'beta', 'gamma'])).toEqual(before)
-    // The symbols' text did not change, so their vectors are kept: only the whole (small) file is embedded again.
-    expect(texts).toHaveLength(1)
+    // The embedded texts name the line, so the file and the three moved symbols are embedded again.
+    expect(texts).toHaveLength(4)
     expect(texts[0]).toContain('a header comment')
     const outline = await listFileSymbols((await fileRow(repo.id)).id)
     expect(outline.map((s) => [s.name, s.startLine, s.endLine])).toEqual([
@@ -209,7 +209,7 @@ describe('stored text = hashed text (#418)', () => {
     const lines = ['export function spaced() {', '  const a = 1', '', '', '  return a', '}', '', 'export const tail = 2', '']
     const content = lines.join('\r\n')
     await sync(repo.id, content, 'src/crlf.ts')
-    const [hit] = (await findSymbols([repo.id], 'spaced', { limit: 5 })).filter((s) => s.name === 'spaced')
+    const [hit] = (await findSymbols([repo.id], 'spaced', { limit: 5 })).results.filter((s) => s.name === 'spaced')
     expect(hit).toMatchObject({ startLine: 1, endLine: 6 })
     expect(hit!.snippet).toBe(content.split('\n').slice(0, 6).join('\n'))
     expect(hit!.snippet).toBe('export function spaced() {\r\n  const a = 1\r\n\r\n\r\n  return a\r\n}\r')

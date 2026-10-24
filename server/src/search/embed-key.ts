@@ -22,7 +22,7 @@ export const CHUNK_VERSION = 2
  * Stored on every embedded `blocks` row (null: not embedded, e.g. over the
  * per-file symbol budget). A re-extraction reuses the vector of a block of
  * the same owner with the same key instead of embedding the text again, so
- * a version bump, a line shift or an edit elsewhere re-embeds only the
+ * a version bump or an edit elsewhere re-embeds only the
  * blocks whose text or model changed. Reads `EMBEDDER_ID` at each call, so a
  * test that changes it changes the key.
  */

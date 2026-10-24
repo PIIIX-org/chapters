@@ -85,40 +85,46 @@ const test: LabTest = {
       return rows[0]?.e ? true : undefined
     }, 600_000, 2_000)
     type Hit = { path: string; snippet: string; score: number }
-    const restSearch = await admin.get<Hit[]>(`/api/vaults/${V}/search?q=${PDF_TOKEN}`)
+    // Every search answers {status, retrieval_mode, degraded, index?, results} (#441, #442, #458).
+    type Answer = { status?: string; results?: Hit[] }
+    const hitsOf = (json: unknown): Hit[] => {
+      const results: unknown = json && typeof json === 'object' && 'results' in json ? json.results : undefined
+      return Array.isArray(results) ? results : []
+    }
+    const restSearch = await admin.get<Answer>(`/api/vaults/${V}/search?q=${PDF_TOKEN}`)
     const mcpSearch = await mcp.call('search', { vaultId: V, query: PDF_TOKEN })
-    const nonsense = await admin.get<Hit[]>(`/api/vaults/${V}/search?q=xqzvbnmplokij`)
-    const controlSearch = await admin.get<Hit[]>(`/api/vaults/${V}/search?q=Attachments`)
+    const nonsense = await admin.get<Answer>(`/api/vaults/${V}/search?q=xqzvbnmplokij`)
+    const controlSearch = await admin.get<Answer>(`/api/vaults/${V}/search?q=Attachments`)
     // Ground truth: the keyword retriever's own predicate (search/search.ts:108).
     const ftsHits = Number(await ctx.docker.psql(`select count(*) from notes where vault_id = '${V}' and fts @@ websearch_to_tsquery('english', '${PDF_TOKEN}')`))
     const assetTables = await ctx.docker.psql(
       `select coalesce(string_agg(table_name, ','), '') from information_schema.tables where table_schema = 'public' and table_name ilike any (array['%asset%','%attachment%','%file_text%'])`,
     )
-    const restHits = Array.isArray(restSearch.json) ? restSearch.json : []
-    const mcpHits = (Array.isArray(mcpSearch.json) ? mcpSearch.json : []) as Hit[]
+    const restHits = hitsOf(restSearch.json)
+    const mcpHits = hitsOf(mcpSearch.json)
     const tokenInSnippet = [...restHits, ...mcpHits].some((h) => h.snippet.includes(PDF_TOKEN))
     checks.push({
       name: 'text inside an uploaded PDF is searchable',
       expected: `"${PDF_TOKEN}" (only inside the PDF) matched by the keyword index or shown in a snippet`,
-      actual: `FTS matches ${ftsHits}; REST ${restHits.length} result(s) [${restHits.map((h) => `${h.path} score ${h.score.toFixed(4)}`).join(', ')}] — vector-only rank (1/61); token in snippet: ${tokenInSnippet}; asset tables: ${assetTables || 'none'}`,
+      actual: `FTS matches ${ftsHits}; REST ${restHits.length} result(s) [${restHits.map((h) => `${h.path} score ${h.score.toFixed(4)}`).join(', ')}] (status ${restSearch.json?.status}); token in snippet: ${tokenInSnippet}; asset tables: ${assetTables || 'none'}`,
       ok: ftsHits > 0 || tokenInSnippet,
       severity: 'medium',
       detail: { restSearch: restSearch.json, mcpSearch: mcpSearch.text.slice(0, 500), code: 'notes/routes.ts:306-322 saves bytes to disk only; nothing extracts or indexes asset text' },
     })
-    const nonsenseHits = Array.isArray(nonsense.json) ? nonsense.json : []
+    const nonsenseHits = hitsOf(nonsense.json)
     checks.push({
       name: 'a query matching nothing returns no results',
-      expected: '0 results for "xqzvbnmplokij"',
-      actual: `${nonsenseHits.length} result(s): ${nonsenseHits.map((h) => `${h.path} score ${h.score.toFixed(4)}`).join(', ')}`,
-      ok: nonsenseHits.length === 0,
+      expected: '0 results and status no_match for "xqzvbnmplokij"',
+      actual: `status ${nonsense.json?.status}, ${nonsenseHits.length} result(s): ${nonsenseHits.map((h) => `${h.path} score ${h.score.toFixed(4)}`).join(', ')}`,
+      ok: nonsenseHits.length === 0 && nonsense.json?.status === 'no_match',
       severity: 'low',
-      detail: { code: 'search/search.ts:118-127 vector KNN has no similarity floor; RRF (294-316) ranks whatever it returns' },
+      detail: { code: 'search/search.ts: a vector hit counts only under config.searchMaxDistance (#441)' },
     })
     checks.push({
       name: 'control: the linking note itself is searchable',
       expected: '>= 1 hit for "Attachments"',
-      actual: String(Array.isArray(controlSearch.json) ? controlSearch.json.length : controlSearch.status),
-      ok: Array.isArray(controlSearch.json) && controlSearch.json.length > 0,
+      actual: String(Array.isArray(controlSearch.json?.results) ? controlSearch.json.results.length : controlSearch.status),
+      ok: hitsOf(controlSearch.json).length > 0,
       severity: 'info',
     })
     const tools = await mcp.listTools()

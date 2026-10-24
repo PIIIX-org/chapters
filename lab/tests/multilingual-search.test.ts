@@ -243,14 +243,14 @@ const test: LabTest = {
     const rankAll = async (vaultId: string): Promise<Ranked[]> => {
       const out: Ranked[] = []
       for (const [i, q] of QUERIES.entries()) {
-        const hybrid = await admin.get<Array<{ path: string; resourceType: string }>>(`/api/vaults/${vaultId}/search?q=${encodeURIComponent(q.q)}&limit=30`)
-        const hybridPaths = Array.isArray(hybrid.json) ? hybrid.json.filter((r) => r.resourceType === 'note').map((r) => r.path) : []
-        // Exactly noteRows(..., 'keyword') from search/search.ts:102-117 (minus ts_headline).
+        const hybrid = await admin.get<{ results?: Array<{ path: string; resourceType: string }> }>(`/api/vaults/${vaultId}/search?q=${encodeURIComponent(q.q)}&limit=30`)
+        const hybridPaths = Array.isArray(hybrid.json?.results) ? hybrid.json.results.filter((r) => r.resourceType === 'note').map((r) => r.path) : []
+        // noteRows(..., 'keyword') from search/search.ts (minus ts_headline and the path, id tie-break).
         const kw = await ctx.docker.psqlRows<{ path: string }>(
           `select path from notes where vault_id = '${vaultId}' and deleted_at is null and fts @@ websearch_to_tsquery('english', ${lit(q.q)}) order by ts_rank(fts, websearch_to_tsquery('english', ${lit(q.q)})) desc limit 30`,
         )
         const v = vectors[i]
-        // noteRows(..., 'semantic') from search/search.ts: the nearest 200 blocks, then each note's best block (#452); psql keeps the default ef_search.
+        // The nearest notes of noteRows(..., 'semantic') (search/search.ts) before its relevance gate (#441): the nearest 200 blocks, each note's best block (#452); psql keeps the default ef_search.
         const vec = v
           ? await ctx.docker.psqlRows<{ path: string }>(
               `select n.path from (select owner_id, min(d) as d from (select owner_id, embedding <=> '${JSON.stringify(v.vec)}'::vector as d from blocks

@@ -7,6 +7,7 @@ import { Buffer } from 'node:buffer'
 import * as Y from 'yjs'
 import type { LabContext } from './context.ts'
 import { appContainerId, appExec, compose, COMPOSE, exec, psqlRows, waitHealthy } from './docker.ts'
+import { answerJson } from './tool-answer.ts'
 
 export const sha = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex')
 
@@ -601,13 +602,8 @@ export async function rawMcp(
     out.ok = !out.isError
     out.textHead = text.slice(0, 500)
     out.textLen = text.length
-    if (opts.parse && out.ok) {
-      try {
-        out.json = JSON.parse(text)
-      } catch {
-        /* not JSON */
-      }
-    }
+    // read_note's body comes as a plain text block after the JSON (#445): answerJson puts it back in its key.
+    if (opts.parse && out.ok) out.json = answerJson(rpc.result.content ?? [])
     return out
   }
 }

@@ -520,8 +520,18 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   restricted to a slug regex (`^[a-z0-9][a-z0-9-]*$`), which makes path
   traversal impossible by construction — this is the one validation
   function shared by every write path (REST, CRDT persistence, MCP).
-  `validateNote` also requires frontmatter `type` to equal the path's
-  first segment.
+  `validateNote` requires a non-empty string frontmatter `type`; it may
+  differ from the path's first segment (#444, D8). `withType` gives a note
+  without one the folder; `notes.type` is always the folder, which the
+  `types` filter and structural edges key on.
+  Any top-level key may hold a scalar, a list or a mapping (OKF §4.1 and
+  the §10 computation keys, #970), nested at most `MAX_FRONTMATTER_DEPTH`
+  (8) levels of lists and mappings (`assertFrontmatterDepth`, also run
+  first by `assertFrontmatterFits` so the size measure never walks a
+  deeper value); known keys (`type`, `title`, `tags`, `timestamp`,
+  `status`, ...) keep their shapes. A `verified` entry is OKF §5.2's
+  `{ by, at }`; `tier` is optional (#563), and an entry with a `tier` may
+  leave out `by` and `at`.
 - **Frontmatter fence** (#400, `parseNote`): the frontmatter runs from an
   opening `---` line to the first line that is exactly `---` (trailing
   spaces/tabs allowed); LF and CRLF files both parse, and the body is
@@ -758,7 +768,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   result; frontmatter keys whose values differ; null for rename, delete
   and restore), `concurrent_changes` (the `base_rev` report) and
   `indexed` (`noteIndexed`: the `file` and `dir_index` projections
-  applied at `seq` and the `embed_note:<id>:<seq>:…` job done). `dry_run`
+  applied at `seq` and the `embed_note:<id>:<seq>:<EMBEDDER_ID>+chunk<CHUNK_VERSION>` job done). `dry_run`
   (create, edit, append, upsert, revert) runs `compute` and returns before
   the transaction (`WriteOptions.dryRun`; `previewCreate` for a create):
   no restore point, and `propose`/the quarantine screen throw without
@@ -1331,17 +1341,79 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 
 - **`search.ts`**: `searchNotes()` — the single hybrid search function
   used by the UI routes and the MCP `search` tool. Runs four queries in
-  parallel (note-keyword, note-semantic, code-keyword, code-semantic)
-  and merges them with **Reciprocal Rank Fusion** (`k=60`), no score
-  normalization to tune. Keyword hits use Postgres
+  parallel (note-keyword, note-semantic, code-keyword, code-semantic;
+  six with symbols) and merges them with **Reciprocal Rank Fusion**
+  (`k=60`), no score normalization to tune. Keyword hits use Postgres
   `websearch_to_tsquery` + `ts_rank` + `ts_headline` snippets; semantic
   hits use pgvector's `<=>` cosine-distance operator over the `blocks`
   HNSW indexes — one per owner type since migration 0036
   (`blocks_note_embedding_idx`, `blocks_code_embedding_idx`, partial on
   `owner_type`), so every vector query names its owner type as a SQL literal
   for the planner to use them — notes ranked by their best block, files by
-  their file-level block, one hit per document (see **Blocks and the line
+  their `file` block, one hit per document (see **Blocks and the line
   contract**).
+  `findSymbols()` does the same over symbols (keyword: `ILIKE` on the
+  whole query).
+  - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
+    `SearchResponse` = `{status, retrieval_mode, degraded, index?,
+    results}`, served as is by REST and inside the budget envelope by MCP.
+  - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
+    (`ORDER BY distance LIMIT 30`, which the HNSW index serves) and keeps
+    those with cosine distance under `config.searchMaxDistance`
+    (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
+    default; 0.40 for bge-small, measured on the five benchmark corpora
+    as `config.ts` records; 0.8 for the fake embedder).
+    Keyword rows
+    always count. The gate cuts a suffix of a distance-ordered list, so the
+    RRF ranks of the rows it keeps do not change.
+  - **Degraded** (#458): a failed query embedding (`queryVector`) skips the
+    vector legs (`keyword_only`, `degraded: {reason: 'embedder_failed'}`);
+    a failed leg drops its whole channel (`vector_leg_failed` →
+    `keyword_only`, `keyword_leg_failed` → `vector_only`; neither →
+    `none`). The failure is logged; the search answers from the channel
+    that ran.
+  - **Status** (#442): `ok` with any result; otherwise `unavailable` when
+    no channel ran, `index_building` when notes, files or repositories
+    in scope are pending, `unavailable` when every item in scope failed
+    indexing, else `no_match`. `index` comes from `embeddingState()`
+    (notes: `embed_note:<id>:<seq>:…` job pending, or no job and no
+    blocks of the current `seq`; failed: that job gave up) and `extractionState()` (files:
+    the predicates of `countPendingExtractions` and `extractionFailures`;
+    repositories with no file whose `sync_status` is `syncing` or that
+    were never synced count in `pending_repositories`, those whose sync
+    failed count as failed items), read beside the query embedding; left
+    out when all zero.
+  - **Total order**: keyword legs `ORDER BY rank DESC, path COLLATE "C",
+    id`, vector legs re-sorted by `distance, path COLLATE "C", id` outside
+    the HNSW limit, final sort score descending then path and id by UTF-16
+    code unit (`compareCodeUnits`), so equal scores never depend on row
+    order. [INFERENCE] HNSW stays approximate: which rows make a vector
+    leg's 30 can still differ between instances.
+  - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
+    search and graph, saved perspectives) bound the last change,
+    `updatedAt`, never frontmatter `timestamp` (the creation time, which
+    edits leave alone). Note legs filter `notes.updated_at` in SQL; code
+    hits use `repository_files.updated_at` (the last sync that changed the
+    file's content: an unchanged hash leaves it) and symbol hits their
+    file's, filtered after the merge by `passesFilters` like `types`. A
+    bound goes through `timeBound`: `YYYY-MM-DD` or an ISO date-time
+    (`THH:MM`, `:SS`, a fraction cut to ms, `Z` or `±HH:MM`); one without
+    an offset is UTC, never the server's time zone; anything else (a
+    5-digit year, `2030/01/01`, `2030-02-30`) matches nothing. Both sides compare at millisecond precision (SQL
+    `date_trunc('milliseconds', updated_at)`, a JS `Date` in the graph), so
+    search and graph agree inside a bound's millisecond. A hit carries
+    only `updated`, the UTC day (`YYYY-MM-DD`) of its last change (REST
+    and MCP; coordinator decision on #446: a full instant on every hit
+    cost ~10 tokens each); MCP drops it with `snippet` at `no_context`.
+    Graph nodes and note reads keep the full `updatedAt`. `notes.updated_at` moves
+    only in `applyRowChange` (store-tx.ts), when a write changes the row:
+    every MCP and REST write, rename, trash and restore, and the CRDT
+    fold (`foldCrdt`, so collaborative typing counts once per debounced
+    fold); a write that changes nothing leaves it. A current-format backup
+    restore and a vault import with `.elara/history` keep the source's
+    `updated_at`; a format-1 backup and a plain import take the restore
+    time. No index: note legs are served by the FTS and HNSW indexes and
+    the graph filters in memory.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
@@ -1786,12 +1858,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   pin, allow-list, live permission) and that every tool has exactly one
   entry.
 - **Structured content and output schemas** (#433, ADR-004 §2.1, D6
-  default): `tool()` answers every success through `answered(text)`:
-  `content[0].text` stays the whole JSON answer (clients that show the
-  model only `content` lose nothing), and when that text is an object
-  (it starts with `{`) `structuredContent` is `JSON.parse(text)`, so it
-  holds exactly what the text shows (dates as strings) and the two never
-  differ. Bare-array answers (`search`, the unbudgeted list tools) carry
+  default): `tool()` answers every success through `answered(text,
+  blocks)`: `content[0].text` is the JSON answer, followed by the
+  rendered `blocks` as text blocks of their own (`read_note`'s body,
+  #445, below; no other tool has one), so clients that show the model
+  only `content` lose nothing. When that text is an object (it starts
+  with `{`) `structuredContent` is `JSON.parse(text)` with each block's
+  text in its key in place of the `{"in": "content[n]"}` marker, so it
+  holds exactly what the blocks show (dates as strings) and is the whole
+  answer. Bare-array answers (the unbudgeted list tools) carry
   none: MCP's `structuredContent` is an object, and wrapping the array
   would make it differ from the text. A tool may declare `outputSchema`
   (a loose zod object, so other keys pass): today only the eight
@@ -1806,8 +1881,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the SDK server does not check an `isError` answer, but the SDK client
   checks any `structuredContent` against the listed outputSchema, error
   or not, so `{error}` there would fail on a write tool.
-  Read tools get no output schema until their shapes settle (#445,
-  #432, #439). `test/mcp-structured-content.test.ts` covers each tool
+  Read tools get no output schema until their shapes settle (#957,
+  #432). `test/mcp-structured-content.test.ts` covers each tool
   family through the real client (which validates against the listed
   schema), every write answer shape and the errors.
 - **Instructions** (#435): `instructionsFor(profile)` in
@@ -1816,7 +1891,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   text per profile, with no id, name, date or pin, so every token of a
   profile gets the same bytes (#681). Reader: tools with
   `budget_tokens` (characters / 4) fit it and end with `truncated`
-  (`search`, `list_vaults` and `list_repositories` take no budget and
+  (`list_vaults` and `list_repositories` take no budget and
   answer bare arrays), the cursor is the only way on (read_note/read_file
   page long bodies only that way), manuals are
   `elara://manual/conventions` and one per family. Writer and admin (the
@@ -1910,9 +1985,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `McpToolError(code, message, extra?)`; `toErrorEnvelope(err)` in the
   `tool()` catch maps it and the domain errors: `CursorError` (its
   code), `OkfValidationError` by its `refusal` (`OKF_INVALID`,
-  `TYPE_MISMATCH`, `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the
-  type rule, the depth limit), `NoteTooLargeError` (`TOO_LARGE`, the
-  limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
+  `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the depth limit),
+  `NoteTooLargeError` (`TOO_LARGE`, the limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
   included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
   quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
   (`INVALID_ARGUMENT`), `NoteEditConflictError` and
@@ -1991,7 +2065,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     lists (the whole ranking recomputed per page, offset plus a guard:
     `find_symbols`, `graph`, `find_graph_path`, `read_file`'s outline) and
     `textSection` (a body or file cut at line boundaries; a line longer
-    than a page is split).
+    than a page is split). A `block: true` text section (`read_note`'s
+    body, #445) is not a JSON string: `compose()` puts the marker
+    `{"in": "content[n]"}` (n = 1 for the first block) in its key and
+    returns this page's text, unescaped, as a block that `answered()`
+    sends after the JSON, an empty one included (the shape is fixed).
+    `fill()` counts its lines by their raw characters, other text by
+    their JSON-escaped length.
   - `browse_repository` (#424) pages in SQL, not in memory:
     `listRepositoryFilesPage` (`repositories/store.ts`) reads `BROWSE_PAGE`
     (500) + 1 files after the cursor's path, `ORDER BY path COLLATE "C"`,
@@ -2035,11 +2115,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
     benchmark's estimate (it undercounts a real tokenizer by roughly
     10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
-    because it is what the benchmark gate measures, ADR-004 §5); the rendered text stays within the budget
+    because it is what the benchmark gate measures, ADR-004 §5); the rendered
+    answer, the JSON plus every block and one separator character per
+    block (`charsOf`; the benchmark's lab client joins blocks with a
+    newline, so both count the same), stays within the budget
     (items dropped whole from the end, a refill loop accounts for the
     `truncated` block), except that a text which would show nothing
     shows its first line (split when longer than the page), so paging
-    always moves on.
+    always moves on. The ladder and the `budget_tokens: N` suggestion
+    measure the same total.
   - Ladder (#421, ADR-004 §2.1): `render()` tries `full`, `no_context`,
     `locations`, `counts`, `total` in order, one level for the whole
     answer; a level no list on the page defines is skipped. An item level
@@ -2089,8 +2173,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - `read_note` records the last read (#864) in `Budgeted.rendered`, on
     every page: the `rev` it reports, the merge base of a later whole-body
     edit (#961).
-  - `search` keeps its bare array and has no budget (its envelope waits
-    for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
+  - `search` (#441) is budgeted like `find_symbols`: the
+    `SearchResponse` head (`status`, `retrieval_mode`, `degraded`,
+    `index`) then the ranked `results` (limit + 1 fetch; ladder: without
+    `snippet`/`frontmatter`, then the path or `path#La-Lb`; counted per
+    path). `test/search-envelope.test.ts` covers each status, the gate,
+    the fallbacks and the order through MCP and REST.
+    `test/mcp-response-envelope.test.ts` drives each
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
     each ladder level.
   `search` and `graph` call
@@ -2435,18 +2524,20 @@ The fence-aware heading parser (`headings()`) lives there too, used by
 headings identically. For a note, `owner_id` is `notes.id` (it survives
 renames).
 *Code blocks* (`repositories/code-blocks.ts`): a `symbol` block per
-symbol; a `file` block (lines 1..total, text `<path>\n<content>`) when
-the file is small — at most 300 lines (`SMALL_FILE_MAX_LINES`) and 16,000
-characters (the embedder's cut) — or has no symbols (an unsupported
-language, a minified file, no declarations); otherwise a `skeleton` block
-for the file (`<path>` then every symbol's first line) and one per class
-with methods (`<kind> <Class> in <path>`, the class's first line, then its
-methods' first lines). Every file thus has one file-level block, always
-embedded. A symbol's embedded text is `<kind> <inner_path> in
-<path>\n<snippet>`, the snippet its first 30 lines cut to 1,500
-characters (`SNIPPET_LINES`, `SNIPPET_CHARS`; search computes hit
-snippets from `content` with the same numbers), with no line number, so a
-block whose lines only moved keeps its text. *Note blocks*
+symbol; a `file` block for every file (lines 1..total, text
+`<path>\n<content>`, the old file vector's; the model reads its first 512
+tokens); and, when the file is not small — more than 300 lines
+(`SMALL_FILE_MAX_LINES`) or 16,000 characters (the embedder's cut) — and has
+symbols, a `skeleton` block for the file (`<path>` then every symbol's first
+line) and one per class with methods (`<kind> <Class> in <path>`, the
+class's first line, then its methods' first lines). The file-level blocks
+are always embedded. A symbol's embedded text is `<kind> <inner_path> in
+<path>:<start line>\n<snippet>`, the snippet its first 30 lines cut to
+1,500 code points (`SNIPPET_LINES`, `SNIPPET_CHARS`), stored on the block
+as `snippet` (the keyword legs match it and hits show it). The line stays
+in the text: without it chapters A13 fell out of the top 5 (bench run
+40076821407 vs 40076707623), so a symbol whose lines moved is embedded
+again while its id stays. *Note blocks*
 (`notes/note-blocks.ts`, #452b): a `preamble` for the body before its first
 heading when it is not blank (a body with no heading that is empty or blank
 is one preamble whose embedded text is the path, so every note keeps a
@@ -2479,10 +2570,9 @@ owner_id, block_id)` with the blocks the content no longer has deleted, so
 a surviving block keeps its row (`find_symbols` `id`); a result for content
 that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same owner already has keeps that vector instead of being embedded again, so
-a line shift, an edit to another symbol or section, a frontmatter edit, or a
-version bump that leaves a block's text alone embeds nothing new for it.
-*Readers*: `search` note vector leg — the nearest 200 note blocks of the
-scoped vaults (`hnsw.ef_search` 200), then each live note's best block
+an edit to another symbol or section, a frontmatter edit, or a version bump that leaves a block's text
+alone, embeds nothing new for it. *Readers*: `search` note vector leg — the nearest 200 note blocks of the
+scoped vaults (`hnsw.ef_search` 200, #967's distance gate on the best distance), then each live note's best block
 distance (filters applied to the note), one hit per note with the same
 `{…, snippet: left(body, 200)}` as before. A vault has about 12 times as
 many note blocks as notes; the partial `blocks_note_embedding_idx` keeps the
@@ -2490,12 +2580,13 @@ leg on note blocks only (10k notes × 12 blocks on a quiet database: warm
 p95 28–34 ms against 22–32 ms for the old `notes.embedding` leg; the first
 query after a restart is slower, 190–700 ms against 30–70 ms, while the
 larger index pages in); `search` code
-vector leg — the nearest file-level blocks (`file`, or the file
-`skeleton`) of the scoped repositories (`hnsw.ef_search` 200), one hit per
-file with the same `{…, snippet: left(content, 200)}` as before (the
-ADR-004 best-block roll-up was measured: symbol blocks of large files
-crowded the leg and chapters hit@5 fell 0.9655 → 0.8966, so it waits for
-#414/#415's per-block hits); `search` symbol legs and `find_symbols` —
+vector leg — the nearest `file` blocks of the scoped repositories
+(`hnsw.ef_search` 200, #967's distance gate), one hit per file with the
+same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
+the ADR-004 best-block roll-up let symbol blocks of large files crowd the
+leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
+outline put a 304-line hook above the answer to A13 (0.931), so both wait
+for #414/#415's per-block hits; `search` symbol legs and `find_symbols` —
 `kind = 'symbol'` blocks, keyword by name, `Class.name` or the stored
 `snippet`, vector by the nearest symbol blocks; semantic edges (`semantic-edges.ts`) — a note's or file's
 similarity to another node is its best block's, the query vectors a note's
@@ -2505,8 +2596,8 @@ symbol's bare name or its `Class.method`); the doctor (`blocks-missing`,
 `blocks-failed`; for notes `vector-missing`/`vector-failed`). Migration 0035 carries the existing vectors and symbols
 over as `legacy:` blocks so search keeps answering until the first boot
 re-extracts each file (a carried file vector made from the file's current
-content gets the `embed_key` of its text, so a small file is not embedded
-again). Migration 0036 does the same for notes: each `notes.embedding`
+content gets the `embed_key` of its text, so the `file` block is not
+embedded again). Migration 0036 does the same for notes: each `notes.embedding`
 becomes one `legacy:note` preamble block spanning the body (`embed_key`
 `legacy`: its text, with the frontmatter, is no block's), searchable until
 the first boot's catch-up re-embeds the note (`chunk_version` 0).
@@ -2563,9 +2654,9 @@ new content's job), and replaces imports and the whole block set and writes
 `chunk_version` together; semantic edges are recomputed after the commit
 (skipped when the file-level block kept its vector).
 Import and block rows go in 1,000 a statement (`INSERT_CHUNK_ROWS`; one
-statement binds at most 65,534 parameters, 14 a block row), all in that
+statement binds at most 65,534 parameters, 15 a block row), all in that
 transaction, so a generated file with thousands of exported consts still
-commits whole (tested with 12,001 blocks). A
+commits whole (tested with 12,002 blocks). A
 failure or a crash anywhere before the commit leaves the previous imports,
 blocks and vectors whole and searchable. **Vector reuse:** a block whose
 `embed_key` (the running `EMBEDDER_ID` and its embedded text) one of the
@@ -2646,19 +2737,31 @@ written in the same transaction) and `notes.embedder_id`, `chunk_version`
 (out of the Drizzle `notes` model, like `seq`; a note's blocks carry its
 `seq` as `owner_version`).
 
-*Upgrade to 0033.* The migration stamps the vectors already stored with
-`Xenova/bge-small-en-v1.5+text1`, the id of what made them (the model,
+*Upgrade to 0033.* The migration rewrites no row, so it holds the boot for
+well under a second: 244 ms measured locally on 100,000 notes (501 MB) and
+20,000 files (124 MB) with vectors (the review of #978 measured 590 s for a
+version that updated every row). It adds `notes.embedder_id` and
+`repository_files.embedder_id` with the constant default
+`Xenova/bge-small-en-v1.5+text1`, which PostgreSQL (11+) gives the existing
+rows from the catalog, then drops the default, so later rows start
+without one. That is the id of what made the stored vectors: the model,
 pooling and the note, file and symbol embed texts are unchanged since
-1f05a6f, 3bc7a5b and 2c584d0), and sets `extracted_hash = content_hash` on
-files; rows whose pre-0033 job for their current content or `seq` is
-pending or failed are left unstamped. Every file keeps `extractor_version`
-0. So the first boot re-embeds only the notes and files without a vector
-or with a pending or failed job (about 100 ms a note and 640 ms a file with
-bge-small on CPU), and re-extracts every repository file once with its
-vectors reused, which costs a parse and a write: measured locally on this
-repository's 766 source files ×3 (2,298 files, 9,807 symbols, shared
-loaded Postgres), 2,298 files queued in 76 ms and drained in 56 s, 24 ms a
-file, with no file or symbol embedded; about 8 minutes for 20,000 files.
+1f05a6f, 3bc7a5b and 2c584d0. The id counts only where `embedding` is set;
+the catch-up and `processFile` check that first. The one UPDATE clears the
+id of the few notes whose pre-0033 job for their current `seq` is pending
+or failed (reached from `jobs` by primary key), so the catch-up embeds them.
+Files keep `extracted_hash` null and `extractor_version` 0, so the first
+boot re-extracts each once. `processFile` keeps such a file's vector unless
+its pre-0033 job `extract:<id>:<hash>` for the current content is pending
+or failed, and a push to it before then records the replaced content in
+`extracted_hash` (`syncRepositoryFiles`), so a vector is only kept for the
+content it was made from. So the first boot re-embeds only the notes and
+files without a vector or with a pending or failed job (about 100 ms a note
+and 640 ms a file with bge-small on CPU), and re-extracts every repository
+file once with its vectors reused, which costs a parse and a write. Measured
+locally on this repository's 766 source files ×3 (2,298 files, 9,807 symbols,
+shared loaded Postgres): queued in 76 ms and drained in 56 s, 24 ms a file,
+with no file or symbol embedded, so about 8 minutes for 20,000 files.
 That re-extraction is also the backfill of import `line`s from before 0031
 (#558, ADR-004 A7). A note written 2 s into that catch-up had its vector
 81 ms later and a file pushed then had its symbols in 99 ms: writes go
