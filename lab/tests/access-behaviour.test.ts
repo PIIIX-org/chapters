@@ -5,7 +5,7 @@
 //
 //   rate limit   a fresh connection sends MCP_RATE_LIMIT requests, then one
 //                more: that one is refused with 429 (per connection: a second
-//                token of the same user is not). The 429 should carry
+//                token of the same user is not). The 429 carries
 //                Retry-After and a JSON-RPC error body (#440).
 //   tokens       revoked: refused on the next request; deactivated owner:
 //                refused on the next request, and still refused after the

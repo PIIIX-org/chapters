@@ -179,7 +179,7 @@ describe('write answers validate against the listed outputSchema', () => {
 })
 
 describe('errors', () => {
-  it('a failed call is isError text without structuredContent, on a tool without and with an outputSchema', async () => {
+  it('a failed call is the error envelope (#439) as text without structuredContent, on a tool without and with an outputSchema', async () => {
     for (const [tool, args] of [
       ['read_note', { vaultId, path: 'docs/missing' }],
       ['edit_note', { vaultId, path: 'docs/missing', body: 'x' }],
@@ -187,7 +187,7 @@ describe('errors', () => {
     ] as const) {
       const r = await call(tool, args)
       expect(r.isError, tool).toBe(true)
-      expect(r.text).toBe('Error: note not found')
+      expect(r.text).toBe('{"error":{"code":"NOT_FOUND","message":"note not found","retryable":false}}')
       expect(r.structured).toBeUndefined()
     }
   })
