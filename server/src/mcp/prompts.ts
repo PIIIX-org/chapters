@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import { buildGraph, findShortestPath } from '../graph/assemble.js'
+import { resolveNode } from '../graph/resolve-node.js'
 import { searchNotes } from '../search/search.js'
 import { readNote } from '../notes/store.js'
 
@@ -129,8 +130,8 @@ INSTRUCTIONS:
       try {
         const vaultId = vaultFor(reqVaultId)
         await requireAccess(vaultId, 'read')
-        const results = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, featureRequest)
-        if (results.length > 0) {
+        const { status, results } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, featureRequest)
+        if (status === 'ok') {
           relevantNotes = results
             .slice(0, 3)
             .map((r) => `- [[${r.path}]]: ${r.snippet?.slice(0, 100) ?? r.path} (score: ${r.score})`)
@@ -182,7 +183,7 @@ PLANNING GUIDELINES:
       try {
         const vaultId = vaultFor(reqVaultId)
         await requireAccess(vaultId, 'read')
-        const hits = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, issueDescription)
+        const { results: hits } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, issueDescription)
         for (const hit of hits.slice(0, 3)) {
           const note = await readNote(vaultId, hit.path).catch(() => null)
           if (note) hydratedContext += `\n--- Note: [[${hit.path}]] ---\n${note.body.slice(0, 600)}\n`
@@ -433,8 +434,8 @@ Include curl examples, payload schemas, and error tables. Offer to save it as \`
         const vaultId = vaultFor(reqVaultId)
         await requireAccess(vaultId, 'read')
         const query = symbol || filePath
-        const hits = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, query)
-        if (hits.length > 0) {
+        const { status, results: hits } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, query)
+        if (status === 'ok') {
           linkedNotesSummary = hits
             .slice(0, 3)
             .map((h) => `- [[${h.path}]]: ${h.snippet?.slice(0, 80) ?? h.path}`)
@@ -513,11 +514,11 @@ STRUCTURE OF THE BRIEFING:
       try {
         const vaultId = vaultFor(reqVaultId)
         await requireAccess(vaultId, 'read')
-        const graph = await buildGraph({ vaultIds: [vaultId], repositoryIds: [] })
-        const sourceNodeObj = graph.nodes.find((n) => n.id === sourceNode || n.path === sourceNode)
-        const targetNodeObj = graph.nodes.find((n) => n.id === targetNode || n.path === targetNode)
-        if (sourceNodeObj && targetNodeObj) {
-          const path = findShortestPath(graph, sourceNodeObj.id, targetNodeObj.id)
+        const resources = { vaultIds: [vaultId], repositoryIds: [] }
+        // Each end as find_graph_path resolves it (#447); a name with several matches or none adds no path.
+        const [sourceRef, targetRef] = await Promise.all([resolveNode(resources, sourceNode), resolveNode(resources, targetNode)])
+        if ('node' in sourceRef && 'node' in targetRef) {
+          const path = findShortestPath(await buildGraph(resources), sourceRef.node.id, targetRef.node.id)
           if (path.found && path.nodes.length > 0) {
             pathInfo =
               `\nDISCOVERED GRAPH PATH (${path.distance} hops):\n` +
