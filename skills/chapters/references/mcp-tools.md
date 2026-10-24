@@ -15,9 +15,10 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
 - **Capabilities** (set when the token is minted, never raised later; every tool declares one, and the server checks them before the scope):
   - Each token has an access level, ordered `read` < `write` < `admin`. A tool runs only if the level is at or above the tool's **Capability** below. `read` tools only read; `write` tools create, edit, trash, restore or revert; `admin` tools widen access to or destroy a resource or change its settings (share, revoke, `update_vault`/`update_repository`, `delete_vault`, `purge_*`, `purge_revision`, `connect_repository`, team membership, `delete_team`).
   - Defaults: an account token minted through the API without a level gets `admin` (every tool); a vault- or repository-pinned token gets `write`, so it cannot share, update, trash or purge its pin or erase history. A pinned token never gets more than its user's permission on the pin: only the owner can mint it with `admin`, and with a read-only vault share (direct or through a team) asking for `write` is refused with HTTP 403 and the default becomes `read`. The Settings form and the vault form start at `write`, or at `read` for a read-only vault member.
-  - An optional tool allow-list limits the token to the named tools. A token with an allow-list gets no MCP prompts (prompts read notes on the server side).
+  - Each token has a **profile** (#428), the set of tools it lists and may call, nested `reader` < `writer` < `admin`. `reader` finds and reads: `list_vaults`, `list_repositories`, `browse_vault`, `browse_repository`, `search`, `read_note`, `read_file`, `find_symbols`, `graph`, `find_graph_path` (10 tools; 5 on a vault-pinned token, 6 on a repository-pinned one). `writer` adds `create_note`, `edit_note` and `append_note`. `admin` has every tool. Each tool's **Profile** line below names the smallest profile it is in; a tool without one is in `admin` only. The profile only narrows what the access level, allow-list and scope allow: a `read` token with the `writer` profile lists the reader tools only. Tokens minted before profiles existed, and tokens minted through the API without `profile`, are `admin` (every tool, as before). The Settings and vault forms start the profile at the one that matches the access level (`read` → `reader`, `write` → `writer`, `admin` → `admin`) until you pick one.
+  - An optional tool allow-list limits the token to the named tools. A token with an allow-list, or with the `reader` profile, gets no MCP prompts (prompts read notes on the server side).
   - An optional expiry: after it, every request is refused with HTTP 401 (`invalid, revoked or expired MCP token`).
-  - `tools/list` shows only the tools the token can call: those in its allow-list, within its access level, and of a scope its own scope reaches (no account-only tools on a pinned token, no vault tools on a repository token, no repository tools on a vault token). On a pinned token it also leaves out tools that need more than the user's current permission on the pin: the owner-only tools below unless the user owns it, and the tools that need edit access on the vault (note writes, `list_trash`, `note_history`, `get_revision`, `export_vault`, saving and deleting perspectives) unless the user can edit it. A tool missing from the list can still be called by name; the call is refused with a message naming what is missing: `<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, a scope refusal such as `<tool> requires an account-scoped connection`, or `owner permission required` / `not found` for missing permission on the pin.
+  - `tools/list` shows only the tools the token can call: those in its allow-list, within its access level and its profile, and of a scope its own scope reaches (no account-only tools on a pinned token, no vault tools on a repository token, no repository tools on a vault token). On a pinned token it also leaves out tools that need more than the user's current permission on the pin: the owner-only tools below unless the user owns it, and the tools that need edit access on the vault (note writes, `list_trash`, `note_history`, `get_revision`, `export_vault`, saving and deleting perspectives) unless the user can edit it. A tool missing from the list can still be called by name; the call is refused with a message naming what is missing: `<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, `<tool> needs the writer profile; this connection has the reader profile (mint a token with that profile)`, a scope refusal such as `<tool> requires an account-scoped connection`, or `owner permission required` / `not found` for missing permission on the pin.
 - **Response**: the result is returned as JSON text (`content[0].text`). Errors come back as `Error: <message>` with `isError: true`. A filesystem or network error is reported only by its code (`internal storage error (ENOENT)`); the full error goes to the server log.
 - **Budgets and `truncated`** (#420, #421, #422): `browse_vault`, `read_note`, `list_trash`, `note_history`, `get_revision`, `browse_repository`, `read_file`, `find_symbols`, `graph` and `find_graph_path` take `budget_tokens` (integer 256-25,000; default 2,000, or 4,000 for `read_note`, `read_file` and `get_revision`), counted as characters / 4 of the answer text (the premise benchmark's estimate; it undercounts real tokenizer tokens, by roughly 10-20 % on code and JSON and 1.3-4× on Persian or Chinese text, so leave headroom). The answer stays within it: lists drop whole items from the end, and text (a note body, a file) is cut at a line boundary; only a line longer than a whole page is split. A text that would show nothing at all shows its first line anyway. When a list could not show at least 5 whole items (or all that are left) even on a page of its own, the answer steps down the ladder instead (see `level`). Each of these answers is an object whose last key is `truncated`: `false` when nothing was left out, else `{ shown, total, dropped, level, cursor, narrow }`.
   - `shown`, `total` and `dropped` count items per list (lines for text) from where this page starts, so `shown + dropped = total`. A `total` of `">n"` means the tool fetched `limit` + 1 and found more than `limit`.
@@ -44,6 +45,7 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
 ### `list_vaults`
 - **Scope**: account only.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**: none.
 - **Returns**: array of `{ id, name, ownerId, mergeable, access }`, where `access` is `owner` | `edit` | `read`.
 
@@ -58,6 +60,7 @@ Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools a
 ### `browse_vault`
 - **Scope**: vault. Read access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, optional): a folder such as `domains/auth` (leading/trailing `/` ignored); without it, the vault root.
@@ -179,6 +182,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `read_note`
 - **Scope**: vault. Read access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -188,6 +192,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `create_note`
 - **Scope**: vault. Edit access.
 - **Capability**: `write`.
+- **Profile**: `writer`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, optional): full note path, for example `domains/storage/postgres`.
@@ -201,6 +206,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `edit_note`
 - **Scope**: vault. Edit access.
 - **Capability**: `write`.
+- **Profile**: `writer`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -216,14 +222,14 @@ The write is committed when the call returns; a connection lost before the answe
     - `{op: "delete_block", find}`: delete `find`, which must occur exactly once; a whole line given without its line break takes the line break with it.
     - `{op: "frontmatter_set", key, value}`: set a top-level key. `{op: "frontmatter_add", key, value}`: add `value` to the list at `key` (created if absent; a value already there is not added twice). `{op: "frontmatter_remove", key, value?}`: delete the key, or with `value` remove it from the list. `type` cannot be changed; list ops on a key that is not a list fail. Frontmatter ops apply after `frontmatter` and `removeKeys`.
     - If any op cannot be resolved (empty, missing or ambiguous `find`/`anchor`/`heading`, a count other than `expectedCount`), the call fails with an error naming the op (`ops[1] insert_after: "foo" occurs 2 times; give a longer \`anchor\` that occurs once`) and **nothing changes**, not even the ops before it. An unknown key inside an op is refused like any unknown argument.
-  - `base_rev` (integer or string, optional): the `rev` that `read_note` (or your previous write) returned for the content your `body` and `frontmatter` were made from; a revision `id` from `note_history` (the `rev` before integer revs) works too. With it, your edit is merged with whatever changed since that revision, so text a person typed meanwhile is kept:
+  - `base_rev` (integer or string, optional): the `rev` that `read_note` (or your previous write) returned for the content your `body` and `frontmatter` were made from; a revision `id` from `note_history` (the `rev` before integer revs; `note_history` is on `admin`-profile tokens only) works too. With it, your edit is merged with whatever changed since that revision, so text a person typed meanwhile is kept:
     - Your changed lines of `body`, and the frontmatter keys you changed (with `frontmatter`, `replace` or `removeKeys`) relative to that revision, are applied to the live note; everything else keeps its current value. A key you send with the value it had at `base_rev` is not a change. `ops` apply to the live text as always.
     - When nothing changed since, the result has `status: "applied"`. When something changed elsewhere, it has `status: "merged"` and `concurrent_changes: { lines?: [{ line, removed, added }], frontmatterKeys? }`: each changed run of lines starts at `line` (1-based) of the body as it was just before your edit, where `added` lines replaced `removed` lines of your base.
     - When a line or frontmatter key you changed was also changed since (two changes to the same line conflict even if they touch different words, and so do two insertions at the same place inside the body), **nothing changes**. The call succeeds with `{ status: "conflicted", path, rev, baseRev, proposalId, conflicts, message }` (`rev` is the note's current one): `conflicts` has the same shape (the changes made since that overlap yours), and your version of the note is kept as revision `proposalId` with action `proposal` and `sourceRevisionId` = the id of the revision your `base_rev` names: your frontmatter (with `frontmatter`, `removeKeys` and frontmatter ops) applied to the base revision's, and your `body`, or your body `ops` applied to the live text. People see it in the note's history as "Proposed by <connection name>" and can restore it. Read the note again (new `rev`) and redo your change, or use `ops`. Sending the same edit again returns the same `proposalId`.
     - Lines you only added after the end of the base's body (ending its last line first when it had no line break) go after whatever was added or typed at the end since, on a line of their own, and lines the end already holds (the same lines sent again from the same base) are not added twice. If one of your added lines (not a blank one) is already among the lines added there since, but not at their end, that is a conflict: it is unclear whether you meant it twice. If you also changed the last line and so did someone else, that is a conflict too.
     - A `base_rev` that is not a revision of this note (another note's revision id, a `quarantine` or `proposal` revision, a `rev` the note never had, anything else) is refused and nothing changes.
     - The size limit is checked on the body you send; the quarantine below is checked on the merged body that would be written, so a note a person shortened since your read does not quarantine your edit.
-  - Without `base_rev`, a `body` is merged in the same way from what this connection last had of the note in the past 24 hours, echoed as `baseRev`: the `rev` of its last `read_note` or `export_note`, or, after it wrote a whole `body`, that write's `rev` with the body it sent (when the write was merged, your next body is built on what you sent, not on what the merge produced). Reading a note, changing its body and sending it back whole keeps what people typed after your read, also across a server restart, and a change of yours that overlaps their typing is `conflicted` as above. Only when this connection has not read the note in the past 24 hours does a `body` replace the live text. Edits with `ops` or only `frontmatter` are not affected.
+  - Without `base_rev`, a `body` is merged in the same way from what this connection last had of the note in the past 24 hours, echoed as `baseRev`: the `rev` of its last `read_note` or `export_note` (`admin` profile), or, after it wrote a whole `body`, that write's `rev` with the body it sent (when the write was merged, your next body is built on what you sent, not on what the merge produced). Reading a note, changing its body and sending it back whole keeps what people typed after your read, also across a server restart, and a change of yours that overlaps their typing is `conflicted` as above. Only when this connection has not read the note in the past 24 hours does a `body` replace the live text. Edits with `ops` or only `frontmatter` are not affected.
   - `allowGrowth` (boolean, optional, default `false`): write a body the quarantine below would keep out. Use it only for a change you mean, such as a large paste into a note. It does not lift the size limit, which is checked first.
   - Omit a field to keep it as it is: a body-only edit leaves the frontmatter untouched.
 - The resulting frontmatter is validated as a whole (the rules at the top of this section) before anything is written; if it is invalid (for example `status: "bogus"` or `title: null`), the call fails and neither the note nor the live document changes. If the invalid value is a key already on the note that you did not send (for example a value a person typed in the editor that the server refused to store), the error names that key: send a valid value for it, list it in `removeKeys`, or pass `replace: true` with the whole map.
@@ -238,6 +244,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `append_note`
 - **Scope**: vault. Edit access.
 - **Capability**: `write`.
+- **Profile**: `writer`.
 - **Parameters**:
   - `vaultId` (uuid, optional).
   - `path` (string, required).
@@ -377,6 +384,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `list_repositories`
 - **Scope**: account only.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**: none.
 - **Returns**: array of repository records: `{ id, name, ownerId, ingestionMethod, gitUrl, localPath, defaultBranch, mergeable, syncStatus, lastSyncedAt, lastSyncError, lastWebhookAt, webhookConfigured, createdAt, access }`. Credentials are never returned.
 
@@ -394,6 +402,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `browse_repository`
 - **Scope**: repository. Repository access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `path` (string, optional): a folder; only the files under it are listed (`src/lib` lists `src/lib/a.ts` and `src/lib/b/c.ts`, not `src/library.ts`). Leading and trailing `/` are ignored; a file's path lists nothing (use `read_file`). Omitted: every file.
@@ -402,6 +411,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `read_file`
 - **Scope**: repository. Repository access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `repositoryId` (uuid, optional).
   - `path` (string, required): file path inside the repository.
@@ -480,6 +490,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `search`
 - **Scope**: vault, repository, or account. Read access to each resource searched.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `query` (string, required).
   - `vaultId` (uuid, optional) and/or `repositoryId` (uuid, optional). An account-scoped token must pass at least one, or `everywhere`.
@@ -491,6 +502,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `find_symbols`
 - **Scope**: repository, or account. A repository-scoped token searches its pinned repository; another `repositoryId` is an error. A vault-scoped token cannot use it. An account-scoped token searches `repositoryId` if given, otherwise (or with `everywhere`) every repository you can access.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `query` (string, required).
   - `kind` (enum `"function"` | `"class"` | `"interface"` | `"type"`, optional).
@@ -507,6 +519,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `graph`
 - **Scope**: vault and/or repository. An account-scoped token must pass `vaultId` or `repositoryId`.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters** (these are all of them):
   - `vaultId` (uuid, optional).
   - `repositoryId` (uuid, optional).
@@ -540,6 +553,7 @@ The write is committed when the call returns; a connection lost before the answe
 ### `find_graph_path`
 - **Scope**: as for `graph`.
 - **Capability**: `read`.
+- **Profile**: `reader`.
 - **Parameters**:
   - `source` (string, required): a node `id` or exact node `path` (note path without `.md`, or repository file path).
   - `target` (string, required): same.
@@ -647,7 +661,7 @@ All team and user tools are **account only**.
 
 ## 8. MCP Prompts (20)
 
-Served through `prompts/list` and `prompts/get` (`server/src/mcp/prompts.ts`). A prompt returns instructions that tell the agent which tools to call; it does not run them. Arguments marked `?` are optional.
+Served through `prompts/list` and `prompts/get` (`server/src/mcp/prompts.ts`). A prompt returns instructions that tell the agent which tools to call; it does not run them. A token with a tool allow-list or the `reader` profile gets none. Arguments marked `?` are optional.
 
 | # | Prompt | What it sets up | Arguments |
 | :- | :--- | :--- | :--- |
