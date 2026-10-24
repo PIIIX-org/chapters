@@ -5,17 +5,20 @@
  *
  * - `symbol`: one per extracted symbol, its lines; `inner_path` is
  *   `Class.method` for a method (#450's `parent`), the bare name otherwise.
- * - `file`: the whole file, when it is small (at most `SMALL_FILE_MAX_LINES`
- *   lines and `MAX_EMBED_CHARS` characters, so its text reaches the embedder
- *   uncut) or has no symbols (an unsupported language, a minified bundle, no
- *   declarations). Embedded text: `<path>\n<content>`, as the file vector was.
- * - `skeleton`: the outline of a file that is not small and has symbols
- *   (`<path>` then each symbol's first line), and of each class in it with
- *   methods (`<kind> <Class> in <path>`, the class's first line, then each
- *   method's first line).
+ * - `file`: the whole file, for every file. Embedded text:
+ *   `<path>\n<content>`, as the file vector was (the model reads its first
+ *   512 tokens); search's code vector leg ranks files by it.
+ * - `skeleton`: the outline of a file that is not small (more than
+ *   `SMALL_FILE_MAX_LINES` lines or `MAX_EMBED_CHARS` characters, so its
+ *   `file` vector covers only its head) and has symbols (`<path>` then each
+ *   symbol's first line), and of each class in it with methods (`<kind>
+ *   <Class> in <path>`, the class's first line, then each method's first
+ *   line).
  *
- * So every file has exactly one file-level block (`file` or the file
- * `skeleton`), always embedded. A symbol's embedded text is
+ * The file-level blocks (`file`, and a file `skeleton`) are always
+ * embedded; the `file` block comes first. Ranking a file by its skeleton
+ * instead of its head was measured worse (chapters A13: a 304-line hook's
+ * outline outranked the 80-line answer, hit@5 0.9655 -> 0.931). A symbol's embedded text is
  * `<kind> <inner_path> in <path>\n<snippet>`, the snippet being its first
  * `SNIPPET_LINES` lines cut to `SNIPPET_CHARS` characters: no line number,
  * so a block whose lines only moved keeps its text and its vector.
@@ -73,8 +76,10 @@ export function codeBlocks(fileId: string, path: string, content: string, symbol
 
   const drafts: Array<Omit<CodeBlock, 'blockId'>> = []
   const whole = { innerPath: '', symbolKind: null, symbolParent: null, snippet: null, startLine: 1, endLine: total, contentHash: hash(1, total), budgetTier: null }
-  if (small || symbols.length === 0) drafts.push({ ...whole, kind: 'file', embedText: `${path}\n${content}` })
-  else drafts.push({ ...whole, kind: 'skeleton', embedText: [path, ...symbols.map((s) => firstLine(s.startLine))].join('\n') })
+  drafts.push({ ...whole, kind: 'file', embedText: `${path}\n${content}` })
+  if (!small && symbols.length > 0) {
+    drafts.push({ ...whole, kind: 'skeleton', embedText: [path, ...symbols.map((s) => firstLine(s.startLine))].join('\n') })
+  }
 
   for (const s of symbols) {
     const innerPath = s.parent ? `${s.parent}.${s.name}` : s.name
