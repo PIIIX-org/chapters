@@ -1940,10 +1940,36 @@ export async function revertNote(
   return updateFn(
     vaultId,
     path,
-    { frontmatter: revision.frontmatter as Record<string, unknown>, body: revision.body },
+    { frontmatter: revertedFrontmatter(revision, row.type, await pathAtRevision(revision)), body: revision.body },
     actor,
     { ...options, revertOf: revision.id },
   )
+}
+
+/**
+ * The note's path when `revision` was recorded: a rename row's `toPath`,
+ * else the `fromPath` of the first rename recorded after it, else (no move
+ * since) null, the note's current path.
+ */
+async function pathAtRevision(revision: { id: string; action: string; toPath: string | null }): Promise<string | null> {
+  if (revision.action === 'rename' && revision.toPath) return revision.toPath
+  const [next] = (await db.execute(sql`
+    SELECT r.from_path FROM note_revisions r, note_revisions rv
+    WHERE rv.id = ${revision.id} AND r.note_id = rv.note_id AND r.action = 'rename' AND r.from_path IS NOT NULL AND r.ord > rv.ord
+    ORDER BY r.ord LIMIT 1`)) as unknown as Array<{ from_path: string }>
+  return next?.from_path ?? null
+}
+
+/**
+ * The frontmatter a revert to `revision` writes (#444): a `type` that was
+ * the folder the note had then (it defaulted to, or followed, the folder)
+ * becomes the current folder, as a move would have made it; a `type` other
+ * than that folder was the note's own and is kept.
+ */
+function revertedFrontmatter(revision: { frontmatter: unknown }, folder: string, pathThen: string | null): Record<string, unknown> {
+  const frontmatter = revision.frontmatter as Record<string, unknown>
+  if (pathThen === null) return frontmatter
+  return frontmatter.type === resolveNotePath(pathThen).type ? { ...frontmatter, type: folder } : frontmatter
 }
 
 /**

@@ -16,7 +16,7 @@ Specification references:
 
 2. **`type` is the note's OKF type; the folder is the first path segment**:
    - `type` may be any non-empty string (OKF §4.1): `Metric`, `BigQuery Table`, `decision`. A note at `notes/adr-007` can have `type: decision`.
-   - Left out (or empty), `type` is the first path segment: `create_note` at `specs/login-flow` without a `type` stores `type: specs`, and a root note such as `index` gets `type: index`. `edit_note` keeps the current `type` unless you set it; removing it (`removeKeys: ["type"]`) puts the folder back. Moving a note with `rename_note` (full path in `toName`) rewrites a `type` equal to the old folder to the new folder and keeps any other `type`.
+   - Left out (or empty), `type` is the first path segment: `create_note` at `specs/login-flow` without a `type` stores `type: specs`, and a root note such as `index` gets `type: index`. `edit_note` keeps the current `type` unless you set it; removing it (`removeKeys: ["type"]`) puts the folder back. Moving a note with `rename_note` (full path in `toName`) rewrites a `type` equal to the old folder to the new folder and keeps any other `type`; `revert_note` to a revision from before a move does the same with the folder the note had then.
    - The folder, not the frontmatter `type`, is the note's `type` field in replies and what the `types` filter of `search` (REST) and `graph`, and structural graph edges, match. The frontmatter `type` shows in `frontmatter` (reads, search hits) and in generated `index.md` tables. Filtering by the frontmatter `type` is not supported yet.
 
 3. **Datetimes with an explicit offset (enforced)**:

@@ -82,6 +82,11 @@
     },
     {
       "test": "export-roundtrip",
+      "check": "import a real OKF v0.2 bundle (open-knowledge-format bundles/acme_retail)",
+      "issue": 970
+    },
+    {
+      "test": "export-roundtrip",
       "check": "non-ASCII attachment name kept",
       "issue": 619
     },

@@ -11,14 +11,14 @@ import AdmZip from 'adm-zip'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { and, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { notes } from '../src/db/schema.js'
+import { noteRevisions, notes } from '../src/db/schema.js'
 import { restoreBackup } from '../src/export/restore.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { serializeNote } from '../src/notes/okf.js'
-import { getLiveNote, readNote } from '../src/notes/store.js'
+import { createNote, getLiveNote, readNote, renameNote, revertNote } from '../src/notes/store.js'
 import { createActiveUser, loginCookie, uniqueEmail, wipeInstance } from './helpers.js'
 
 /** The spec repo's sample bundle, GoogleCloudPlatform/open-knowledge-format@ad30107c bundles/acme_retail (Apache-2.0). */
@@ -196,6 +196,33 @@ describe('frontmatter type is free; notes.type stays the folder (#444)', () => {
     ])
   })
 
+  /** Creates `from` with `frontmatter`, moves it to `to`, then reverts it to its `create` revision. */
+  async function revertAfterMove(from: string, to: string, frontmatter: Record<string, unknown>) {
+    const created = await createNote(vaultId, { path: from, frontmatter, body: 'v1\n' })
+    await renameNote(vaultId, from, to)
+    const [first] = await db
+      .select({ id: noteRevisions.id })
+      .from(noteRevisions)
+      .where(and(eq(noteRevisions.noteId, created.id), eq(noteRevisions.action, 'create')))
+      .orderBy(asc(noteRevisions.ord))
+    expect(await revertNote(vaultId, to, first!.id, { type: 'user' })).not.toBeNull()
+    return noteRow(to)
+  }
+
+  it('a revert to a revision from before a move gives a folder type the current folder', async () => {
+    expect(await revertAfterMove('drafts/rv', 'specs/rv', {})).toMatchObject({ type: 'specs', frontmatter: { type: 'specs' } })
+    // The revision itself recorded at the old folder too: the type follows the note when it moves again.
+    await renameNote(vaultId, 'specs/rv', 'guides/rv')
+    expect(await noteRow('guides/rv')).toMatchObject({ type: 'guides', frontmatter: { type: 'guides' } })
+  })
+
+  it('a revert to a revision from before a move keeps a semantic type', async () => {
+    expect(await revertAfterMove('drafts/rv-sem', 'specs/rv-sem', { type: 'decision' })).toMatchObject({
+      type: 'specs',
+      frontmatter: { type: 'decision' },
+    })
+  })
+
   // Last: restoring a whole instance wipes the database the tests above use.
   it('restores a note whose type is not its folder (format-1 archive)', async () => {
     await wipeInstance()
@@ -219,8 +246,13 @@ describe('frontmatter type is free; notes.type stays the folder (#444)', () => {
       ),
     )
     zip.addFile(`vaults/${restoredVault}/notes/adr-restored.md`, Buffer.from(serializeNote({ frontmatter: { type: 'decision' }, body: 'Restored decision.\n' })))
+    zip.addFile(`vaults/${restoredVault}/notes/numeric-type.md`, Buffer.from('---\ntype: 7\n---\nA number is not a type.\n'))
     const plan = await restoreBackup(zip.toBuffer())
-    expect(plan.warnings.filter((w) => w.includes('note skipped'))).toEqual([])
+    // A type that is not a string is refused as on create and edit, not turned into "7".
+    expect(plan.warnings.filter((w) => w.includes('note skipped'))).toEqual([
+      `note skipped: ${restoredVault}/notes/numeric-type: frontmatter type must be a non-empty string`,
+    ])
+    expect(await getLiveNote(restoredVault, 'notes/numeric-type')).toBeNull()
     const note = await readNote(restoredVault, 'notes/adr-restored')
     expect(note?.row.type).toBe('notes')
     expect(note?.frontmatter.type).toBe('decision')
