@@ -5,7 +5,7 @@ import { db } from '../src/db/client.js'
 import { repositories } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { findSymbols, searchNotes, type SymbolSearchResult } from '../src/search/search.js'
+import { findSymbols, searchNotes, type SearchResponse, type SymbolSearchResult } from '../src/search/search.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -34,7 +34,7 @@ describe('searchNotes over vaults and repositories', () => {
     )
     await flushExtraction()
 
-    const results = await searchNotes({ vaultIds: [], repositoryIds: [repo.id] }, 'quantumFluxCapacitor')
+    const { results } = await searchNotes({ vaultIds: [], repositoryIds: [repo.id] }, 'quantumFluxCapacitor')
     expect(results[0]?.resourceType).toBe('code')
     expect(results[0]?.path).toBe('src/quantum.ts')
     expect(results[0]?.snippet).toContain('<b>')
@@ -58,7 +58,7 @@ describe('searchNotes over vaults and repositories', () => {
       body: { type: 'docs', name: 'note', body: 'unmistakable keyword zephyrtoken here' },
     })
 
-    const results = await searchNotes({ vaultIds: [vault.id], repositoryIds: [] }, 'zephyrtoken')
+    const { results } = await searchNotes({ vaultIds: [vault.id], repositoryIds: [] }, 'zephyrtoken')
     expect(results[0]?.resourceType).toBe('note')
     expect(results[0]?.frontmatter).toBeTruthy()
   })
@@ -84,7 +84,7 @@ describe('searchNotes over vaults and repositories', () => {
     await syncRepositoryFiles(repo.id, [{ path: 'thruster.py', content: '# orbitalthruster control loop' }], ['thruster.py'])
     await flushExtraction()
 
-    const results = await searchNotes({ vaultIds: [vault.id], repositoryIds: [repo.id] }, 'orbitalthruster')
+    const { results } = await searchNotes({ vaultIds: [vault.id], repositoryIds: [repo.id] }, 'orbitalthruster')
     const types = new Set(results.map((r) => r.resourceType))
     expect(types.has('note')).toBe(true)
     expect(types.has('code')).toBe(true)
@@ -95,7 +95,7 @@ describe('searchNotes over vaults and repositories', () => {
     await syncRepositoryFiles(repo.id, [{ path: 'secret.ts', content: 'export const zzyxxsecretmarker = 1' }], ['secret.ts'])
     await flushExtraction()
 
-    const results = await searchNotes({ vaultIds: [], repositoryIds: [] }, 'zzyxxsecretmarker')
+    const { results } = await searchNotes({ vaultIds: [], repositoryIds: [] }, 'zzyxxsecretmarker')
     expect(results).toEqual([])
   })
 })
@@ -124,7 +124,7 @@ describe('symbol embeddings and precise retrieval (#262)', () => {
     await flushExtraction()
 
     // Test findSymbols directly
-    const symbols = await findSymbols([repo.id], 'generateAuthToken')
+    const { results: symbols } = await findSymbols([repo.id], 'generateAuthToken')
     expect(symbols.length).toBeGreaterThan(0)
     const fn = symbols.find((s) => s.name === 'generateAuthToken')
     expect(fn).toBeDefined()
@@ -135,12 +135,12 @@ describe('symbol embeddings and precise retrieval (#262)', () => {
     expect(fn?.snippet).toContain('return "signed."')
 
     // Test kind filter
-    const interfaces = await findSymbols([repo.id], 'Token', { kind: 'interface' })
+    const { results: interfaces } = await findSymbols([repo.id], 'Token', { kind: 'interface' })
     expect(interfaces.every((s) => s.kind === 'interface')).toBe(true)
     expect(interfaces.some((s) => s.name === 'TokenPayload')).toBe(true)
 
     // Test searchNotes with includeSymbols
-    const allResults = await searchNotes(
+    const { results: allResults } = await searchNotes(
       { vaultIds: [], repositoryIds: [repo.id] },
       'TokenValidator',
       20,
@@ -180,7 +180,7 @@ describe('symbol embeddings and precise retrieval (#262)', () => {
       headers: { cookie },
     })
     expect(repoRes.statusCode).toBe(200)
-    const repoSymbols = repoRes.json() as SymbolSearchResult[]
+    const repoSymbols = repoRes.json<SearchResponse<SymbolSearchResult>>().results
     expect(repoSymbols.some((s) => s.name === 'calculateHypotenuse')).toBe(true)
 
     // Everywhere symbol search
@@ -190,7 +190,7 @@ describe('symbol embeddings and precise retrieval (#262)', () => {
       headers: { cookie },
     })
     expect(allRes.statusCode).toBe(200)
-    const allSymbols = allRes.json() as SymbolSearchResult[]
+    const allSymbols = allRes.json<SearchResponse<SymbolSearchResult>>().results
     expect(allSymbols.some((s) => s.name === 'calculateHypotenuse')).toBe(true)
   })
 })

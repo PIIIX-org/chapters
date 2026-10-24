@@ -12,11 +12,6 @@
     },
     {
       "test": "attachments",
-      "check": "a query matching nothing returns no results",
-      "issue": 533
-    },
-    {
-      "test": "attachments",
       "check": "an attachment can be deleted at all (REST)",
       "issue": 561
     },
