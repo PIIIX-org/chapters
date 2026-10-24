@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
+import { and, eq, inArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { notes, semanticEdges } from '../db/schema.js'
+import { semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
 
 export type SemanticNodeType = 'note' | 'code'
@@ -13,37 +13,43 @@ interface Neighbor {
 
 type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
 
+/**
+ * The nearest owners of one type to any of `vecs` (ADR-004 §2.5 roll-up): for
+ * each query vector its 100 nearest blocks (`hnsw.ef_search` is 100 in
+ * recomputeSemanticEdges's transaction, so HNSW returns at most that many),
+ * then one row per owner with its best block's similarity. Notes count only
+ * while live.
+ */
+async function nearestOwners(
+  client: DbOrTx,
+  ownerType: SemanticNodeType,
+  vecs: string,
+  excludeId: string | null,
+): Promise<Array<{ id: string; similarity: number }>> {
+  return (await client.execute(sql`
+    SELECT nearest.owner_id AS id, 1 - min(nearest.distance) AS similarity
+    FROM unnest(${vecs}::text[]) AS q(vec)
+    CROSS JOIN LATERAL (
+      SELECT owner_id, embedding <=> q.vec::vector AS distance FROM blocks
+      WHERE owner_type = ${ownerType} AND embedding IS NOT NULL ${excludeId ? sql`AND owner_id <> ${excludeId}` : sql``}
+      ORDER BY embedding <=> q.vec::vector
+      LIMIT 100
+    ) nearest
+    ${ownerType === 'note' ? sql`JOIN notes n ON n.id = nearest.owner_id AND n.deleted_at IS NULL` : sql``}
+    GROUP BY nearest.owner_id ORDER BY min(nearest.distance), nearest.owner_id
+    LIMIT ${config.semanticK}`)) as unknown as Array<{ id: string; similarity: number }>
+}
+
 async function knn(
-  vec: string,
+  vectors: readonly number[][],
   excludeType: SemanticNodeType,
   excludeId: string,
   client: DbOrTx = db,
 ): Promise<Neighbor[]> {
-  const noteRows = await client
-    .select({ id: notes.id, similarity: sql<number>`1 - (${notes.embedding} <=> ${vec}::vector)` })
-    .from(notes)
-    .where(
-      and(
-        isNull(notes.deletedAt),
-        sql`${notes.embedding} is not null`,
-        excludeType === 'note' ? ne(notes.id, excludeId) : sql`true`,
-      ),
-    )
-    .orderBy(sql`${notes.embedding} <=> ${vec}::vector`)
-    .limit(config.semanticK)
-
-  // A file's similarity is its best block's (ADR-004 §2.5): the nearest blocks, then one row per file.
-  // `hnsw.ef_search` is 100 in recomputeSemanticEdges's transaction, so at most 100 blocks come back.
-  const codeRows = (await client.execute(sql`
-    SELECT owner_id AS id, 1 - min(distance) AS similarity FROM (
-      SELECT owner_id, embedding <=> ${vec}::vector AS distance FROM blocks
-      WHERE owner_type = 'code' AND embedding IS NOT NULL ${excludeType === 'code' ? sql`AND owner_id <> ${excludeId}` : sql``}
-      ORDER BY embedding <=> ${vec}::vector
-      LIMIT 100
-    ) nearest
-    GROUP BY owner_id ORDER BY min(distance), owner_id
-    LIMIT ${config.semanticK}`)) as unknown as Array<{ id: string; similarity: number }>
-
+  // One Postgres text[] of vector literals: `[a,b,…]` holds no comma-quoting hazard inside `{"…","…"}`.
+  const vecs = `{${vectors.map((v) => `"${JSON.stringify(v)}"`).join(',')}}`
+  const noteRows = await nearestOwners(client, 'note', vecs, excludeType === 'note' ? excludeId : null)
+  const codeRows = await nearestOwners(client, 'code', vecs, excludeType === 'code' ? excludeId : null)
   return [
     ...noteRows.map((r) => ({ type: 'note' as const, id: r.id, similarity: r.similarity })),
     ...codeRows.map((r) => ({ type: 'code' as const, id: r.id, similarity: r.similarity })),
@@ -56,12 +62,15 @@ async function knn(
  * Recomputes one node's semantic neighbors across both notes and code
  * (spec 9: one shared embedding space, semantic edges span both content
  * types) and stores the strong ones. Called by both the note embedding
- * queue and the repository file extraction queue.
+ * queue and the repository file extraction queue. `vectors`: the node's
+ * block vectors whose neighbours count (a note: all its blocks; a file: its
+ * file-level block); a neighbour's similarity is that of its best block to
+ * the best of these (ADR-004 §2.5).
  */
 export async function recomputeSemanticEdges(
   nodeType: SemanticNodeType,
   nodeId: string,
-  embedding: number[],
+  vectors: readonly number[][],
 ): Promise<void> {
   await db.transaction(async (tx) => {
     // A note purged while it was embedded keeps no edges: the row is locked
@@ -81,8 +90,8 @@ export async function recomputeSemanticEdges(
       .delete(semanticEdges)
       .where(and(eq(semanticEdges.sourceType, nodeType), eq(semanticEdges.sourceId, nodeId)))
 
-    const vec = JSON.stringify(embedding)
-    const neighbors = (await knn(vec, nodeType, nodeId, tx)).filter(
+    if (vectors.length === 0) return
+    const neighbors = (await knn(vectors, nodeType, nodeId, tx)).filter(
       (n) => n.similarity >= config.semanticThreshold,
     )
     if (neighbors.length === 0) return

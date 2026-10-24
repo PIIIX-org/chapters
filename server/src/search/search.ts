@@ -69,9 +69,10 @@ export interface SearchNotesOptions {
 const CANDIDATES = 30
 const RRF_K = 60
 /**
- * Nearest blocks a code vector leg reads before it keeps each file's best
- * one (#452): a file has several blocks, so 30 files need more than 30.
- * Also the leg's `hnsw.ef_search`, since HNSW returns at most that many rows.
+ * Nearest blocks a note or code vector leg reads before it keeps each
+ * document's best one (#452): a note or file has several blocks, so 30
+ * documents need more than 30. Also the leg's `hnsw.ef_search`, since HNSW
+ * returns at most that many rows.
  */
 const BLOCK_CANDIDATES = 200
 
@@ -147,14 +148,22 @@ async function noteRows(
                              'MaxWords=30, MinWords=10') AS snippet
           FROM top_notes
         `)
-      : await db.execute(sql`
+      : await blockLeg(sql`
+          -- A note's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per note, as before blocks.
+          WITH nearest AS (
+            SELECT owner_id, embedding <=> ${vec}::vector AS distance
+            FROM blocks
+            WHERE owner_type = 'note' AND container_id = ANY(${uuidArray(vaultIds)}) AND embedding IS NOT NULL
+            ORDER BY embedding <=> ${vec}::vector
+            LIMIT ${BLOCK_CANDIDATES}
+          ), best AS (
+            SELECT owner_id, min(distance) AS distance FROM nearest GROUP BY owner_id
+          )
           SELECT id, vault_id AS container_id, path, type, frontmatter, left(body, 200) AS snippet
-          FROM notes
-          WHERE vault_id = ANY(${uuidArray(vaultIds)})
-            AND deleted_at IS NULL
-            AND embedding IS NOT NULL
+          FROM best JOIN notes ON notes.id = best.owner_id
+          WHERE deleted_at IS NULL
             ${filterSql}
-          ORDER BY embedding <=> ${vec}::vector
+          ORDER BY best.distance, notes.id
           LIMIT ${CANDIDATES}
         `)
   return rows as unknown as Row[]

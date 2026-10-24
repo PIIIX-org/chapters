@@ -163,7 +163,7 @@ const test: LabTest = {
     const repoSettle = await settleRepo(ctx, RA, 'lab-sep-a-repo', { stallMs: 60_000, timeoutMs: 240_000 })
     const embedded = await poll(async () => {
       const rows = await ctx.docker.psqlRows<{ n: number }>(
-        `select count(*)::int as n from notes where id in ('${noteA.id}', '${noteB.id}') and embedding is not null`,
+        `select count(*)::int as n from notes n where n.id in ('${noteA.id}', '${noteB.id}') and exists (select 1 from blocks b where b.owner_type = 'note' and b.owner_id = n.id and b.owner_version = n.seq::text and b.embedding is not null)`,
       )
       return rows[0]?.n === 2 ? true : undefined
     }, 240_000, 2_000)

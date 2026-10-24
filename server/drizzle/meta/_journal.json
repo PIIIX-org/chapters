@@ -253,6 +253,13 @@
       "when": 1792150000000,
       "tag": "0035_blocks",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792200000000,
+      "tag": "0036_note_blocks",
+      "breakpoints": true
     }
   ]
 }

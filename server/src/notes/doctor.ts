@@ -18,8 +18,9 @@
  *   with no `note_crdt` row): text different from the row, undecodable, or
  *   no live note. Bins S2b no longer reads are not problems.
  * - FTS: the stored `fts` vector differs from the one the row gives.
- * - vectors: a live note with no embedding and no job, or whose job for its
- *   current `seq` failed.
+ * - vectors: a live note without the blocks of its current `seq`, embedder
+ *   and chunker (#452) and no job for them (or one that finished without
+ *   them), or whose job for its current `seq` failed.
  * - links: the `note_links` rows (targets and lines) differ from the wikilinks of the body.
  * - blocks (repository files, #413): a file with no blocks of its current
  *   content and embed key (`blocks-missing`: no extraction job for them, or
@@ -57,7 +58,7 @@ import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { onJobConflict } from '../jobs/durable.js'
 import { EXTRACTION_JOB, extractionJobKeySql, hasCurrentBlocksSql } from '../repositories/extraction-queue.js'
-import { EMBEDDING_JOB, embeddingJobKeySql } from '../search/embedding-queue.js'
+import { EMBEDDING_JOB, embeddingJobKeySql, noteBlocksCurrentSql } from '../search/embedding-queue.js'
 import { sameContent } from './frontmatter-order.js'
 import { compareNoteFile, orphanFiles } from './integrity.js'
 import { PROJECTION_VERSIONS, noteFileRel, sha256 } from './projector.js'
@@ -187,7 +188,7 @@ interface NoteRow {
   seq: string
   frontmatter: Record<string, unknown>
   body: string
-  no_embedding: boolean
+  no_current_blocks: boolean
   fts_stale: boolean
   has_revision: boolean
   revision_same: boolean | null
@@ -320,7 +321,7 @@ export async function runDoctor(
   for (;;) {
     const notes = (await client.execute(sql`
       SELECT n.id, n.vault_id, v.name AS vault_name, n.path, n.deleted_at, n.seq, n.frontmatter, n.body,
-        n.embedding IS NULL AS no_embedding, ${FTS_STALE} AS fts_stale,
+        NOT ${noteBlocksCurrentSql()} AS no_current_blocks, ${FTS_STALE} AS fts_stale,
         r.id IS NOT NULL AS has_revision, (r.frontmatter = n.frontmatter AND r.body = n.body) AS revision_same,
         COALESCE((SELECT array_agg(CASE WHEN l.start_line = 0 THEN l.target_path || ' (no line)' WHEN l.start_line = l.end_line THEN l.target_path || '#L' || l.start_line
           ELSE l.target_path || '#L' || l.start_line || '-L' || l.end_line END) FROM note_links l WHERE l.source_note_id = n.id), '{}') AS links
@@ -410,7 +411,10 @@ export async function runDoctor(
         const job = embedJobs.get(note.id)
         if (job && !job.done) pending.push({ ...pendingAt, kind: 'embedding', detail: `embedding job for seq ${seq}` })
         else if (job?.last_error) problem({ ...at, class: 'vector-failed', path: note.path, detail: `embedding for seq ${seq} failed: ${job.last_error}` })
-        else if (note.no_embedding) problem({ ...at, class: 'vector-missing', path: note.path, detail: 'no embedding and no embedding job' })
+        else if (note.no_current_blocks) {
+          const detail = job ? 'its embedding job finished without blocks of its current seq' : 'no blocks of its current seq, embedder and chunker, and no embedding job'
+          problem({ ...at, class: 'vector-missing', path: note.path, detail })
+        }
         // The rows `replaceLinks` would store (`linkRows`: one per target and start line); `(no line)` rows are from before migration 0031.
         const expected = linkRows(note.id, note.body)
           .map((l) => (l.startLine === l.endLine ? `${l.targetPath}#L${l.startLine}` : `${l.targetPath}#L${l.startLine}-L${l.endLine}`))

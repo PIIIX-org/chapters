@@ -694,7 +694,8 @@ const test: LabTest = {
         const readBack = await new McpClient(restoredUrl, ctx.env.tokens.adminAccount.token, 'restored-admin').call('read_note', { vaultId: V, path: 'concepts/persian' })
         const t0 = performance.now()
         const reembedded = await poll(async () => {
-          const r = await psqlRowsDb<{ missing: number }>(RESTORE_DB, 'select count(*)::int as missing from notes where deleted_at is null and embedding is null')
+          const r = await psqlRowsDb<{ missing: number }>(RESTORE_DB, `select count(*)::int as missing from notes n where n.deleted_at is null
+            and not exists (select 1 from blocks b where b.owner_type = 'note' and b.owner_id = n.id and b.owner_version = n.seq::text and b.embedding is not null)`)
           return r[0]?.missing === 0 ? true : undefined
         }, 240_000, 3_000)
         checks.push({

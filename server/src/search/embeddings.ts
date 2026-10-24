@@ -26,20 +26,20 @@ export const MAX_EMBED_CHARS = 16_000
 export const LOCAL_EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5'
 
 /**
- * Version of the texts the queues embed (#453): a note's
- * `<path>\n<frontmatter JSON>\n<body>` (embedding-queue.ts) and the
- * `MAX_EMBED_CHARS` cut. Bump it with any change to those. A repository
- * file's block texts are versioned by embed-key.ts `CHUNK_VERSION`.
+ * Version of how the embedder cuts a text (#453): the `MAX_EMBED_CHARS` cut.
+ * Bump it with any change to that. What a note or a file embeds (its block
+ * texts) is versioned by embed-key.ts `CHUNK_VERSION` (#452): bumping this
+ * one would embed every block of every file and note again.
  */
 const EMBED_TEXT_VERSION = 1
 
 /**
  * What produced a vector (#453): the model (`fake` for the test embedder)
- * and the embed-text version. Part of the `embed_note` job key and stored on
- * `notes.embedder_id` and `repository_files.embedder_id`; a code block's
- * vector carries embed-key.ts `embedKey(text)`, which covers it. Changing either
- * re-embeds every note and file at the next boot, the old vectors searchable
- * until each new one commits.
+ * and the embed-text version. Part of the `embed_note` and extraction job
+ * keys and stored on `notes.embedder_id` and `repository_files.embedder_id`;
+ * a block's vector carries embed-key.ts `embedKey(text)`, which covers it.
+ * Changing either re-embeds every note and file at the next boot, the old
+ * vectors searchable until each new one commits.
  */
 export const EMBEDDER_ID = `${config.embeddings === 'local' ? LOCAL_EMBEDDING_MODEL : 'fake'}+text${EMBED_TEXT_VERSION}`
 

@@ -33,10 +33,13 @@ function expectLean(route: string, { reply, text }: { reply: Reply; text: string
   expect(text.length, `${route} reply size`).toBeLessThan(MAX_REPLY_CHARS)
 }
 
-/** Gives the note an embedding, as the save-time embedding job would. */
+/** Gives the note an embedded block, as the save-time embedding job would (#452: a note's vectors are its blocks). */
 async function embed(path: string): Promise<void> {
   const vector = `[${Array.from({ length: 384 }, (_, i) => (i % 7) / 7 + 0.123456).join(',')}]`
-  await sql`UPDATE notes SET embedding = ${vector}::vector WHERE vault_id = ${vaultId} AND path = ${path}`
+  await sql`INSERT INTO blocks (owner_type, owner_id, container_id, block_id, kind, inner_path, start_line, end_line, content_hash, owner_version, embed_key, embedding)
+    SELECT 'note', id, vault_id, 'b_replyfields', 'preamble', '', 1, 1, 'test', seq::text, 'test', ${vector}::vector
+    FROM notes WHERE vault_id = ${vaultId} AND path = ${path}
+    ON CONFLICT (owner_type, owner_id, block_id) DO NOTHING`
 }
 
 beforeAll(async () => {

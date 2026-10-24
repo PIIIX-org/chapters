@@ -68,7 +68,8 @@ afterEach(async () => {
   // Rows the test marked as derived by the bumped version count as derived by the shipped one again.
   await db.execute(sql`UPDATE repository_files SET extractor_version = ${shipped.extractor}, embedder_id = ${shipped.embedder}
     WHERE extractor_version = ${versions.extractor} AND embedder_id = ${versions.embedder}`)
-  await db.execute(sql`UPDATE notes SET embedder_id = ${shipped.embedder} WHERE embedder_id = ${versions.embedder} AND embedding IS NOT NULL`)
+  await db.execute(sql`UPDATE notes SET embedder_id = ${shipped.embedder} WHERE embedder_id = ${versions.embedder}
+    AND EXISTS (SELECT 1 FROM blocks b WHERE b.owner_type = 'note' AND b.owner_id = notes.id)`)
   Object.assign(versions, shipped)
   for (const id of createdVaultIds.splice(0)) await db.delete(vaults).where(eq(vaults.id, id))
 })
@@ -125,7 +126,7 @@ async function othersCurrent(repositoryId: string | null, vaultId: string | null
     WHERE TRUE ${repositoryId ? sql`AND repository_id <> ${repositoryId}` : sql``}`)
   // A block's key names the model and text of its vector: a bumped EMBEDDER_ID makes it stale, as it should.
   await db.execute(sql`UPDATE notes SET embedder_id = ${versions.embedder}
-    WHERE embedding IS NOT NULL ${vaultId ? sql`AND vault_id <> ${vaultId}` : sql``}`)
+    WHERE EXISTS (SELECT 1 FROM blocks b WHERE b.owner_type = 'note' AND b.owner_id = notes.id) ${vaultId ? sql`AND vault_id <> ${vaultId}` : sql``}`)
 }
 
 describe('derived rows record what produced them (#453)', () => {
@@ -152,7 +153,7 @@ describe('derived rows record what produced them (#453)', () => {
     const note = await createNote(vault!.id, { path: `versions-${Date.now()}`, body: 'a versioned note' })
     await flushEmbeddings()
     const key = embeddingJobKey(note.id, note.seq)
-    expect(key).toBe(`embed_note:${note.id}:${note.seq}:${EMBEDDER_ID}`)
+    expect(key).toBe(`embed_note:${note.id}:${note.seq}:${EMBEDDER_ID}+chunk${CHUNK_VERSION}`)
     const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, key))
     expect(job?.doneAt).not.toBeNull()
     expect((await noteVersion(note.id)).embedder_id).toBe(EMBEDDER_ID)
@@ -211,7 +212,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     const after = await noteVersion(note.id)
     expect(after.embedder_id).toBe(versions.embedder)
     const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, embeddingJobKey(note.id, after.seq)))
-    expect(job?.idempotencyKey).toBe(`embed_note:${note.id}:${after.seq}:${versions.embedder}`)
+    expect(job?.idempotencyKey).toBe(`embed_note:${note.id}:${after.seq}:${versions.embedder}+chunk${CHUNK_VERSION}`)
     expect(job?.doneAt).not.toBeNull()
 
     await scheduleMissingEmbeddings()

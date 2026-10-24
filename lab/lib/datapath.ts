@@ -207,7 +207,7 @@ export async function dbNotes(ctx: LabContext, vaultId: string): Promise<DbNote[
         where r.note_id = n.id order by r.ord desc limit 1) as last_rev_sha,
       (select r.action from note_revisions r where r.note_id = n.id order by r.ord desc limit 1) as last_rev_action,
       (select r.actor_type::text from note_revisions r where r.note_id = n.id order by r.ord desc limit 1) as last_rev_actor,
-      n.embedding is not null as embedded
+      exists (select 1 from blocks b where b.owner_type = 'note' and b.owner_id = n.id and b.owner_version = n.seq::text and b.embedding is not null) as embedded
     from notes n where n.vault_id = '${vaultId}' order by n.path`)
 }
 

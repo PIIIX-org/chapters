@@ -81,7 +81,7 @@ const test: LabTest = {
 
     // ------------------------------------------------- PDF text search
     await poll(async () => {
-      const rows = await ctx.docker.psqlRows<{ e: boolean }>(`select embedding is not null as e from notes where vault_id = '${V}' and path = '${notePath}'`)
+      const rows = await ctx.docker.psqlRows<{ e: boolean }>(`select exists (select 1 from blocks b where b.owner_type = 'note' and b.owner_id = n.id and b.owner_version = n.seq::text and b.embedding is not null) as e from notes n where n.vault_id = '${V}' and n.path = '${notePath}'`)
       return rows[0]?.e ? true : undefined
     }, 600_000, 2_000)
     type Hit = { path: string; snippet: string; score: number }
