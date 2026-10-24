@@ -483,6 +483,11 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
   })
 })
 
+// Files extracted before migration 0033 (no `extracted_hash`, version 0): after 0035 their vectors are
+// `legacy:` blocks, keyed by their text only when no pre-0033 job for their current content is pending
+// or failed. migration-0035-blocks.test.ts checks that rule; a block keyed by its text is always the
+// vector of that text, so the runtime has no separate legacy case.
+
 describe('the note model is unchanged (#453)', () => {
   it('notes.embedder_id is not part of the note rows the API returns', async () => {
     const user = await createActiveUser()

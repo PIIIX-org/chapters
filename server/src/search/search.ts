@@ -4,7 +4,7 @@ import { config } from '../config.js'
 import { embedder } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
 import { extractionState } from '../repositories/extraction-queue.js'
-import { passesFilters, type GraphFilters } from '../graph/assemble.js'
+import { passesFilters, timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
 
 function uuidArray(ids: string[]): SQL {
@@ -12,19 +12,29 @@ function uuidArray(ids: string[]): SQL {
   return sql`${`{${ids.join(',')}}`}::uuid[]`
 }
 
+/**
+ * A `since`/`until` bound on `notes.updated_at` (#446): a bound that is no
+ * date matches nothing, as in `passesFilters`. Both sides are compared at
+ * millisecond precision (`timeBound` and graph nodes' `updatedAt` hold no
+ * more), so search and graph agree on a change within a bound's millisecond.
+ */
+function updatedBound(op: SQL, value: string): SQL {
+  const bound = timeBound(value)
+  return bound === null ? sql`AND false` : sql`AND date_trunc('milliseconds', updated_at) ${op} ${bound}::timestamptz`
+}
+
 function noteFilterClauses(filters?: GraphFilters): SQL {
   const clauses: SQL[] = []
   if (filters?.types && filters.types.length > 0) {
     clauses.push(sql`AND type = ANY(${`{${filters.types.join(',')}}`}::text[])`)
   }
-  if (filters?.since) {
-    clauses.push(sql`AND (frontmatter->>'timestamp') >= ${filters.since}`)
-  }
-  if (filters?.until) {
-    clauses.push(sql`AND (frontmatter->>'timestamp') <= ${filters.until}`)
-  }
+  if (filters?.since) clauses.push(updatedBound(sql`>=`, filters.since))
+  if (filters?.until) clauses.push(updatedBound(sql`<=`, filters.until))
   return clauses.length > 0 ? sql.join(clauses, sql` `) : sql``
 }
+
+/** `updated_at` as `toISOString` text (what graph nodes and `passesFilters` compare). */
+const UPDATED_AT = (column: SQL) => sql`to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at`
 
 export type ResourceType = 'note' | 'code' | 'symbol'
 
@@ -48,6 +58,8 @@ export interface SearchResult {
   endLine?: number // symbols only
   snippet: string
   score: number
+  /** The UTC day (`YYYY-MM-DD`) of the last change: the note's, the code file's (its last sync that changed it), a symbol's file's (#446). */
+  updated: string
 }
 
 export interface SymbolSearchResult {
@@ -129,7 +141,7 @@ const SYMBOL_NAME = sql.raw(`CASE WHEN b.symbol_parent IS NULL THEN b.inner_path
 
 /** The columns of a symbol hit from block `b` of file `f`; the snippet is the one code-blocks.ts stored and embedded. */
 const SYMBOL_COLUMNS = sql`b.id, b.owner_id AS file_id, b.container_id, f.path, ${SYMBOL_NAME} AS name,
-  b.symbol_kind AS kind, b.symbol_parent AS parent, b.start_line, b.end_line, coalesce(b.snippet, ${SYMBOL_NAME}) AS snippet`
+  b.symbol_kind AS kind, b.symbol_parent AS parent, b.start_line, b.end_line, coalesce(b.snippet, ${SYMBOL_NAME}) AS snippet, ${UPDATED_AT(sql`f.updated_at`)}`
 
 interface Row {
   id: string
@@ -139,6 +151,7 @@ interface Row {
   frontmatter?: unknown
   language?: string | null
   snippet: string
+  updated_at: string
 }
 
 interface SymbolRow {
@@ -152,6 +165,7 @@ interface SymbolRow {
   start_line: number
   end_line: number
   snippet: string
+  updated_at: string
 }
 
 /**
@@ -180,7 +194,7 @@ async function noteRows(
     mode === 'keyword'
       ? await db.execute(sql`
           WITH top_notes AS (
-            SELECT id, vault_id AS container_id, path, type, frontmatter, body,
+            SELECT id, vault_id AS container_id, path, type, frontmatter, body, ${UPDATED_AT(sql`updated_at`)},
                    ts_rank(fts, websearch_to_tsquery('english', ${query})) AS rank
             FROM notes
             WHERE vault_id = ANY(${uuidArray(vaultIds)})
@@ -190,7 +204,7 @@ async function noteRows(
             ORDER BY rank DESC, path COLLATE "C", id
             LIMIT ${CANDIDATES}
           )
-          SELECT id, container_id, path, type, frontmatter,
+          SELECT id, container_id, path, type, frontmatter, updated_at,
                  ts_headline('english', body, websearch_to_tsquery('english', ${query}),
                              'MaxWords=30, MinWords=10') AS snippet
           FROM top_notes
@@ -198,7 +212,7 @@ async function noteRows(
         `)
       : await db.execute(
           gated(sql`
-            SELECT id, vault_id AS container_id, path, type, frontmatter, left(body, 200) AS snippet,
+            SELECT id, vault_id AS container_id, path, type, frontmatter, left(body, 200) AS snippet, ${UPDATED_AT(sql`updated_at`)},
                    embedding <=> ${vec}::vector AS distance
             FROM notes
             WHERE vault_id = ANY(${uuidArray(vaultIds)})
@@ -217,7 +231,7 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
     mode === 'keyword'
       ? await db.execute(sql`
           WITH top_code AS (
-            SELECT id, repository_id AS container_id, path, language, content,
+            SELECT id, repository_id AS container_id, path, language, content, ${UPDATED_AT(sql`updated_at`)},
                    ts_rank(fts, websearch_to_tsquery('english', ${query})) AS rank
             FROM repository_files
             WHERE repository_id = ANY(${uuidArray(repositoryIds)})
@@ -225,7 +239,7 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
             ORDER BY rank DESC, path COLLATE "C", id
             LIMIT ${CANDIDATES}
           )
-          SELECT id, container_id, path, language,
+          SELECT id, container_id, path, language, updated_at,
                  ts_headline('english', content, websearch_to_tsquery('english', ${query}),
                              'MaxWords=30, MinWords=10') AS snippet
           FROM top_code
@@ -238,7 +252,7 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
             -- run 40063746649, hit@5 0.9655 -> 0.8966), and the outline of a large file did A13 (run 40068837408,
             -- 0.931). #967's relevance gate applies to that block's distance.
             SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet,
-                   b.embedding <=> ${vec}::vector AS distance
+                   ${UPDATED_AT(sql`f.updated_at`)}, b.embedding <=> ${vec}::vector AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
             WHERE b.owner_type = 'code' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL
               AND b.kind = 'file'
@@ -462,6 +476,8 @@ export async function searchNotes(
 
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
   const merged = new Map<string, SearchResult>()
+  // Each hit's full `updated_at`, for `since`/`until`; the hit itself shows the day only.
+  const lastChange = new Map<string, string>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
       const key = `${resourceType}:${row.id}`
@@ -471,6 +487,7 @@ export async function searchNotes(
         existing.score += contribution
         if (preferSnippet) existing.snippet = row.snippet
       } else {
+        lastChange.set(key, row.updated_at)
         merged.set(key, {
           resourceType,
           id: row.id,
@@ -479,6 +496,7 @@ export async function searchNotes(
           type: resourceType === 'note' ? (row.type ?? null) : (row.language ?? null),
           frontmatter: resourceType === 'note' ? row.frontmatter : undefined,
           language: resourceType === 'code' ? row.language : undefined,
+          updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
           score: contribution,
         })
@@ -495,6 +513,7 @@ export async function searchNotes(
         existing.score += contribution
         if (preferSnippet && row.snippet) existing.snippet = row.snippet
       } else {
+        lastChange.set(key, row.updated_at)
         merged.set(key, {
           resourceType: 'symbol',
           id: row.id,
@@ -506,6 +525,7 @@ export async function searchNotes(
           ...(row.parent !== null ? { symbolParent: row.parent } : {}),
           startLine: row.start_line,
           endLine: row.end_line,
+          updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
           score: contribution,
         })
@@ -524,17 +544,10 @@ export async function searchNotes(
   if (vector) contributeSymbols(vector[2], false)
   if (keyword) contributeSymbols(keyword[2], true)
 
-  const filtered = [...merged.values()].filter((r) => {
-    const fm = (r.frontmatter ?? {}) as { tags?: unknown; timestamp?: unknown }
-    return passesFilters(
-      {
-        type: r.type ?? null,
-        tags: Array.isArray(fm.tags) ? (fm.tags as string[]) : [],
-        timestamp: typeof fm.timestamp === 'string' ? fm.timestamp : null,
-      },
-      filters,
-    )
-  })
+  const filtered = [...merged].filter(([key, r]) => {
+    const fm = (r.frontmatter ?? {}) as { tags?: unknown }
+    return passesFilters({ type: r.type ?? null, tags: Array.isArray(fm.tags) ? (fm.tags as string[]) : [], updatedAt: lastChange.get(key)! }, filters)
+  }).map(([, r]) => r)
 
   return respond(filtered.sort(byScore).slice(0, limit), vec !== null, keyword, vector, await state)
 }

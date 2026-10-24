@@ -55,7 +55,11 @@ INSERT INTO "blocks" ("owner_type", "owner_id", "container_id", "block_id", "kin
     'legacy', 'legacy',
     -- embed-key.ts embedKey: what made the vector (#453's embedder_id) and its text, `<path>\n<content>` as a file block's
     -- (only when it was made from the current content).
-    CASE WHEN f.embedder_id IS NULL OR f.extracted_hash IS DISTINCT FROM f.content_hash THEN 'legacy'
+    -- A file not extracted since 0033 (no extracted_hash, extractor_version 0) has a vector of its current content
+    -- unless a job for that content is pending or failed (#453's legacyVectorCurrent rule).
+    CASE WHEN f.embedder_id IS NULL OR NOT (f.extracted_hash IS NOT DISTINCT FROM f.content_hash OR (f.extracted_hash IS NULL AND f.extractor_version = 0
+        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.idempotency_key LIKE 'extract:' || f.id || ':' || f.content_hash || '%'
+          AND (j.done_at IS NULL OR j.last_error IS NOT NULL)))) THEN 'legacy'
       ELSE left(encode(sha256(convert_to(f.embedder_id || E'\n' || f.path || E'\n' || f.content, 'UTF8')), 'hex'), 16) END,
     f.embedding
   FROM "repository_files" f WHERE f.embedding IS NOT NULL;--> statement-breakpoint

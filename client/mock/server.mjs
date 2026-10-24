@@ -1318,7 +1318,8 @@ function applyFilters(nodes, q) {
   return nodes.filter((n) => {
     if (types?.length && !(n.type && types.includes(n.type))) return false
     if (tags?.length && !n.tags.some((t) => tags.includes(t))) return false
-    const when = n.timestamp ?? n.updatedAt
+    // The last change, as the server (#446): frontmatter `timestamp` is the creation time.
+    const when = n.updatedAt
     if (since && when && when < since) return false
     if (until && when && when > until) return false
     return true
@@ -1498,7 +1499,7 @@ function runSearch(q, { vaultId, limit, query }) {
         if (n.name.toLowerCase().includes(t)) score += 3
         score += Math.min(5, hay.split(t).length - 1) * 0.4
       }
-      if (score > 0) results.push({ resourceType: 'note', id: n.id, containerId: vid, path: n.path, type: n.type, frontmatter: n.frontmatter, language: null, snippet: snippetAround(n.body, terms[0]), score: Number((score / 4).toFixed(3)) })
+      if (score > 0) results.push({ resourceType: 'note', id: n.id, containerId: vid, path: n.path, type: n.type, frontmatter: n.frontmatter, language: null, updated: n.updatedAt.slice(0, 10), snippet: snippetAround(n.body, terms[0]), score: Number((score / 4).toFixed(3)) })
     }
   }
   for (const rid of scope.repoIds) {
@@ -1510,7 +1511,7 @@ function runSearch(q, { vaultId, limit, query }) {
         if (f.path.toLowerCase().includes(t)) score += 2
         score += Math.min(5, hay.split(t).length - 1) * 0.3
       }
-      if (score > 0) results.push({ resourceType: 'code', id: f.id, containerId: rid, path: f.path, type: null, language: f.language, snippet: snippetAround(f.content, terms[0]), score: Number((score / 4).toFixed(3)) })
+      if (score > 0) results.push({ resourceType: 'code', id: f.id, containerId: rid, path: f.path, type: null, language: f.language, updated: f.updatedAt.slice(0, 10), snippet: snippetAround(f.content, terms[0]), score: Number((score / 4).toFixed(3)) })
     }
   }
   return answer(results.sort((a, b) => b.score - a.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).slice(0, limit))

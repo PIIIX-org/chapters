@@ -54,6 +54,18 @@ describe('migration 0035 carries vectors and symbols into blocks (#452a)', { tim
         insert into repository_files (repository_id, path, content, content_hash, size, embedding, embedder_id, extracted_hash)
         values (${repo!.id}, 'src/stale.ts', 'new', 'hash-new', 3, ${vector}::vector, 'fake+text1', 'hash-old')
         returning id`
+      // Not extracted since 0033 (no extracted_hash, version 0): current unless its pre-0033 job for this content failed.
+      const legacy = async (path: string) => {
+        const [row] = await client`
+          insert into repository_files (repository_id, path, content, content_hash, size, embedding, embedder_id)
+          values (${repo!.id}, ${path}, ${path}, ${`hash-${path}`}, 1, ${vector}::vector, 'fake+text1')
+          returning id, content_hash`
+        return row!
+      }
+      const legacyCurrent = await legacy('src/legacy.ts')
+      const legacyFailed = await legacy('src/failed.ts')
+      await client`insert into jobs (kind, payload, idempotency_key, done_at, last_error, attempts)
+        values ('extract', '{}'::jsonb, ${`extract:${legacyFailed.id}:${legacyFailed.content_hash}`}, now(), 'Error: outage', 3)`
       await client`insert into repository_file_symbols (file_id, name, kind, parent, start_line, end_line, snippet, embedding)
         values (${current!.id}, 'Store', 'class', null, 1, 3, 'export class Store {', ${vector}::vector),
                (${current!.id}, 'save', 'method', 'Store', 2, 2, '  save() {}', null)`
@@ -70,6 +82,9 @@ describe('migration 0035 carries vectors and symbols into blocks (#452a)', { tim
       ])
       // A vector of an earlier content is carried but never reused.
       expect(rows.filter((r) => r.owner_id === stale!.id).map((r) => [r.kind, r.embed_key])).toEqual([['file', 'legacy']])
+      const keyOf = (id: string) => rows.find((r) => r.owner_id === id)!.embed_key
+      const legacyKey = (path: string) => createHash('sha256').update(`fake+text1\n${path}\n${path}`).digest('hex').slice(0, 16)
+      expect([keyOf(legacyCurrent.id), keyOf(legacyFailed.id)]).toEqual([legacyKey('src/legacy.ts'), 'legacy'])
       expect(rows.every((r) => r.owner_version === 'legacy' && String(r.block_id).startsWith('legacy:'))).toBe(true)
 
       const [gone] = await client`select to_regclass('public.repository_file_symbols') as t,
