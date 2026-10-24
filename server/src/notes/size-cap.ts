@@ -22,11 +22,15 @@ export class NoteTooLargeError extends OkfValidationError {
   readonly statusCode = 413
   /**
    * `atLeast`: `bytes` is a lower bound, for a body refused before it is built.
-   * `part`: what is over the cap, the body or (#933) the frontmatter.
+   * `part`: what is over the cap, the body or (#933) the frontmatter. The
+   * error envelope's `rule` (#439) names the limit of that part.
    */
   constructor(bytes: number, limit: number, context?: string, atLeast = false, part: 'body' | 'frontmatter' = 'body') {
+    const what = part === 'body' ? 'body' : 'frontmatter (keys and values as JSON)'
     super(
-      `${context ? `${context}: ` : ''}note ${part === 'body' ? 'body' : 'frontmatter (keys and values as JSON)'} ${atLeast ? 'would be at least' : 'is'} ${bytes} bytes (UTF-8); the limit is ${limit} bytes (ELARA_NOTE_MAX_BYTES)`,
+      `${context ? `${context}: ` : ''}note ${what} ${atLeast ? 'would be at least' : 'is'} ${bytes} bytes (UTF-8); the limit is ${limit} bytes (ELARA_NOTE_MAX_BYTES)`,
+      'invalid',
+      `note ${what} at most ${limit} bytes (UTF-8, ELARA_NOTE_MAX_BYTES)`,
     )
   }
 }

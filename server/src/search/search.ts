@@ -2,7 +2,6 @@ import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { embedder } from './embeddings.js'
 import { passesFilters, type GraphFilters } from '../graph/assemble.js'
-import { SNIPPET_CHARS, SNIPPET_LINES } from '../repositories/code-blocks.js'
 
 function uuidArray(ids: string[]): SQL {
   // ponytail: single Postgres array parameter literal instead of N placeholders (DB-07).
@@ -69,10 +68,9 @@ export interface SearchNotesOptions {
 const CANDIDATES = 30
 const RRF_K = 60
 /**
- * Nearest blocks a note or code vector leg reads before it keeps each
- * document's best one (#452): a note or file has several blocks, so 30
- * documents need more than 30. Also the leg's `hnsw.ef_search`, since HNSW
- * returns at most that many rows.
+ * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
+ * that many rows, and each leg keeps only some kinds: file-level blocks, or
+ * symbol blocks, so the default 40 would leave it short of `CANDIDATES`).
  */
 const BLOCK_CANDIDATES = 200
 
@@ -87,15 +85,9 @@ async function blockLeg(query: SQL): Promise<unknown> {
 /** A symbol block `b`'s bare name: `inner_path` without its `symbol_parent.` prefix. */
 const SYMBOL_NAME = sql.raw(`CASE WHEN b.symbol_parent IS NULL THEN b.inner_path ELSE substr(b.inner_path, length(b.symbol_parent) + 2) END`)
 
-/**
- * The columns of a symbol hit from block `b` of file `f`, its snippet being
- * the exact text of its first `SNIPPET_LINES` lines cut to `SNIPPET_CHARS`
- * characters (#418: lines split on `\n` only, `\r` and blank lines kept;
- * code-blocks.ts embeds the same text).
- */
+/** The columns of a symbol hit from block `b` of file `f`; the snippet is the one code-blocks.ts stored and embedded. */
 const SYMBOL_COLUMNS = sql`b.id, b.owner_id AS file_id, b.container_id, f.path, ${SYMBOL_NAME} AS name,
-  b.symbol_kind AS kind, b.symbol_parent AS parent, b.start_line, b.end_line,
-  ${sql.raw(`left(array_to_string((string_to_array(f.content, E'\\n'))[b.start_line:least(b.end_line, b.start_line + ${SNIPPET_LINES - 1})], E'\\n'), ${SNIPPET_CHARS})`)} AS snippet`
+  b.symbol_kind AS kind, b.symbol_parent AS parent, b.start_line, b.end_line, coalesce(b.snippet, ${SYMBOL_NAME}) AS snippet`
 
 interface Row {
   id: string
@@ -189,18 +181,18 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
           FROM top_code
         `)
       : await blockLeg(sql`
-          -- A file's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per file, as before blocks.
-          WITH nearest AS (
+          -- A file's vector rank is its file-level block's (the whole small file, or a larger file's outline): one row
+          -- per file, as before blocks. The ADR-004 §2.5 best-block roll-up ranked chapters questions A6 and A13 out of
+          -- the top 5 (bench run 40063746649, hit@5 0.9655 -> 0.8966): symbol blocks of large files crowded the leg.
+          SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet
+          FROM (
             SELECT owner_id, embedding <=> ${vec}::vector AS distance
             FROM blocks
             WHERE owner_type = 'code' AND container_id = ANY(${uuidArray(repositoryIds)}) AND embedding IS NOT NULL
+              AND inner_path = '' AND kind IN ('file', 'skeleton')
             ORDER BY embedding <=> ${vec}::vector
-            LIMIT ${BLOCK_CANDIDATES}
-          ), best AS (
-            SELECT owner_id, min(distance) AS distance FROM nearest GROUP BY owner_id ORDER BY 2, 1 LIMIT ${CANDIDATES}
-          )
-          SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet
-          FROM best JOIN repository_files f ON f.id = best.owner_id
+            LIMIT ${CANDIDATES}
+          ) best JOIN repository_files f ON f.id = best.owner_id
           ORDER BY best.distance, f.id
         `)
   return rows as unknown as Row[]
@@ -220,21 +212,11 @@ async function symbolRows(
   const rows =
     mode === 'keyword'
       ? await db.execute(sql`
-          -- By name (inner_path is the name, or Class.name), or by the snippet's text in a file whose content matches at all.
-          WITH matched AS MATERIALIZED (
-            SELECT id, string_to_array(content, E'\n') AS lines FROM repository_files
-            WHERE repository_id = ANY(${repos}) AND content ILIKE ${pattern}
-          ), hits AS (
-            SELECT b.id FROM blocks b
-            WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
-              AND b.inner_path ILIKE ${pattern}
-            UNION
-            SELECT b.id FROM blocks b JOIN matched m ON m.id = b.owner_id
-            WHERE b.owner_type = 'code' AND b.kind = 'symbol' ${kind}
-              AND left(array_to_string(m.lines[b.start_line:least(b.end_line, b.start_line + ${SNIPPET_LINES - 1})], E'\n'), ${SNIPPET_CHARS}) ILIKE ${pattern}
-          )
+          -- By name, by Class.name (inner_path), or by snippet, as the symbol table was matched before blocks.
           SELECT ${SYMBOL_COLUMNS}
-          FROM hits JOIN blocks b ON b.id = hits.id JOIN repository_files f ON f.id = b.owner_id
+          FROM blocks b JOIN repository_files f ON f.id = b.owner_id
+          WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
+            AND (b.inner_path ILIKE ${pattern} OR (b.snippet IS NOT NULL AND b.snippet ILIKE ${pattern}))
           ORDER BY
             CASE
               WHEN lower(${SYMBOL_NAME}) = lower(${query}) OR lower(b.inner_path) = lower(${query}) THEN 1

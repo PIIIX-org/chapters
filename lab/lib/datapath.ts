@@ -568,7 +568,7 @@ export async function rawMcp(
     }
     const out: RawCall = { httpStatus: res.status, bytes, ms, ttfbMs, ok: false, isError: false, textHead: '', textLen: 0 }
     if (truncated) {
-      // Only successful tool results get this big; an error result is a short `Error: ...` text.
+      // Only successful tool results get this big; an error result is a short error envelope (#439).
       const h = new TextDecoder().decode(head)
       const t = new TextDecoder().decode(tail)
       out.textHead = h.slice(0, 500)

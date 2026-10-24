@@ -206,11 +206,21 @@ export function findShortestPath(
   }
 }
 
+/**
+ * The REST answer when `source` or `target` names several nodes (#447): that
+ * end's candidates, shorter path first; `truncated`: how many more matched.
+ */
+export interface GraphPathCandidates {
+  end: 'source' | 'target'
+  candidates: Array<{ path: string; kind: 'note' | 'code'; id: string }>
+  truncated: false | number
+}
+
 export function fetchGraphPath(
   vaultId: string | null,
   source: string,
   target: string,
-): Promise<PathFindingResult> {
+): Promise<PathFindingResult | GraphPathCandidates> {
   const basePath = vaultId ? `/vaults/${vaultId}/graph/path` : '/graph/merged/path'
   const params = new URLSearchParams({ source, target })
   return apiFetch(`${basePath}?${params.toString()}`)
