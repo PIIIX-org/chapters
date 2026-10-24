@@ -25,7 +25,7 @@ import { restBytes } from '../src/sync/collab-size.js'
 import { db } from '../src/db/client.js'
 import { noteRevisions } from '../src/db/schema.js'
 import { and, eq } from 'drizzle-orm'
-import { createActiveUser, loginCookie, loginToken, noteDocName, storedCrdtDoc, storedCrdtText } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName, storedCrdtDoc, storedCrdtText, toolText } from './helpers.js'
 
 /** The default cap: 1 MiB of UTF-8. */
 const CAP = 1024 * 1024
@@ -112,8 +112,7 @@ async function mcpClient(): Promise<Client> {
 }
 
 function textOf(result: Awaited<ReturnType<Client['callTool']>>): string {
-  const content = result.content as Array<{ type: string; text?: string }>
-  return content[0]?.text ?? ''
+  return toolText(result.content as unknown[])
 }
 
 /** A note's whole body over MCP: read_note pages a long one (#420). */

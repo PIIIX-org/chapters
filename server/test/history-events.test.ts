@@ -10,7 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
 
@@ -44,7 +44,7 @@ async function must<T>(name: string, args: Args): Promise<T> {
   resetRateLimits()
   const result = await agent.callTool({ name, arguments: { vaultId, ...args } })
   const content: unknown[] = Array.isArray(result.content) ? result.content : []
-  const text = content.map((c) => field(c, 'text')).join('')
+  const text = toolText(content)
   if (result.isError) throw new Error(`${name} failed: ${text}`)
   return JSON.parse(text) as T
 }
