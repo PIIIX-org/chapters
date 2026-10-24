@@ -5,6 +5,7 @@ import {
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   McpError,
+  type CallToolResult,
   type ListResourcesResult,
   type ListToolsResult,
   type Tool,
@@ -86,7 +87,7 @@ import { notify } from '../notifications/notify.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 import { NoteEditConflictError, requestedEdit, writeThroughCollab, type EditBase, type WriteReport } from './crdt-write.js'
-import { NO_NOTE, diffStats, runWrite, writeAnswer, writeResult, type KeyedAnswer } from './write-result.js'
+import { NO_NOTE, WRITE_RESULT_SCHEMA, diffStats, runWrite, writeAnswer, writeResult, type KeyedAnswer } from './write-result.js'
 import { showAgentPresence } from '../sync/agent-presence.js'
 import { registerMcpPrompts } from './prompts.js'
 import { manualText, manualVisible, toolManuals, type ToolManual } from './manuals.js'
@@ -257,17 +258,34 @@ function toolErrorMessage(err: unknown): string {
 const NO_PAGE = new Page(null)
 
 /**
- * A tools/list entry without the two fields that restate a default (#429):
- * the input schema's `$schema` (draft-07; the schemas use only keywords that
- * draft-07 and 2020-12, MCP's default dialect, read alike) and `execution`
- * `{taskSupport: "forbidden"}`, which is what MCP assumes without it.
+ * A tools/list entry without the fields that restate a default (#429): the
+ * input and output schemas' `$schema` (draft-07; the schemas use only
+ * keywords that draft-07 and 2020-12, MCP's default dialect, read alike) and
+ * `execution` `{taskSupport: "forbidden"}`, which is what MCP assumes
+ * without it.
  */
 function withoutDefaults(tool: Tool): Tool {
   const inputSchema = { ...tool.inputSchema }
   delete inputSchema.$schema
   const listed: Tool = { ...tool, inputSchema }
+  if (tool.outputSchema) {
+    const outputSchema = { ...tool.outputSchema }
+    delete outputSchema.$schema
+    listed.outputSchema = outputSchema
+  }
   if (listed.execution?.taskSupport === 'forbidden') delete listed.execution
   return listed
+}
+
+/**
+ * A successful tool answer (#433, ADR-004 §2.1): `text` is the whole JSON
+ * answer, and when it is an object, `structuredContent` is the same object
+ * (parsed from `text`, so it holds exactly what the text shows: dates as
+ * their strings). A bare array has none: MCP's structuredContent is an object.
+ */
+function answered(text: string): CallToolResult {
+  const content = [{ type: 'text' as const, text }]
+  return text.startsWith('{') ? { content, structuredContent: JSON.parse(text) as Record<string, unknown> } : { content }
 }
 
 /**
@@ -603,6 +621,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
    * `budget_tokens` and `cursor` too; its handler gets the cursor's position
    * (checked against the tool and its arguments) and returns a `Budgeted`
    * answer, rendered within the budget with `truncated` last (#420, #422).
+   * A successful answer that is an object is also `structuredContent` (#433,
+   * `answered`). `outputSchema` (the write tools' WRITE_RESULT_SCHEMA) is
+   * listed in tools/list and checked by the SDK on every successful answer;
+   * it must allow other keys (a loose object), and an `isError` answer is
+   * not checked.
    */
   function tool<S extends ToolScope, A extends Record<string, unknown> = Record<string, unknown>, B extends BudgetKind | undefined = undefined>(
     name: string,
@@ -614,6 +637,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       ids?: (args: A) => Promise<ScopeIds>
       description: string
       inputSchema?: z.ZodRawShape
+      outputSchema?: z.ZodObject<z.ZodRawShape, z.core.$loose>
       budget?: B
     },
     handler: (args: A, scoped: ScopeTargets[S], page: Page) => Promise<B extends BudgetKind ? Budgeted : unknown>,
@@ -632,7 +656,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     tools.push({ name, scope: def.scope, capability: def.capability, pinPermission, profile })
     if (!callable(name, def.scope, def.capability, profile)) hiddenTools.add(name)
     pinPermissionOf.set(name, pinPermission)
-    registerTool(name, { description: def.description, inputSchema }, async (raw: unknown) => {
+    const config = { description: def.description, inputSchema, ...(def.outputSchema ? { outputSchema: def.outputSchema } : {}) }
+    registerTool(name, config, async (raw: unknown) => {
       try {
         requireCapability(name, def.capability, profile)
         // The SDK has already parsed the arguments with `inputSchema`, the shape A describes.
@@ -646,7 +671,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         const scoped = await resolve(name, ids, args.everywhere === true)
         if (!budget) {
           const result = await handler(args, scoped, NO_PAGE)
-          return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] }
+          return answered(JSON.stringify(result))
         }
         const fingerprint = argsFingerprint(args, scoped)
         const at = typeof args.cursor === 'string' ? decodeCursor(args.cursor, name, fingerprint) : null
@@ -654,7 +679,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         const budgetTokens = typeof args.budget_tokens === 'number' ? args.budget_tokens : DEFAULT_BUDGET[budget]
         const { text, truncated } = render(answer, { tool: name, fingerprint, budget: budgetTokens, at })
         await answer.rendered?.(truncated)
-        return { content: [{ type: 'text' as const, text }] }
+        return answered(text)
       } catch (err) {
         return { content: [{ type: 'text' as const, text: `Error: ${toolErrorMessage(err)}` }], isError: true }
       }
@@ -1237,6 +1262,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       profile: 'writer',
       pinPermission: 'edit',
+      outputSchema: WRITE_RESULT_SCHEMA,
       description: 'Create an OKF note at `path`, or at `type`/`name`; requires edit access.' + WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
@@ -1297,6 +1323,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       profile: 'writer',
       pinPermission: 'edit',
+      outputSchema: WRITE_RESULT_SCHEMA,
       description:
         'Change a note: `ops` (preferred) edit the live text in place, `body` replaces the whole body merged from `base_rev` or your last unpaged read_note (after a paged read, send its `rev` as `base_rev`), `frontmatter` merges per key; requires edit access.' +
         WRITE_DOC,
@@ -1504,6 +1531,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       profile: 'writer',
       pinPermission: 'edit',
+      outputSchema: WRITE_RESULT_SCHEMA,
       description:
         'Append `text` as whole lines to the live note, so concurrent appends all land (use it for logs instead of read_note + edit_note); `createIfMissing: true` creates the note; requires edit access.' +
         WRITE_DOC,
@@ -1549,6 +1577,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'write',
       pinPermission: 'edit',
+      outputSchema: WRITE_RESULT_SCHEMA,
       description:
         'Create the note at `path`, or replace its whole body (merged from your last read) and merge `frontmatter` when it exists, in one step that concurrent callers cannot race; requires edit access.' +
         WRITE_DOC,
@@ -1591,6 +1620,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'write',
       pinPermission: 'edit',
+      outputSchema: WRITE_RESULT_SCHEMA,
       description: 'Rename a note (a slug) or move it (a full path); links using its old full path are rewritten; requires edit access.' + WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
@@ -1619,6 +1649,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'write',
       pinPermission: 'edit',
+      outputSchema: WRITE_RESULT_SCHEMA,
       description: 'Move a note to the trash (`id` for restore_note); requires edit access.' + WRITE_DOC,
       inputSchema: { vaultId: VAULT_ID, path: NOTE_PATH, ...IDEMPOTENCY_ARG },
     },
@@ -1672,6 +1703,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'write',
       pinPermission: 'edit',
+      outputSchema: WRITE_RESULT_SCHEMA,
       description: 'Restore a trashed note by `noteId`; requires edit access.' + WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
@@ -1787,6 +1819,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'write',
       pinPermission: 'edit',
+      outputSchema: WRITE_RESULT_SCHEMA,
       description: 'Restore a note to a recorded revision (from note_history), as a new revision; requires edit access.' + WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
