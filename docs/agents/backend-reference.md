@@ -495,7 +495,7 @@ collab socket and live view it opened closes at once (#498, §5.7).
   at `write`, or at `read` for a read-only member; its allow-list picker
   leaves out tools whose `pinPermission` is above the user's permission.
   `GET /mcp-connections/tools` returns `listMcpTools()` (name, scope,
-  capability, pinPermission, profile) for the allow-list picker. Migration 0019 set
+  capability, pinPermission, profile, annotations) for the allow-list picker. Migration 0019 set
   existing account tokens to `admin` and left existing pinned tokens at
   `write`, whoever minted them; a restore of an older dump applies the
   same rule. Such a token held by a read-only member keeps `write` in
@@ -1689,11 +1689,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `test/mcp-tool-budget.test.ts` measures, per profile, the ADR-004 §2.6
   sum: characters / 4 of `tools/list`, `prompts/list` and the
   `initialize` instructions. It fails a reader account token over 2,000
-  tokens (no prompts on reader, #428; measured 7,676 characters) and a
-  writer one whose `tools/list` plus instructions are over 4,000 (15,036
-  with #433's output schemas, 14,286 before; its `prompts/list`, 10,042,
-  is reported), reports admin (`tools/list` 39,512, 37,512 before #433;
-  its ceiling, 40,000, is in `mcp-tool-schema.test.ts`), checks the
+  tokens (no prompts on reader, #428; measured 7,949 characters with
+  #434's annotations, 7,676 before) and a writer one whose `tools/list`
+  plus instructions are over 4,000 (15,429 with #434; 15,036 with #433's
+  output schemas, 14,286 before; its `prompts/list`, 10,042, is
+  reported), reports admin (`tools/list` 42,101 with #434; 39,512 with
+  #433, 37,512 before; its ceiling, 43,000, is in
+  `mcp-tool-schema.test.ts`), checks the
   `tools/list` bytes are the same on every call and for two vault pins of
   a reader token (a writer or admin list follows the live pin permission),
   and counts each description's
@@ -1722,6 +1724,35 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   #432, #439). `test/mcp-structured-content.test.ts` covers each tool
   family through the real client (which validates against the listed
   schema), every write answer shape and the errors.
+- **Tool annotations** (#434, ADR-004 §2.6): `toolAnnotations()` in
+  `server.ts` derives each tool's MCP `annotations` from its `tool()`
+  record; `registerTool` lists them and `McpToolInfo` carries the same
+  map. A `read` tool lists `{readOnlyHint: true}` only (MCP reads the
+  other hints only for tools that are not read-only; the reads' read
+  markers, presence and export security events change nothing a user
+  sees). Every other tool lists `destructiveHint` (from the def's
+  `destructive: true`; `false` otherwise, written out because MCP's
+  default is `true`) and `idempotentHint: true` when the def says
+  `idempotent: true`: a repeat of the same call without an
+  `idempotency_key` changes nothing more or fails. Destructive: every
+  `delete_*`, `purge_*`, `revoke_*` and `remove_*` tool (`tool()` throws
+  at registration when one of these names lacks `destructive`, or a read
+  declares either flag) and `update_vault_preferences` (its maps replace
+  the stored ones, with no history). Note edits, reverts and renames are
+  not: every state stays a revision. Not idempotent: tools that create
+  a row or start a sync each call, `share_vault` and `add_team_member`
+  (a notification each call), and the eight note writes that take an
+  `idempotency_key` (an unkeyed repeat can merge again, record a restore
+  point or append twice; the key is their retry contract). No `title`
+  and no `openWorldHint`: about 20 characters per tool each, against
+  the reader budget. The annotations cost 36 characters on a read tool
+  and 39 to 62 on the others; reader's budget was kept by dropping
+  "currently" from `list_vaults`/`list_repositories` and the second
+  sentence of `search` (it repeated the `everywhere` parameter).
+  `test/mcp-tool-annotations.test.ts` checks every listed tool through
+  the real client against its capability, the destructive and
+  idempotent sets against their lists, a reader token's list (all
+  read-only) and `listMcpTools()`.
 - **Tools** (60, all registered in `server.ts`; parameters and return
   shapes are documented in `skills/elara/references/mcp-tools.md`):
   - *Vaults* (14): `list_vaults`, `create_vault`, `browse_vault`, `update_vault`, `get_vault_graph_preference`, `set_vault_graph_preference`, `get_vault_preferences`, `update_vault_preferences`, `delete_vault`, `restore_vault`, `purge_vault`, `list_vault_shares`, `share_vault`, `revoke_vault_share`.
