@@ -30,19 +30,21 @@ describe('OKF validation', () => {
     )
   })
 
-  it('rejects frontmatter type mismatching the path', () => {
-    expect(() => validateNote('people', 'x', { type: 'projects' }, '')).toThrow(
-      OkfValidationError,
-    )
+  it('accepts any non-empty string type, not only the folder (#444)', () => {
+    expect(() => validateNote('people', 'x', { type: 'projects' }, '')).not.toThrow()
+    expect(() => validateNote('tables', 'orders', { type: 'BigQuery Table' }, '')).not.toThrow()
+    for (const bad of ['', '   ', 7, undefined]) {
+      expect(() => validateNote('people', 'x', { type: bad } as unknown as Frontmatter, ''), String(bad)).toThrow(
+        'frontmatter type must be a non-empty string',
+      )
+    }
   })
 
-  it('rejects malformed tags and nested values', () => {
+  it('rejects malformed tags; accepts nested values on other keys (#970)', () => {
     expect(() =>
       validateNote('a', 'b', { type: 'a', tags: 'not-array' as unknown as string[] }, ''),
     ).toThrow(OkfValidationError)
-    expect(() => validateNote('a', 'b', { type: 'a', nested: { deep: true } }, '')).toThrow(
-      'frontmatter key "nested" must be a scalar or list of scalars',
-    )
+    expect(() => validateNote('a', 'b', { type: 'a', nested: { deep: true } }, '')).not.toThrow()
   })
 
   it('validates ISO 8601 timestamps with explicit UTC/offset strictly', () => {
