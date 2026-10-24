@@ -28,7 +28,7 @@ import { lineStarts, sliceLines } from '../text/lines.js'
 import type { ExtractedSymbol, SymbolKind } from './extraction.js'
 
 export const SMALL_FILE_MAX_LINES = 300
-/** A symbol snippet (search hits, embedded text): its first lines, cut to this many characters. Search's SQL uses the same two numbers. */
+/** A symbol snippet (stored on the block; search hits, embedded text): its first lines, cut to this many code points. */
 export const SNIPPET_LINES = 30
 export const SNIPPET_CHARS = 1500
 
@@ -44,6 +44,8 @@ export interface CodeBlock {
   endLine: number
   /** sha256 (hex) of lines startLine..endLine of the stored text. */
   contentHash: string
+  /** A symbol block's snippet (stored, matched and returned by search); null on the others. */
+  snippet: string | null
   embedText: string
   /**
    * A symbol's place in the per-file embed budget (#496, #450): 0 exported,
@@ -70,13 +72,14 @@ export function codeBlocks(fileId: string, path: string, content: string, symbol
   }
 
   const drafts: Array<Omit<CodeBlock, 'blockId'>> = []
-  const whole = { innerPath: '', symbolKind: null, symbolParent: null, startLine: 1, endLine: total, contentHash: hash(1, total), budgetTier: null }
+  const whole = { innerPath: '', symbolKind: null, symbolParent: null, snippet: null, startLine: 1, endLine: total, contentHash: hash(1, total), budgetTier: null }
   if (small || symbols.length === 0) drafts.push({ ...whole, kind: 'file', embedText: `${path}\n${content}` })
   else drafts.push({ ...whole, kind: 'skeleton', embedText: [path, ...symbols.map((s) => firstLine(s.startLine))].join('\n') })
 
   for (const s of symbols) {
     const innerPath = s.parent ? `${s.parent}.${s.name}` : s.name
-    const snippet = sliceLines(content, s.startLine, Math.min(s.endLine, s.startLine + SNIPPET_LINES - 1), starts).slice(0, SNIPPET_CHARS)
+    // Cut by code point, so an astral character is never split.
+    const snippet = [...sliceLines(content, s.startLine, Math.min(s.endLine, s.startLine + SNIPPET_LINES - 1), starts)].slice(0, SNIPPET_CHARS).join('')
     const span = { innerPath, startLine: s.startLine, endLine: s.endLine, contentHash: hash(s.startLine, s.endLine) }
     const at =
       drafts.push({
@@ -84,6 +87,7 @@ export function codeBlocks(fileId: string, path: string, content: string, symbol
         kind: 'symbol',
         symbolKind: s.kind,
         symbolParent: s.parent ?? null,
+        snippet,
         embedText: `${s.kind} ${innerPath} in ${path}\n${snippet}`,
         budgetTier: s.kind === 'method' ? 2 : s.exported ? 0 : 1,
       }) - 1
@@ -94,6 +98,7 @@ export function codeBlocks(fileId: string, path: string, content: string, symbol
         kind: 'skeleton',
         symbolKind: null,
         symbolParent: null,
+        snippet: null,
         embedText: [`${s.kind} ${innerPath} in ${path}`, firstLine(s.startLine), ...methods.map((m) => firstLine(m.startLine))].join('\n'),
         budgetTier: null,
         outlineOf: at,
