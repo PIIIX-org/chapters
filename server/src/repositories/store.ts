@@ -67,8 +67,16 @@ export async function syncRepositoryFiles(
       sourceModifiedAt: file.sourceModifiedAt,
       updatedAt: new Date(),
     }
+    // A file with a vector but no `extracted_hash` was last extracted before
+    // migration 0033: record the content it replaces as the one its vector was
+    // made from, so the extraction of the new content embeds it again (#453).
+    const updated = {
+      ...values,
+      extractedHash: sql`CASE WHEN ${repositoryFiles.extractedHash} IS NULL AND ${repositoryFiles.embedding} IS NOT NULL
+        THEN ${repositoryFiles.contentHash} ELSE ${repositoryFiles.extractedHash} END`,
+    }
     if (current) {
-      await db.update(repositoryFiles).set(values).where(eq(repositoryFiles.id, current.id))
+      await db.update(repositoryFiles).set(updated).where(eq(repositoryFiles.id, current.id))
       toExtract.push(current.id)
       result.updated += 1
     } else {
@@ -77,7 +85,7 @@ export async function syncRepositoryFiles(
         .values(values)
         .onConflictDoUpdate({
           target: [repositoryFiles.repositoryId, repositoryFiles.path],
-          set: values,
+          set: updated,
         })
         .returning({ id: repositoryFiles.id })
       if (inserted) toExtract.push(inserted.id)

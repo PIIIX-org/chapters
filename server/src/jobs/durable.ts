@@ -2,9 +2,11 @@
  * Durable background jobs on the `jobs` table (ADR-003 §4, §7; S5 = #494).
  *
  * A job is one row: `kind`, `payload`, and an `idempotency_key` of the form
- * `<stage>:<item id>:<item version>` (a repository file's content hash, a
- * note's `seq`), so enqueueing the same work twice is a no-op and a restart
- * loses nothing. The table has no `run_after` column, so `lease_until` serves
+ * `<stage>:<item id>:<item version>[:<producer versions>]` (a repository
+ * file's content hash, a note's `seq`; then the extractor version and the
+ * embedder id that will produce the result, #453), so enqueueing the same
+ * work twice is a no-op, a restart loses nothing, and new code that derives
+ * differently gets new jobs. The table has no `run_after` column, so `lease_until` serves
  * both purposes: a job is claimable when it is not done and `lease_until` is
  * null or past. A claim sets it to now + `leaseMs` (a process that dies
  * mid-job leaves a lease that simply runs out); a failure sets it to now +
@@ -43,6 +45,22 @@ export const jobTiming = {
   pollMs: 5_000,
 }
 
+/**
+ * Boot catch-up enqueues in pages of this many items, one short statement
+ * each (#453): a version bump on a large instance re-enqueues every file and
+ * note without one transaction holding the whole backlog. Mutable for tests only.
+ */
+export const catchUpLimits = { batchSize: 1000 }
+
+/**
+ * `jobs.priority` (#453, migration 0033): claims take the lowest first, then
+ * the oldest. A job a write queued (a note saved, a file pushed) goes before
+ * the jobs a boot catch-up or `pnpm reindex` queued, so a version bump that
+ * re-derives a whole instance never makes a new note wait for its vector.
+ */
+export const JOB_PRIORITY = { write: 0, catchUp: 1 } as const
+export type JobPriority = (typeof JOB_PRIORITY)[keyof typeof JOB_PRIORITY]
+
 /** Successfully finished jobs are deleted after this long (failed ones stay as the status). */
 const DONE_RETENTION_DAYS = 7
 const MAX_ERROR_LENGTH = 500
@@ -80,6 +98,16 @@ export function erroredJobExists(key: SQL): SQL {
 }
 
 /**
+ * Boot catch-up condition: a job with idempotency key `key` exists, in any
+ * state (#453): an item derived by other versions needs a job only when
+ * there is none for the current ones (a pending one runs, an errored one is
+ * matched by `erroredJobExists`, a `LeaseExpired` one stays failed).
+ */
+export function jobExists(key: SQL): SQL {
+  return sql`EXISTS (SELECT 1 FROM jobs j WHERE j.idempotency_key = ${key})`
+}
+
+/**
  * The ON CONFLICT clause of an enqueue. The caller passes each key once:
  * Postgres refuses to update one row twice in a statement. A job run again
  * gets a new id, so it queues behind the jobs already pending.
@@ -91,8 +119,10 @@ export function onJobConflict(rerun: JobRerun): SQL {
     errored: sql`AND ${erroredJob(sql`jobs`)}`,
     finished: sql``,
   }[rerun]
+  // A job run again takes the priority of the enqueue that runs it.
   return sql`ON CONFLICT (idempotency_key) DO UPDATE
-    SET id = nextval(pg_get_serial_sequence('jobs', 'id')), done_at = NULL, attempts = 0, last_error = NULL, lease_until = NULL
+    SET id = nextval(pg_get_serial_sequence('jobs', 'id')), done_at = NULL, attempts = 0, last_error = NULL, lease_until = NULL,
+      priority = EXCLUDED.priority
     WHERE jobs.done_at IS NOT NULL ${which}`
 }
 
@@ -115,7 +145,7 @@ export async function failCrashedJobs(kind: string, monitoringKind: JobKind, sub
   return rows.length
 }
 
-/** Claims the oldest claimable job of `kind` (optionally narrowed by `filter` on `payload`). */
+/** Claims the claimable job of `kind` (optionally narrowed by `filter` on `payload`) with the lowest priority, then the oldest. */
 export async function claimJob<P>(kind: string, filter?: SQL): Promise<ClaimedJob<P> | null> {
   const rows = (await db.execute(sql`
     UPDATE jobs SET lease_until = now() + ${jobTiming.leaseMs} * interval '1 millisecond', attempts = attempts + 1
@@ -123,7 +153,7 @@ export async function claimJob<P>(kind: string, filter?: SQL): Promise<ClaimedJo
       SELECT id FROM jobs
       WHERE kind = ${kind} AND done_at IS NULL AND (lease_until IS NULL OR lease_until < now())
         AND attempts < ${MAX_JOB_ATTEMPTS} ${filter ? sql`AND ${filter}` : sql``}
-      ORDER BY id LIMIT 1
+      ORDER BY priority, id LIMIT 1
       FOR UPDATE SKIP LOCKED
     )
     RETURNING id, payload, attempts`)) as unknown as Array<{ id: string | number; payload: P; attempts: number }>
