@@ -421,7 +421,10 @@ async function processFile(fileId: string): Promise<void> {
 
   // The vectors this embedder made for this file: reused where their text is the one to embed now.
   const sameEmbedder = row.embedding !== null && row.embedderId === embedderId
-  const reusedFileVector = sameEmbedder && row.extractedHash === row.contentHash ? row.embedding : null
+  const fileVectorCurrent =
+    sameEmbedder &&
+    (row.extractedHash === row.contentHash || (row.extractedHash === null && (await legacyVectorCurrent(row))))
+  const reusedFileVector = fileVectorCurrent ? row.embedding : null
   const previousSymbolVectors = new Map<string, number[]>()
   if (sameEmbedder && embedded.length > 0) {
     const previous = await db
@@ -488,4 +491,21 @@ async function processFile(fileId: string): Promise<void> {
 /** The text a symbol is embedded from (`EMBED_TEXT_VERSION` in search/embeddings.ts versions it). */
 function symbolEmbedText(kind: string, name: string, path: string, startLine: number, snippet: string): string {
   return `${kind} ${name} in ${path}:${startLine}\n${snippet}`
+}
+
+/**
+ * Whether the vector of a file never extracted since migration 0033 (no
+ * `extracted_hash`, `extractor_version` 0) is of its current content: its
+ * pre-0033 job for that content (`extract:<id>:<hash>`, written by that
+ * code, also after a rollback to it) is not pending or failed. A push by
+ * this code sets `extracted_hash` from the content it replaces
+ * (repositories/store.ts), so such a row always has the content its vector was made from.
+ */
+async function legacyVectorCurrent(row: { id: string; contentHash: string; extractorVersion: number }): Promise<boolean> {
+  if (row.extractorVersion !== 0) return false
+  const [found] = (await db.execute(sql`
+    SELECT NOT EXISTS (
+      SELECT 1 FROM jobs WHERE idempotency_key = ${`${EXTRACTION_JOB}:${row.id}:${row.contentHash}`}
+        AND (done_at IS NULL OR last_error IS NOT NULL)) AS current`)) as unknown as Array<{ current: boolean }>
+  return found?.current === true
 }
