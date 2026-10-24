@@ -442,6 +442,48 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     expect(symbols.map((s) => s.name).sort()).toEqual(['LIMIT', 'Store', 'keep', 'load', 'save'])
     expect(symbols.every((s) => s.embedding !== null)).toBe(true)
   })
+
+  // #466 bumped EXTRACTOR_VERSION to 4: re-exports, `import()` and `require()`
+  // become import rows. The bump costs a parse: no block text changes, so
+  // nothing of the file is embedded again.
+  it('a row extractor version 3 produced gains its re-export and import() rows; nothing is embedded again', async () => {
+    const owner = await createActiveUser()
+    const [repo] = await db
+      .insert(repositories)
+      .values({ name: 'versions-imports-v3', ownerId: owner.id, ingestionMethod: 'agent_push' })
+      .returning()
+    const content = [
+      "import { keep } from './keep'",
+      "export { other } from './other'",
+      "export function run() { return import('./lazy').then(() => keep()) }",
+      '',
+    ].join('\n')
+    versions.extractor = 3
+    await syncRepositoryFiles(repo!.id, [{ path: 'src/run.ts', content }], ['src/run.ts'])
+    await flushExtraction()
+    const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
+    // Stand-in for version 3's rows: `import` statements only.
+    await db.execute(sql`DELETE FROM repository_file_imports WHERE source_file_id = ${file!.id} AND target_path <> './keep'`)
+    const fileVectorBefore = await fileEmbedding(file!.id)
+    versions.extractor = shipped.extractor
+    await othersCurrent(repo!.id, null)
+    const texts = embeddedTexts()
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
+    await flushExtraction()
+
+    expect(await fileVersions(file!.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
+    expect(texts.filter((t) => t.includes(file!.path))).toEqual([])
+    expect(await fileEmbedding(file!.id)).toEqual(fileVectorBefore)
+    const imports = (await db.execute(
+      sql`SELECT target_path AS "target", line FROM repository_file_imports WHERE source_file_id = ${file!.id} ORDER BY line`,
+    )) as unknown as Array<{ target: string; line: number }>
+    expect(imports).toEqual([
+      { target: './keep', line: 1 },
+      { target: './other', line: 2 },
+      { target: './lazy', line: 3 },
+    ])
+  })
 })
 
 describe('the note model is unchanged (#453)', () => {
