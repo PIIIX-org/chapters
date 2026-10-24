@@ -76,6 +76,7 @@ import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { getRepositoryFile, listFileSymbols, listRepositoryFilesPage } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
+import { skippedField } from '../repositories/fs-scan.js'
 import { prepareGitRemote } from '../repositories/git-remote.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
@@ -2145,6 +2146,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           lastSyncedAt: repositories.lastSyncedAt,
           lastSyncError: repositories.lastSyncError,
           gitUrl: repositories.gitUrl,
+          skippedFiles: repositories.skippedFiles,
         })
         .from(repositories)
         .where(eq(repositories.id, target))
@@ -2156,6 +2158,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         lastSyncError: publicSyncError(row),
         filesPendingExtraction: await countPendingExtractions(target),
         extractionFailures: await extractionFailures(target),
+        // What the last sync left out and why (#465); absent when nothing.
+        ...skippedField(row.skippedFiles),
       }
     },
   )

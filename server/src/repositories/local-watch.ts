@@ -1,9 +1,7 @@
-import { relative } from 'node:path'
+import { statSync, type Stats } from 'node:fs'
+import { basename, relative } from 'node:path'
 import chokidar from 'chokidar'
-
-// ponytail: hardcoded ignore list, not full .gitignore parsing — covers
-// the overwhelming common case (vendored deps, git internals) cheaply.
-export const IGNORED = /(^|\/)(\.git|node_modules)(\/|$)/
+import { GIT_METADATA, GitignoreRules } from './fs-scan.js'
 
 const DEBOUNCE_MS = 300
 
@@ -55,11 +53,27 @@ export function startWatching(
     }
   }
 
-  const watcher = chokidar.watch(localPath, {
-    ignored: (path) => IGNORED.test(relative(localPath, path)),
-    ignoreInitial: false,
-  })
-  watcher.on('all', () => {
+  // The same rules as the scan (#465): .git always, then the folder's
+  // .gitignore files. A changed .gitignore drops the cached rules, and the
+  // sync it triggers rescans with fresh ones.
+  const rules = new GitignoreRules(localPath)
+  const ignored = (path: string, stats?: Stats): boolean => {
+    const relPath = relative(localPath, path)
+    if (relPath === '' || relPath.startsWith('..')) return false
+    if (GIT_METADATA.test(relPath)) return true
+    let isDir = stats?.isDirectory()
+    if (isDir === undefined) {
+      try {
+        isDir = statSync(path).isDirectory()
+      } catch {
+        isDir = false
+      }
+    }
+    return rules.ignores(relPath, isDir)
+  }
+  const watcher = chokidar.watch(localPath, { ignored, ignoreInitial: false })
+  watcher.on('all', (_event, path) => {
+    if (basename(path) === '.gitignore') rules.clear()
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => void runSync(), DEBOUNCE_MS)
   })

@@ -18,6 +18,7 @@ import {
   uuid,
   vector,
 } from 'drizzle-orm/pg-core'
+import type { SkipSummary } from '../repositories/fs-scan.js'
 
 export const userStatus = pgEnum('user_status', [
   'pending_approval',
@@ -697,6 +698,11 @@ export const repositories = pgTable(
     lastSyncedCommit: text('last_synced_commit'),
     /** Staleness signal for the polling fallback scheduler. */
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
+    /**
+     * What the last git or local-path sync left out of the index: counts per
+     * reason and a short sample of paths (#465). Null until a sync records it.
+     */
+    skippedFiles: jsonb('skipped_files').$type<SkipSummary>(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
