@@ -2196,6 +2196,24 @@ is the history record, not Chapters).
    bearer sync-token auth, the client sends its own file list directly
    — the closest analog to how a coding agent itself already works.
 
+**Which files are indexed** — git and local_path share one scan
+(`readRepositoryFiles` in `fs-scan.ts`) over the listed paths (each
+method's ignored directories and the binary extensions are not listed; at
+most 10,000 files). It skips a file over `MAX_FILE_BYTES` (1 MiB on disk) or holding
+a NUL byte: a server-side scan can't tell a stray NUL in a text file from
+a binary format, so it takes the file as binary. A skipped file is left out
+of `currentPaths` as well, so a row indexed from an earlier version is
+deleted with its symbols, imports, embedding and semantic edges: a file
+that grows past the cap or gains a NUL byte leaves the index (`read_file`
+answers `NOT_FOUND`, search and `find_symbols` stop finding it) and comes
+back on the first sync after it is indexable again (#923). The scan
+returns the skipped paths with a reason (`too_large`, `binary`), not
+reported anywhere yet (#465). A file that fails to read (gone since the
+listing, no permission) stays current and keeps its row. agent_push is
+the exception: the client chose to send the content as text, so
+`syncRepositoryFiles` strips NUL bytes and indexes the rest, with no
+per-file size check (the request body limit bounds it).
+
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
 credentials and webhook secrets. Reversible by design (a stored
@@ -2382,7 +2400,7 @@ are idempotent rewrites.
 - **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` (through a temp file of the same mode) in a `0700` directory, whatever the umask (#493). The restore CLI prints counts, and only a driver message and code on errors. The `backup.json` digests (#493) are integrity checks, not a signature: they catch damage and truncation, not someone who can rewrite the whole archive.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
-- **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
+- **Ingestion bounds**: git and local-path ingestion capped to 1 MiB per file (`MAX_FILE_BYTES`, `fs-scan.ts`) and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`); a file over the cap or with a NUL byte is skipped and drops out of the index (§5.10, #923).
 - **Global perspective guards**: Unvaulted graph perspectives are created only by instance admins and listed to and deleted by their creator only (#550; §5.5).
 - Full findings and the design changes they drove:
   `docs/superpowers/specs/2026-07-12-security-audit-findings.md` and
