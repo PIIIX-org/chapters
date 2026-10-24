@@ -2238,9 +2238,15 @@ is the history record, not Chapters).
 - **local_path** follows git's ignore rules, in the scan and in the
   watcher (`GitignoreRules`): `.git/info/exclude`, the root `.gitignore`
   and every nested `.gitignore`, the deepest decisive rule winning (a
-  nested `!keep.log` re-includes a root `*.log`). `.git` is always skipped.
-  A folder with no root `.gitignore` still skips `node_modules/` as a
-  safety default. The watcher rereads the rules when a `.gitignore` changes.
+  nested `!keep.log` re-includes a root `*.log`), matched case-sensitively
+  like git's default unless the folder's `.git/config` sets
+  `core.ignorecase`. `.git` is always skipped. A folder with no root
+  `.gitignore` still skips `node_modules/` as a safety default. chokidar
+  never watches a directory it pruned, so when a `.gitignore`,
+  `.git/info/exclude` or `.git/config` changes, the watcher drops its
+  cached rules and replaces itself (once per debounced burst) before the
+  sync, so a newly un-ignored directory is watched and a newly ignored one
+  stops syncing.
 - **agent_push** has no filter: the client chose what to send.
 
 Both scans leave out binary assets by extension, then cap the listing at

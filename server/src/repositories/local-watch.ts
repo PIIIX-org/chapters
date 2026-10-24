@@ -5,6 +5,9 @@ import { GIT_METADATA, GitignoreRules } from './fs-scan.js'
 
 const DEBOUNCE_MS = 300
 
+/** The root's git files that hold ignore rules: watched although `.git` is not. */
+const GIT_RULE_PATHS = new Set(['.git', '.git/info', '.git/info/exclude', '.git/config'])
+
 /**
  * Real-time local-path ingestion (spec 8). Returns a stop() to close the watcher.
  *
@@ -54,12 +57,17 @@ export function startWatching(
   }
 
   // The same rules as the scan (#465): .git always, then the folder's
-  // .gitignore files. A changed .gitignore drops the cached rules, and the
-  // sync it triggers rescans with fresh ones.
+  // ignore files. chokidar asks `ignored` once per path and never watches a
+  // directory it pruned, so a change to the rules (a `.gitignore`, or the
+  // root's `.git/info/exclude` or `.git/config` for core.ignorecase) drops
+  // the cached rules and replaces the watcher, so a directory the change
+  // un-ignores gets watched and one it ignores stops syncing. Done once per
+  // debounced burst, before the sync that rescans with the fresh rules.
   const rules = new GitignoreRules(localPath)
   const ignored = (path: string, stats?: Stats): boolean => {
     const relPath = relative(localPath, path)
     if (relPath === '' || relPath.startsWith('..')) return false
+    if (GIT_RULE_PATHS.has(relPath)) return false
     if (GIT_METADATA.test(relPath)) return true
     let isDir = stats?.isDirectory()
     if (isDir === undefined) {
@@ -71,15 +79,38 @@ export function startWatching(
     }
     return rules.ignores(relPath, isDir)
   }
-  const watcher = chokidar.watch(localPath, { ignored, ignoreInitial: false })
-  watcher.on('all', (_event, path) => {
-    if (basename(path) === '.gitignore') rules.clear()
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => void runSync(), DEBOUNCE_MS)
-  })
+
+  let rulesChanged = false
+  let stopped = false
+  const watch = (ignoreInitial: boolean) => {
+    // Rule files listed by the initial scan are not changes.
+    let ready = false
+    const watcher = chokidar.watch(localPath, { ignored, ignoreInitial })
+    watcher.on('ready', () => {
+      ready = true
+    })
+    watcher.on('all', (_event, path) => {
+      if (ready && (basename(path) === '.gitignore' || GIT_RULE_PATHS.has(relative(localPath, path)))) {
+        rulesChanged = true
+      }
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        if (rulesChanged && !stopped) {
+          rulesChanged = false
+          rules.clear()
+          void current.close()
+          current = watch(true)
+        }
+        void runSync()
+      }, DEBOUNCE_MS)
+    })
+    return watcher
+  }
+  let current = watch(false)
 
   return () => {
+    stopped = true
     if (timer) clearTimeout(timer)
-    void watcher.close()
+    void current.close()
   }
 }

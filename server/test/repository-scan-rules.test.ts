@@ -175,4 +175,17 @@ describe('local watcher follows .gitignore', () => {
     await settle()
     expect(syncs).toBe(before)
   })
+
+  it('a .git/info/exclude change re-reads the rules too', async () => {
+    const root = await makeTree({ '.git/info/exclude': 'gen/\n', '.gitignore': '', 'gen/x.ts': 'x' })
+    let syncs = 0
+    stops.push(startWatching('scan-rules-test', root, async () => void syncs++))
+    await settle()
+    await writeFile(join(root, '.git', 'info', 'exclude'), '')
+    await settle()
+    const before = syncs
+    await writeFile(join(root, 'gen', 'x.ts'), 'edited')
+    await settle()
+    expect(syncs).toBeGreaterThan(before)
+  })
 })

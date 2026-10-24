@@ -33,16 +33,43 @@ function readOptional(path: string): string | null {
 }
 
 /**
+ * `core.ignorecase` from the folder's `.git/config`. Git's default is false
+ * (case-sensitive), and `ignore` would otherwise match case-insensitively and
+ * drop `data/` for a `/Data/` rule; `git init` on a case-insensitive file
+ * system (macOS, Windows) writes true, and then git matches either case.
+ */
+function gitIgnoreCase(root: string): boolean {
+  const config = readOptional(join(root, '.git', 'config'))
+  if (!config) return false
+  let inCore = false
+  let ignoreCase = false
+  for (const line of config.split('\n')) {
+    const section = /^\s*\[\s*([^\]\s"]+)/.exec(line)
+    if (section) {
+      inCore = section[1]!.toLowerCase() === 'core'
+      continue
+    }
+    // A bare key is true; `true`/`yes`/`on`/`1` too.
+    const entry = inCore ? /^\s*ignorecase\s*(?:=\s*([^\s;#]*))?\s*(?:[;#].*)?$/i.exec(line) : null
+    if (entry) ignoreCase = entry[1] === undefined || /^(true|yes|on|1)$/i.test(entry[1])
+  }
+  return ignoreCase
+}
+
+/**
  * The ignore rules of a local folder, as git applies them (#465, D12):
  * `.git/info/exclude`, then the root `.gitignore`, then each nested
  * `.gitignore` down to the path, the deepest decisive rule winning (so a
- * nested `!keep.log` re-includes what the root's `*.log` excluded). A folder
+ * nested `!keep.log` re-includes what the root's `*.log` excluded), matched
+ * case-sensitively unless `.git/config` sets `core.ignorecase`. A folder
  * with no root `.gitignore` skips `node_modules/` as a safety default. A
  * directory's `.gitignore` is read once and cached; the watcher calls
- * `clear()` when one changes. Sync reads: chokidar's `ignored` is synchronous.
+ * `clear()` when a rule file changes. Sync reads: chokidar's `ignored` is
+ * synchronous.
  */
 export class GitignoreRules {
   private readonly dirs = new Map<string, Ignore | null>()
+  private ignorecase = false
   private base: Ignore
 
   constructor(private readonly root: string) {
@@ -72,7 +99,8 @@ export class GitignoreRules {
   }
 
   private loadBase(): Ignore {
-    const base = ignore()
+    this.ignorecase = gitIgnoreCase(this.root)
+    const base = ignore({ ignorecase: this.ignorecase })
     const exclude = readOptional(join(this.root, '.git', 'info', 'exclude'))
     if (exclude) base.add(exclude)
     if (this.rulesIn('') === null) base.add('node_modules/')
@@ -83,7 +111,7 @@ export class GitignoreRules {
     let rules = this.dirs.get(dir)
     if (rules === undefined) {
       const text = readOptional(join(this.root, dir, '.gitignore'))
-      rules = text === null ? null : ignore().add(text)
+      rules = text === null ? null : ignore({ ignorecase: this.ignorecase }).add(text)
       this.dirs.set(dir, rules)
     }
     return rules
