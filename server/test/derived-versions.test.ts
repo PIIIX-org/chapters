@@ -1,11 +1,9 @@
 // #453: every derived artifact is keyed by what produced it. A repository
-// file's imports and blocks carry `EXTRACTOR_VERSION` and `EMBEDDER_ID` (on
-// its `repository_files` row, written with them in one transaction) and each
-// block vector its `embedKey` (the model and the embedded text, #452, so an
-// unchanged text keeps its vector across a bump); a note's vector carries
-// `EMBEDDER_ID`. The versions go into the job keys, and boot catch-up
-// re-derives rows a different version produced, in batches, once (the jobs
-// dedupe by key).
+// file's imports, symbols and vector carry `EXTRACTOR_VERSION` and
+// `EMBEDDER_ID` (on its `repository_files` row, written with them in one
+// transaction); a note's vector carries `EMBEDDER_ID`. Both go into the job
+// keys, and boot catch-up re-derives rows a different version produced, in
+// batches, once (the jobs dedupe by key).
 //
 // The tests bump the versions for real: the two modules are mocked with a
 // getter, which the queues read at each call.
@@ -28,9 +26,10 @@ import { CHUNK_VERSION, embedKey } from '../src/search/embed-key.js'
 import { EMBEDDER_ID, embedder } from '../src/search/embeddings.js'
 import type * as Embeddings from '../src/search/embeddings.js'
 import type * as Extraction from '../src/repositories/extraction.js'
-import { createActiveUser, symbolBlocks } from './helpers.js'
+import type * as EmbedKey from '../src/search/embed-key.js'
+import { createActiveUser, fileEmbedding, symbolBlocks } from './helpers.js'
 
-const versions = vi.hoisted(() => ({ extractor: 0, embedder: '' }))
+const versions = vi.hoisted(() => ({ extractor: 0, embedder: '', chunk: 0 }))
 
 vi.mock('../src/repositories/extraction.js', async (importOriginal) => {
   const real = await importOriginal<typeof Extraction>()
@@ -54,6 +53,17 @@ vi.mock('../src/search/embeddings.js', async (importOriginal) => {
   }
 })
 
+vi.mock('../src/search/embed-key.js', async (importOriginal) => {
+  const real = await importOriginal<typeof EmbedKey>()
+  versions.chunk = real.CHUNK_VERSION
+  return {
+    ...real,
+    get CHUNK_VERSION() {
+      return versions.chunk
+    },
+  }
+})
+
 const shipped = { ...versions }
 const savedBackoff = jobTiming.backoffBaseMs
 const savedBatch = catchUpLimits.batchSize
@@ -66,10 +76,11 @@ afterEach(async () => {
   catchUpLimits.batchSize = savedBatch
   vi.restoreAllMocks()
   // Rows the test marked as derived by the bumped version count as derived by the shipped one again.
-  await db.execute(sql`UPDATE repository_files SET extractor_version = ${shipped.extractor}, embedder_id = ${shipped.embedder}
-    WHERE extractor_version = ${versions.extractor} AND embedder_id = ${versions.embedder}`)
-  await db.execute(sql`UPDATE notes SET embedder_id = ${shipped.embedder} WHERE embedder_id = ${versions.embedder}
-    AND EXISTS (SELECT 1 FROM blocks b WHERE b.owner_type = 'note' AND b.owner_id = notes.id)`)
+  await db.execute(sql`UPDATE repository_files SET extractor_version = ${shipped.extractor}, embedder_id = ${shipped.embedder}, chunk_version = ${shipped.chunk}
+    WHERE extractor_version = ${versions.extractor} AND embedder_id = ${versions.embedder} AND chunk_version = ${versions.chunk}`)
+  await db.execute(sql`UPDATE notes SET embedder_id = ${shipped.embedder}, chunk_version = ${shipped.chunk}
+    WHERE embedder_id = ${versions.embedder} AND chunk_version = ${versions.chunk}
+      AND EXISTS (SELECT 1 FROM blocks b WHERE b.owner_type = 'note' AND b.owner_id = notes.id)`)
   Object.assign(versions, shipped)
   for (const id of createdVaultIds.splice(0)) await db.delete(vaults).where(eq(vaults.id, id))
 })
@@ -107,12 +118,11 @@ async function noteVersion(noteId: string) {
   return row
 }
 
-/** Counts the embeds whose first text is the file's text `file`, and those whose first text starts with `notePrefix`; `texts`: every text of a file extraction. */
+/** Counts the embeds whose first text is the file's text `file`, and those whose first text starts with `notePrefix`. */
 function countEmbeds(file: string, notePrefix?: string) {
-  const calls = { file: 0, note: 0, texts: [] as string[] }
+  const calls = { file: 0, note: 0 }
   const embed = embedder.embed.bind(embedder)
   vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => {
-    if (notePrefix === undefined || !texts[0]!.startsWith(notePrefix)) calls.texts.push(...texts)
     if (texts[0] === file) calls.file++
     if (notePrefix !== undefined && texts[0]!.startsWith(notePrefix)) calls.note++
     return embed(texts)
@@ -120,17 +130,34 @@ function countEmbeds(file: string, notePrefix?: string) {
   return calls
 }
 
-/** Every row outside `repositoryId` counts as derived by the current versions: the catch-up then only has this test's rows to do. */
+/** Every text the embedder is asked for from now on, in order. */
+function embeddedTexts(): string[] {
+  const texts: string[] = []
+  const embed = embedder.embed.bind(embedder)
+  vi.spyOn(embedder, 'embed').mockImplementation(async (batch) => {
+    texts.push(...batch)
+    return embed(batch)
+  })
+  return texts
+}
+
+/**
+ * The other rows that were derived by the shipped versions follow the bump,
+ * as if already re-derived: the catch-up then has only this test's rows to do.
+ * Rows other test files left stale stay stale (afterEach moves these back).
+ */
 async function othersCurrent(repositoryId: string | null, vaultId: string | null) {
-  await db.execute(sql`UPDATE repository_files SET extractor_version = ${versions.extractor}, embedder_id = ${versions.embedder}
-    WHERE TRUE ${repositoryId ? sql`AND repository_id <> ${repositoryId}` : sql``}`)
-  // A block's key names the model and text of its vector: a bumped EMBEDDER_ID makes it stale, as it should.
-  await db.execute(sql`UPDATE notes SET embedder_id = ${versions.embedder}
-    WHERE EXISTS (SELECT 1 FROM blocks b WHERE b.owner_type = 'note' AND b.owner_id = notes.id) ${vaultId ? sql`AND vault_id <> ${vaultId}` : sql``}`)
+  await db.execute(sql`UPDATE repository_files SET extractor_version = ${versions.extractor}, embedder_id = ${versions.embedder}, chunk_version = ${versions.chunk}
+    WHERE extracted_hash = content_hash
+      AND extractor_version = ${shipped.extractor} AND embedder_id = ${shipped.embedder} AND chunk_version = ${shipped.chunk}
+      ${repositoryId ? sql`AND repository_id <> ${repositoryId}` : sql``}`)
+  await db.execute(sql`UPDATE notes SET embedder_id = ${versions.embedder}, chunk_version = ${versions.chunk}
+    WHERE EXISTS (SELECT 1 FROM blocks b WHERE b.owner_type = 'note' AND b.owner_id = notes.id)
+      AND embedder_id = ${shipped.embedder} AND chunk_version = ${shipped.chunk} ${vaultId ? sql`AND vault_id <> ${vaultId}` : sql``}`)
 }
 
 describe('derived rows record what produced them (#453)', () => {
-  it('a file records EXTRACTOR_VERSION and EMBEDDER_ID, each embedded block its embedKey; the job key carries the versions', async () => {
+  it('a file records EXTRACTOR_VERSION and EMBEDDER_ID; its job key carries both', async () => {
     const { files } = await extractedRepo('versions-keys')
     const file = files[0]!
     expect(await fileVersions(file.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
@@ -139,7 +166,7 @@ describe('derived rows record what produced them (#453)', () => {
     const fileBlocks = await db.select().from(blocks).where(eq(blocks.ownerId, file.id)).orderBy(blocks.kind)
     expect(fileBlocks.map((b) => [b.kind, b.embedKey, b.ownerVersion])).toEqual([
       ['file', embedKey(`${file.path}\n${SOURCE}`), file.contentHash],
-      ['symbol', embedKey(`function unchanged in ${file.path}\nexport function unchanged() { return b() }`), file.contentHash],
+      ['symbol', embedKey(`function unchanged in ${file.path}\n${SOURCE.split('\n')[1]}`), file.contentHash],
     ])
     const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, key))
     expect(job?.doneAt).not.toBeNull()
@@ -161,31 +188,49 @@ describe('derived rows record what produced them (#453)', () => {
 })
 
 describe('boot catch-up re-derives rows of another version (#453)', () => {
-  it('EXTRACTOR_VERSION bumped: an unchanged file is extracted again, once', async () => {
+  it('EXTRACTOR_VERSION bumped: an unchanged file is extracted again once, and its vectors are kept (no embedding)', async () => {
     const { repo, files } = await extractedRepo('versions-extractor-bump')
     const file = files[0]!
-    // What the previous extractor left: one symbol fewer than the new one finds.
-    await db.delete(blocks).where(and(eq(blocks.ownerId, file.id), eq(blocks.kind, 'symbol')))
+    const symbolsBefore = await symbolBlocks(file.id)
     versions.extractor = shipped.extractor + 1
     await othersCurrent(repo.id, null)
-    const calls = countEmbeds(`${file.path}\n${SOURCE}`)
+    const texts = embeddedTexts()
 
     expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
     await flushExtraction()
 
-    // The file block's text did not change, so its vector is kept (#452); the symbol the old extractor missed is embedded.
-    expect(calls.file).toBe(0)
-    expect(calls.texts).toEqual([`function unchanged in ${file.path}\nexport function unchanged() { return b() }`])
+    expect(texts.filter((t) => t.includes(file.path))).toEqual([])
     expect(await fileVersions(file.id)).toEqual({ extractor_version: versions.extractor, embedder_id: EMBEDDER_ID })
-    expect((await symbolBlocks(file.id)).map((s) => s.name)).toEqual(['unchanged'])
+    const symbols = await symbolBlocks(file.id)
+    expect(symbols.map((s) => [s.name, s.embedding])).toEqual(symbolsBefore.map((s) => [s.name, s.embedding]))
     const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, extractionJobKey(file.id, file.contentHash)))
     expect(job?.idempotencyKey).toBe(`extract:${file.id}:${file.contentHash}:${versions.extractor}:${EMBEDDER_ID}+chunk${CHUNK_VERSION}`)
     expect(job?.doneAt).not.toBeNull()
 
     // The next boot finds it current: nothing runs again.
+    const [again] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, extractionJobKey(file.id, file.contentHash)))
     await scheduleMissingExtractions()
     await flushExtraction()
-    expect(calls.texts).toHaveLength(1)
+    const [after] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, extractionJobKey(file.id, file.contentHash)))
+    expect(after?.id).toBe(again?.id)
+  })
+
+  it('EXTRACTOR_VERSION bumped: only a symbol whose embed text is new is embedded', async () => {
+    const { repo, files } = await extractedRepo('versions-extractor-new-symbol')
+    const file = files[0]!
+    // What the previous extractor left: one symbol fewer than the new one finds.
+    await db.delete(blocks).where(and(eq(blocks.ownerId, file.id), eq(blocks.kind, 'symbol')))
+    versions.extractor = shipped.extractor + 1
+    await othersCurrent(repo.id, null)
+    const texts = embeddedTexts()
+
+    await scheduleMissingExtractions()
+    await flushExtraction()
+
+    expect(texts.filter((t) => t.includes(file.path))).toEqual([`function unchanged in ${file.path}\n${SOURCE.split('\n')[1]}`])
+    const symbols = await symbolBlocks(file.id)
+    expect(symbols.map((s) => s.name)).toEqual(['unchanged'])
+    expect(symbols[0]!.embedding).not.toBeNull()
   })
 
   it('EMBEDDER_ID bumped: files and notes are embedded again, once', async () => {
@@ -207,7 +252,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await flushEmbeddings()
     await flushExtraction()
 
-    expect(calls).toMatchObject({ file: 1, note: 1 })
+    expect(calls).toEqual({ file: 1, note: 1 })
     expect((await fileVersions(file.id)).embedder_id).toBe(versions.embedder)
     const after = await noteVersion(note.id)
     expect(after.embedder_id).toBe(versions.embedder)
@@ -219,7 +264,29 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await scheduleMissingExtractions()
     await flushEmbeddings()
     await flushExtraction()
-    expect(calls).toMatchObject({ file: 1, note: 1 })
+    expect(calls).toEqual({ file: 1, note: 1 })
+  })
+
+  it('CHUNK_VERSION bumped: every file is extracted again once, and blocks whose text is unchanged embed nothing (#452)', async () => {
+    const { repo, files } = await extractedRepo('versions-chunk-bump')
+    const file = files[0]!
+    const before = await db.select().from(blocks).where(eq(blocks.ownerId, file.id)).orderBy(blocks.blockId)
+    versions.chunk = shipped.chunk + 1
+    await othersCurrent(repo.id, null)
+    const texts = embeddedTexts()
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
+    await flushExtraction()
+
+    expect(texts.filter((t) => t.includes(file.path))).toEqual([])
+    const [row] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
+    expect(row!.chunkVersion).toBe(versions.chunk)
+    const after = await db.select().from(blocks).where(eq(blocks.ownerId, file.id)).orderBy(blocks.blockId)
+    expect(after.map((b) => [b.id, b.blockId, b.embedKey, b.embedding])).toEqual(before.map((b) => [b.id, b.blockId, b.embedKey, b.embedding]))
+    const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, extractionJobKey(file.id, file.contentHash)))
+    expect(job?.idempotencyKey).toBe(`extract:${file.id}:${file.contentHash}:${EXTRACTOR_VERSION}:${EMBEDDER_ID}+chunk${versions.chunk}`)
+    expect(job?.priority).toBe(1)
+    expect(job?.doneAt).not.toBeNull()
   })
 
   it('works in batches: a page smaller than the backlog still reaches every file', async () => {
@@ -297,20 +364,83 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await flushExtraction()
     const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
     expect((await fileVersions(file!.id)).extractor_version).toBe(1)
-    // Stand-in for the broken outline version 1's TypeScript grammar left.
-    await db.delete(blocks).where(and(eq(blocks.ownerId, file!.id), eq(blocks.kind, 'symbol')))
+    // Stand-in for the broken outline version 1's TypeScript grammar left:
+    // the declaration before the JSX, none of those after it.
+    await db.delete(blocks).where(and(eq(blocks.ownerId, file!.id), eq(blocks.kind, 'symbol'), inArray(blocks.innerPath, ['Page', 'PageProps'])))
+    const [cardBefore] = await symbolBlocks(file!.id)
     versions.extractor = shipped.extractor
     await othersCurrent(repo!.id, null)
+    const texts = embeddedTexts()
 
     expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
     await flushExtraction()
 
     expect(await fileVersions(file!.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
-    expect((await symbolBlocks(file!.id)).map((s) => [s.name, s.kind, s.startLine, s.endLine])).toEqual([
+    const byLine = await symbolBlocks(file!.id)
+    expect(byLine.map((s) => [s.name, s.kind, s.startLine, s.endLine])).toEqual([
       ['Card', 'function', 1, 3],
       ['Page', 'function', 4, 4],
       ['PageProps', 'interface', 5, 5],
     ])
+    // The bump costs a parse: the file vector and Card's vector are kept; only
+    // the two symbols the TSX grammar recovers are embedded.
+    const embeddedHere = texts.filter((t) => t.includes(file!.path))
+    expect(embeddedHere.map((t) => t.split('\n')[0])).toEqual([
+      `function Page in ${file!.path}`,
+      `interface PageProps in ${file!.path}`,
+    ])
+    expect(byLine[0]!.embedding).toEqual(cardBefore!.embedding)
+    expect(byLine.every((s) => s.embedding !== null)).toBe(true)
+  })
+
+  // #450 bumped EXTRACTOR_VERSION to 3: methods, arrow-function consts and
+  // exported consts become symbols. The bump costs a parse: the file vector
+  // and the vectors of the symbols version 2 already had are kept; only the
+  // new symbols are embedded.
+  it('a row extractor version 2 produced keeps its vectors; only the symbols version 3 adds are embedded', async () => {
+    const owner = await createActiveUser()
+    const [repo] = await db
+      .insert(repositories)
+      .values({ name: 'versions-symbols-v2', ownerId: owner.id, ingestionMethod: 'agent_push' })
+      .returning()
+    const content = [
+      'export function keep() { return 1 }',
+      'export class Store {',
+      '  save() { return keep() }',
+      '}',
+      'export const load = () => new Store()',
+      'export const LIMIT = 3',
+    ].join('\n')
+    versions.extractor = 2
+    await syncRepositoryFiles(repo!.id, [{ path: 'src/store.ts', content }], ['src/store.ts'])
+    await flushExtraction()
+    const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
+    expect((await fileVersions(file!.id)).extractor_version).toBe(2)
+    // Stand-in for version 2's outline: only the function and class declarations.
+    await db.delete(blocks).where(and(eq(blocks.ownerId, file!.id), eq(blocks.kind, 'symbol'), inArray(blocks.innerPath, ['Store.save', 'load', 'LIMIT'])))
+    const before = await symbolBlocks(file!.id)
+    const fileVectorBefore = await fileEmbedding(file!.id)
+    versions.extractor = shipped.extractor
+    await othersCurrent(repo!.id, null)
+    const texts = embeddedTexts()
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
+    await flushExtraction()
+
+    expect(await fileVersions(file!.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
+    // No file text; exported symbols before methods (the embed budget's order).
+    expect(texts.filter((t) => t.includes(file!.path)).map((t) => t.split('\n')[0])).toEqual([
+      `function load in ${file!.path}`,
+      `variable LIMIT in ${file!.path}`,
+      `method Store.save in ${file!.path}`,
+    ])
+    expect(await fileEmbedding(file!.id)).toEqual(fileVectorBefore)
+    const symbols = await symbolBlocks(file!.id)
+    const vectorOf = (rows: typeof symbols, name: string) => rows.find((s) => s.name === name)?.embedding
+    expect(vectorOf(symbols, 'keep')).toEqual(vectorOf(before, 'keep'))
+    expect(vectorOf(symbols, 'Store')).toEqual(vectorOf(before, 'Store'))
+    expect(symbols.map((s) => s.name).sort()).toEqual(['LIMIT', 'Store', 'keep', 'load', 'save'])
+    expect(symbols.every((s) => s.embedding !== null)).toBe(true)
   })
 })
 
