@@ -11,9 +11,11 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  smallint,
   text,
   real,
   timestamp,
+  unique,
   uniqueIndex,
   uuid,
   vector,
@@ -340,10 +342,15 @@ export const instanceState = pgTable('instance_state', {
  *
  * Migration 0021 (ADR-003 §4) also adds `seq bigint NOT NULL DEFAULT 1`
  * (bumped by the `notes_bump_seq` trigger on any change of body, frontmatter,
- * path or deleted_at) and `frontmatter_src json`. They are deliberately not
+ * path or deleted_at) and `frontmatter_src json`; migration 0033 (#453) adds
+ * `embedder_id text` (search/embeddings.ts `EMBEDDER_ID` of its blocks;
+ * null before #453) and migration 0036 (#452) `chunk_version integer NOT
+ * NULL DEFAULT 0` (search/embed-key.ts `CHUNK_VERSION` of its blocks; 0:
+ * none yet). They are deliberately not
  * in this model: rows are returned whole by REST and MCP, so declaring them
  * would add fields to responses. The store reads them with SQL
- * (store-tx.ts `storedColumns`).
+ * (store-tx.ts `storedColumns`). A note's vectors are its `blocks`
+ * (migration 0036 dropped `notes.embedding`).
  */
 export const notes = pgTable(
   'notes',
@@ -358,8 +365,6 @@ export const notes = pgTable(
     frontmatter: jsonb('frontmatter').notNull(),
     body: text('body').notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
-    /** One embedding per note, computed at save-time (specs 3+4's shared index). */
-    embedding: vector('embedding', { dimensions: 384 }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -548,8 +553,14 @@ export const jobs = pgTable(
     leaseUntil: timestamp('lease_until', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     doneAt: timestamp('done_at', { withTimezone: true }),
+    /** jobs/durable.ts `JOB_PRIORITY` (#453, migration 0033): 0 a write's job, 1 catch-up; claims take the lowest first. */
+    priority: smallint('priority').notNull().default(0),
   },
-  (t) => [index('jobs_pending').on(t.kind, t.createdAt).where(sql`done_at is null`)],
+  (t) => [
+    index('jobs_pending').on(t.kind, t.createdAt).where(sql`done_at is null`),
+    // claimJob's order: the next claimable job is the first index entry that passes the lease and attempts checks.
+    index('jobs_claim').on(t.kind, t.priority, t.id).where(sql`done_at is null`),
+  ],
 )
 
 /** The first result of an MCP write sent with an `idempotency_key` (#477, migration 0025), per connection and key. */
@@ -756,13 +767,24 @@ export const repositoryFiles = pgTable(
     contentHash: text('content_hash').notNull(),
     size: integer('size').notNull(),
     sourceModifiedAt: timestamp('source_modified_at', { withTimezone: true }),
-    /** Shared embedding index with notes (spec 9) — one model, one vector space. */
-    embedding: vector('embedding', { dimensions: 384 }),
     /**
      * Why the last extraction embedded this file only partly (#496: the
-     * per-file symbol budget); null when it embedded everything.
+     * per-file symbol budget); null when it embedded everything. The file's
+     * vectors are its `blocks` (migration 0035).
      */
     embeddingNote: text('embedding_note'),
+    /**
+     * What produced this file's imports, blocks and vectors (#453, migration
+     * 0033), written in one transaction with them: the `content_hash` they
+     * were extracted from, extraction.ts `EXTRACTOR_VERSION` (0: before #453)
+     * and embeddings.ts `EMBEDDER_ID` (null: before #453). Boot catch-up
+     * re-extracts a file whose values differ from its content and the running code.
+     */
+    extractedHash: text('extracted_hash'),
+    extractorVersion: integer('extractor_version').notNull().default(0),
+    embedderId: text('embedder_id'),
+    /** embed-key.ts `CHUNK_VERSION` of its blocks (migration 0035; 0: before #452a), checked by boot catch-up like the two above. */
+    chunkVersion: integer('chunk_version').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -797,24 +819,56 @@ export const repositoryFileImports = pgTable(
   ],
 )
 
-/** "Contains" edges (spec 9): a file's own top-level declarations — cheap, no cross-file resolution. */
-export const repositoryFileSymbols = pgTable(
-  'repository_file_symbols',
+/**
+ * Blocks (ADR-004 §2.2, §2.5; #413, #452, migrations 0035, 0036): the
+ * addressable spans of a note or a repository file, which are also its
+ * embedding chunks. For code (repositories/code-blocks.ts) a file's
+ * `symbol`, `skeleton` and `file` blocks; for a note (notes/note-blocks.ts)
+ * its `preamble` and `section` blocks, with body-relative lines. `block_id`
+ * is stable across line shifts (text/blocks.ts `blockId`); lines follow
+ * text/lines.ts. `owner_id` has no foreign key (it names a note or a file):
+ * triggers delete a repository file's or a note's blocks with its row.
+ * `owner_version` is what the set was derived from (a file's
+ * `content_hash`, a note's `seq`), replaced whole in one transaction (#460).
+ * `embed_key` is embed-key.ts `embedKey(text)` of the vector, null when
+ * the block is not embedded (over the per-file symbol budget); on the file
+ * vectors migration 0035 carried over it is computed from the embedder and
+ * text that made them (so the first re-extraction reuses them), `legacy` on
+ * the carried-over symbol and note vectors (their text no block has now).
+ */
+export const blocks = pgTable(
+  'blocks',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    fileId: uuid('file_id')
-      .notNull()
-      .references(() => repositoryFiles.id, { onDelete: 'cascade' }),
-    name: text('name').notNull(),
+    ownerType: semanticNodeType('owner_type').notNull(),
+    ownerId: uuid('owner_id').notNull(),
+    /** vault_id | repository_id: the scope filter inside each leg (#454). */
+    containerId: uuid('container_id').notNull(),
+    blockId: text('block_id').notNull(),
+    /** text/blocks.ts `BlockKind`. */
     kind: text('kind').notNull(),
+    innerPath: text('inner_path').notNull(),
+    /** extraction.ts `SymbolKind` for kind = 'symbol'. */
+    symbolKind: text('symbol_kind'),
+    /**
+     * A symbol's `parent` (#450: a method's class, a namespace member's
+     * namespace), null at module level: `inner_path` is `parent.name`, and a
+     * name may itself hold a `.` (`namespace A.B`), so the split is kept.
+     */
+    symbolParent: text('symbol_parent'),
+    /** A symbol block's snippet (code-blocks.ts): the keyword legs match it and hits show it, as `repository_file_symbols.snippet` was. */
+    snippet: text('snippet'),
     startLine: integer('start_line').notNull(),
     endLine: integer('end_line').notNull(),
-    snippet: text('snippet'),
+    contentHash: text('content_hash').notNull(),
+    ownerVersion: text('owner_version').notNull(),
+    embedKey: text('embed_key'),
     embedding: vector('embedding', { dimensions: 384 }),
   },
   (t) => [
-    index('repository_file_symbols_file_idx').on(t.fileId),
-    index('repository_file_symbols_name_idx').on(t.name),
+    unique('blocks_owner_block').on(t.ownerType, t.ownerId, t.blockId),
+    // The unique index also serves (owner_type, owner_id) lookups.
+    index('blocks_container_idx').on(t.containerId),
   ],
 )
 

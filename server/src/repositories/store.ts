@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
-import { and, eq, notInArray, sql, type SQL } from 'drizzle-orm'
+import { and, asc, eq, notInArray, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { repositoryFiles, repositoryFileSymbols } from '../db/schema.js'
+import { blocks, repositoryFiles } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
-import { enqueueExtractions } from './extraction-queue.js'
+import { enqueueExtractions, scheduleImportReresolution } from './extraction-queue.js'
+import { isResolutionManifest } from './import-resolution.js'
 import { checkCodeStaleness } from '../notes/staleness.js'
 
 export type RepositoryFileRow = typeof repositoryFiles.$inferSelect
@@ -25,7 +26,8 @@ export interface SyncResult {
 /**
  * The one write path for repository file content (spec 8): every
  * ingestion method funnels through here. `contentHash` is always
- * computed server-side from `content` — never trusted from a caller,
+ * computed server-side from the stored `content` (NUL bytes removed first:
+ * stored text = hashed text, #418) — never trusted from a caller,
  * since the server is the single source of truth regardless of how the
  * content arrived.
  */
@@ -45,18 +47,21 @@ export async function syncRepositoryFiles(
   // — starting it per-file would race cross-file import resolution against
   // sibling files in the same batch still being inserted.
   const toExtract: string[] = []
+  // A package.json, workspace or tsconfig change can change what any import of the repository resolves to (#466).
+  let manifestChanged = false
 
   for (const file of changedOrNewFiles) {
-    const contentHash = createHash('sha256').update(file.content).digest('hex')
+    // Pushed content is text the client chose to send, so a stray NUL is
+    // stripped. Git and local-path scans skip a file with a NUL as binary
+    // before it gets here (readRepositoryFiles in fs-scan.ts, #923). The hash
+    // is of the stored, stripped text (#418).
+    const cleanContent = file.content.replace(/\0/g, '')
+    const contentHash = createHash('sha256').update(cleanContent).digest('hex')
     const current = existingByPath.get(file.path)
     if (current && current.contentHash === contentHash) {
       result.unchanged += 1
       continue
     }
-    // Pushed content is text the client chose to send, so a stray NUL is
-    // stripped. Git and local-path scans skip a file with a NUL as binary
-    // before it gets here (readRepositoryFiles in fs-scan.ts, #923).
-    const cleanContent = file.content.replace(/\0/g, '')
     const values = {
       repositoryId,
       path: file.path,
@@ -83,6 +88,7 @@ export async function syncRepositoryFiles(
       if (inserted) toExtract.push(inserted.id)
       result.created += 1
     }
+    if (isResolutionManifest(file.path)) manifestChanged = true
   }
 
   const currentPathSet = new Set(currentPaths)
@@ -100,7 +106,10 @@ export async function syncRepositoryFiles(
     // Same as notes: semanticEdges has no FK and does not cascade (#92).
     await deleteSemanticEdgesFor('code', toDelete.map((r) => r.id))
     result.deleted = toDelete.length
+    if (toDelete.some((r) => isResolutionManifest(r.path))) manifestChanged = true
   }
+
+  if (manifestChanged) scheduleImportReresolution(repositoryId)
 
   await enqueueExtractions(toExtract)
   checkCodeStaleness(repositoryId).catch(console.error)
@@ -164,17 +173,30 @@ export async function listRepositoryFilesPage(
     .limit(opts.limit)
 }
 
-/** Declared top-level symbols for a file — its "outline" (spec 9). */
+/**
+ * A file's declared symbols — its "outline" (spec 9): its `symbol` blocks
+ * (#413); `parent` only on a method or namespace member (#450).
+ */
 export async function listFileSymbols(
   fileId: string,
-): Promise<Array<Pick<typeof repositoryFileSymbols.$inferSelect, 'name' | 'kind' | 'startLine' | 'endLine'>>> {
-  return db
+): Promise<Array<{ name: string; kind: string; parent?: string; startLine: number; endLine: number }>> {
+  const rows = await db
     .select({
-      name: repositoryFileSymbols.name,
-      kind: repositoryFileSymbols.kind,
-      startLine: repositoryFileSymbols.startLine,
-      endLine: repositoryFileSymbols.endLine,
+      innerPath: blocks.innerPath,
+      kind: blocks.symbolKind,
+      parent: blocks.symbolParent,
+      startLine: blocks.startLine,
+      endLine: blocks.endLine,
     })
-    .from(repositoryFileSymbols)
-    .where(eq(repositoryFileSymbols.fileId, fileId))
+    .from(blocks)
+    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId), eq(blocks.kind, 'symbol')))
+    // Line order: an upsert moves heap rows, so without this the outline comes back in any order.
+    .orderBy(asc(blocks.startLine), asc(blocks.blockId))
+  return rows.map(({ innerPath, kind, parent, startLine, endLine }) => ({
+    name: parent === null ? innerPath : innerPath.slice(parent.length + 1),
+    kind: kind!, // set on every symbol block
+    ...(parent === null ? {} : { parent }),
+    startLine,
+    endLine,
+  }))
 }

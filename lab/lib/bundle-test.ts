@@ -13,7 +13,8 @@
 //             guard, so this measures the batched embedder alone on ~900 symbols
 // #496: embedding runs in a worker thread (on the main thread each batch held
 // /health past its probe on slow runners), and a file embeds at most 256
-// symbols; the pretty bundle still stores all ~900, the rest without a vector.
+// symbols; the pretty bundle still stores all ~1,080 (900 declarations plus
+// the classes' methods, #450), the rest without a vector.
 //
 // Method: local_path repo = BUNDLE (~700 KB) + BATCH small TS files in the
 // same first sync (queue order = directory order, so some land behind the
@@ -43,16 +44,22 @@ const LATE = Number(process.env.LAB_BUNDLE_LATE_FILES ?? 10)
 const TIMEOUT_MS = Number(process.env.LAB_BUNDLE_TIMEOUT_MS ?? 25 * 60_000)
 const STALL_MS = Number(process.env.LAB_BUNDLE_STALL_MS ?? 240_000)
 
-/** esbuild-style output, ~TARGET_BYTES: all declarations on one line, or (pretty) one per line. */
-function makeBundle(pretty: boolean): string {
+/**
+ * esbuild-style output, ~TARGET_BYTES: all declarations on one line, or
+ * (pretty) one per line; with the symbols a readable copy yields (#450:
+ * a function is one, a class three: itself, `constructor` and `run`).
+ */
+function makeBundle(pretty: boolean): { text: string; symbols: number } {
   const per = Math.floor(TARGET_BYTES / DECLS)
   const parts: string[] = ['"use strict";']
+  let symbols = 0
   for (let i = 0; i < DECLS; i++) {
-    const head =
-      i % 10 === 9
-        ? `class C${i}{constructor(e){this.v=e}run(t){return this.v+t+"`
-        : `function a${i}(e,t){var n=e+t|0;for(var r=0;r<n;r++)n^=r<<${i % 7};return n+"`
-    const tail = i % 10 === 9 ? `"}}` : `"}`
+    const isClass = i % 10 === 9
+    const head = isClass
+      ? `class C${i}{constructor(e){this.v=e}run(t){return this.v+t+"`
+      : `function a${i}(e,t){var n=e+t|0;for(var r=0;r<n;r++)n^=r<<${i % 7};return n+"`
+    symbols += isClass ? 3 : 1
+    const tail = isClass ? `"}}` : `"}`
     const padLen = Math.max(8, per - head.length - tail.length)
     const token = `k${i}_`
     parts.push(
@@ -61,8 +68,11 @@ function makeBundle(pretty: boolean): string {
         tail,
     )
   }
-  return parts.join(pretty ? '\n' : '') + '\nexport{a0 as run};\n'
+  return { text: parts.join(pretty ? '\n' : '') + '\nexport{a0 as run};\n', symbols }
 }
+
+/** Symbols of one `smallTs` file (#450): the function, the class and its method `go`. */
+const SMALL_TS_SYMBOLS = 3
 
 function smallTs(prefix: string, i: number): string {
   return `export function ${prefix}Fn${i}(x: number): number {\n  return x * ${i}\n}\n\nexport class ${prefix}Cls${i} {\n  go() {\n    return ${prefix}Fn${i}(2)\n  }\n}\n`
@@ -80,7 +90,7 @@ export function bundleTest(pretty: boolean): LabTest {
       : 'PR #405: a 700 KB / 900-declaration minified bundle neither OOMs/restarts the app nor blocks files queued with or after it.',
     async run(ctx) {
       const checks: Check[] = []
-      const bundle = makeBundle(pretty)
+      const { text: bundle, symbols: bundleSymbols } = makeBundle(pretty)
       const name = ctx.uniq(`fix-bundle-${variant}`)
       const first: Record<string, string> = { 'cli.bundle.mjs': bundle }
       for (let i = 0; i < BATCH; i++)
@@ -149,15 +159,15 @@ export function bundleTest(pretty: boolean): LabTest {
           imports: number
           bytes: number
         }>(
-          `select f.path, (f.embedding is not null) as embedded, length(f.content)::int as bytes,
-          (select count(*) from repository_file_symbols s where s.file_id = f.id)::int as symbols,
+          `select f.path, exists (select 1 from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.owner_version = f.content_hash and b.embedding is not null) as embedded, length(f.content)::int as bytes,
+          (select count(*) from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.kind = 'symbol')::int as symbols,
           (select count(*) from repository_file_imports i where i.source_file_id = f.id)::int as imports
         from repository_files f where f.repository_id = '${repo.id}' order by f.path`,
         )
         .catch(() => [])
       const bundleRow = perFile.find((f) => f.path === 'cli.bundle.mjs')
       const smallRows = perFile.filter((f) => f.path.startsWith('src/'))
-      const smallDone = smallRows.filter((f) => f.embedded && f.symbols === 2)
+      const smallDone = smallRows.filter((f) => f.embedded && f.symbols === SMALL_TS_SYMBOLS)
       const lateDone = smallDone.filter((f) =>
         f.path.startsWith('src/late'),
       ).length
@@ -200,30 +210,30 @@ export function bundleTest(pretty: boolean): LabTest {
         },
         {
           name: 'files synced with the bundle still get extracted',
-          expected: `${BATCH}/${BATCH} batch files embedded with 2 symbols each`,
+          expected: `${BATCH}/${BATCH} batch files embedded with ${SMALL_TS_SYMBOLS} symbols each`,
           actual: `${batchDone}/${BATCH} (settle ${settle.outcome} in ${Math.round(settle.ms / 1000)} s)`,
           ok: batchDone === BATCH,
           severity: 'critical',
         },
         {
           name: 'files added after the bundle still get extracted',
-          expected: `${LATE}/${LATE} late files embedded with 2 symbols each`,
+          expected: `${LATE}/${LATE} late files embedded with ${SMALL_TS_SYMBOLS} symbols each`,
           actual: `${lateDone}/${LATE}`,
           ok: lateDone === LATE,
           severity: 'high',
         },
         {
           name: pretty
-            ? 'bundle itself: embedded with one symbol per declaration'
+            ? 'bundle itself: embedded with every declaration and method a symbol'
             : 'bundle itself: file embedding, no junk symbols',
           expected: pretty
-            ? `bundle embedded, ${DECLS} symbols`
+            ? `bundle embedded, ${bundleSymbols} symbols`
             : 'bundle embedded, 0 symbols (minified)',
           actual: bundleRow
             ? `embedded ${bundleRow.embedded}, ${bundleRow.symbols} symbols, ${bundleRow.bytes} chars`
             : 'bundle row missing',
           ok: bundleRow
-            ? bundleRow.embedded && bundleRow.symbols === (pretty ? DECLS : 0)
+            ? bundleRow.embedded && bundleRow.symbols === (pretty ? bundleSymbols : 0)
             : null,
           severity: 'medium',
         },

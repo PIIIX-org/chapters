@@ -9,7 +9,7 @@ import {
   scheduleMissingEmbeddings,
 } from '../src/search/embedding-queue.js'
 import { jobTiming } from '../src/jobs/durable.js'
-import { createActiveUser } from './helpers.js'
+import { createActiveUser, noteVectors } from './helpers.js'
 
 // Row-only fixtures (no note files): delete each vault after its test so the
 // CI vault-invariant gate (#578) never sees notes the store did not write.
@@ -40,13 +40,12 @@ async function makeVaultAndNote(body = 'Testing embeddings') {
 }
 
 describe('embedding queue reliability', () => {
-  it('embeds a note and writes embedding to db', async () => {
+  it('embeds a note and writes its blocks to db', async () => {
     const { note } = await makeVaultAndNote('Hello world note content')
     scheduleEmbedding(note.id)
     await flushEmbeddings()
 
-    const updated = (await db.select().from(notes).where(eq(notes.id, note.id)))[0]
-    expect(updated?.embedding).not.toBeNull()
+    expect(await noteVectors(note.id)).toHaveLength(1)
   })
 
   it('retries up to 3 times on embedding error before marking permanently failed', async () => {
@@ -84,11 +83,11 @@ describe('embedding queue reliability', () => {
     }
   })
 
-  it('scheduleMissingEmbeddings enqueues all notes with null embeddings', async () => {
+  it('scheduleMissingEmbeddings enqueues all notes without blocks', async () => {
     const { note } = await makeVaultAndNote('Unembedded note')
-    expect(note.embedding).toBeNull()
+    expect(await noteVectors(note.id)).toEqual([])
 
-    const embedSpy = vi.spyOn(embedder, 'embed').mockResolvedValue([new Array(384).fill(0.1)])
+    const embedSpy = vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => texts.map(() => new Array(384).fill(0.1)))
 
     try {
       const count = await scheduleMissingEmbeddings(5)

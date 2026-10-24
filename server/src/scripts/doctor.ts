@@ -1,10 +1,13 @@
 /**
  * The doctor (ADR-003 S6, #495): compares each note's file, row, revision,
- * CRDT state, FTS vector, embedding, links and projections, and reports
- * every mismatch (notes/doctor.ts). Usage:
- *   pnpm doctor [-- --vault <uuid>] [--repair] [--report [<file>]]
- * Read-only unless `--repair`, which re-raises derived state (file and index
- * projections, link rows, embedding jobs) and folds a stuck collab tail as
+ * CRDT state, FTS vector, embedding, links and projections, and each
+ * repository file's blocks (#413), and reports every mismatch
+ * (notes/doctor.ts). Usage:
+ *   pnpm doctor [-- --vault <uuid>] [--repository <uuid>] [--repair] [--report [<file>]]
+ * `--vault` checks one vault and no repository files; `--repository` checks
+ * that repository's files. Read-only unless `--repair`, which re-raises
+ * derived state (file and index projections, link rows, embedding and
+ * extraction jobs) and folds a stuck collab tail as
  * boot does; it never invents or overwrites note content.
  * `--report` prints the JSON report instead of text; `--report <file>` writes
  * it to a new file (an existing file or symlink is refused). `--repair` holds
@@ -19,9 +22,10 @@ import { sql } from '../db/client.js'
 import { runDoctor } from '../notes/doctor.js'
 import { holdSharedLockOrExit } from '../notes/maintenance-lock.js'
 
-const USAGE = 'usage: doctor [--vault <vault-id>] [--repair] [--report [<file>]]'
+const USAGE = 'usage: doctor [--vault <vault-id>] [--repository <repository-id>] [--repair] [--report [<file>]]'
 const args = process.argv.slice(2).filter((arg) => arg !== '--')
 let vaultId: string | undefined
+let repositoryId: string | undefined
 let repair = false
 let json = false
 let reportPath: string | undefined
@@ -29,6 +33,7 @@ let bad = false
 for (let i = 0; i < args.length; i++) {
   const arg = args[i]!
   if (arg === '--vault' && args[i + 1] && !args[i + 1]!.startsWith('--')) vaultId = args[++i]
+  else if (arg === '--repository' && args[i + 1] && !args[i + 1]!.startsWith('--')) repositoryId = args[++i]
   else if (arg === '--repair') repair = true
   else if (arg === '--report') {
     json = true
@@ -57,22 +62,25 @@ if (reportPath) {
   }
 }
 
-const report = await runDoctor({ vaultId, repair })
+const report = await runDoctor({ vaultId, repositoryId, repair })
 await instanceLock?.release()
 const summary =
   `checked ${report.checked.notes} notes, ${report.checked.files} files, ${report.checked.bins} .crdt bins, ` +
-  `${report.checked.crdtRows} note_crdt rows: ${report.problems.length} problem(s)` +
+  `${report.checked.crdtRows} note_crdt rows, ${report.checked.repositoryFiles} repository files: ${report.problems.length} problem(s)` +
   (repair ? `, ${report.problems.filter((p) => p.repaired).length} repair(s) queued` : '') +
   `, ${report.pending.length} pending, ${report.info.length} info` +
   (report.status === 'repairable' ? `\nevery problem is repairable: ${repair ? 'run the doctor again once the projector is idle' : 'run with --repair'}` : '')
+/** A vault, or for a repository file's line (#413) its repository. */
+const where = (p: { vaultId: string; vaultName: string; repositoryId?: string; repositoryName?: string }) =>
+  p.repositoryId ? `repository ${p.repositoryName} (${p.repositoryId})` : `${p.vaultName} (${p.vaultId})`
 let out: string
 if (json) out = `${JSON.stringify(report, null, 2)}\n`
 else {
   out = [
     ...report.problems.map(
-      (p) => `PROBLEM ${p.class}  ${p.vaultName} (${p.vaultId})  ${p.path}: ${p.detail}${p.repaired ? '  [repair queued]' : p.repairable ? '  [--repair]' : ''}`,
+      (p) => `PROBLEM ${p.class}  ${where(p)}  ${p.path}: ${p.detail}${p.repaired ? '  [repair queued]' : p.repairable ? '  [--repair]' : ''}`,
     ),
-    ...report.pending.map((p) => `PENDING ${p.kind}  ${p.vaultName} (${p.vaultId})  ${p.path}: ${p.detail}`),
+    ...report.pending.map((p) => `PENDING ${p.kind}  ${where(p)}  ${p.path}: ${p.detail}`),
     ...report.info.map((p) => `INFO ${p.kind}  ${p.vaultName} (${p.vaultId})  ${p.path}: ${p.detail}`),
     summary,
   ].join('\n')

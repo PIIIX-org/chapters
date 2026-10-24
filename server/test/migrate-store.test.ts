@@ -18,6 +18,7 @@ import { parseNote, serializeNote } from '../src/notes/okf.js'
 import { noteFile, trashFile, vaultDir } from '../src/notes/store.js'
 import { crdtFile } from '../src/sync/crdt-store.js'
 import { flushProjections } from '../src/notes/projector.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // ADR-003 S1: `migrate-store --dry-run` classifies every case of §8 on a
@@ -164,6 +165,8 @@ describe('planStoreMigration (ADR-003 §8 dry run)', () => {
   beforeAll(async () => {
     // The dry run models an instance before the S2a backfill; another test file's backfill may have set the marker.
     await sql`update instance_state set store_migrated_at = null`
+    // The fixture's writes queued embed jobs; their blocks land in the background (#452), so the snapshot waits for them.
+    await flushEmbeddings()
     before = await snapshot()
     report = await planStoreMigration({ vaultId })
   })

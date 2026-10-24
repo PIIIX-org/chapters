@@ -190,9 +190,9 @@ const test: LabTest = {
     const mcp = ctx.mcp('adminAccount')
     const admin = ctx.rest('admin')
     // The same corpus is written to TRIALS vaults. Content is identical; only the
-    // auto-added frontmatter `timestamp` (store.ts:225-229), which is part of the
-    // embedded text (embedding-queue.ts:77), differs — so trial-to-trial rank
-    // changes measure how much ranking depends on noise rather than content.
+    // auto-added frontmatter `timestamp` (store.ts:225-229) differs. Since #452 a
+    // note embeds its heading blocks without the frontmatter (notes/note-blocks.ts),
+    // so trial-to-trial rank changes would now mean ranking depends on noise.
     const trials = Number(process.env.LAB_ML_TRIALS ?? 3)
     const vaultIds: string[] = []
     const failures: string[] = []
@@ -215,12 +215,13 @@ const test: LabTest = {
     const t0 = performance.now()
     const embedded = await poll(async () => {
       const rows = await ctx.docker.psqlRows<{ missing: number }>(
-        `select count(*)::int as missing from notes where vault_id in (${vaultIds.map(lit).join(',')}) and embedding is null`,
+        `select count(*)::int as missing from notes n where n.vault_id in (${vaultIds.map(lit).join(',')})
+          and not exists (select 1 from blocks b where b.owner_type = 'note' and b.owner_id = n.id and b.owner_version = n.seq::text and b.embedding is not null)`,
       )
       return rows[0]?.missing === 0 ? true : undefined
     }, 15 * 60_000, 2_000)
     const embedMs = Math.round(performance.now() - t0)
-    checks.push({ name: 'all notes embedded', expected: 'embedding not null for every note', actual: embedded ? `yes after ${embedMs} ms` : `timed out after ${embedMs} ms`, ok: Boolean(embedded), severity: 'high' })
+    checks.push({ name: 'all notes embedded', expected: 'blocks of its current seq with a vector for every note', actual: embedded ? `yes after ${embedMs} ms` : `timed out after ${embedMs} ms`, ok: Boolean(embedded), severity: 'high' })
 
     // Query vectors from the same model inside the app container.
     const emb = await ctx.docker.appExec(['node', '--input-type=module', '-e', EMBED_JS], JSON.stringify(QUERIES.map((q) => q.q)))
@@ -249,10 +250,12 @@ const test: LabTest = {
           `select path from notes where vault_id = '${vaultId}' and deleted_at is null and fts @@ websearch_to_tsquery('english', ${lit(q.q)}) order by ts_rank(fts, websearch_to_tsquery('english', ${lit(q.q)})) desc limit 30`,
         )
         const v = vectors[i]
-        // The nearest rows of noteRows(..., 'semantic') (search/search.ts), before its relevance gate (#441): the vector ranking itself.
+        // The nearest notes of noteRows(..., 'semantic') (search/search.ts) before its relevance gate (#441): the nearest 200 blocks, each note's best block (#452); psql keeps the default ef_search.
         const vec = v
           ? await ctx.docker.psqlRows<{ path: string }>(
-              `select path from notes where vault_id = '${vaultId}' and deleted_at is null and embedding is not null order by embedding <=> '${JSON.stringify(v.vec)}'::vector limit 30`,
+              `select n.path from (select owner_id, min(d) as d from (select owner_id, embedding <=> '${JSON.stringify(v.vec)}'::vector as d from blocks
+                where owner_type = 'note' and container_id = '${vaultId}' and embedding is not null order by embedding <=> '${JSON.stringify(v.vec)}'::vector limit 200) nearest
+                group by owner_id) best join notes n on n.id = best.owner_id where n.deleted_at is null order by best.d, n.id limit 30`,
             )
           : []
         const rank = (paths: string[]) => {
@@ -363,9 +366,11 @@ const test: LabTest = {
       `select alias, token, lexemes from ts_debug('english', ${lit('می‌خواهم سی‌وسه‌پل كوير کویر يلدا یلدا ۱۳۴۹ 1349 PostgreSQL')})`,
     )
     const similarity = await ctx.docker.psqlRows<{ pair: string; avg_sim: number; min_sim: number }>(
-      `select a.tags || '-' || b.tags as pair, round(avg(1 - (a.embedding <=> b.embedding))::numeric, 3)::float as avg_sim, round(min(1 - (a.embedding <=> b.embedding))::numeric, 3)::float as min_sim
-       from (select id, embedding, frontmatter->'tags'->>0 as tags from notes where vault_id = '${V}') a
-       join (select id, embedding, frontmatter->'tags'->>0 as tags from notes where vault_id = '${V}') b on a.id < b.id
+      `with e as (select distinct on (n.id) n.id, b.embedding, n.frontmatter->'tags'->>0 as tags from notes n
+         join blocks b on b.owner_type = 'note' and b.owner_id = n.id and b.embedding is not null
+         where n.vault_id = '${V}' order by n.id, b.start_line, b.block_id)
+       select a.tags || '-' || b.tags as pair, round(avg(1 - (a.embedding <=> b.embedding))::numeric, 3)::float as avg_sim, round(min(1 - (a.embedding <=> b.embedding))::numeric, 3)::float as min_sim
+       from e a join e b on a.id < b.id
        group by 1 order by 1`,
     )
     // semantic-edges.ts:16-56 kNN is not scoped to a vault, so with identical

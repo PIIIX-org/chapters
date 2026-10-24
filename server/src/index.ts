@@ -65,15 +65,16 @@ try {
   // Embedding and extraction jobs are rows in `jobs` (#494): the worker resumes
   // pending ones, reclaims those whose lease a dead process left and fails
   // those whose runs ended with the process 3 times (LeaseExpired). These
-  // scans add jobs (idempotently) for rows without an embedding and no job
-  // (written before the jobs table), and re-run jobs of the current content or
-  // `seq` that failed with an error (an outage that outlasted the retries).
+  // scans add jobs (idempotently, in pages) for rows without an embedding, or
+  // derived from other content or by another EXTRACTOR_VERSION / EMBEDDER_ID
+  // (#453), that have no job for their current key, and re-run jobs of the
+  // current key that failed with an error (an outage that outlasted the retries).
   const pruned = await pruneFinishedJobs([EMBEDDING_JOB, EXTRACTION_JOB, COMPACT_REVISIONS_JOB])
   if (pruned > 0) console.log(`pruned ${pruned} finished background job(s)`)
   const missing = await scheduleMissingEmbeddings()
-  if (missing > 0) console.log(`embedding catch-up: ${missing} notes without an embedding or with a failed job`)
+  if (missing > 0) console.log(`embedding catch-up: ${missing} notes without a current embedding or with a failed job`)
   const missingFiles = await scheduleMissingExtractions()
-  if (missingFiles > 0) console.log(`extraction catch-up: ${missingFiles} repository files without an embedding or with a failed job`)
+  if (missingFiles > 0) console.log(`extraction catch-up: ${missingFiles} repository files without a current extraction or with a failed job`)
   // Long revision histories stored whole (#501): queued in the background, never awaited by boot.
   scheduleRevisionCompaction()
   startJobPolling()

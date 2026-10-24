@@ -4,19 +4,20 @@ import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
-import { jobs, notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
+import { blocks, jobs, notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
 import { MAX_JOB_ATTEMPTS, jobTiming } from '../src/jobs/durable.js'
 import {
   countPendingExtractions,
+  extractionJobKey,
   extractionFailures,
   flushExtraction,
   scheduleExtraction,
   scheduleMissingExtractions,
 } from '../src/repositories/extraction-queue.js'
-import { flushEmbeddings, scheduleMissingEmbeddings } from '../src/search/embedding-queue.js'
+import { embeddingJobKey, flushEmbeddings, scheduleMissingEmbeddings } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
 import { metricsSnapshot } from '../src/monitoring/metrics.js'
-import { createActiveUser } from './helpers.js'
+import { createActiveUser, fileEmbedding, noteVectors } from './helpers.js'
 
 const savedBackoff = jobTiming.backoffBaseMs
 beforeEach(() => {
@@ -42,7 +43,7 @@ async function unextractedFile(name: string, content = `plain text of ${name}`) 
     .insert(repositoryFiles)
     .values({ repositoryId: repo!.id, path: `${name}.txt`, language: null, content, contentHash, size: content.length })
     .returning()
-  return { repo: repo!, file: file!, key: `extract:${file!.id}:${contentHash}` }
+  return { repo: repo!, file: file!, key: extractionJobKey(file!.id, contentHash) }
 }
 
 async function jobByKey(key: string) {
@@ -83,7 +84,7 @@ describe('durable job retries (#494)', () => {
     await flushExtraction()
 
     expect(calls).toBe(MAX_JOB_ATTEMPTS)
-    const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, `extract:${file!.id}:${contentHash}`))
+    const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, extractionJobKey(file!.id, contentHash)))
     expect(job?.attempts).toBe(MAX_JOB_ATTEMPTS)
     expect(job?.doneAt).not.toBeNull()
     expect(job?.lastError).toBe(`Error: Synthetic embedder failure ${MAX_JOB_ATTEMPTS}`)
@@ -165,8 +166,7 @@ describe('durable job limits (#494 review)', () => {
     const repaired = await jobByKey(key)
     expect(repaired?.doneAt).not.toBeNull()
     expect(repaired?.lastError).toBeNull()
-    const [row] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
-    expect(row?.embedding).not.toBeNull()
+    expect(await fileEmbedding(file.id)).not.toBeNull()
     expect((await extractionFailures(repo.id)).total).toBe(0)
   })
 
@@ -179,7 +179,7 @@ describe('durable job limits (#494 review)', () => {
       .values({ vaultId: vault!.id, type: 'note', name: 'n', path: `outage-${Date.now()}.md`, body: 'outage', frontmatter: {} })
       .returning()
     const [{ seq }] = (await db.execute(sql`SELECT seq FROM notes WHERE id = ${note!.id}`)) as unknown as [{ seq: string }]
-    const key = `embed_note:${note!.id}:${seq}`
+    const key = embeddingJobKey(note!.id, seq)
     await db.insert(jobs).values({
       kind: 'embed_note',
       payload: { noteId: note!.id, seq: Number(seq) },
@@ -192,8 +192,7 @@ describe('durable job limits (#494 review)', () => {
     await scheduleMissingEmbeddings()
     await flushEmbeddings()
 
-    const [row] = await db.select().from(notes).where(eq(notes.id, note!.id))
-    expect(row?.embedding).not.toBeNull()
+    expect(await noteVectors(note!.id)).not.toEqual([])
     expect((await jobByKey(key))?.lastError).toBeNull()
   })
 
@@ -222,7 +221,7 @@ describe('boot re-runs failed jobs of the current version (#494 review round 2)'
     const v2 = 'version two'
     const v2Hash = createHash('sha256').update(v2).digest('hex')
     await db.update(repositoryFiles).set({ content: v2, contentHash: v2Hash, size: v2.length }).where(eq(repositoryFiles.id, file.id))
-    const key = `extract:${file.id}:${v2Hash}`
+    const key = extractionJobKey(file.id, v2Hash)
     await db.insert(jobs).values({
       kind: 'extract',
       payload: { fileId: file.id, repositoryId: repo.id },
@@ -231,8 +230,7 @@ describe('boot re-runs failed jobs of the current version (#494 review round 2)'
       lastError: 'Error: model download failed',
       doneAt: new Date(),
     })
-    const [before] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
-    expect(before?.embedding).not.toBeNull()
+    expect(await fileEmbedding(file.id)).not.toBeNull()
     let calls = 0
     const embed = embedder.embed.bind(embedder)
     vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => {
@@ -250,7 +248,7 @@ describe('boot re-runs failed jobs of the current version (#494 review round 2)'
     expect((await extractionFailures(repo.id)).total).toBe(0)
   })
 
-  it('a note that kept its old embedding and failed on its new version is re-embedded at the next boot', async () => {
+  it('a note that kept its old blocks and failed on its new version is re-embedded at the next boot', async () => {
     const user = await createActiveUser()
     const [vault] = await db.insert(vaults).values({ name: 'jobs-v2-vault', ownerId: user.id }).returning()
     createdVaultIds.push(vault!.id)
@@ -258,10 +256,23 @@ describe('boot re-runs failed jobs of the current version (#494 review round 2)'
       .insert(notes)
       .values({ vaultId: vault!.id, type: 'note', name: 'n', path: `v2-${Date.now()}.md`, body: 'version one', frontmatter: {} })
       .returning()
-    await db.update(notes).set({ embedding: new Array(384).fill(0.1) }).where(eq(notes.id, note!.id))
+    await db.insert(blocks).values({
+      ownerType: 'note',
+      ownerId: note!.id,
+      containerId: vault!.id,
+      blockId: 'legacy:note',
+      kind: 'preamble',
+      innerPath: '',
+      startLine: 1,
+      endLine: 1,
+      contentHash: 'legacy',
+      ownerVersion: 'legacy',
+      embedKey: 'legacy',
+      embedding: new Array(384).fill(0.1),
+    })
     await db.update(notes).set({ body: 'version two' }).where(eq(notes.id, note!.id))
     const [{ seq }] = (await db.execute(sql`SELECT seq FROM notes WHERE id = ${note!.id}`)) as unknown as [{ seq: string }]
-    const key = `embed_note:${note!.id}:${seq}`
+    const key = embeddingJobKey(note!.id, seq)
     await db.insert(jobs).values({
       kind: 'embed_note',
       payload: { noteId: note!.id, seq: Number(seq) },

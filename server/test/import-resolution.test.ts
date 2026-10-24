@@ -14,6 +14,9 @@ const known = new Set([
   'client/src/lib/api.ts',
   'client/src/components/ui/button.tsx',
   'client/src/components/ui/button-variants.ts',
+  'client/src/content/intro.md',
+  'client/src/assets/logo.svg',
+  'client/src/workers/parse.ts',
   'client/src/components/ui/index.ts',
   'client/src/components/graph/GraphCanvas.tsx',
   'client/src/pages/vault/index.tsx',
@@ -30,6 +33,10 @@ const known = new Set([
   'dual/thing.js',
   'dual/thing.ts',
   'dual/main.ts',
+  'esm/lib/index.mts',
+  'esm/both.mts',
+  'esm/both.mjs',
+  'cjs/lib/index.cjs',
 ])
 
 describe('resolveImportPath', () => {
@@ -60,15 +67,36 @@ describe('resolveImportPath', () => {
       expect(resolveImportPath('scripts/build.mjs', './util.mjs', known)).toBe('scripts/util.mjs')
     })
 
-    it('never resolves bare packages, node: builtins or scoped packages', () => {
+    it('never resolves external packages or node: builtins (no package of that name in the repository)', () => {
       expect(resolveImportPath('client/src/App.tsx', 'react', known)).toBeNull()
       expect(resolveImportPath('server/src/db/client.ts', 'node:path', known)).toBeNull()
       expect(resolveImportPath('client/src/App.tsx', '@tanstack/react-query', known)).toBeNull()
+      expect(resolveImportPath('client/src/App.tsx', 'react?raw', known)).toBeNull()
     })
 
     it('returns null for a relative specifier with no matching file', () => {
       expect(resolveImportPath('client/src/App.tsx', './missing.js', known)).toBeNull()
       expect(resolveImportPath('client/src/App.tsx', './missing', known)).toBeNull()
+    })
+  })
+
+  // #466: bundlers (Vite) take a `?query` or `#hash` after the path; the file is the path before it.
+  describe('query and hash suffixes', () => {
+    it('resolves ./x.md?raw to x.md', () => {
+      expect(resolveImportPath('client/src/App.tsx', './content/intro.md?raw', known)).toBe('client/src/content/intro.md')
+    })
+
+    it('resolves ?url, ?worker and #hash suffixes, extensionless and through @/', () => {
+      expect(resolveImportPath('client/src/App.tsx', './assets/logo.svg?url', known)).toBe('client/src/assets/logo.svg')
+      expect(resolveImportPath('client/src/App.tsx', './workers/parse?worker', known)).toBe('client/src/workers/parse.ts')
+      expect(resolveImportPath('client/src/App.tsx', './workers/parse.js?worker&inline', known)).toBe(
+        'client/src/workers/parse.ts',
+      )
+      expect(resolveImportPath('client/src/App.tsx', '@/assets/logo.svg#icon', known)).toBe('client/src/assets/logo.svg')
+    })
+
+    it('returns null when the file before the suffix does not exist', () => {
+      expect(resolveImportPath('client/src/App.tsx', './content/missing.md?raw', known)).toBeNull()
     })
   })
 
@@ -119,6 +147,28 @@ describe('resolveImportPath', () => {
 
     it('prefers the TypeScript source when both x.ts and x.js exist (tsc semantics)', () => {
       expect(resolveImportPath('dual/main.ts', './thing.js', known)).toBe('dual/thing.ts')
+    })
+  })
+
+  describe('.mts/.cts/.mjs/.cjs as candidate extensions (#451)', () => {
+    it('resolves an extensionless import to x.mts and x.cts', () => {
+      expect(resolveImportPath('tools/gen.mts', './load', known)).toBe('tools/load.mts')
+      expect(resolveImportPath('tools/gen.mts', './compat', known)).toBe('tools/compat.cts')
+    })
+
+    it('resolves an extensionless import to x.mjs and x.cjs', () => {
+      expect(resolveImportPath('scripts/build.mjs', './util', known)).toBe('scripts/util.mjs')
+      expect(resolveImportPath('scripts/build.mjs', './legacy', known)).toBe('scripts/legacy.cjs')
+    })
+
+    it('resolves a directory import to its index.mts or index.cjs', () => {
+      expect(resolveImportPath('esm/main.mts', './lib', known)).toBe('esm/lib/index.mts')
+      expect(resolveImportPath('cjs/main.cjs', './lib', known)).toBe('cjs/lib/index.cjs')
+    })
+
+    it('prefers the TypeScript source when both x.mts and x.mjs exist', () => {
+      expect(resolveImportPath('esm/main.mts', './both', known)).toBe('esm/both.mts')
+      expect(resolveImportPath('esm/main.mts', './both.mjs', known)).toBe('esm/both.mts')
     })
   })
 

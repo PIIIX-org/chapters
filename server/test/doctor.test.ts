@@ -372,7 +372,7 @@ describe('doctor', () => {
   })
 
   it('vector-missing: queues an embedding job', async () => {
-    await db.execute(sql`UPDATE notes SET embedding = NULL WHERE id = ${ids.unvectored}`)
+    await db.execute(sql`DELETE FROM blocks WHERE owner_type = 'note' AND owner_id = ${ids.unvectored}`)
     await db.execute(sql`DELETE FROM jobs WHERE kind = 'embed_note' AND payload->>'noteId' = ${ids.unvectored}`)
     await expectRepaired('unvectored', 'vector-missing')
   })
