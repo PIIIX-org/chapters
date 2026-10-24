@@ -345,14 +345,49 @@ export class EdgeList {
   }
 }
 
+/** `YYYY-MM-DD`, optionally `THH:MM`, `:SS`, a fraction and `Z` or `±HH:MM`. */
+const TIME_BOUND = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/
+
+/**
+ * A `since`/`until` bound as an ISO instant (`toISOString`, the form of a
+ * node's `updatedAt`), or null when it is not a calendar date `YYYY-MM-DD`
+ * or an ISO date-time: the filter then matches nothing. A bound without an
+ * offset is UTC (never the server's time zone); a fraction is cut to
+ * milliseconds.
+ */
+export function timeBound(value: string): string | null {
+  const m = TIME_BOUND.exec(value)
+  if (!m) return null
+  const [, year, month, day, hour = '00', minute = '00', second = '00', fraction = '', offset = 'Z'] = m
+  const date = `${year}-${month}-${day}`
+  // A bound names a real day: 2021-02-30 is refused, never rolled over to March.
+  const midnight = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
+  if (midnight.getUTCFullYear() !== Number(year) || midnight.getUTCMonth() !== Number(month) - 1 || midnight.getUTCDate() !== Number(day)) return null
+  const ms = Date.parse(`${date}T${hour}:${minute}:${second}${fraction.slice(0, 4)}${offset}`)
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString()
+}
+
+/**
+ * `since`/`until` bound the resource's last change, `updatedAt` (#446, D9 on
+ * #930): a note's `updated_at`, a code file's (the last sync that changed its
+ * content), a symbol's file's. Frontmatter `timestamp` is the creation time
+ * and plays no part. Compared at millisecond precision (a `Date` holds no
+ * more), as search's SQL does (`date_trunc('milliseconds', updated_at)`).
+ */
 export function passesFilters(
-  node: { type: string | null; tags: string[]; timestamp: string | null },
+  node: { type: string | null; tags: string[]; updatedAt: string | null },
   filters: GraphFilters,
 ): boolean {
   if (filters.types && (!node.type || !filters.types.includes(node.type))) return false
   if (filters.tags && !filters.tags.some((t) => node.tags.includes(t))) return false
-  if (filters.since && (!node.timestamp || node.timestamp < filters.since)) return false
-  if (filters.until && (!node.timestamp || node.timestamp > filters.until)) return false
+  if (filters.since) {
+    const since = timeBound(filters.since)
+    if (since === null || node.updatedAt === null || node.updatedAt < since) return false
+  }
+  if (filters.until) {
+    const until = timeBound(filters.until)
+    if (until === null || node.updatedAt === null || node.updatedAt > until) return false
+  }
   return true
 }
 
