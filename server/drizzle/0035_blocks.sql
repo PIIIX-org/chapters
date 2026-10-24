@@ -70,6 +70,12 @@ INSERT INTO "blocks" ("owner_type", "owner_id", "container_id", "block_id", "kin
   FROM "repository_file_symbols" s JOIN "repository_files" f ON f.id = s.file_id;--> statement-breakpoint
 -- Built after the bulk inserts above (one build instead of one insert at a time).
 CREATE INDEX "blocks_embedding_idx" ON "blocks" USING hnsw ("embedding" vector_cosine_ops);--> statement-breakpoint
+-- One per search leg: HNSW applies the leg's WHERE after it fetched its candidates, so a leg over one
+-- index of every kind found few or no file blocks of a repository among several (bench run 40079933785,
+-- diagram-design Q14). The files-only and symbols-only indexes keep the composition the old
+-- repository_files and repository_file_symbols indexes had.
+CREATE INDEX "blocks_file_embedding_idx" ON "blocks" USING hnsw ("embedding" vector_cosine_ops) WHERE "kind" = 'file';--> statement-breakpoint
+CREATE INDEX "blocks_symbol_embedding_idx" ON "blocks" USING hnsw ("embedding" vector_cosine_ops) WHERE "kind" = 'symbol';--> statement-breakpoint
 -- embed-key.ts CHUNK_VERSION of a file's blocks (0: none yet); boot catch-up re-extracts a file of another version.
 ALTER TABLE "repository_files" ADD COLUMN "chunk_version" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 DROP TABLE "repository_file_symbols";--> statement-breakpoint
