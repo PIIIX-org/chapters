@@ -7,6 +7,7 @@ import { EMBEDDER_ID, embedder } from './embeddings.js'
 import { recomputeSemanticEdges } from './semantic-edges.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
+  JOB_PRIORITY,
   MAX_JOB_ATTEMPTS,
   catchUpLimits,
   claimJob,
@@ -17,6 +18,7 @@ import {
   jobDrainer,
   jobExists,
   onJobConflict,
+  type JobPriority,
   type JobRerun,
 } from '../jobs/durable.js'
 
@@ -56,15 +58,20 @@ export function noteBlocksCurrentSql(): SQL {
 
 /**
  * Inserts embedding jobs for these live notes at their current `seq` (a
- * repeated id counts once). `rerun: 'finished'` re-embeds (`pnpm reindex`).
+ * repeated id counts once), at `priority`. `rerun: 'finished'` re-embeds
+ * (`pnpm reindex`, at catch-up priority).
  */
-export async function enqueueEmbeddings(noteIds: string[], rerun: JobRerun = 'never'): Promise<void> {
+export async function enqueueEmbeddings(
+  noteIds: string[],
+  rerun: JobRerun = 'never',
+  priority: JobPriority = JOB_PRIORITY.write,
+): Promise<void> {
   if (noteIds.length === 0) return
   const ids = [...new Set(noteIds)]
   await db.execute(sql`
-    INSERT INTO jobs (kind, payload, idempotency_key)
+    INSERT INTO jobs (kind, payload, idempotency_key, priority)
     SELECT ${EMBEDDING_JOB}, jsonb_build_object('noteId', n.id::text, 'seq', n.seq),
-      ${embeddingJobKeySql(sql`n.id`, sql`n.seq`)}
+      ${embeddingJobKeySql(sql`n.id`, sql`n.seq`)}, ${priority}::smallint
     FROM unnest(${`{${ids.join(',')}}`}::uuid[]) WITH ORDINALITY AS u(id, ord)
     JOIN notes n ON n.id = u.id
     WHERE n.deleted_at IS NULL
@@ -119,6 +126,7 @@ export async function scheduleMissingEmbeddings(limit?: number): Promise<number>
     await enqueueEmbeddings(
       page.map((r) => r.id),
       'errored',
+      JOB_PRIORITY.catchUp,
     )
     found += page.length
     if (page.length < batchSize) break
@@ -218,5 +226,7 @@ async function processNote(noteId: string, jobSeq: number | undefined): Promise<
       WHERE id = ${noteId} AND (embedder_id IS DISTINCT FROM ${embedderId} OR chunk_version <> ${chunkVersion})`)
     return true
   })
-  if (written) await recomputeSemanticEdges('note', noteId, vectors as number[][])
+  // The note's neighbours follow its block vectors: a set that only kept vectors it had (a frontmatter edit) has the edges it had.
+  const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !keys.includes(k))
+  if (written && changed) await recomputeSemanticEdges('note', noteId, vectors as number[][])
 }
