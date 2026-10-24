@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { and, eq } from 'drizzle-orm'
+import { and, count, eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories, repositoryFileImports, repositoryFiles, repositoryFileSymbols } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
@@ -10,6 +10,7 @@ import {
   flushExtraction,
   scheduleMissingExtractions,
 } from '../src/repositories/extraction-queue.js'
+import { EXTRACTOR_VERSION } from '../src/repositories/extraction.js'
 import { embedder } from '../src/search/embeddings.js'
 import { createActiveUser } from './helpers.js'
 
@@ -335,6 +336,35 @@ describe('extraction queue', () => {
       'symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: 3 of 8 symbols embedded, the rest are keyword-searchable only',
     )
   })
+
+  it('stores a file with more symbols and imports than one INSERT can bind (#450 review)', async () => {
+    // 8 parameters a symbol row and 4 an import row: one statement would pass
+    // postgres.js's 65,534-parameter cap (9,000 x 8 and 17,000 x 4). Generated
+    // constant tables reach this now that exported consts are symbols.
+    vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '4')
+    const repo = await makeRepo()
+    const consts = Array.from({ length: 9_000 }, (_, i) => `export const K${i} = ${i}`)
+    const imports = Array.from({ length: 17_000 }, (_, i) => `import './m${i}.js'`)
+    const content = [...imports, ...consts].join('\n')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'src/table.ts', content }], ['src/table.ts'])
+      await flushExtraction()
+    } finally {
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+
+    const file = await fileByPath(repo.id, 'src/table.ts')
+    expect(file.embedding).not.toBeNull()
+    expect(file.extractorVersion).toBe(EXTRACTOR_VERSION)
+    const [symbols] = await db.select({ n: count() }).from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))
+    expect(symbols!.n).toBe(9_000)
+    const [importRows] = await db.select({ n: count() }).from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file.id))
+    expect(importRows!.n).toBe(17_000)
+  }, 120_000)
 
   it('one failing file does not stop the files queued after it, and stays counted as pending', async () => {
     const repo = await makeRepo()

@@ -300,6 +300,18 @@ const extraction = jobDrainer('extraction', drainOnce)
 export const extractionWork = { processFile }
 
 /**
+ * Rows per INSERT: one statement binds at most 65,534 parameters
+ * (postgres.js), and a symbol row has 8, so a generated file with thousands
+ * of constants would fail whole (#450 review). Every chunk is in the same
+ * transaction, so the file still commits all or nothing.
+ */
+const INSERT_CHUNK_ROWS = 1_000
+
+function* chunks<T>(rows: readonly T[]): Generator<T[]> {
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK_ROWS) yield rows.slice(i, i + INSERT_CHUNK_ROWS)
+}
+
+/**
  * Derives one file (#453): everything is computed first, the slow embed
  * included, outside any transaction; then one short transaction locks the
  * row, checks its content is still the one extracted, and replaces the
@@ -375,23 +387,20 @@ async function processFile(fileId: string): Promise<void> {
       .for('update')
     if (current?.contentHash !== row.contentHash) return false
     await tx.delete(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, fileId))
-    // One row per specifier: a file importing one path twice keeps the first line.
-    if (importRows.length > 0) await tx.insert(repositoryFileImports).values(importRows).onConflictDoNothing()
+    // One row per specifier: a file importing one path twice keeps the first line (chunks insert in order).
+    for (const chunk of chunks(importRows)) await tx.insert(repositoryFileImports).values(chunk).onConflictDoNothing()
     await tx.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, fileId))
-    if (symbolPayloads.length > 0) {
-      await tx.insert(repositoryFileSymbols).values(
-        symbolPayloads.map((s, i) => ({
-          fileId: s.fileId,
-          name: s.name,
-          kind: s.kind,
-          parent: s.parent,
-          startLine: s.startLine,
-          endLine: s.endLine,
-          snippet: s.snippet,
-          embedding: symbolEmbeddings.get(i) ?? null,
-        })),
-      )
-    }
+    const symbolRows = symbolPayloads.map((s, i) => ({
+      fileId: s.fileId,
+      name: s.name,
+      kind: s.kind,
+      parent: s.parent,
+      startLine: s.startLine,
+      endLine: s.endLine,
+      snippet: s.snippet,
+      embedding: symbolEmbeddings.get(i) ?? null,
+    }))
+    for (const chunk of chunks(symbolRows)) await tx.insert(repositoryFileSymbols).values(chunk)
     await tx
       .update(repositoryFiles)
       .set({ embedding: fileEmbedding, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId })

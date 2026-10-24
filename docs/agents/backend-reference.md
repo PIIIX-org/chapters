@@ -2255,7 +2255,11 @@ then one short transaction locks the file row, drops the result if
 `content_hash` changed meanwhile (the push that changed it enqueued the
 new content's job), and replaces imports and symbols and writes the file
 vector, `embedding_note`, `extracted_hash`, `extractor_version` and
-`embedder_id` together; semantic edges are recomputed after the commit. A
+`embedder_id` together; semantic edges are recomputed after the commit.
+Import and symbol rows go in 1,000 a statement (`INSERT_CHUNK_ROWS`; one
+statement binds at most 65,534 parameters, 8 a symbol row), all in that
+transaction, so a generated file with thousands of exported consts still
+commits whole. A
 failure or a crash anywhere before the commit leaves the previous imports,
 symbols and vectors whole and searchable. A file
 with a line longer than 1,000
