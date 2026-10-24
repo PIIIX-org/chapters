@@ -42,6 +42,7 @@ import { failpoint } from '../failpoints.js'
 import {
   OkfValidationError,
   validateNote,
+  withType,
   isSlug,
   type Frontmatter,
 } from './okf.js'
@@ -239,7 +240,7 @@ export async function refuseSuspiciousWrite(
   if (input.body === undefined) return
   const finding = suspiciousWrite(row.body, input.body, rules)
   if (!finding) return
-  const frontmatter = { ...(input.frontmatter ?? (row.frontmatter as Frontmatter)), type: row.type }
+  const frontmatter = withType(input.frontmatter ?? (row.frontmatter as Frontmatter), row.type)
   let continued: string | undefined
   if (actor.type === 'collab') {
     continued = episode
@@ -401,7 +402,7 @@ function releaseFold(fold: Fold | null): void {
  */
 function refusal(row: NoteRow, state: DocState): string | null {
   try {
-    validateNote(row.type, row.name, { ...state.frontmatter, type: row.type } as Frontmatter, state.body)
+    validateNote(row.type, row.name, withType(state.frontmatter, row.type), state.body)
     assertBodyFits(state.body, row.body)
     assertFrontmatterFits(state.frontmatter, row.frontmatter as Record<string, unknown>)
   } catch (err) {
@@ -436,7 +437,7 @@ interface CaughtUp {
  */
 async function foldCrdt(tx: Tx, row: StoredNote, crdt: NoteCrdt, detail: Record<string, unknown>): Promise<CaughtUp> {
   const state = docState(crdt.doc)
-  const frontmatter = { ...state.frontmatter, type: row.type } as Frontmatter
+  const frontmatter = withType(state.frontmatter, row.type)
   if (state.body === row.body && sameContent(frontmatter, row.frontmatter as Record<string, unknown>)) {
     await markFolded(tx, crdt, row.seq)
     return { row, crdt, refused: null, rebased: null }
@@ -486,7 +487,7 @@ async function rebaseLocked(tx: Tx, row: StoredNote, crdt: NoteCrdt): Promise<Ca
     conflict = body.overlaps.length > 0 || frontmatter.conflicts.length > 0
   }
   if (conflict) console.warn(`[collab] note ${row.id}: rebase kept the editors' text where the row changed behind the store too`)
-  const update = compileChange(cloneDocument(crdt.doc), { frontmatter: { ...merged.frontmatter, type: row.type }, body: merged.body })
+  const update = compileChange(cloneDocument(crdt.doc), { frontmatter: withType(merged.frontmatter, row.type), body: merged.body })
   const appended = await appendUpdate(tx, crdt, update, SYSTEM_ACTOR, { kind: 'rebase', conflict })
   const folded = await foldCrdt(tx, row, crdt, { kind: 'merge', conflict })
   return { ...folded, rebased: appended ? update : null }
@@ -572,11 +573,10 @@ function newNoteState(input: NewNote, asImported = false): { resolved: ResolvedN
       ? `${input.type}/${input.name}`
       : `${input.type ?? ''}/${input.name ?? ''}`)
   const resolved = resolveNotePath(rawPath)
-  const frontmatter: Frontmatter = {
-    ...(asImported ? {} : { timestamp: new Date().toISOString() }),
-    ...input.frontmatter,
-    type: input.frontmatter?.type ? String(input.frontmatter.type) : resolved.type,
-  }
+  const frontmatter = withType(
+    { ...(asImported ? {} : { timestamp: new Date().toISOString() }), ...input.frontmatter },
+    resolved.type,
+  )
   const body = input.body ?? ''
   validateNote(resolved.type, resolved.name, frontmatter, body)
   assertBodyFits(body)
@@ -907,9 +907,10 @@ export async function writeNote(
         try {
           const current = fold?.state ?? { frontmatter: seen.frontmatter as Record<string, unknown>, body: seen.body }
           const next = await compute(current, plainRow(seen))
-          assertFrontmatterFits({ ...next.frontmatter, type: seen.type }, seen.frontmatter as Record<string, unknown>)
+          const frontmatter = withType(next.frontmatter, seen.type)
+          assertFrontmatterFits(frontmatter, seen.frontmatter as Record<string, unknown>)
           if (options.outcome) options.outcome.before = current
-          return { ...plainRow(seen), frontmatter: { ...next.frontmatter, type: seen.type }, body: next.body }
+          return { ...plainRow(seen), frontmatter, body: next.body }
         } finally {
           releaseFold(fold)
         }
@@ -928,12 +929,13 @@ export async function writeNote(
           const current = crdt ? docState(crdt.doc) : { frontmatter: row.frontmatter as Record<string, unknown>, body: row.body }
           const next = await compute(current, plainRow(row))
           // Every write path's frontmatter, merged or whole, against the stored one (#933), before anything is written.
-          assertFrontmatterFits({ ...next.frontmatter, type: row.type }, row.frontmatter as Record<string, unknown>)
+          const frontmatter = withType(next.frontmatter, row.type)
+          assertFrontmatterFits(frontmatter, row.frontmatter as Record<string, unknown>)
           if (options.outcome) options.outcome.before = current
           const { row: written } = await applyRowChange(
             tx,
             row,
-            { frontmatter: { ...next.frontmatter, type: row.type }, body: next.body },
+            { frontmatter, body: next.body },
             options.revertOf
               ? { action: 'revert', actor, sourceRevisionId: options.revertOf, actorDetail: options.actorDetail }
               : { action: 'update', actor, actorDetail: options.actorDetail },
@@ -989,7 +991,7 @@ export async function updateNote(
     async (current, row) => {
       const edit = typeof input === 'function' ? input(current) : input
       const body = typeof edit.body === 'function' ? edit.body(current.body) : (edit.body ?? keptBody(row, current))
-      const frontmatter: Frontmatter = { ...(edit.frontmatter ?? current.frontmatter), type: row.type }
+      const frontmatter = withType(edit.frontmatter ?? current.frontmatter, row.type)
       validateNote(row.type, row.name, frontmatter, body)
       // The size cap first: an over-cap body is refused, never kept as a quarantine revision (#491).
       assertBodyFits(body, row.body)
@@ -1188,7 +1190,9 @@ async function moveNote(
       // Self-referential wikilinks in the note's own body follow it. The row
       // holds the editors' typing now, unless the relay would refuse it.
       const newBody = isMoving ? refactorWikilinks(row.body, fromResolved.fullPath, toResolved.fullPath) : row.body
-      const newFrontmatter: Frontmatter = { ...(row.frontmatter as Record<string, unknown>), type: toResolved.type }
+      // A type that is the old folder follows the note to its new folder; a semantic type stays (#444).
+      const current = row.frontmatter as Record<string, unknown>
+      const newFrontmatter = withType({ ...current, type: current.type === row.type ? undefined : current.type }, toResolved.type)
       validateNote(toResolved.type, toResolved.name, newFrontmatter, newBody)
       // #491: rewriting links can grow a body past the size cap. Every rewritten
       // body (the note's own, then each referrer's) is checked before anything is
@@ -2083,10 +2087,38 @@ export async function revertNote(
   return updateFn(
     vaultId,
     path,
-    { frontmatter: revision.frontmatter as Record<string, unknown>, body: revision.body },
+    { frontmatter: revertedFrontmatter(revision, row.type, await pathAtRevision(revision)), body: revision.body },
     actor,
     { ...options, revertOf: revision.id },
   )
+}
+
+/**
+ * The note's path when `revision` was recorded: a rename row's `toPath`,
+ * else the `fromPath` of the first rename recorded after it, else (no move
+ * since) null, the note's current path. A move recorded before migration
+ * 0023 has no `from_path`, so it is not seen: a revert across such a move
+ * keeps the revision's `type` (legacy history only).
+ */
+async function pathAtRevision(revision: { id: string; action: string; toPath: string | null }): Promise<string | null> {
+  if (revision.action === 'rename' && revision.toPath) return revision.toPath
+  const [next] = (await db.execute(sql`
+    SELECT r.from_path FROM note_revisions r, note_revisions rv
+    WHERE rv.id = ${revision.id} AND r.note_id = rv.note_id AND r.action = 'rename' AND r.from_path IS NOT NULL AND r.ord > rv.ord
+    ORDER BY r.ord LIMIT 1`)) as unknown as Array<{ from_path: string }>
+  return next?.from_path ?? null
+}
+
+/**
+ * The frontmatter a revert to `revision` writes (#444): a `type` that was
+ * the folder the note had then (it defaulted to, or followed, the folder)
+ * becomes the current folder, as a move would have made it; a `type` other
+ * than that folder was the note's own and is kept.
+ */
+function revertedFrontmatter(revision: { frontmatter: unknown }, folder: string, pathThen: string | null): Record<string, unknown> {
+  const frontmatter = revision.frontmatter as Record<string, unknown>
+  if (pathThen === null) return frontmatter
+  return frontmatter.type === resolveNotePath(pathThen).type ? { ...frontmatter, type: folder } : frontmatter
 }
 
 /**

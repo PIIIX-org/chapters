@@ -11,7 +11,7 @@ import { db } from '../src/db/client.js'
 import { checkNoteFiles } from '../src/notes/integrity.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { getLiveNote } from '../src/notes/store.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 let app: FastifyInstance
 let baseUrl: string
@@ -34,8 +34,7 @@ async function mcpClient(token: string): Promise<Client> {
 }
 
 function textOf(result: Awaited<ReturnType<Client['callTool']>>): string {
-  const content = result.content as Array<{ type: string; text?: string }>
-  return content[0]?.text ?? ''
+  return toolText(result.content as unknown[])
 }
 
 beforeAll(async () => {
