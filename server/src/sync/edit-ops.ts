@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util'
 import { assertLengthFits } from '../notes/size-cap.js'
+import { atxHeading, headings } from '../text/blocks.js'
 
 /**
  * `edit_note` ops (#408): local changes an agent asks for instead of sending
@@ -74,44 +75,6 @@ function uniqueAt(text: string, needle: string, what: string, where: string): nu
     throw new NoteEditError(`${where}: ${quoted(needle)} occurs ${found.count} times; give a longer \`${what}\` that occurs once`)
   }
   return found.first
-}
-
-interface Heading {
-  /** Offset of the heading line. */
-  start: number
-  /** Offset just past the heading line, its line break included. */
-  end: number
-  level: number
-  line: string
-  title: string
-}
-
-/** The level and text of an ATX heading line (`## Plan`, `## Plan ##`), or null. */
-function atxHeading(line: string): { level: number; title: string } | null {
-  const atx = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$/.exec(line)
-  if (!atx) return null
-  return { level: atx[1]!.length, title: (atx[2] ?? '').replace(/(?:^|[ \t]+)#+$/, '').trim() }
-}
-
-/** ATX headings (`#` to `######`) outside fenced code blocks. */
-function headings(text: string): Heading[] {
-  const out: Heading[] = []
-  let fence: string | null = null
-  for (let start = 0; start < text.length; ) {
-    const nl = text.indexOf('\n', start)
-    const end = nl === -1 ? text.length : nl + 1
-    const line = text.slice(start, nl === -1 ? text.length : nl).replace(/\r$/, '')
-    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1]
-    if (fence === null && marker) fence = marker
-    // A closing fence has no info string (CommonMark): "```js" inside a block is content.
-    else if (fence !== null && marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = null
-    else if (fence === null) {
-      const atx = atxHeading(line)
-      if (atx) out.push({ start, end, ...atx, line: line.trim() })
-    }
-    start = end
-  }
-  return out
 }
 
 /**

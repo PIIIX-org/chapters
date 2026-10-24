@@ -14,7 +14,7 @@ import {
 } from '../src/repositories/extraction-queue.js'
 import { embeddingJobKey, flushEmbeddings, scheduleEmbedding } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
-import { createActiveUser } from './helpers.js'
+import { createActiveUser, fileEmbedding } from './helpers.js'
 
 const createdVaultIds: string[] = []
 afterEach(async () => {
@@ -95,8 +95,7 @@ describe('durable extraction jobs (#494)', () => {
     expect(job?.doneAt).not.toBeNull()
     expect(job?.attempts).toBe(2)
     expect(job?.lastError).toBeNull()
-    const [row] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
-    expect(row?.embedding).not.toBeNull()
+    expect(await fileEmbedding(file.id)).not.toBeNull()
   })
 
   it('a live lease is not reclaimed; once it expires the job runs', async () => {

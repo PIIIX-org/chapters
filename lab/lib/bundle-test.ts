@@ -159,8 +159,8 @@ export function bundleTest(pretty: boolean): LabTest {
           imports: number
           bytes: number
         }>(
-          `select f.path, (f.embedding is not null) as embedded, length(f.content)::int as bytes,
-          (select count(*) from repository_file_symbols s where s.file_id = f.id)::int as symbols,
+          `select f.path, exists (select 1 from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.owner_version = f.content_hash and b.embedding is not null) as embedded, length(f.content)::int as bytes,
+          (select count(*) from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.kind = 'symbol')::int as symbols,
           (select count(*) from repository_file_imports i where i.source_file_id = f.id)::int as imports
         from repository_files f where f.repository_id = '${repo.id}' order by f.path`,
         )

@@ -1,0 +1,106 @@
+/**
+ * A repository file as blocks (#413, #452a; ADR-004 §2.2, §2.5): what
+ * extraction stores and embeds per file. Pure; versioned by embed-key.ts
+ * `CHUNK_VERSION` (bump it with any change here).
+ *
+ * - `symbol`: one per extracted symbol, its lines; `inner_path` is
+ *   `Class.method` for a method (#450's `parent`), the bare name otherwise.
+ * - `file`: the whole file, when it is small (at most `SMALL_FILE_MAX_LINES`
+ *   lines and `MAX_EMBED_CHARS` characters, so its text reaches the embedder
+ *   uncut) or has no symbols (an unsupported language, a minified bundle, no
+ *   declarations). Embedded text: `<path>\n<content>`, as the file vector was.
+ * - `skeleton`: the outline of a file that is not small and has symbols
+ *   (`<path>` then each symbol's first line), and of each class in it with
+ *   methods (`<kind> <Class> in <path>`, the class's first line, then each
+ *   method's first line).
+ *
+ * So every file has exactly one file-level block (`file` or the file
+ * `skeleton`), always embedded. A symbol's embedded text is
+ * `<kind> <inner_path> in <path>\n<snippet>`, the snippet being its first
+ * `SNIPPET_LINES` lines cut to `SNIPPET_CHARS` characters: no line number,
+ * so a block whose lines only moved keeps its text and its vector.
+ * An empty file's `file` block spans no line (1..0).
+ */
+import { createHash } from 'node:crypto'
+import { MAX_EMBED_CHARS } from '../search/embeddings.js'
+import { blockId, siblingIndexes } from '../text/blocks.js'
+import { lineStarts, sliceLines } from '../text/lines.js'
+import type { ExtractedSymbol, SymbolKind } from './extraction.js'
+
+export const SMALL_FILE_MAX_LINES = 300
+/** A symbol snippet (search hits, embedded text): its first lines, cut to this many characters. Search's SQL uses the same two numbers. */
+export const SNIPPET_LINES = 30
+export const SNIPPET_CHARS = 1500
+
+export interface CodeBlock {
+  blockId: string
+  kind: 'symbol' | 'skeleton' | 'file'
+  innerPath: string
+  /** A symbol block's SymbolKind; null on the others. */
+  symbolKind: SymbolKind | null
+  /** A symbol block's `parent` (#450); null at module level and on the others. */
+  symbolParent: string | null
+  startLine: number
+  endLine: number
+  /** sha256 (hex) of lines startLine..endLine of the stored text. */
+  contentHash: string
+  embedText: string
+  /**
+   * A symbol's place in the per-file embed budget (#496, #450): 0 exported,
+   * 1 other top-level, 2 method. Null: not under the budget (file-level
+   * blocks are always embedded; a class skeleton follows `outlineOf`).
+   */
+  budgetTier: 0 | 1 | 2 | null
+  /** A class skeleton: the index of its class's symbol block; embedded only when that block is. */
+  outlineOf?: number
+}
+
+export function codeBlocks(fileId: string, path: string, content: string, symbols: readonly ExtractedSymbol[]): CodeBlock[] {
+  const starts = lineStarts(content)
+  const total = starts.length
+  const small = total <= SMALL_FILE_MAX_LINES && content.length <= MAX_EMBED_CHARS
+  const hash = (start: number, end: number) => createHash('sha256').update(sliceLines(content, start, end, starts)).digest('hex')
+  const firstLine = (line: number) => sliceLines(content, line, line, starts)
+  const methodsOf = new Map<string, ExtractedSymbol[]>()
+  for (const m of small ? [] : symbols) {
+    if (m.kind !== 'method' || !m.parent) continue
+    const list = methodsOf.get(m.parent) ?? []
+    if (list.length === 0) methodsOf.set(m.parent, list)
+    list.push(m)
+  }
+
+  const drafts: Array<Omit<CodeBlock, 'blockId'>> = []
+  const whole = { innerPath: '', symbolKind: null, symbolParent: null, startLine: 1, endLine: total, contentHash: hash(1, total), budgetTier: null }
+  if (small || symbols.length === 0) drafts.push({ ...whole, kind: 'file', embedText: `${path}\n${content}` })
+  else drafts.push({ ...whole, kind: 'skeleton', embedText: [path, ...symbols.map((s) => firstLine(s.startLine))].join('\n') })
+
+  for (const s of symbols) {
+    const innerPath = s.parent ? `${s.parent}.${s.name}` : s.name
+    const snippet = sliceLines(content, s.startLine, Math.min(s.endLine, s.startLine + SNIPPET_LINES - 1), starts).slice(0, SNIPPET_CHARS)
+    const span = { innerPath, startLine: s.startLine, endLine: s.endLine, contentHash: hash(s.startLine, s.endLine) }
+    const at =
+      drafts.push({
+        ...span,
+        kind: 'symbol',
+        symbolKind: s.kind,
+        symbolParent: s.parent ?? null,
+        embedText: `${s.kind} ${innerPath} in ${path}\n${snippet}`,
+        budgetTier: s.kind === 'method' ? 2 : s.exported ? 0 : 1,
+      }) - 1
+    const methods = s.kind === 'class' ? (methodsOf.get(s.name) ?? []) : []
+    if (methods.length > 0) {
+      drafts.push({
+        ...span,
+        kind: 'skeleton',
+        symbolKind: null,
+        symbolParent: null,
+        embedText: [`${s.kind} ${innerPath} in ${path}`, firstLine(s.startLine), ...methods.map((m) => firstLine(m.startLine))].join('\n'),
+        budgetTier: null,
+        outlineOf: at,
+      })
+    }
+  }
+
+  const siblings = siblingIndexes(drafts)
+  return drafts.map((d, i) => ({ ...d, blockId: blockId(fileId, d.kind, d.innerPath, siblings[i]!) }))
+}

@@ -69,7 +69,7 @@ const test: LabTest = {
           .catch((e: unknown) => [{ error: String(e).slice(0, 300) }])
     const noSymbols = Number(
       await ctx.docker.psql(`select count(*) from repository_files f where f.repository_id = '${repo.id}'
-        and not exists (select 1 from repository_file_symbols s where s.file_id = f.id);`),
+        and not exists (select 1 from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.kind = 'symbol');`),
     )
     const bootLog = (await ctx.docker.app.logs('app', 300)).split('\n').filter((l) => /extraction catch-up|reconciled|extraction failed/.test(l)).slice(0, 20)
 

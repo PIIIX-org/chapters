@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { and, eq, notInArray, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { repositoryFiles, repositoryFileSymbols } from '../db/schema.js'
+import { blocks, repositoryFiles } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
 import { enqueueExtractions } from './extraction-queue.js'
@@ -25,7 +25,8 @@ export interface SyncResult {
 /**
  * The one write path for repository file content (spec 8): every
  * ingestion method funnels through here. `contentHash` is always
- * computed server-side from `content` — never trusted from a caller,
+ * computed server-side from the stored `content` (NUL bytes removed first:
+ * stored text = hashed text, #418) — never trusted from a caller,
  * since the server is the single source of truth regardless of how the
  * content arrived.
  */
@@ -47,13 +48,13 @@ export async function syncRepositoryFiles(
   const toExtract: string[] = []
 
   for (const file of changedOrNewFiles) {
-    const contentHash = createHash('sha256').update(file.content).digest('hex')
+    const cleanContent = file.content.replace(/\0/g, '')
+    const contentHash = createHash('sha256').update(cleanContent).digest('hex')
     const current = existingByPath.get(file.path)
     if (current && current.contentHash === contentHash) {
       result.unchanged += 1
       continue
     }
-    const cleanContent = file.content.replace(/\0/g, '')
     const values = {
       repositoryId,
       path: file.path,
@@ -161,19 +162,28 @@ export async function listRepositoryFilesPage(
     .limit(opts.limit)
 }
 
-/** A file's declared symbols — its "outline" (spec 9); `parent` only on a method or namespace member (#450). */
+/**
+ * A file's declared symbols — its "outline" (spec 9): its `symbol` blocks
+ * (#413); `parent` only on a method or namespace member (#450).
+ */
 export async function listFileSymbols(
   fileId: string,
 ): Promise<Array<{ name: string; kind: string; parent?: string; startLine: number; endLine: number }>> {
   const rows = await db
     .select({
-      name: repositoryFileSymbols.name,
-      kind: repositoryFileSymbols.kind,
-      parent: repositoryFileSymbols.parent,
-      startLine: repositoryFileSymbols.startLine,
-      endLine: repositoryFileSymbols.endLine,
+      innerPath: blocks.innerPath,
+      kind: blocks.symbolKind,
+      parent: blocks.symbolParent,
+      startLine: blocks.startLine,
+      endLine: blocks.endLine,
     })
-    .from(repositoryFileSymbols)
-    .where(eq(repositoryFileSymbols.fileId, fileId))
-  return rows.map(({ parent, ...s }) => (parent === null ? s : { ...s, parent }))
+    .from(blocks)
+    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId), eq(blocks.kind, 'symbol')))
+  return rows.map(({ innerPath, kind, parent, startLine, endLine }) => ({
+    name: parent === null ? innerPath : innerPath.slice(parent.length + 1),
+    kind: kind!, // set on every symbol block
+    ...(parent === null ? {} : { parent }),
+    startLine,
+    endLine,
+  }))
 }

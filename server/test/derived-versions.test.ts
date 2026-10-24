@@ -1,9 +1,11 @@
 // #453: every derived artifact is keyed by what produced it. A repository
-// file's imports, symbols and vector carry `EXTRACTOR_VERSION` and
-// `EMBEDDER_ID` (on its `repository_files` row, written with them in one
-// transaction); a note's vector carries `EMBEDDER_ID`. Both go into the job
-// keys, and boot catch-up re-derives rows a different version produced, in
-// batches, once (the jobs dedupe by key).
+// file's imports and blocks carry `EXTRACTOR_VERSION` and `EMBEDDER_ID` (on
+// its `repository_files` row, written with them in one transaction) and each
+// block vector its `embedKey` (the model and the embedded text, #452, so an
+// unchanged text keeps its vector across a bump); a note's vector carries
+// `EMBEDDER_ID`. The versions go into the job keys, and boot catch-up
+// re-derives rows a different version produced, in batches, once (the jobs
+// dedupe by key).
 //
 // The tests bump the versions for real: the two modules are mocked with a
 // getter, which the queues read at each call.
@@ -11,7 +13,7 @@ import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
-import { jobs, notes, repositories, repositoryFiles, repositoryFileSymbols, vaults } from '../src/db/schema.js'
+import { blocks, jobs, notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
 import { MAX_JOB_ATTEMPTS, catchUpLimits, jobTiming } from '../src/jobs/durable.js'
 import { createNote } from '../src/notes/store.js'
 import {
@@ -22,10 +24,11 @@ import {
 import { EXTRACTOR_VERSION } from '../src/repositories/extraction.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { embeddingJobKey, flushEmbeddings, scheduleMissingEmbeddings } from '../src/search/embedding-queue.js'
+import { CHUNK_VERSION, embedKey } from '../src/search/embed-key.js'
 import { EMBEDDER_ID, embedder } from '../src/search/embeddings.js'
 import type * as Embeddings from '../src/search/embeddings.js'
 import type * as Extraction from '../src/repositories/extraction.js'
-import { createActiveUser } from './helpers.js'
+import { createActiveUser, symbolBlocks } from './helpers.js'
 
 const versions = vi.hoisted(() => ({ extractor: 0, embedder: '' }))
 
@@ -64,7 +67,7 @@ afterEach(async () => {
   vi.restoreAllMocks()
   // Rows the test marked as derived by the bumped version count as derived by the shipped one again.
   await db.execute(sql`UPDATE repository_files SET extractor_version = ${shipped.extractor}, embedder_id = ${shipped.embedder}
-    WHERE extractor_version = ${versions.extractor} AND embedder_id = ${versions.embedder} AND embedding IS NOT NULL`)
+    WHERE extractor_version = ${versions.extractor} AND embedder_id = ${versions.embedder}`)
   await db.execute(sql`UPDATE notes SET embedder_id = ${shipped.embedder} WHERE embedder_id = ${versions.embedder} AND embedding IS NOT NULL`)
   Object.assign(versions, shipped)
   for (const id of createdVaultIds.splice(0)) await db.delete(vaults).where(eq(vaults.id, id))
@@ -103,11 +106,12 @@ async function noteVersion(noteId: string) {
   return row
 }
 
-/** Counts the embeds whose first text is the file's text `file`, and those whose first text starts with `notePrefix`. */
+/** Counts the embeds whose first text is the file's text `file`, and those whose first text starts with `notePrefix`; `texts`: every text of a file extraction. */
 function countEmbeds(file: string, notePrefix?: string) {
-  const calls = { file: 0, note: 0 }
+  const calls = { file: 0, note: 0, texts: [] as string[] }
   const embed = embedder.embed.bind(embedder)
   vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => {
+    if (notePrefix === undefined || !texts[0]!.startsWith(notePrefix)) calls.texts.push(...texts)
     if (texts[0] === file) calls.file++
     if (notePrefix !== undefined && texts[0]!.startsWith(notePrefix)) calls.note++
     return embed(texts)
@@ -118,18 +122,24 @@ function countEmbeds(file: string, notePrefix?: string) {
 /** Every row outside `repositoryId` counts as derived by the current versions: the catch-up then only has this test's rows to do. */
 async function othersCurrent(repositoryId: string | null, vaultId: string | null) {
   await db.execute(sql`UPDATE repository_files SET extractor_version = ${versions.extractor}, embedder_id = ${versions.embedder}
-    WHERE embedding IS NOT NULL ${repositoryId ? sql`AND repository_id <> ${repositoryId}` : sql``}`)
+    WHERE TRUE ${repositoryId ? sql`AND repository_id <> ${repositoryId}` : sql``}`)
+  // A block's key names the model and text of its vector: a bumped EMBEDDER_ID makes it stale, as it should.
   await db.execute(sql`UPDATE notes SET embedder_id = ${versions.embedder}
     WHERE embedding IS NOT NULL ${vaultId ? sql`AND vault_id <> ${vaultId}` : sql``}`)
 }
 
 describe('derived rows record what produced them (#453)', () => {
-  it('a file records EXTRACTOR_VERSION and EMBEDDER_ID; its job key carries both', async () => {
+  it('a file records EXTRACTOR_VERSION and EMBEDDER_ID, each embedded block its embedKey; the job key carries the versions', async () => {
     const { files } = await extractedRepo('versions-keys')
     const file = files[0]!
     expect(await fileVersions(file.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
     const key = extractionJobKey(file.id, file.contentHash)
-    expect(key).toBe(`extract:${file.id}:${file.contentHash}:${EXTRACTOR_VERSION}:${EMBEDDER_ID}`)
+    expect(key).toBe(`extract:${file.id}:${file.contentHash}:${EXTRACTOR_VERSION}:${EMBEDDER_ID}+chunk${CHUNK_VERSION}`)
+    const fileBlocks = await db.select().from(blocks).where(eq(blocks.ownerId, file.id)).orderBy(blocks.kind)
+    expect(fileBlocks.map((b) => [b.kind, b.embedKey, b.ownerVersion])).toEqual([
+      ['file', embedKey(`${file.path}\n${SOURCE}`), file.contentHash],
+      ['symbol', embedKey(`function unchanged in ${file.path}\nexport function unchanged() { return b() }`), file.contentHash],
+    ])
     const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, key))
     expect(job?.doneAt).not.toBeNull()
     expect(job?.lastError).toBeNull()
@@ -154,7 +164,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     const { repo, files } = await extractedRepo('versions-extractor-bump')
     const file = files[0]!
     // What the previous extractor left: one symbol fewer than the new one finds.
-    await db.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))
+    await db.delete(blocks).where(and(eq(blocks.ownerId, file.id), eq(blocks.kind, 'symbol')))
     versions.extractor = shipped.extractor + 1
     await othersCurrent(repo.id, null)
     const calls = countEmbeds(`${file.path}\n${SOURCE}`)
@@ -162,18 +172,19 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
     await flushExtraction()
 
-    expect(calls.file).toBe(1)
+    // The file block's text did not change, so its vector is kept (#452); the symbol the old extractor missed is embedded.
+    expect(calls.file).toBe(0)
+    expect(calls.texts).toEqual([`function unchanged in ${file.path}\nexport function unchanged() { return b() }`])
     expect(await fileVersions(file.id)).toEqual({ extractor_version: versions.extractor, embedder_id: EMBEDDER_ID })
-    const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file.id))
-    expect(symbols.map((s) => s.name)).toEqual(['unchanged'])
+    expect((await symbolBlocks(file.id)).map((s) => s.name)).toEqual(['unchanged'])
     const [job] = await db.select().from(jobs).where(eq(jobs.idempotencyKey, extractionJobKey(file.id, file.contentHash)))
-    expect(job?.idempotencyKey).toBe(`extract:${file.id}:${file.contentHash}:${versions.extractor}:${EMBEDDER_ID}`)
+    expect(job?.idempotencyKey).toBe(`extract:${file.id}:${file.contentHash}:${versions.extractor}:${EMBEDDER_ID}+chunk${CHUNK_VERSION}`)
     expect(job?.doneAt).not.toBeNull()
 
     // The next boot finds it current: nothing runs again.
     await scheduleMissingExtractions()
     await flushExtraction()
-    expect(calls.file).toBe(1)
+    expect(calls.texts).toHaveLength(1)
   })
 
   it('EMBEDDER_ID bumped: files and notes are embedded again, once', async () => {
@@ -195,7 +206,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await flushEmbeddings()
     await flushExtraction()
 
-    expect(calls).toEqual({ file: 1, note: 1 })
+    expect(calls).toMatchObject({ file: 1, note: 1 })
     expect((await fileVersions(file.id)).embedder_id).toBe(versions.embedder)
     const after = await noteVersion(note.id)
     expect(after.embedder_id).toBe(versions.embedder)
@@ -207,7 +218,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await scheduleMissingExtractions()
     await flushEmbeddings()
     await flushExtraction()
-    expect(calls).toEqual({ file: 1, note: 1 })
+    expect(calls).toMatchObject({ file: 1, note: 1 })
   })
 
   it('works in batches: a page smaller than the backlog still reaches every file', async () => {
@@ -286,7 +297,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
     expect((await fileVersions(file!.id)).extractor_version).toBe(1)
     // Stand-in for the broken outline version 1's TypeScript grammar left.
-    await db.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    await db.delete(blocks).where(and(eq(blocks.ownerId, file!.id), eq(blocks.kind, 'symbol')))
     versions.extractor = shipped.extractor
     await othersCurrent(repo!.id, null)
 
@@ -294,9 +305,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     await flushExtraction()
 
     expect(await fileVersions(file!.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
-    const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
-    const byLine = symbols.sort((a, b) => a.startLine - b.startLine)
-    expect(byLine.map((s) => [s.name, s.kind, s.startLine, s.endLine])).toEqual([
+    expect((await symbolBlocks(file!.id)).map((s) => [s.name, s.kind, s.startLine, s.endLine])).toEqual([
       ['Card', 'function', 1, 3],
       ['Page', 'function', 4, 4],
       ['PageProps', 'interface', 5, 5],

@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { notes, repositoryFiles, semanticEdges } from '../db/schema.js'
+import { notes, semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
 
 export type SemanticNodeType = 'note' | 'code'
@@ -32,20 +32,17 @@ async function knn(
     .orderBy(sql`${notes.embedding} <=> ${vec}::vector`)
     .limit(config.semanticK)
 
-  const codeRows = await client
-    .select({
-      id: repositoryFiles.id,
-      similarity: sql<number>`1 - (${repositoryFiles.embedding} <=> ${vec}::vector)`,
-    })
-    .from(repositoryFiles)
-    .where(
-      and(
-        sql`${repositoryFiles.embedding} is not null`,
-        excludeType === 'code' ? ne(repositoryFiles.id, excludeId) : sql`true`,
-      ),
-    )
-    .orderBy(sql`${repositoryFiles.embedding} <=> ${vec}::vector`)
-    .limit(config.semanticK)
+  // A file's similarity is its best block's (ADR-004 §2.5): the nearest blocks, then one row per file.
+  // `hnsw.ef_search` is 100 in recomputeSemanticEdges's transaction, so at most 100 blocks come back.
+  const codeRows = (await client.execute(sql`
+    SELECT owner_id AS id, 1 - min(distance) AS similarity FROM (
+      SELECT owner_id, embedding <=> ${vec}::vector AS distance FROM blocks
+      WHERE owner_type = 'code' AND embedding IS NOT NULL ${excludeType === 'code' ? sql`AND owner_id <> ${excludeId}` : sql``}
+      ORDER BY embedding <=> ${vec}::vector
+      LIMIT 100
+    ) nearest
+    GROUP BY owner_id ORDER BY min(distance), owner_id
+    LIMIT ${config.semanticK}`)) as unknown as Array<{ id: string; similarity: number }>
 
   return [
     ...noteRows.map((r) => ({ type: 'note' as const, id: r.id, similarity: r.similarity })),

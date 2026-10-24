@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { totalLines } from '../text/lines.js'
 
 /**
  * The response envelope of the budgeted MCP tools (#420, #422; ADR-004
@@ -272,9 +273,6 @@ function newlines(text: string, end = text.length): number {
   return n
 }
 
-/** Lines in `text`: a final line without `\n` counts; an empty text has none. */
-const countLines = (text: string) => (text === '' ? 0 : newlines(text) + (text.endsWith('\n') ? 0 : 1))
-
 /** Characters `s` takes inside a JSON string. */
 const escapedLength = (s: string) => JSON.stringify(s).length - 2
 
@@ -522,8 +520,8 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       const chunk = slot.start < 0 || counted ? '' : section.text.slice(slot.start, slot.start + shown[n]!)
       const rest = slot.start < 0 ? '' : section.text.slice(slot.start)
       // A line counts as shown on the page where it ends, so a line split across pages counts once.
-      const shownLines = chunk.length < rest.length ? newlines(chunk) : countLines(chunk)
-      const total = countLines(rest)
+      const shownLines = chunk.length < rest.length ? newlines(chunk) : totalLines(chunk)
+      const total = totalLines(rest)
       values.push([section.name, chunk])
       counts.shown[section.name] = shownLines
       counts.total[section.name] = total
@@ -532,7 +530,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       if (section.lines && partial && chunk !== '') {
         // The lines this page touches, a split one included.
         const first = newlines(section.text, slot.start) + 1
-        out.lines = [first, first + countLines(chunk) - 1]
+        out.lines = [first, first + totalLines(chunk) - 1]
       }
       if (cursor === null && !counted && chunk.length < rest.length) {
         cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: slot.start + chunk.length }, g: guardOf(section.text) })

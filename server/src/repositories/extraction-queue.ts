@@ -1,10 +1,12 @@
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
-import { repositoryFileImports, repositoryFileSymbols, repositoryFiles } from '../db/schema.js'
+import { blocks, repositoryFileImports, repositoryFiles } from '../db/schema.js'
 import { failpoint } from '../failpoints.js'
+import { CHUNK_VERSION, embedKey } from '../search/embed-key.js'
 import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
+import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { resolveImportPath } from './import-resolution.js'
 import { recordJob } from '../monitoring/metrics.js'
@@ -36,14 +38,28 @@ import {
 const EXTRACTION_TURN_FILES = 10
 export const EXTRACTION_JOB = 'extract'
 
-/** The key of the job that derives a file's content `contentHash` with the running extractor and embedder (#453). */
+/** The versions part of an extraction job key: `<EXTRACTOR_VERSION>:<EMBEDDER_ID>+chunk<CHUNK_VERSION>`. */
+function versionsKey(): string {
+  return `${EXTRACTOR_VERSION}:${EMBEDDER_ID}+chunk${CHUNK_VERSION}`
+}
+
+/** The key of the job that derives a file's content `contentHash` with the running extractor, embedder and chunker (#453, #452). */
 export function extractionJobKey(fileId: string, contentHash: string): string {
-  return `${EXTRACTION_JOB}:${fileId}:${contentHash}:${EXTRACTOR_VERSION}:${EMBEDDER_ID}`
+  return `${EXTRACTION_JOB}:${fileId}:${contentHash}:${versionsKey()}`
 }
 
 /** `extractionJobKey` in SQL, from a file row's `id` and `content_hash`. */
-function extractionJobKeySql(id: SQL, contentHash: SQL): SQL {
-  return sql`${EXTRACTION_JOB} || ':' || ${id} || ':' || ${contentHash} || ':' || ${`${EXTRACTOR_VERSION}:${EMBEDDER_ID}`}`
+export function extractionJobKeySql(id: SQL, contentHash: SQL): SQL {
+  return sql`${EXTRACTION_JOB} || ':' || ${id} || ':' || ${contentHash} || ':' || ${versionsKey()}`
+}
+
+/**
+ * True when the file row `f` has blocks derived from its current content
+ * (`owner_version` = its `content_hash`; the legacy blocks migration 0035
+ * carried over have none). Every extraction writes at least one block.
+ */
+export function hasCurrentBlocksSql(): SQL {
+  return sql`EXISTS (SELECT 1 FROM blocks b WHERE b.owner_type = 'code' AND b.owner_id = f.id AND b.owner_version = f.content_hash)`
 }
 
 /** Turn number each repository last got; repositories never served count as 0. */
@@ -168,9 +184,11 @@ export async function backfillUnresolvedImports(): Promise<number> {
 
 /**
  * Boot catch-up: enqueue every file whose derived rows are not those of its
- * current content by the running code (#453): no embedding, extracted from
+ * current content by the running code (#453, #452): no blocks of this
+ * content (`hasCurrentBlocksSql`, e.g. only the legacy blocks migration 0035
+ * carried over), extracted from
  * another content hash (`extracted_hash`, e.g. a push the process died in
- * before it enqueued), or by another `EXTRACTOR_VERSION` or `EMBEDDER_ID` —
+ * before it enqueued), or by another `EXTRACTOR_VERSION`, `EMBEDDER_ID` or `CHUNK_VERSION` —
  * unless a job for that already exists — and every file whose job for the
  * current key failed with an error (an updated file keeps its previous rows).
  * Then wake the worker, which also reclaims jobs whose lease a dead process
@@ -179,7 +197,7 @@ export async function backfillUnresolvedImports(): Promise<number> {
  * repaired it before #494); one whose runs ended with the process
  * (`LeaseExpired`) does not, so a crash loop is not restarted at every boot.
  * A version bump changes the key, so such a file gets one new job (3
- * attempts) per new extractor or embedder. Keyset pages of
+ * attempts) per new extractor, embedder or chunker. Keyset pages of
  * `catchUpLimits.batchSize` files by repository and path, one SELECT and one
  * INSERT each, never one transaction for the whole instance. Returns the
  * files found.
@@ -194,8 +212,9 @@ export async function scheduleMissingExtractions(): Promise<number> {
       SELECT f.id, f.repository_id AS "repositoryId", f.path FROM repository_files f
       WHERE ${after ? sql`(f.repository_id, f.path) > (${after.repositoryId}::uuid, ${after.path})` : sql`TRUE`}
         AND (
-          ((f.embedding IS NULL OR f.extracted_hash IS DISTINCT FROM f.content_hash
-            OR f.extractor_version <> ${EXTRACTOR_VERSION} OR f.embedder_id IS DISTINCT FROM ${EMBEDDER_ID})
+          ((NOT ${hasCurrentBlocksSql()} OR f.extracted_hash IS DISTINCT FROM f.content_hash
+            OR f.extractor_version <> ${EXTRACTOR_VERSION} OR f.embedder_id IS DISTINCT FROM ${EMBEDDER_ID}
+            OR f.chunk_version <> ${CHUNK_VERSION})
             AND NOT ${jobExists(key)})
           OR ${erroredJobExists(key)})
       ORDER BY f.repository_id, f.path
@@ -214,8 +233,8 @@ export async function scheduleMissingExtractions(): Promise<number> {
 
 /**
  * Files of a repository whose extraction for their current content is still
- * to come: a pending (queued or running) job, or no job and no embedding
- * (written before the jobs table; the boot scan adds its job). Failed files
+ * to come: a pending (queued or running) job, or no job and no current
+ * blocks (the boot scan adds its job). Failed files
  * are not counted: `extractionFailures` lists them. 0 = extraction finished.
  */
 export async function countPendingExtractions(repositoryId: string): Promise<number> {
@@ -224,7 +243,7 @@ export async function countPendingExtractions(repositoryId: string): Promise<num
     FROM repository_files f
     LEFT JOIN jobs j ON j.idempotency_key = ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}
     WHERE f.repository_id = ${repositoryId}
-      AND (j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND f.embedding IS NULL)`)) as unknown as [{ pending: number }]
+      AND (j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND NOT ${hasCurrentBlocksSql()})`)) as unknown as [{ pending: number }]
   return row?.pending ?? 0
 }
 
@@ -301,7 +320,7 @@ export const extractionWork = { processFile }
 
 /**
  * Rows per INSERT: one statement binds at most 65,534 parameters
- * (postgres.js), and a symbol row has 8, so a generated file with thousands
+ * (postgres.js), and a block row has 14, so a generated file with thousands
  * of constants would fail whole (#450 review). Every chunk is in the same
  * transaction, so the file still commits all or nothing.
  */
@@ -312,21 +331,26 @@ function* chunks<T>(rows: readonly T[]): Generator<T[]> {
 }
 
 /**
- * Derives one file (#453): everything is computed first, the slow embed
- * included, outside any transaction; then one short transaction locks the
- * row, checks its content is still the one extracted, and replaces the
- * imports, symbols, vectors and versions together. A failure or a crash at
- * any point before the commit leaves the previous rows whole and searchable.
- * A result for content a push replaced meanwhile is dropped: that push
- * enqueued the job of the new content.
+ * Derives one file (#453, #413, #460): everything is computed first, the
+ * slow embed included, outside any transaction; then one short transaction
+ * locks the row, checks its content is still the one extracted, and replaces
+ * the imports, the file's whole block set and the versions together. A
+ * failure or a crash at any point before the commit leaves the previous rows
+ * whole and searchable. A result for content a push replaced meanwhile (an
+ * older `owner_version`) is dropped: that push enqueued the job of the new
+ * content. Blocks are upserted by `block_id`, so a block that survives keeps
+ * its row; one whose `embedKey` (model + embedded text) a block of the file
+ * already has keeps that vector instead of being embedded again, so a line
+ * shift, an edit elsewhere or a version bump re-embeds only changed texts.
  */
 async function processFile(fileId: string): Promise<void> {
   const row = (await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, fileId)))[0]
   if (!row) return
   const extractorVersion = EXTRACTOR_VERSION
   const embedderId = EMBEDDER_ID
+  const chunkVersion = CHUNK_VERSION
 
-  // An unsupported or minified file gets its file vector only, and still loses the imports/symbols an earlier content left.
+  // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
   const { imports, symbols }: ExtractionResult =
     isSupportedLanguage(row.language) && !looksMinified(row.content)
       ? await extractStructure(row.language, row.content, row.path)
@@ -341,44 +365,69 @@ async function processFile(fileId: string): Promise<void> {
     }
   }
 
-  const fileLines = symbols.length > 0 ? row.content.split('\n') : []
-  const symbolPayloads = symbols.map((s) => {
-    const snippetLines = fileLines.slice(s.startLine - 1, s.endLine)
-    const snippet = snippetLines.slice(0, 30).join('\n').slice(0, 1500)
-    return {
-      fileId,
-      name: s.name,
-      kind: s.kind,
-      parent: s.parent ?? null,
-      startLine: s.startLine,
-      endLine: s.endLine,
-      snippet,
-      embedText: `${s.kind} ${s.parent ? `${s.parent}.` : ''}${s.name} in ${row.path}:${s.startLine}\n${snippet}`,
-    }
-  })
+  const fileBlocks = codeBlocks(fileId, row.path, row.content, symbols)
 
-  // Per-file budget (#496): the file and N of its symbols get a vector, the
-  // rest are stored without one, so one file with thousands of declarations
-  // neither holds the queue for minutes nor loses its structure. The budget
-  // goes to exported symbols, then other module-level ones, then methods,
-  // each in file order (#450): a large class early in a file does not take
-  // it from the functions after it.
+  // Per-file budget (#496): the file-level block and N of its symbols get a
+  // vector, the rest are stored without one (null embed_key), so one file
+  // with thousands of declarations neither holds the queue for minutes nor
+  // loses its structure. The budget goes to exported symbols, then other
+  // module-level ones, then methods, each in file order (#450): a large class
+  // early in a file does not take it from the functions after it. A class
+  // skeleton is embedded when its class is.
   const budget = config.embedMaxSymbolsPerFile
-  const embedOrder = symbols
-    .map((s, i) => ({ i, tier: s.kind === 'method' ? 2 : s.exported ? 0 : 1 }))
+  const symbolOrder = fileBlocks
+    .flatMap((b, i) => (b.budgetTier === null ? [] : [{ i, tier: b.budgetTier }]))
     .sort((a, b) => a.tier - b.tier)
-    .slice(0, budget)
-    .map(({ i }) => i)
+  const budgeted = new Set(symbolOrder.slice(0, budget).map(({ i }) => i))
   let embeddingNote: string | null = null
-  if (symbolPayloads.length > budget) {
-    embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolPayloads.length} symbols embedded, the rest are keyword-searchable only`
+  if (symbolOrder.length > budget) {
+    embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolOrder.length} symbols embedded, the rest are keyword-searchable only`
     console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${embeddingNote}`)
   }
-  const allEmbeddings = await embedder.embed([`${row.path}\n${row.content}`, ...embedOrder.map((i) => symbolPayloads[i]!.embedText)])
-  const fileEmbedding = allEmbeddings[0]!
-  const symbolEmbeddings = new Map(embedOrder.map((symbolIndex, k) => [symbolIndex, allEmbeddings[k + 1]!]))
+  // The file-level block first, then the symbols in budget order, then the class skeletons.
+  const embedOrder = [
+    ...fileBlocks.flatMap((b, i) => (b.budgetTier === null && b.outlineOf === undefined ? [i] : [])),
+    ...symbolOrder.filter(({ i }) => budgeted.has(i)).map(({ i }) => i),
+    ...fileBlocks.flatMap((b, i) => (b.outlineOf !== undefined && budgeted.has(b.outlineOf) ? [i] : [])),
+  ]
+
+  const kept = new Map<string, number[]>()
+  for (const b of await db
+    .select({ embedKey: blocks.embedKey, embedding: blocks.embedding })
+    .from(blocks)
+    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId)))) {
+    if (b.embedKey && b.embedding) kept.set(b.embedKey, b.embedding)
+  }
+  const keys = new Map(embedOrder.map((i) => [i, embedKey(fileBlocks[i]!.embedText)]))
+  const vectors = new Map<number, number[]>()
+  const toEmbed: number[] = []
+  for (const i of embedOrder) {
+    const reused = kept.get(keys.get(i)!)
+    if (reused) vectors.set(i, reused)
+    else toEmbed.push(i)
+  }
+  if (toEmbed.length > 0) {
+    const embedded = await embedder.embed(toEmbed.map((i) => fileBlocks[i]!.embedText))
+    toEmbed.forEach((i, k) => vectors.set(i, embedded[k]!))
+  }
   failpoint('extract.after-embed-before-write')
 
+  const blockRows = fileBlocks.map((b, i) => ({
+    ownerType: 'code' as const,
+    ownerId: fileId,
+    containerId: row.repositoryId,
+    blockId: b.blockId,
+    kind: b.kind,
+    innerPath: b.innerPath,
+    symbolKind: b.symbolKind,
+    symbolParent: b.symbolParent,
+    startLine: b.startLine,
+    endLine: b.endLine,
+    contentHash: b.contentHash,
+    ownerVersion: row.contentHash,
+    embedKey: keys.get(i) ?? null,
+    embedding: vectors.get(i) ?? null,
+  }))
   const written = await db.transaction(async (tx) => {
     const [current] = await tx
       .select({ contentHash: repositoryFiles.contentHash })
@@ -389,24 +438,37 @@ async function processFile(fileId: string): Promise<void> {
     await tx.delete(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, fileId))
     // One row per specifier: a file importing one path twice keeps the first line (chunks insert in order).
     for (const chunk of chunks(importRows)) await tx.insert(repositoryFileImports).values(chunk).onConflictDoNothing()
-    await tx.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, fileId))
-    const symbolRows = symbolPayloads.map((s, i) => ({
-      fileId: s.fileId,
-      name: s.name,
-      kind: s.kind,
-      parent: s.parent,
-      startLine: s.startLine,
-      endLine: s.endLine,
-      snippet: s.snippet,
-      embedding: symbolEmbeddings.get(i) ?? null,
-    }))
-    for (const chunk of chunks(symbolRows)) await tx.insert(repositoryFileSymbols).values(chunk)
+    // The block set is replaced whole: blocks this content no longer has go, the others are written over in place.
+    await tx.execute(sql`DELETE FROM blocks WHERE owner_type = 'code' AND owner_id = ${fileId}
+      AND block_id <> ALL(${`{${fileBlocks.map((b) => b.blockId).join(',')}}`}::text[])`)
+    for (const chunk of chunks(blockRows)) {
+      await tx
+        .insert(blocks)
+        .values(chunk)
+        .onConflictDoUpdate({
+          target: [blocks.ownerType, blocks.ownerId, blocks.blockId],
+          set: {
+            containerId: sql`excluded.container_id`,
+            kind: sql`excluded.kind`,
+            innerPath: sql`excluded.inner_path`,
+            symbolKind: sql`excluded.symbol_kind`,
+            symbolParent: sql`excluded.symbol_parent`,
+            startLine: sql`excluded.start_line`,
+            endLine: sql`excluded.end_line`,
+            contentHash: sql`excluded.content_hash`,
+            ownerVersion: sql`excluded.owner_version`,
+            embedKey: sql`excluded.embed_key`,
+            embedding: sql`excluded.embedding`,
+          },
+        })
+    }
     await tx
       .update(repositoryFiles)
-      .set({ embedding: fileEmbedding, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId })
+      .set({ embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId, chunkVersion })
       .where(eq(repositoryFiles.id, fileId))
     failpoint('extract.before-commit')
     return true
   })
-  if (written) await recomputeSemanticEdges('code', fileId, fileEmbedding)
+  // The file's semantic neighbours are those of its file-level block (the first, always embedded).
+  if (written) await recomputeSemanticEdges('code', fileId, vectors.get(0)!)
 }
