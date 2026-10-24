@@ -64,6 +64,26 @@ describe('GitignoreRules', () => {
     expect(rules.ignores('out', true)).toBe(true)
     expect(rules.ignores('node_modules', true)).toBe(false)
   })
+
+  it('matches case-sensitively, as git does by default, unless .git/config sets core.ignorecase', async () => {
+    const files = { '.gitignore': '/Data/\n*.LOG\n' }
+    const sensitive = new GitignoreRules(await makeTree(files))
+    expect(sensitive.ignores('data', true)).toBe(false)
+    expect(sensitive.ignores('a.log', false)).toBe(false)
+    expect(sensitive.ignores('Data', true)).toBe(true)
+    expect(sensitive.ignores('a.LOG', false)).toBe(true)
+
+    const explicitFalse = new GitignoreRules(
+      await makeTree({ ...files, '.git/config': '[core]\n\tignorecase = false\n' }),
+    )
+    expect(explicitFalse.ignores('data', true)).toBe(false)
+
+    const insensitive = new GitignoreRules(
+      await makeTree({ ...files, '.git/config': '[core]\n\trepositoryformatversion = 0\n\tignoreCase = true\n' }),
+    )
+    expect(insensitive.ignores('data', true)).toBe(true)
+    expect(insensitive.ignores('a.log', false)).toBe(true)
+  })
 })
 
 describe('scanRepository', () => {
@@ -107,14 +127,15 @@ describe('summarizeSkips / skippedField', () => {
   })
 })
 
+// Real file-system events through chokidar: fake timers can't drive them, so
+// wait out the 300 ms debounce (as repository-local-watch.test does).
+const settle = () => new Promise((r) => setTimeout(r, 900))
+
 describe('local watcher follows .gitignore', () => {
-  it('does not sync for a change under an ignored path, and picks up a .gitignore change', async () => {
+  it('does not sync for a change under an ignored path', async () => {
     const root = await makeTree({ '.gitignore': 'dist/\n', 'a.ts': 'a', 'dist/out.js': 'x' })
     let syncs = 0
     stops.push(startWatching('scan-rules-test', root, async () => void syncs++))
-    // Real file-system events through chokidar: fake timers can't drive them,
-    // so wait out the 300 ms debounce (as repository-local-watch.test does).
-    const settle = () => new Promise((r) => setTimeout(r, 900))
     await settle()
     const initial = syncs
     expect(initial).toBeGreaterThan(0)
@@ -126,5 +147,32 @@ describe('local watcher follows .gitignore', () => {
     await writeFile(join(root, 'b.ts'), 'b')
     await settle()
     expect(syncs).toBeGreaterThan(initial)
+  })
+
+  it('watches a nested directory a .gitignore change un-ignores, and stops when it is ignored again', async () => {
+    const root = await makeTree({ '.gitignore': 'a/b/gen/\n', 'a/b/keep.ts': 'k', 'a/b/gen/x.ts': 'x' })
+    let syncs = 0
+    stops.push(startWatching('scan-rules-test', root, async () => void syncs++))
+    await settle()
+
+    // Un-ignore: the .gitignore edit itself syncs once, then edits under gen/ must too.
+    await writeFile(join(root, '.gitignore'), '')
+    await settle()
+    let before = syncs
+    await writeFile(join(root, 'a', 'b', 'gen', 'x.ts'), 'edited')
+    await settle()
+    expect(syncs).toBeGreaterThan(before)
+    before = syncs
+    await writeFile(join(root, 'a', 'b', 'gen', 'y.ts'), 'added')
+    await settle()
+    expect(syncs).toBeGreaterThan(before)
+
+    // Ignore again: edits under gen/ no longer sync.
+    await writeFile(join(root, '.gitignore'), 'a/b/gen/\n')
+    await settle()
+    before = syncs
+    await writeFile(join(root, 'a', 'b', 'gen', 'x.ts'), 'edited again')
+    await settle()
+    expect(syncs).toBe(before)
   })
 })
