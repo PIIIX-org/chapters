@@ -401,8 +401,8 @@ function* chunks<T>(rows: readonly T[]): Generator<T[]> {
  * older `owner_version`) is dropped: that push enqueued the job of the new
  * content. Blocks are upserted by `block_id`, so a block that survives keeps
  * its row; one whose `embedKey` (model + embedded text) a block of the file
- * already has keeps that vector instead of being embedded again, so a line
- * shift, an edit elsewhere or a version bump re-embeds only changed texts.
+ * already has keeps that vector instead of being embedded again, so an edit
+ * elsewhere or a version bump re-embeds only changed texts.
  */
 async function processFile(fileId: string): Promise<void> {
   const row = (await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, fileId)))[0]

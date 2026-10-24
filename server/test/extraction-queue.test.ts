@@ -298,7 +298,7 @@ describe('extraction queue', () => {
       await syncRepositoryFiles(repo.id, [{ path: 'src/store.ts', content }], ['src/store.ts'])
       await flushExtraction()
       expect(embedSpy.mock.calls.map(([texts]) => texts.slice(1).map((t) => t.split('\n')[0]))).toEqual([
-        ['class Store in src/store.ts', 'function load in src/store.ts', 'function helper in src/store.ts'],
+        ['class Store in src/store.ts:1', 'function load in src/store.ts:8', 'function helper in src/store.ts:7'],
       ])
     } finally {
       embedSpy.mockRestore()
