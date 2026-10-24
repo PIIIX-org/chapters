@@ -101,6 +101,10 @@ beforeAll(async () => {
     { path: 'server/src/notes/store.ts', content: 'export const store = 1' },
     { path: 'client/src/store.tsx', content: 'export const view = 2' },
     { path: 'pkg/readme.md', content: '# readme' },
+    // Build and editor leftovers: a reference with an extension must not match them by their stripped path.
+    { path: 'server/src/notes/store.ts.orig', content: 'export const store = 0' },
+    { path: 'lib/index.js', content: 'export default 1' },
+    { path: 'lib/index.js.map', content: '{}' },
   ]
   await syncRepositoryFiles(repoId, files, files.map((f) => f.path))
   // The stranger's vault holds the same names, and a note only it has.
@@ -146,6 +150,21 @@ describe('graph neighborsOf resolves a node reference (#447)', () => {
     expect((await centerOf('src/store.tsx')).id).toBe(idOf['file:client/src/store.tsx'])
     // Not inside a segment: `tes/store.ts` is not a suffix of `notes/store.ts` on a boundary.
     expect((await refusal('graph', { ...both(), neighborsOf: 'tes/store.ts' })).error.code).toBe('NOT_FOUND')
+  })
+
+  it('matches a reference with an extension on that extension only; one without it on the stripped path', async () => {
+    // Tier 4: `store.ts` is not the stripped `store.ts.orig`, `index.js` not `index.js.map`.
+    expect((await centerOf('store.ts')).id).toBe(idOf['file:server/src/notes/store.ts'])
+    expect((await centerOf('notes/store.ts')).id).toBe(idOf['file:server/src/notes/store.ts'])
+    expect((await centerOf('index.js')).id).toBe(idOf['file:lib/index.js'])
+    // Tier 3 (any case): the same.
+    expect((await centerOf('LIB/INDEX.JS')).id).toBe(idOf['file:lib/index.js'])
+    expect((await centerOf('Server/Src/Notes/Store.ts')).id).toBe(idOf['file:server/src/notes/store.ts'])
+    // The leftover itself is named by its own extension.
+    expect((await centerOf('store.ts.orig')).id).toBe(idOf['file:server/src/notes/store.ts.orig'])
+    expect((await centerOf('index.js.map')).id).toBe(idOf['file:lib/index.js.map'])
+    // Without an extension, the stripped path still matches.
+    expect((await centerOf('lib/index')).id).toBe(idOf['file:lib/index.js'])
   })
 
   it('takes a unique basename or note title', async () => {
