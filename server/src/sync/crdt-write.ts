@@ -346,5 +346,7 @@ function explainInheritedKeys(
   const keys = culprits.map((key) => `"${key}"`).join(', ')
   return new OkfValidationError(
     `${err.message} (frontmatter ${keys} is already on the note, not in this edit; send a valid value, list it in \`removeKeys\`, or pass \`replace: true\` with the whole map)`,
+    err.refusal,
+    err.rule,
   )
 }

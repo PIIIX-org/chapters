@@ -37,7 +37,11 @@ export const DEFAULT_BUDGET: Record<BudgetKind, number> = { list: 2_000, read: 4
 const MIN_BUDGET = 256
 const MAX_BUDGET = 25_000
 
-/** The arguments every budgeted tool takes, with its kind's default in the description. */
+/**
+ * The arguments every budgeted tool takes, with its kind's default in the
+ * description. What a token is and how the cursor is used is said once, in
+ * `initialize.instructions` (#435, instructions.ts).
+ */
 export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
   return {
     budget_tokens: z
@@ -46,8 +50,8 @@ export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
       .min(MIN_BUDGET)
       .max(MAX_BUDGET)
       .optional()
-      .describe(`Max tokens (chars/4); default ${DEFAULT_BUDGET[kind]}`),
-    cursor: z.string().optional().describe('`truncated.cursor` of the last answer'),
+      .describe(`Max tokens; default ${DEFAULT_BUDGET[kind]}`),
+    cursor: z.string().optional().describe('`truncated.cursor`'),
   }
 }
 
@@ -164,7 +168,7 @@ export interface Budgeted {
   rendered?: (truncated: Truncated) => Promise<void>
 }
 
-/** A refused cursor; `code` is the ADR-004 §2.7 error code the error envelope (#439) will carry. */
+/** A refused cursor; `code` is the error envelope's code (#439, ADR-004 §2.7). */
 export class CursorError extends Error {
   constructor(
     readonly code: 'CURSOR_INVALID' | 'CURSOR_STALE',

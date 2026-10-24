@@ -1,12 +1,10 @@
-import { readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
 import { and, eq, ne } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { recordSyncFailure, syncGitRepository, type RepositorySyncStatus } from './git-sync.js'
-import { listFilesRecursive } from './fs-scan.js'
+import { listFilesRecursive, readRepositoryFiles } from './fs-scan.js'
 import { IGNORED, startWatching } from './local-watch.js'
-import { syncRepositoryFiles, type FileUpdate } from './store.js'
+import { syncRepositoryFiles } from './store.js'
 import { recordJob } from '../monitoring/metrics.js'
 
 /**
@@ -124,25 +122,8 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
   await db.update(repositories).set({ syncStatus: 'syncing' }).where(eq(repositories.id, repositoryId))
   try {
     const allPaths = await listFilesRecursive(root, IGNORED)
-    const currentPaths = allPaths.slice(0, 10_000)
-    const files: FileUpdate[] = []
-    for (const path of currentPaths) {
-      try {
-        const fullPath = join(root, path)
-        const fileStat = await stat(fullPath)
-        if (fileStat.size > 1_048_576) {
-          continue
-        }
-        const content = await readFile(fullPath, 'utf8')
-        if (content.includes('\0')) {
-          continue
-        }
-        files.push({ path, content })
-      } catch (err) {
-        // Vanished between listing and reading, or permission/read failure — log for diagnostics.
-        console.warn(`[scheduler] failed reading repository file ${path} at ${root}:`, err)
-      }
-    }
+    // Skipped files (too large, binary) leave currentPaths, so a stale row goes (#923).
+    const { files, currentPaths } = await readRepositoryFiles(root, allPaths.slice(0, 10_000), 'scheduler')
     await syncRepositoryFiles(repositoryId, files, currentPaths)
     await db
       .update(repositories)

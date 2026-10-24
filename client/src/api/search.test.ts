@@ -9,18 +9,22 @@ describe('search api', () => {
 
   it('GETs /api/search with query, limit, and filters (everywhere scope)', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      mockJsonResponse(200, [
-        { resourceType: 'note', id: 'n1', containerId: 'v1', path: 'people/jane', snippet: '…jane…', score: 0.9 },
-      ]),
+      mockJsonResponse(200, {
+        status: 'ok',
+        retrieval_mode: 'hybrid',
+        degraded: false,
+        results: [{ resourceType: 'note', id: 'n1', containerId: 'v1', path: 'people/jane', snippet: '…jane…', score: 0.9 }],
+      }),
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const results = await search('jane doe', {
+    const answer = await search('jane doe', {
       limit: 10,
       filters: { types: ['people'], tags: ['a', 'b'], since: '2026-01-01' },
     })
 
-    expect(results[0]!.path).toBe('people/jane')
+    expect(answer.status).toBe('ok')
+    expect(answer.results[0]!.path).toBe('people/jane')
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/search?q=jane%20doe&limit=10&types=people&tags=a,b&since=2026-01-01',
       expect.objectContaining({ credentials: 'include' }),

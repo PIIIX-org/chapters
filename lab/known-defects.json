@@ -7,23 +7,8 @@
     },
     {
       "test": "access-behaviour",
-      "check": "rate limit: the 429 body is a JSON-RPC error",
-      "issue": 440
-    },
-    {
-      "test": "access-behaviour",
-      "check": "rate limit: the 429 carries a Retry-After header",
-      "issue": 440
-    },
-    {
-      "test": "access-behaviour",
       "check": "semantic edges are stored only between notes of the same account",
       "issue": 461
-    },
-    {
-      "test": "attachments",
-      "check": "a query matching nothing returns no results",
-      "issue": 533
     },
     {
       "test": "attachments",
