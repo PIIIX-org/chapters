@@ -330,7 +330,7 @@ const test: LabTest = {
       actual: freeType.ok ? 'created' : freeType.text.slice(0, 160),
       ok: freeType.ok,
       severity: 'medium',
-      detail: { code: 'okf.ts:79-88: type must be a slug equal to the first path segment' },
+      detail: { code: 'okf.ts validateNote: frontmatter type is any non-empty string since #444 (notes.type stays the folder)' },
     })
 
     // rename (wikilink refactor), revisions, revert, trash
@@ -847,7 +847,7 @@ const test: LabTest = {
         actual: res ? `${res.imported} imported, ${res.skipped.length} skipped: ${res.skipped.slice(0, 3).join(' | ')}` : `${r.status} ${r.text.slice(0, 160)}`,
         ok: res ? res.imported === acmeConcepts.length : false,
         severity: 'high',
-        detail: { result: res, acmeTypes, code: 'okf.ts:84 frontmatter.type must equal the first path segment slug; OKF types are free text (SPEC §4.1)' },
+        detail: { result: res, acmeTypes, code: 'type is free since #444; still refused: verified {by, at} without tier (#563), nested producer keys parameters/executor/attester/not (#970)' },
       })
       if (res?.vaultId) {
         const acmeRows = await noteSnapshot(null, [res.vaultId])
@@ -871,6 +871,7 @@ const test: LabTest = {
       { name: 'concepts/../../escape2.md', data: enc.encode('---\ntype: escape2\n---\nx') },
       { name: 'assets/../../../escape.png', data: makePng(2, 2, 1) },
       { name: 'assets/ok.png', data: makePng(2, 2, 2) },
+      // A type that is not the folder is a free OKF type since #444: this note imports.
       { name: 'concepts/mismatch.md', data: enc.encode('---\ntype: tables\n---\nwrong type') },
       { name: 'concepts/no-fence.md', data: enc.encode('no frontmatter at all') },
       { name: 'concepts/good.md', data: enc.encode('---\ntype: concepts\ntitle: good\n---\nfine\n') },
@@ -882,11 +883,14 @@ const test: LabTest = {
     const evilShare = evilJson?.vaultId
       ? await ctx.docker.psqlRows<{ grantee_id: string; permission: string }>(`select grantee_id, permission from vault_shares where vault_id = '${evilJson.vaultId}'`)
       : []
+    const evilPaths = evilJson?.vaultId
+      ? (await ctx.docker.psqlRows<{ path: string }>(`select path from notes where vault_id = '${evilJson.vaultId}' and deleted_at is null order by path`)).map((r) => r.path)
+      : []
     checks.push({
       name: 'crafted archive: traversal entries are not written outside the vault',
-      expected: 'only concepts/good imported; no escape* files',
-      actual: `${evilRes.status} imported=${evilJson?.imported} skipped=${evilJson?.skipped.length}; escape files: ${escaped.stdout.trim() || 'none'}`,
-      ok: evilJson?.imported === 1 && escaped.stdout.trim() === '',
+      expected: 'only concepts/good and concepts/mismatch (a free type, #444) imported; no escape* files',
+      actual: `${evilRes.status} imported=${evilJson?.imported} (${evilPaths.join(', ')}) skipped=${evilJson?.skipped.length}; escape files: ${escaped.stdout.trim() || 'none'}`,
+      ok: evilPaths.join(',') === 'concepts/good,concepts/mismatch' && escaped.stdout.trim() === '',
       severity: 'high',
       detail: evilJson,
     })

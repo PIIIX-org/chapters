@@ -519,8 +519,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   restricted to a slug regex (`^[a-z0-9][a-z0-9-]*$`), which makes path
   traversal impossible by construction — this is the one validation
   function shared by every write path (REST, CRDT persistence, MCP).
-  `validateNote` also requires frontmatter `type` to equal the path's
-  first segment.
+  `validateNote` requires a non-empty string frontmatter `type`; it may
+  differ from the path's first segment (#444, D8). `withType` gives a note
+  without one the folder; `notes.type` is always the folder, which the
+  `types` filter and structural edges key on.
 - **Frontmatter fence** (#400, `parseNote`): the frontmatter runs from an
   opening `---` line to the first line that is exactly `---` (trailing
   spaces/tabs allowed); LF and CRLF files both parse, and the body is
@@ -1940,9 +1942,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `McpToolError(code, message, extra?)`; `toErrorEnvelope(err)` in the
   `tool()` catch maps it and the domain errors: `CursorError` (its
   code), `OkfValidationError` by its `refusal` (`OKF_INVALID`,
-  `TYPE_MISMATCH`, `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the
-  type rule, the depth limit), `NoteTooLargeError` (`TOO_LARGE`, the
-  limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
+  `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the depth limit),
+  `NoteTooLargeError` (`TOO_LARGE`, the limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
   included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
   quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
   (`INVALID_ARGUMENT`), `NoteEditConflictError` and

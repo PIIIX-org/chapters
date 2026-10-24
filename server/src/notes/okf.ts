@@ -67,10 +67,10 @@ export function isSlug(value: string): boolean {
 /** The slug rule of every path segment, `type` and name, as the regex text an error shows (#439). */
 export const SLUG_RULE = SLUG.source
 
-/** What an OKF refusal is about (#439): MCP answers it as OKF_INVALID, TYPE_MISMATCH or ALREADY_EXISTS. */
-export type OkfRefusal = 'invalid' | 'type_mismatch' | 'exists'
+/** What an OKF refusal is about (#439): MCP answers it as OKF_INVALID or ALREADY_EXISTS. */
+export type OkfRefusal = 'invalid' | 'exists'
 
-/** A note the OKF rules refuse; `rule` is the rule it broke when one names it (the slug regex, the type rule). */
+/** A note the OKF rules refuse; `rule` is the rule it broke when one names it (the slug regex). */
 export class OkfValidationError extends Error {
   constructor(
     message: string,
@@ -82,11 +82,23 @@ export class OkfValidationError extends Error {
 }
 
 /**
+ * `frontmatter` with its OKF `type`: the one it has, or the folder (the
+ * path's first segment) when it has none. The frontmatter `type` is free
+ * (OKF §4.1, #444); the folder stays in `notes.type`.
+ */
+export function withType(frontmatter: Record<string, unknown>, folder: string): Frontmatter {
+  const type = frontmatter.type
+  return { ...frontmatter, type: type === undefined || type === null || type === '' ? folder : type } as Frontmatter
+}
+
+/**
  * The shared OKF validation (Editor spec hardening): every write path —
  * REST, CRDT persistence, MCP — validates through here. Slug-only path
  * segments make traversal impossible by construction. It runs before the
  * row or the file is written, so it is also where a note that its own file
- * could not reproduce is refused (see `assertRoundTrips`).
+ * could not reproduce is refused (see `assertRoundTrips`). `type` is the
+ * folder (the path's first segment); the frontmatter `type` may be any
+ * non-empty string (#444).
  */
 export function validateNote(
   type: string,
@@ -99,12 +111,8 @@ export function validateNote(
   if (nameSegments.length === 0 || nameSegments.some((seg) => !isSlug(seg))) {
     throw new OkfValidationError(`invalid name slug: ${name}`, 'invalid', SLUG_RULE)
   }
-  if (frontmatter.type !== type) {
-    throw new OkfValidationError(
-      `frontmatter type "${String(frontmatter.type)}" does not match path type "${type}"`,
-      'type_mismatch',
-      'frontmatter `type` equals the first path segment',
-    )
+  if (typeof frontmatter.type !== 'string' || frontmatter.type.trim() === '') {
+    throw new OkfValidationError('frontmatter type must be a non-empty string')
   }
   if (frontmatter.tags !== undefined) {
     if (
