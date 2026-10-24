@@ -58,6 +58,19 @@ describe('Rust (#464)', () => {
     ])
     expect(imports).toEqual(['1 std::collections::HashMap', '2 crate::index', '3 super::codec::Codec'])
   })
+
+  it("names an impl for a reference or a path by its type: `impl IntoIterator for &'a Store` gives `Store` methods", async () => {
+    const src = [
+      "impl<'a> IntoIterator for &'a Store {",
+      '    fn into_iter(self) -> Iter<\'a> { todo!() }',
+      '}',
+      'impl Default for crate::store::Store {',
+      '    fn default() -> Self { todo!() }',
+      '}',
+    ].join('\n')
+    const result = await extractStructure('rust', src, 'src/iter.rs')
+    expect(brief(result.symbols)).toEqual(['2-2 method Store.into_iter', '5-5 method Store.default'])
+  })
 })
 
 describe('Java (#464)', () => {
