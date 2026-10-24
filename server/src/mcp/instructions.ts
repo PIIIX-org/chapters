@@ -8,8 +8,8 @@ import type { ToolProfile } from './server.js'
  * text holds only the budget, cursor and manual rules. Only tools with
  * `budget_tokens` answer with `truncated` (`search`, `list_vaults` and
  * `list_repositories` answer bare arrays). Profiles that list the note
- * writes add how a whole body merges (the last read is recorded only for an
- * unpaged `read_note`, last-read.ts) and how a note write is retried (only
+ * writes add how a whole body merges (every `read_note`, paged or not,
+ * records its `rev` as the base, last-read.ts) and how a note write is retried (only
  * the note writes take `idempotency_key`; admin's other writes refuse it).
  */
 const READ_RULES =
@@ -17,7 +17,7 @@ const READ_RULES =
   'read_note and read_file page long bodies only this way. Manuals: elara://manual/conventions and one per tool family.'
 
 const WRITE_RULES =
-  ' A whole `body` merges from `base_rev`, else from your last unpaged read_note; after a paged read send its `rev` as `base_rev`. ' +
+  ' A whole `body` merges from `base_rev`, else from your last read_note. ' +
   '`ops` edit the live text. Retry a note write with the same `idempotency_key`.'
 
 export function instructionsFor(profile: ToolProfile): string {
