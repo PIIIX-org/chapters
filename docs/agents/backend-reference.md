@@ -86,7 +86,7 @@ reconnect.
 | Full-text search | native Postgres `tsvector`/GIN (generated columns) | no separate search engine (Elasticsearch etc.) for a single-instance app |
 | ORM / migrations | Drizzle ORM + `drizzle-kit generate`, hand-edited SQL for vector/FTS/HNSW extras Drizzle can't express | typed queries, SQL-level control when needed |
 | Embeddings | Transformers.js (`@huggingface/transformers`) running `Xenova/bge-small-en-v1.5` fully local via ONNX | notes/code never leave the instance; no external API dependency |
-| Code parsing | `web-tree-sitter` (WASM) + per-language grammar packages (TS, JS, Python, Go) | native `tree-sitter` bindings fail to compile against current Node's V8 headers (see §11); WASM sidesteps native compilation entirely |
+| Code parsing | `web-tree-sitter` (WASM) + per-language grammar packages (TS, JS, Python, Go, Rust, Java, C, C++, C#, Kotlin, Ruby, PHP) | native `tree-sitter` bindings fail to compile against current Node's V8 headers (see §11); WASM sidesteps native compilation entirely |
 | Graph analysis | `graphology` + `graphology-communities-louvain` | community detection (Louvain now, Leiden tracked as a future upgrade) |
 | AI access | `@modelcontextprotocol/sdk`, Streamable HTTP transport | official SDK, stateless-per-request transport (no server-side session state to leak across connections) |
 | Auth | `@node-rs/argon2` (passwords), `otpauth` (TOTP/MFA), Node `crypto` (session/reset tokens, SHA-256 hashed at rest) | |
@@ -2176,12 +2176,41 @@ the scrub left alone does not serve its token through the error text
 either (#577). A query-string token stays at rest in `gitUrl`: it is
 not userinfo, so nothing moves it.
 
-**Code extraction** (`extraction.ts`): `web-tree-sitter` (WASM), four
-supported languages — TypeScript, JavaScript, Python, Go. `language.ts`
-labels files by extension: `.ts`, `.tsx`, `.mts` and `.cts` are all
+**Code extraction** (`extraction.ts`, `extraction-languages.ts`):
+`web-tree-sitter` (WASM), twelve parsed languages, and heading outlines
+for two more (#464):
+
+| label (`language.ts`) | extensions | parsed with (npm package, pinned in the lockfile) | `.wasm` |
+| :--- | :--- | :--- | ---: |
+| `typescript` | `.ts` `.tsx` `.mts` `.cts` | `tree-sitter-typescript` 0.23.2 (`.tsx`: its TSX grammar) | 1.41 MB (TSX 1.45 MB) |
+| `javascript` | `.js` `.jsx` `.mjs` `.cjs` | `tree-sitter-javascript` 0.25.0 | 0.41 MB |
+| `python` | `.py` | `tree-sitter-python` 0.25.0 | 0.46 MB |
+| `go` | `.go` | `tree-sitter-go` 0.25.0 | 0.22 MB |
+| `rust` | `.rs` | `tree-sitter-rust` 0.24.0 | 1.10 MB |
+| `java` | `.java` | `tree-sitter-java` 0.23.5 | 0.41 MB |
+| `c` | `.c` `.h` | `tree-sitter-c` 0.24.1 | 0.63 MB |
+| `cpp` | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` | `tree-sitter-cpp` 0.23.4 | 3.43 MB |
+| `csharp` | `.cs` | `tree-sitter-c-sharp` 0.23.5 | 5.35 MB |
+| `kotlin` | `.kt` `.kts` | `@tree-sitter-grammars/tree-sitter-kotlin` 1.1.0 | 3.44 MB |
+| `ruby` | `.rb` | `tree-sitter-ruby` 0.23.1 | 2.11 MB |
+| `php` | `.php` | `tree-sitter-php` 0.24.2 (`tree-sitter-php.wasm`: PHP in HTML) | 1.06 MB |
+| `markdown` | `.md` `.markdown` | heading outline (`outline.ts`), no grammar | — |
+| `html` | `.html` `.htm` | heading outline (`outline.ts`), no grammar | — |
+| `swift` | `.swift` | labelled only: the npm `tree-sitter-swift` ships no `.wasm` (#988) | — |
+
+All grammar packages are MIT and load in `web-tree-sitter` 0.27 (ABI 14
+and 15). Their native build never runs (`allowBuilds: false` in
+`pnpm-workspace.yaml`), two dependencies only a native or grammar build
+reads are overridden away (`npm-check-updates` under Kotlin, a second
+`tree-sitter-c` under C++), and the image deletes their C sources and
+native prebuilds in its install layer (Dockerfile), so a grammar costs the
+image about its `.wasm`. `language.ts` labels files by extension: `.ts`, `.tsx`, `.mts` and `.cts` are all
 `typescript` (#449, #451; the label is what `read_file`, `search` and the
 graph's language groups show, so one `typescript` filter finds them all),
-`.js`, `.jsx`, `.mjs` and `.cjs` are `javascript`. The grammar comes from
+`.js`, `.jsx`, `.mjs` and `.cjs` are `javascript`. A sync labels the files
+it writes; extraction writes the label of the running `language.ts` on the
+row too, so a file synced before its language was labelled (`.kt`, `.md`)
+gets it at the `EXTRACTOR_VERSION` 5 re-extraction. The grammar comes from
 the extension, not the label: `.tsx` parses with TSX
 (`tree-sitter-tsx.wasm`, #449), since JSX is not TypeScript syntax and the
 TypeScript grammar reads `<div>` as a type assertion; the other TypeScript
@@ -2196,7 +2225,13 @@ imports (#466): `import ... from`, `export ... from` (`export *`,
 `export { x }`, `export type`), `import('x')` and `require('x')` whose
 specifier is a literal (a string or a template without `${}`; `require`
 with exactly one argument), and TypeScript `import x = require('x')`; a
-computed specifier is not an import row.
+computed specifier is not an import row. The #464 languages' imports:
+Rust `use` (the module path: `crate::store` for `use
+crate::store::{A, B}`, the path before `as` or `::*`), Java and Kotlin
+`import` (`a.b.C`, `a.b.*` for a wildcard), C/C++ `#include "x.h"` (never
+`<x.h>`), Ruby `require_relative 'x'`, PHP `require`/`require_once`/
+`include`/`include_once` of a string literal (not `__DIR__ . '/x.php'`); C#
+`using` names namespaces, not files, so C# has no import rows.
 
 **Symbol contract** (`SymbolKind`/`SYMBOL_KINDS` in `extraction.ts`; more
 languages, #464, and the symbol/edge table, #469, use the same kinds and
@@ -2216,6 +2251,33 @@ anonymous `export default` is named `default`. Kinds:
 | `namespace` | module-level `namespace N {}`, `module N {}` and ambient `declare module "x" {}` (named `x`) | — | — |
 | `method` | in a module-level class body: methods, getters, setters, static and abstract methods, `#private` methods, fields bound to an arrow function or function expression; `parent` is the class | a `def` in a module-level class body, decorators included; `parent` is the class | a receiver method; `parent` is the receiver's type (`*Repo[T]` → `Repo`) |
 | `variable` | an exported module-level `const`/`let`/`var` bound to anything else | — | — |
+
+The #464 languages (`extraction-languages.ts`; each grammar's
+`ScopeRules` say which nodes are bodies, classes and namespaces):
+
+| kind | Rust | Java | C / C++ | C# | Kotlin | Ruby | PHP |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `function` | `fn` | — | function definitions, and prototypes the file does not define | — | `fun` at module level | `def` at the top | `function` |
+| `class` | `struct`, `union` | `class`, `record` | `struct`/`union` (C++ also `class`) with a body | `class`, `struct`, `record` | `class`, `object` | `class` | `class`, `trait` |
+| `interface` | `trait` | `interface`, `@interface` | — | `interface` | `interface` | — | `interface` |
+| `type` | `type` | — | `typedef` (C++ also `using X = ...`) | `delegate` | `typealias` | — | — |
+| `enum` | `enum` | `enum` | `enum` with a body | `enum` | `enum class` | — | `enum` |
+| `namespace` | `mod m { ... }` (members: `parent` is `m`) | — | C++ `namespace` (members: `parent` is it; an anonymous one is transparent) | `namespace` (block or file-scoped; members have no `parent`) | — | `module` (members: `parent` is it) | `namespace` (members have no `parent`) |
+| `method` | functions in an `impl` (`parent`: its type, `Store<T>` → `Store`) or a `trait` | methods, constructors | C++: in a class body (definitions and declarations), and out-of-line `T Store<T>::load()` (`parent` `Store`) | methods, constructors | `fun` in a class, object or companion object | `def`, `def self.x` and `class << self` methods in a class or module | methods |
+| `variable` | `const`, `static` (in a module or `mod`) | `public` or `static` fields, interface constants (`parent`: the class) | — | `public`, `static` or `const` fields and properties | properties: module-level when not `private`, in a class when not `private`/`protected` | — | — |
+
+Their `exported`: `pub` (any `pub(...)`) in Rust; `public` in Java and
+C# (a namespace always); not `static` in C/C++; not `private` in Kotlin;
+always in Ruby and PHP; never on a method or a member field. A
+declaration counts at module level, in a namespace (at any depth), or
+directly in a class that is itself at one of those places; wrappers such
+as C++ `template <...>`, C preprocessor conditionals (`#ifndef` include
+guards), `extern "C" {}` and Kotlin `companion object` are transparent.
+Nested types and their members, local functions and lambdas are not
+symbols. Attributes, annotations and doc comments above a declaration are
+not in its lines unless the grammar makes them part of the node (Java and
+C# modifiers, PHP and Kotlin modifiers on the same node). A `.h` header is
+parsed as C.
 
 Top level only: a declaration counts when only `export`, `declare`,
 decorators, its `const`/`let`/`var` statement or a statement wrapper stand
@@ -2263,18 +2325,34 @@ The fence-aware heading parser (`headings()`) lives there too, used by
 headings identically. For a note, `owner_id` is `notes.id` (it survives
 renames).
 *Code blocks* (`repositories/code-blocks.ts`): a `symbol` block per
-symbol; a `file` block (lines 1..total, text `<path>\n<content>`) when
+symbol; a `section` block per heading of a Markdown or HTML file (#464,
+below); a `file` block (lines 1..total, text `<path>\n<content>`) when
 the file is small — at most 300 lines (`SMALL_FILE_MAX_LINES`) and 16,000
-characters (the embedder's cut) — or has no symbols (an unsupported
-language, a minified file, no declarations); otherwise a `skeleton` block
-for the file (`<path>` then every symbol's first line) and one per class
+characters (the embedder's cut) — or has no symbols or sections (an
+unsupported language, a minified file, no declarations); otherwise a
+`skeleton` block for the file (`<path>` then every symbol's or heading's
+first line) and one per class
 with methods (`<kind> <Class> in <path>`, the class's first line, then its
 methods' first lines). Every file thus has one file-level block, always
 embedded. A symbol's embedded text is `<kind> <inner_path> in
 <path>\n<snippet>`, the snippet its first 30 lines cut to 1,500
 characters (`SNIPPET_LINES`, `SNIPPET_CHARS`; search computes hit
 snippets from `content` with the same numbers), with no line number, so a
-block whose lines only moved keeps its text. *Note blocks*
+block whose lines only moved keeps its text. *Repository outlines*
+(`repositories/outline.ts`, #464): a Markdown file's ATX headings
+(`headings()`, so none inside a fence; a leading `---` front matter block
+is skipped) and an HTML file's `h1`–`h6` (a small scanner: comments,
+`<script>` and `<style>` are skipped, the title is the element's text with
+tags dropped, entities decoded and white space collapsed). Each heading is
+a `section` block spanning its line through the line before the next
+heading of the same or a higher level, `inner_path` the heading titles
+joined with ` > ` (as a note's); its embedded text is `section <inner_path>
+in <path>\n<snippet>`, the snippet cut from its own text (up to its first
+subheading) as a symbol's is; it takes tier 1 of the embed budget. A
+section is **not a symbol** (no `symbol_kind`): `find_symbols`,
+`read_file`'s outline and the staleness check never see it; it serves the
+`search` code vector leg (a long README's matching section ranks its file).
+*Note blocks*
 (`notes/note-blocks.ts`, #452b): a `preamble` for the body before its first
 heading when it is not blank (a body with no heading that is empty or blank
 is one preamble whose embedded text is the path, so every note keeps a
@@ -2316,7 +2394,8 @@ to the note), one hit per note with the same `{…, snippet: left(body,
 vector leg — the nearest 200 blocks of the scoped repositories
 (`hnsw.ef_search` 200), then each file's best block distance, one hit per
 file with the same `{…, snippet: left(content, 200)}` as before; `search`
-symbol legs and `find_symbols` — `kind = 'symbol'` blocks (name, then
+symbol legs and `find_symbols` — `kind = 'symbol'` blocks (never a
+repository `section`; name, then
 `Class.name`, then snippet text in a file whose content matches; vector:
 nearest symbol blocks); semantic edges (`semantic-edges.ts`) — a note's or file's
 similarity to another node is its best block's, the query vectors a note's
@@ -2346,6 +2425,23 @@ specifiers name the compiled output, so `.js` tries `.ts` then `.tsx`,
 `.jsx` tries `.tsx`, `.mjs` tries `.mts`, `.cjs` tries `.cts`, before the
 literal path, then the path plus `.ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs/.py/.go`
 (TypeScript sources first, #451), then `<path>/index.<ext>`.
+
+The #464 languages resolve their own way, by the importing file's
+language, and never fall through to the rules above (a standard library,
+an external crate, gem or package, or a system header stays unresolved):
+Rust `use` — `crate::` from the crate's `src` directory (the importing
+path up to its last `src`), `self::` from the current module,
+`super::` one module up per `super`, any other path relative to the
+current module (2018 uniform paths); a module's submodules are in
+`a/b/` for `a/b.rs`, beside it for `mod.rs`, `lib.rs` and `main.rs`; the
+longest module path that is a known `x.rs` or `x/mod.rs` wins, so `use
+crate::store::Store` resolves to `src/store.rs` or `src/store/mod.rs`.
+Java and Kotlin `import a.b.C` (or a static member `a.b.C.f`) — the `.java`,
+`.kt` or `.kts` file whose path, without its extension, ends in `a/b/C`
+(then `a/b`, never one segment; a per-repository suffix index built once
+per file list); a wildcard never resolves. C/C++ `#include "x.h"` and PHP
+`require 'x.php'` — relative to the including file only; Ruby
+`require_relative 'x'` — the same, `.rb` optional.
 
 The **resolution context** (`buildResolutionContext`, #466) comes from the
 repository's indexed manifests (`isResolutionManifest`: package.json,
@@ -2480,13 +2576,17 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
 #452, migrations 0035 and 0036). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 4; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+an integer, now 5; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
 top-level rule and the embed-budget order, #450; 4 re-exports, literal
 `import()`/`require()` and `import x = require()` as imports, #466, which
-embeds nothing again): bump it with any change to the grammars and queries,
-symbol kinds, the minified-file rule or the embed-budget order (the
-snippet cut and block texts are `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
+embeds nothing again; 5 Rust, Java, C, C++, C#, Kotlin, Ruby and PHP
+symbols and imports, Markdown/HTML heading sections and the relabelling of
+files whose label changed, #464, which embeds only the new symbol and
+section texts): bump it with any change to the grammars and queries,
+symbol kinds, the outlines (`outline.ts`), the labels, the minified-file
+rule or the embed-budget order (the snippet cut and block texts are
+`CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
 (`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus
 `+text<EMBED_TEXT_VERSION>`, the version of the 16,000-character cut; bump
 `EMBED_TEXT_VERSION` with any change to it (that re-embeds every block).
