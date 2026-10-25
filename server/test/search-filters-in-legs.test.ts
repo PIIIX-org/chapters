@@ -21,7 +21,7 @@ import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
-import { searchNotes } from '../src/search/search.js'
+import { findSymbols, searchNotes } from '../src/search/search.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 afterEach(() => {
@@ -184,5 +184,30 @@ describe('code and symbol filters apply inside each leg (#454)', () => {
     expect((await hits({})).filter((hit) => hit.startsWith('symbol:z/'))).toEqual([])
     await inBothPlans(() => hits({ kinds: ['class'] }), classes)
     await inBothPlans(() => hits({ types: ['class'] }), classes)
+  }, 120_000)
+})
+
+describe('repository scope applies inside the symbol vector leg (#454)', () => {
+  it('a small repository crowded out by a big one keeps its symbols', async () => {
+    // 300 symbols of another repository (more than the leg's ef_search of 200) are all nearer the query than the
+    // small repository's 5, which share one word with it, so only the vector leg can find them.
+    const owner = await createActiveUser()
+    const repo = async (name: string, files: Array<{ path: string; content: string }>) => {
+      const [row] = await db.insert(repositories).values({ name, ownerId: owner.id, ingestionMethod: 'agent_push' }).returning()
+      await syncRepositoryFiles(row!.id, files, files.map((f) => f.path))
+      await flushExtraction()
+      return row!.id
+    }
+    await repo('crowd', Array.from({ length: 300 }, (_, i) => ({ path: `big/f${i}.ts`, content: 'export function starve() { return query }\n' })))
+    const small = await repo('crowded-out', TARGETS.map((i) => ({ path: `s/a${i}.ts`, content: 'export function starve() {}\n' })))
+    const expected = TARGETS.map((i) => `s/a${i}.ts`)
+    await inBothPlans(async () => (await findSymbols([small], QUERY, { limit: TARGETS.length })).results.map((r) => r.path).sort(), expected)
+    await inBothPlans(
+      async () =>
+        (await searchNotes({ vaultIds: [], repositoryIds: [small] }, QUERY, 20, { kinds: ['function'] } as Filters, { includeSymbols: true })).results
+          .map((r) => r.path)
+          .sort(),
+      expected,
+    )
   }, 120_000)
 })
