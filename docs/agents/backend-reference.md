@@ -2822,7 +2822,7 @@ embedded; it stores no `snippet`. A section is **not a symbol** (no
 `symbol_kind`): `find_symbols`, the `search` symbol legs, `read_file`'s
 outline and the staleness check never see it. A Markdown file keeps its
 outline even with a line over the minified limit (that rule is about code);
-an HTML file with one does not. Migration 0044 clears the vectors earlier
+an HTML file with one does not. Migration 0048 clears the vectors earlier
 heads of #464's PR gave code sections. *Note blocks*
 (`notes/note-blocks.ts`, #452b): a `preamble` for the body before its first
 heading when it is not blank (a body with no heading that is empty or blank
