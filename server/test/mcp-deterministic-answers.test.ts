@@ -26,9 +26,8 @@
 //
 // A question `dev` answers differently in the other database names its issue
 // in `differs`: its cross-database case is `it.fails`, so the fix turns it red
-// and the fix PR removes the marker (`fixPending`: the fix is already in an
-// open PR, and the case is skipped instead). The causes the graph cases mix
-// are also pinned one per issue at the end, as `it.fails`.
+// and the fix PR removes the marker. The causes the graph cases mix are also
+// pinned one per issue at the end, as `it.fails`.
 import type * as Crypto from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
@@ -287,8 +286,6 @@ interface Question {
   args: (w: World) => Args
   /** Why `dev` answers it differently in the other database: its cross-database case is `it.fails` until that issue is fixed. */
   differs?: string
-  /** The fix of `differs` is in an open PR: the case is skipped instead, so that PR's merge doesn't turn this file red. */
-  fixPending?: boolean
 }
 
 /** Graph node order, undirected edge ends and community numbers follow the per-database ids. */
@@ -306,10 +303,8 @@ const QUESTIONS: Question[] = [
   {
     name: 'search everywhere',
     tool: 'search',
+    // Retrier and Retrier.retry (src/retry.ts) tie in the symbol keyword leg (#623: then by path, start line).
     args: () => ({ everywhere: true, query: 'upload' }),
-    // Retrier and Retrier.retry (src/retry.ts) tie in the symbol keyword leg, which then orders by id.
-    differs: '#623 (fixed by #1000)',
-    fixPending: true,
   },
   { name: 'find_symbols one name in three files', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse' }) },
   { name: 'find_symbols by meaning and kind', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'upload a chunk', kind: 'function' }) },
@@ -354,7 +349,7 @@ describe('read tools answer deterministically (#473)', () => {
 
   describe('another database, rows in reverse physical and id order: the same bytes once ids and times are masked', () => {
     for (const q of QUESTIONS) {
-      const test = q.fixPending ? it.skip : q.differs ? it.fails : it
+      const test = q.differs ? it.fails : it
       test(`${q.name}${q.differs ? ` (differs on dev: ${q.differs})` : ''}`, async () => {
         const other = mask(B, await ask(B, q.tool, q.args(B)))
         expect(other).toBe(mask(A, await ask(A, q.tool, q.args(A))))

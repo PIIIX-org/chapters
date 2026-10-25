@@ -3092,8 +3092,7 @@ pnpm -C server test # vitest run — needs Postgres reachable at DATABASE_URL
   answers that still differ across databases name their issue and are
   `it.fails`, which goes red once the issue is fixed: graph order from ids
   (#1006), semantic edges from embed order (#1007) and imports pushed before
-  their target (#1008). The `search` symbol tie (#623) is skipped instead,
-  because its fix is open in #1000.
+  their target (#1008).
 - Live/e2e verification (booting a real server against a real database
   and exercising it over real HTTP) is a standing project discipline,
   not optional — several real bugs in this codebase (an extraction
