@@ -8,6 +8,7 @@ import { buildApp } from '../src/app.js'
 import { sql as pg } from '../src/db/client.js'
 import { cacheCaller, cacheKey, readEpochs, type CacheCaller, type CacheResources, type Epochs } from '../src/cache/key.js'
 import type * as ExtractionQueue from '../src/repositories/extraction-queue.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import type { McpAuth } from '../src/vaults/mcp-connection-routes.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -113,9 +114,11 @@ describe('readEpochs + cacheKey on a real instance: writes in scope move the key
     const scope = { vaultIds, repositoryIds: [] }
     return cacheKey('search', { query: 'epochs' }, scope, await readEpochs(scope), who)
   }
+  /** A note write, then its embedding: the epoch moves before the next key is read, not between two of them. */
   async function write(vaultId: string, name: string) {
     const res = await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/notes`, headers: { cookie }, body: { type: 'docs', name, body: `${name}\n` } })
     expect(res.statusCode).toBe(200)
+    await flushEmbeddings()
   }
 
   it('moves with a write in its scope only; a read leaves it', async () => {
@@ -123,7 +126,9 @@ describe('readEpochs + cacheKey on a real instance: writes in scope move the key
     const k0 = await keyOver([a])
     const both0 = await keyOver([a, b])
     expect(k0).not.toBeNull()
-    expect((await app.inject({ method: 'GET', url: `/api/vaults/${a}/notes`, headers: { cookie } })).statusCode).toBe(200)
+    for (const url of [`/api/vaults/${a}/notes/docs/first`, `/api/vaults/${a}/tree`]) {
+      expect((await app.inject({ method: 'GET', url, headers: { cookie } })).statusCode).toBe(200)
+    }
     expect(await keyOver([a])).toBe(k0)
     await write(b, 'elsewhere')
     expect(await keyOver([a])).toBe(k0)

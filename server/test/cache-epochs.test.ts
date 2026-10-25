@@ -46,16 +46,20 @@ async function call(name: string, args: Record<string, unknown>): Promise<string
 }
 const json = async (name: string, args: Record<string, unknown>) => JSON.parse(await call(name, args)) as Record<string, unknown>
 
-/** Every scope's epoch, read without naming the columns: on a build without them each reads 0. */
+/** Every scope's epoch, read so that a build without them (no `index_epochs`, no `permission_epoch`) reads 0 for each. */
 async function epochs(): Promise<Record<string, number>> {
-  const rows = await pg<Array<{ id: string; epoch: string }>>`
-    SELECT v.id::text, coalesce(to_jsonb(v) ->> 'index_epoch', '0') AS epoch FROM vaults v WHERE v.id = ANY(${[scopes.A, scopes.B]}::uuid[])
-    UNION ALL
-    SELECT r.id::text, coalesce(to_jsonb(r) ->> 'index_epoch', '0') FROM repositories r WHERE r.id = ANY(${[scopes.P, scopes.L]}::uuid[])
-    UNION ALL
-    SELECT 'permission', coalesce((SELECT to_jsonb(s) ->> 'permission_epoch' FROM instance_state s WHERE s.id = 'singleton'), '0')`
-  const label = new Map(Object.entries(scopes).map(([k, id]) => [id, k === 'A' || k === 'B' ? `vault:${k}` : `repo:${k}`]))
-  return Object.fromEntries(rows.map((r) => [label.get(r.id) ?? r.id, Number(r.epoch)]))
+  const [{ has } = { has: false }] = await pg<Array<{ has: boolean }>>`SELECT to_regclass('public.index_epochs') IS NOT NULL AS has`
+  const index = has
+    ? await pg<Array<{ id: string; epoch: string }>>`
+        SELECT scope_id::text AS id, epoch::text FROM index_epochs WHERE scope_id = ANY(${Object.values(scopes)}::uuid[])`
+    : []
+  const [permission] = await pg<Array<{ epoch: string | null }>>`
+    SELECT (SELECT to_jsonb(s) ->> 'permission_epoch' FROM instance_state s WHERE s.id = 'singleton') AS epoch`
+  const at = new Map(index.map((r) => [r.id, Number(r.epoch)]))
+  return {
+    ...Object.fromEntries(Object.entries(scopes).map(([k, id]) => [k === 'A' || k === 'B' ? `vault:${k}` : `repo:${k}`, at.get(id) ?? 0])),
+    permission: Number(permission?.epoch ?? 0),
+  }
 }
 
 /** Waits until no embedding, extraction or projection is queued or running. */
@@ -146,6 +150,15 @@ describe('index_epoch: a change an answer could show bumps its own vault or repo
     expect(await moved(() => call('purge_note', { vaultId: scopes.A, noteId: id }))).toEqual(['vault:A'])
     // A write to the other vault leaves this one's epoch alone.
     expect(await moved(() => call('create_note', { vaultId: scopes.B, path: 'docs/other', body: 'Elsewhere.\n' }))).toEqual(['vault:B'])
+  })
+
+  it('a revision purge bumps its vault (note_history answers change)', async () => {
+    await call('create_note', { vaultId: scopes.A, path: 'docs/history', body: 'First version.\n' })
+    await call('edit_note', { vaultId: scopes.A, path: 'docs/history', body: 'Second version.\n' })
+    const history = (await json('note_history', { vaultId: scopes.A, path: 'docs/history' })) as { revisions: Array<{ id: string }> }
+    // Newest first: the last one is the first version, which the note no longer holds.
+    const oldest = history.revisions.at(-1)!.id
+    expect(await moved(() => call('purge_revision', { vaultId: scopes.A, revisionId: oldest }))).toEqual(['vault:A'])
   })
 
   it('a collab fold bumps the vault; logged typing that is not folded yet bumps nothing', async () => {
