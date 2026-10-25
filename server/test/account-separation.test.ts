@@ -8,8 +8,9 @@
 //             by B with one of A's ids, answers exactly like the same call
 //             with an id that does not exist: no existence oracle.
 // A's notes and B's note share their wording, and a semantic edge joins them
-// (as the global neighbour lookup stores today, #461), so the related-note
-// surfaces have something to leak.
+// (inserted by hand: the neighbour lookup no longer stores one across vaults,
+// #461, but the reads must not depend on that), so the related-note surfaces
+// have something to leak.
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
@@ -200,7 +201,7 @@ beforeAll(async () => {
   const RB = await agentPushRepo(cookieB, `sep-bravo-repo-${next()}`, FILE.B, `export function sepBravoSymbol() { return '${MARK_B}' }`)
   await flushExtraction()
   await flushEmbeddings()
-  // The cross-account related-note edge the global neighbour lookup can store (#461).
+  // A cross-account related-note edge, as the neighbour lookup stored before #461 (migration 0038 deletes those).
   await db
     .insert(semanticEdges)
     .values([
@@ -359,7 +360,7 @@ describe("account separation: B sees nothing of A's (#552)", () => {
     expect((await call(acctA, 'graph', { vaultId: fx.VA, aggregate: 'none' })).text).toContain(fx.noteA)
     expect((await call(acctA, 'list_notifications', {})).text).toContain(MARK_A)
     expect((await call(acctA, 'list_graph_perspectives', {})).text).toContain(fx.objects.id[1]!)
-    // The cross-account edge is stored: only the read side keeps it from B.
+    // The hand-inserted cross-account edge is stored: only the read side keeps it from B.
     const edges = await db.select().from(semanticEdges).where(eq(semanticEdges.sourceId, fx.noteB))
     expect(edges.map((e) => e.targetId)).toContain(fx.noteA)
   })
