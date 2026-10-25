@@ -1,8 +1,9 @@
 import { and, eq, isNull, sql, type SQL } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
-import { blocks, repositoryFileImports, repositoryFiles } from '../db/schema.js'
+import { repositoryFileImports, repositoryFiles } from '../db/schema.js'
 import { failpoint } from '../failpoints.js'
+import { chunks, replaceBlockSet, vectorsByEmbedKey } from '../search/block-rows.js'
 import { CHUNK_VERSION, embedKey } from '../search/embed-key.js'
 import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
@@ -380,18 +381,6 @@ const extraction = jobDrainer('extraction', drainOnce)
 export const extractionWork = { processFile }
 
 /**
- * Rows per INSERT: one statement binds at most 65,534 parameters
- * (postgres.js), and a block row has 15, so a generated file with thousands
- * of constants would fail whole (#450 review). Every chunk is in the same
- * transaction, so the file still commits all or nothing.
- */
-const INSERT_CHUNK_ROWS = 1_000
-
-function* chunks<T>(rows: readonly T[]): Generator<T[]> {
-  for (let i = 0; i < rows.length; i += INSERT_CHUNK_ROWS) yield rows.slice(i, i + INSERT_CHUNK_ROWS)
-}
-
-/**
  * Derives one file (#453, #413, #460): everything is computed first, the
  * slow embed included, outside any transaction; then one short transaction
  * locks the row, checks its content is still the one extracted, and replaces
@@ -456,13 +445,7 @@ async function processFile(fileId: string): Promise<void> {
     ...fileBlocks.flatMap((b, i) => (b.outlineOf !== undefined && budgeted.has(b.outlineOf) ? [i] : [])),
   ]
 
-  const kept = new Map<string, number[]>()
-  for (const b of await db
-    .select({ embedKey: blocks.embedKey, embedding: blocks.embedding })
-    .from(blocks)
-    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId)))) {
-    if (b.embedKey && b.embedding) kept.set(b.embedKey, b.embedding)
-  }
+  const kept = await vectorsByEmbedKey('code', fileId)
   const keys = new Map(embedOrder.map((i) => [i, embedKey(fileBlocks[i]!.embedText)]))
   const vectors = new Map<number, number[]>()
   const toEmbed: number[] = []
@@ -505,30 +488,7 @@ async function processFile(fileId: string): Promise<void> {
     // One row per specifier: a file importing one path twice keeps the first line (chunks insert in order).
     for (const chunk of chunks(importRows)) await tx.insert(repositoryFileImports).values(chunk).onConflictDoNothing()
     // The block set is replaced whole: blocks this content no longer has go, the others are written over in place.
-    await tx.execute(sql`DELETE FROM blocks WHERE owner_type = 'code' AND owner_id = ${fileId}
-      AND block_id <> ALL(${`{${fileBlocks.map((b) => b.blockId).join(',')}}`}::text[])`)
-    for (const chunk of chunks(blockRows)) {
-      await tx
-        .insert(blocks)
-        .values(chunk)
-        .onConflictDoUpdate({
-          target: [blocks.ownerType, blocks.ownerId, blocks.blockId],
-          set: {
-            containerId: sql`excluded.container_id`,
-            kind: sql`excluded.kind`,
-            innerPath: sql`excluded.inner_path`,
-            symbolKind: sql`excluded.symbol_kind`,
-            symbolParent: sql`excluded.symbol_parent`,
-            snippet: sql`excluded.snippet`,
-            startLine: sql`excluded.start_line`,
-            endLine: sql`excluded.end_line`,
-            contentHash: sql`excluded.content_hash`,
-            ownerVersion: sql`excluded.owner_version`,
-            embedKey: sql`excluded.embed_key`,
-            embedding: sql`excluded.embedding`,
-          },
-        })
-    }
+    await replaceBlockSet(tx, 'code', fileId, blockRows)
     await tx
       .update(repositoryFiles)
       .set({ language, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId, chunkVersion })
@@ -538,5 +498,5 @@ async function processFile(fileId: string): Promise<void> {
   })
   // The file's semantic neighbours are those of its file-level block (the first, always embedded);
   // a file-level vector kept as it was has the edges it had.
-  if (written && toEmbed.includes(0)) await recomputeSemanticEdges('code', fileId, vectors.get(0)!)
+  if (written && toEmbed.includes(0)) await recomputeSemanticEdges('code', fileId, [vectors.get(0)!])
 }

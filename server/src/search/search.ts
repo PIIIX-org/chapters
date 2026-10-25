@@ -210,16 +210,25 @@ async function noteRows(
           FROM top_notes
           ORDER BY rank DESC, path COLLATE "C", id
         `)
-      : await db.execute(
+      : await blockLeg(
           gated(sql`
-            SELECT id, vault_id AS container_id, path, type, frontmatter, left(body, 200) AS snippet, ${UPDATED_AT(sql`updated_at`)},
-                   embedding <=> ${vec}::vector AS distance
-            FROM notes
-            WHERE vault_id = ANY(${uuidArray(vaultIds)})
-              AND deleted_at IS NULL
-              AND embedding IS NOT NULL
+            -- A note's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per note, as before
+            -- blocks; #967's relevance gate applies to that best distance.
+            WITH nearest AS (
+              SELECT owner_id, embedding <=> ${vec}::vector AS distance
+              FROM blocks
+              WHERE owner_type = 'note' AND container_id = ANY(${uuidArray(vaultIds)}) AND embedding IS NOT NULL
+              ORDER BY embedding <=> ${vec}::vector
+              LIMIT ${BLOCK_CANDIDATES}
+            ), best AS (
+              SELECT owner_id, min(distance) AS distance FROM nearest GROUP BY owner_id
+            )
+            SELECT notes.id, notes.vault_id AS container_id, notes.path, notes.type, notes.frontmatter, left(notes.body, 200) AS snippet,
+                   ${UPDATED_AT(sql`notes.updated_at`)}, best.distance
+            FROM best JOIN notes ON notes.id = best.owner_id
+            WHERE notes.deleted_at IS NULL
               ${filterSql}
-            ORDER BY embedding <=> ${vec}::vector`),
+            ORDER BY best.distance, notes.id`),
         )
   return rows as unknown as Row[]
 }
@@ -254,8 +263,9 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
             SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet,
                    ${UPDATED_AT(sql`f.updated_at`)}, b.embedding <=> ${vec}::vector AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
-            WHERE b.owner_type = 'code' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL
-              AND b.kind = 'file'
+            -- kind = 'file' alone (only code has file blocks): naming owner_type too would let the planner take the
+            -- owner_type = 'code' index (migration 0036), whose post-filter is what the files-only index avoids.
+            WHERE b.kind = 'file' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL
             ORDER BY b.embedding <=> ${vec}::vector`),
         )
   return rows as unknown as Row[]
@@ -293,7 +303,8 @@ async function symbolRows(
           gated(sql`
             SELECT ${SYMBOL_COLUMNS}, b.embedding <=> ${vec}::vector AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
-            WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
+            -- kind = 'symbol' alone, so the planner takes the symbols-only index (see codeRows).
+            WHERE b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
               AND b.embedding IS NOT NULL
             ORDER BY b.embedding <=> ${vec}::vector`),
         )

@@ -173,3 +173,13 @@ export async function fileEmbedding(fileId: string): Promise<number[] | null> {
     .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId), eq(blocks.kind, 'file')))
   return row?.embedding ?? null
 }
+
+/** The vectors of a note's blocks in body order; empty when it has none (#452: `notes.embedding` moved to `blocks`). */
+export async function noteVectors(noteId: string): Promise<number[][]> {
+  const rows = await db
+    .select({ embedding: blocks.embedding })
+    .from(blocks)
+    .where(and(eq(blocks.ownerType, 'note'), eq(blocks.ownerId, noteId)))
+    .orderBy(blocks.startLine, blocks.innerPath)
+  return rows.flatMap((r) => (r.embedding ? [r.embedding] : []))
+}

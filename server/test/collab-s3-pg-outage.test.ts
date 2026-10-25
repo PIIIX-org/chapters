@@ -7,6 +7,7 @@ import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { getLiveNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 
 // ADR-003 S3 (#487, review round 2): with Postgres unreachable, a typed
@@ -60,6 +61,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await outage(false)
+  // The fold after the outage queued an embed job: finish it before the pool closes.
+  await flushEmbeddings()
   await admin.end()
   providers.forEach((p) => p.destroy())
   await collab.destroy()
@@ -93,6 +96,10 @@ describe('Postgres unreachable across a reconnect (S3)', () => {
     const text = document.getText('body')
     await waitFor(() => provider.isSynced && text.length > 0)
 
+    // The create queued an embed job (since #452 several statements and two transactions): let it finish first,
+    // so the outage kills no pool connection in the middle of a background query (postgres.js then throws
+    // "Cannot read properties of null (reading 'write')" outside any test, CI run 40180939065).
+    await flushEmbeddings()
     await outage(true)
     try {
       text.insert(text.length, '@PG-OUTAGE@')

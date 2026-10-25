@@ -318,6 +318,31 @@ docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc
   ```
 
   Without the optional line, the older code serves the carried-back symbols with no snippet (they match by name only) until each file changes. While rolled back, deleting a repository file still deletes its blocks (the trigger stays). **Rolling forward again** needs no SQL: the newer code re-extracts every file the older code extracted meanwhile (its blocks no longer match the file's content) and ignores the recreated table and column; drop them afterwards to free the space (`DROP TABLE repository_file_symbols; ALTER TABLE repository_files DROP COLUMN embedding`). The 0034 entry above still applies to a release without 0034. Backups are unaffected: neither symbols nor blocks are in an instance backup. A one-time cost to plan for: the upgrade re-extracts every repository file, and the block count is higher than the old symbol count (one or two blocks per file more).
+- **Migration 0036 (note blocks, #452b) is not additive.** It adds a trigger that deletes a note's blocks with the note and `notes.chunk_version` (integer, default 0); it carries every note vector over into `blocks` (one `legacy:note` block per note), then **drops `notes.embedding`**. Search keeps answering from the carried-over vectors while the first start re-embeds every note once in the background, as its heading blocks (a preamble and one block per section); the same start re-extracts every repository file once without computing any of its vectors again. **Plan for the re-embed time:** a note becomes about 12 blocks (measured on a 206-note vault: 2,461 blocks) and the built-in model takes about 0.2 s a block on CPU, so roughly 6–7 hours per 10,000 notes, one embedder thread. During it, search by meaning answers from the carried-over vectors, and notes you write are embedded first (their jobs go ahead of the catch-up). Older code reads the dropped column, so a **code-only rollback over 0036 needs this SQL first**, with the newer app stopped:
+
+  ```bash
+  docker compose stop app
+  docker compose exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"' sh "
+    BEGIN;
+    ALTER TABLE notes ADD COLUMN embedding vector(384);
+    -- One vector per note: its carried-over block if it still has one, else its first block in body order.
+    UPDATE notes n SET embedding = b.embedding FROM (
+      SELECT DISTINCT ON (owner_id) owner_id, embedding FROM blocks
+      WHERE owner_type = 'note' AND embedding IS NOT NULL
+      ORDER BY owner_id, (block_id = 'legacy:note') DESC, start_line, inner_path) b
+    WHERE b.owner_id = n.id;
+    CREATE INDEX notes_embedding_idx ON notes USING hnsw (embedding vector_cosine_ops);
+    CREATE INDEX notes_missing_embeddings_idx ON notes (id) WHERE deleted_at IS NULL AND embedding IS NULL;
+    -- Back to 0035's vector indexes: its index over every block, and not 0036's per-owner ones, which older
+    -- code's file and symbol legs (they also name owner_type = 'code') could pick over the files-only and symbols-only indexes.
+    CREATE INDEX blocks_embedding_idx ON blocks USING hnsw (embedding vector_cosine_ops);
+    DROP INDEX blocks_note_embedding_idx, blocks_code_embedding_idx;
+    -- Recommended, so the older code re-embeds every note from its whole text (in the background):
+    UPDATE notes SET embedder_id = NULL;
+    COMMIT;"
+  ```
+
+  Without the recommended line, the older code serves each note's first block vector (the text before its first heading, or its first section) as the note's vector until the note changes. While rolled back, purging a note still deletes its blocks (the trigger stays). **Rolling forward again** needs the 0036 indexes back (`DROP INDEX blocks_embedding_idx; CREATE INDEX blocks_note_embedding_idx ON blocks USING hnsw (embedding vector_cosine_ops) WHERE owner_type = 'note'; CREATE INDEX blocks_code_embedding_idx ON blocks USING hnsw (embedding vector_cosine_ops) WHERE owner_type = 'code'`, the migration does not run again); otherwise the newer code re-embeds every note the older code wrote meanwhile (its blocks no longer carry the note's `seq`) and every note whose `embedder_id` the line above cleared, and ignores the recreated column; drop it afterwards to free the space (`ALTER TABLE notes DROP COLUMN embedding`). The 0035 entry above still applies to a release without 0035. Backups are unaffected: neither note vectors nor blocks are in an instance backup, and a restored instance re-embeds its notes on its first start.
 - **Migration 0026 (revision compaction, #501)** adds three nullable columns to `note_revisions` (`body_delta`, `delta_base_id`, `body_bytes`), a check on them that older code never touches, a foreign key that refuses to delete a revision others are stored against, a table `note_revision_compaction` (how far each note's history has been compacted; older code ignores it), and two SQL functions. Older code records and lists revisions with no SQL, but it reads every revision's `body` column directly, and a compacted revision's `body` is empty, so it would show and revert to empty revisions. **Before starting older code, store every revision whole again**: step 3 of the procedure in the 0021 entry above (with the newer app stopped, so no compaction runs; this only adds back the space compaction saved).
 
   Older code's `purge_revision` of a revision others are still stored against fails instead of losing them (after step 3 there are none). When you upgrade again, the newer code compacts the history again (the `DELETE` lets it start from the oldest revision). An instance backup made by the newer code holds every body whole and restores on older releases (subject to the 0024 note above).

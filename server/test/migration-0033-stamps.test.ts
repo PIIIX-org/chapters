@@ -105,6 +105,10 @@ describe('migration 0033 stamps existing vectors (#453)', { timeout: 60_000 }, (
         'failed.md': { embedderId: null, seq: String(failed.seq) },
         'pending.md': { embedderId: null, seq: String(pending.seq) },
       })
+      // 0036 (#452b) carries each note vector over as one `legacy:note` block, then drops `notes.embedding`.
+      const legacy = await client`select n.path from blocks b join notes n on n.id = b.owner_id
+        where b.owner_type = 'note' and b.block_id = 'legacy:note' and b.embedding is not null order by n.path`
+      expect(legacy.map((r) => r.path)).toEqual(['current.md', 'failed.md', 'pending.md'])
       const files = Object.fromEntries(
         (await client`select path, embedder_id, extracted_hash, extractor_version from repository_files`).map((r) => [
           r.path,

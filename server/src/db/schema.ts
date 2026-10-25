@@ -343,11 +343,14 @@ export const instanceState = pgTable('instance_state', {
  * Migration 0021 (ADR-003 §4) also adds `seq bigint NOT NULL DEFAULT 1`
  * (bumped by the `notes_bump_seq` trigger on any change of body, frontmatter,
  * path or deleted_at) and `frontmatter_src json`; migration 0033 (#453) adds
- * `embedder_id text` (search/embeddings.ts `EMBEDDER_ID` of the embedding;
- * null before #453). They are deliberately not
+ * `embedder_id text` (search/embeddings.ts `EMBEDDER_ID` of its blocks;
+ * null before #453) and migration 0036 (#452) `chunk_version integer NOT
+ * NULL DEFAULT 0` (search/embed-key.ts `CHUNK_VERSION` of its blocks; 0:
+ * none yet). They are deliberately not
  * in this model: rows are returned whole by REST and MCP, so declaring them
  * would add fields to responses. The store reads them with SQL
- * (store-tx.ts `storedColumns`).
+ * (store-tx.ts `storedColumns`). A note's vectors are its `blocks`
+ * (migration 0036 dropped `notes.embedding`).
  */
 export const notes = pgTable(
   'notes',
@@ -362,8 +365,6 @@ export const notes = pgTable(
     frontmatter: jsonb('frontmatter').notNull(),
     body: text('body').notNull(),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
-    /** One embedding per note, computed at save-time (specs 3+4's shared index). */
-    embedding: vector('embedding', { dimensions: 384 }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -819,19 +820,21 @@ export const repositoryFileImports = pgTable(
 )
 
 /**
- * Blocks (ADR-004 §2.2, §2.5; #413, #452, migration 0035): the addressable
- * spans of a note or a repository file, which are also its embedding chunks.
- * For code (repositories/code-blocks.ts) a file's `symbol`, `skeleton` and
- * `file` blocks; note blocks are #452b. `block_id` is stable across line
- * shifts (text/blocks.ts `blockId`); lines follow text/lines.ts. `owner_id`
- * has no foreign key (it names a note or a file): a trigger deletes a
- * repository file's blocks with it. `owner_version` is what the set was
- * derived from (a file's `content_hash`), replaced whole in one transaction
- * (#460). `embed_key` is embed-key.ts `embedKey(text)` of the vector, null when
+ * Blocks (ADR-004 §2.2, §2.5; #413, #452, migrations 0035, 0036): the
+ * addressable spans of a note or a repository file, which are also its
+ * embedding chunks. For code (repositories/code-blocks.ts) a file's
+ * `symbol`, `skeleton` and `file` blocks; for a note (notes/note-blocks.ts)
+ * its `preamble` and `section` blocks, with body-relative lines. `block_id`
+ * is stable across line shifts (text/blocks.ts `blockId`); lines follow
+ * text/lines.ts. `owner_id` has no foreign key (it names a note or a file):
+ * triggers delete a repository file's or a note's blocks with its row.
+ * `owner_version` is what the set was derived from (a file's
+ * `content_hash`, a note's `seq`), replaced whole in one transaction (#460).
+ * `embed_key` is embed-key.ts `embedKey(text)` of the vector, null when
  * the block is not embedded (over the per-file symbol budget); on the file
  * vectors migration 0035 carried over it is computed from the embedder and
  * text that made them (so the first re-extraction reuses them), `legacy` on
- * the carried-over symbol vectors (their text had a line number).
+ * the carried-over symbol and note vectors (their text no block has now).
  */
 export const blocks = pgTable(
   'blocks',

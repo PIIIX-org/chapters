@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { and, eq } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { db } from '../src/db/client.js'
-import { notes, semanticEdges, vaults } from '../src/db/schema.js'
+import { blocks, notes, semanticEdges, vaults } from '../src/db/schema.js'
 import { recomputeSemanticEdges } from '../src/search/semantic-edges.js'
 import { createActiveUser } from './helpers.js'
 
@@ -13,7 +13,8 @@ function denseVector(seed: number): number[] {
   return raw.map((v) => v / norm)
 }
 
-async function createNote(vaultId: string, name: string, embedding: number[]): Promise<string> {
+/** A note whose blocks carry these vectors (one `section` block each; ADR-004 §2.5). */
+async function createNote(vaultId: string, name: string, ...embeddings: number[][]): Promise<string> {
   const [row] = await db
     .insert(notes)
     .values({
@@ -23,9 +24,24 @@ async function createNote(vaultId: string, name: string, embedding: number[]): P
       path: `notes/${name}.md`,
       frontmatter: { type: 'notes' },
       body: name,
-      embedding,
     })
     .returning({ id: notes.id })
+  await db.insert(blocks).values(
+    embeddings.map((embedding, i) => ({
+      ownerType: 'note' as const,
+      ownerId: row!.id,
+      containerId: vaultId,
+      blockId: `b_test${i}`,
+      kind: 'section',
+      innerPath: `S${i}`,
+      startLine: i + 1,
+      endLine: i + 1,
+      contentHash: 'test',
+      ownerVersion: '1',
+      embedKey: `test${i}`,
+      embedding,
+    })),
+  )
   return row!.id
 }
 
@@ -73,7 +89,7 @@ describe('recomputeSemanticEdges', () => {
       })
       .onConflictDoNothing()
 
-    await recomputeSemanticEdges('note', noteA, embeddingA)
+    await recomputeSemanticEdges('note', noteA, [embeddingA])
 
     const survivors = await db
       .select()
@@ -92,18 +108,31 @@ describe('recomputeSemanticEdges', () => {
       similarity: 0.9,
     })
 
-    await recomputeSemanticEdges('note', noteA, embeddingA)
+    await recomputeSemanticEdges('note', noteA, [embeddingA])
 
     const own = await edgesOwnedBy(noteA)
     expect(own.some((e) => e.targetId === stale)).toBe(false)
   })
 
   it('writes its rows source-first', async () => {
-    await recomputeSemanticEdges('note', noteA, embeddingA)
+    await recomputeSemanticEdges('note', noteA, [embeddingA])
 
     const own = await edgesOwnedBy(noteA)
     expect(own.length).toBeGreaterThan(0)
     expect(own.every((e) => e.sourceType === 'note' && e.sourceId === noteA)).toBe(true)
     expect(own.some((e) => e.targetId === noteB)).toBe(true)
+  })
+
+  it('a neighbour note counts once, with its best block; any of the source blocks can find it (#452)', async () => {
+    // C: one block far from everything, one equal to D's only block.
+    const noteC = await createNote(vaultId, `sem-c-${randomUUID()}`, denseVector(50), denseVector(90))
+    const noteD = await createNote(vaultId, `sem-d-${randomUUID()}`, denseVector(90))
+    await recomputeSemanticEdges('note', noteD, [denseVector(90)])
+    const fromD = (await edgesOwnedBy(noteD)).filter((e) => e.targetId === noteC)
+    expect(fromD).toHaveLength(1)
+    expect(fromD[0]!.similarity).toBeGreaterThan(0.999)
+
+    await recomputeSemanticEdges('note', noteC, [denseVector(50), denseVector(90)])
+    expect((await edgesOwnedBy(noteC)).some((e) => e.targetId === noteD && e.similarity > 0.999)).toBe(true)
   })
 })
