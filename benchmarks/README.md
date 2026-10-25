@@ -251,13 +251,14 @@ How to read it, honestly:
 
 ## Noise
 
-The grep agent is deterministic: identical in every run. Elara's ranks move
-between instances of identical code. When the table below was measured the
-server broke score ties by database row order (#623) and the agent broke
-exact ties by path; since #441 the server orders ties by path, then id, in
-every leg and in the final sort, which leaves the approximate HNSW candidate
-set as the known source. Measured, per suite,
-Elara hit@5 / tokens-to-gold:
+The grep agent is deterministic: identical in every run. Elara's ranks moved
+between instances of identical code. When the first table below was measured
+the server broke score ties by database row order (#623) and the agent broke
+exact ties by path; #441 then ordered ties by path, then id, in the keyword
+legs, after each vector cut and in the final sort, and #462/#623 made every
+cut total (the vector legs' own HNSW limit included; a symbol's start line
+before its id, since ids differ on every instance) and gave every vector leg
+pgvector's iterative scan. Measured, per suite, Elara hit@5 / tokens-to-gold:
 
 | suite | 3 instances of run 38856349787 | earlier single instances (harness a941c16): runs 38848135892, 38848138390, PR runs 38852760271, 38853656282 (chapters only) |
 |---|---|---|
@@ -275,6 +276,26 @@ a suite with a low mean (chapters) by more than 10 %; the gate treats that
 as material, because reaching the evidence or not is the premise.
 (Indexing took about half as long in run 38856349787 as in the earlier
 runs, on the same code; index time is reported, not gated.)
+
+Re-measured with #462/#623, all five suites, three instances each, against
+the same `dev` without them:
+
+| suite | before: `dev` ba5690a, run [40195176096](https://github.com/PIIIX-org/chapters/actions/runs/40195176096) | after: run [40195178980](https://github.com/PIIIX-org/chapters/actions/runs/40195178980) (and PR run [40195380528](https://github.com/PIIIX-org/chapters/actions/runs/40195380528), chapters) |
+|---|---|---|
+| chapters | 1 / 3,623; 1 / 3,596; 1 / 3,623 (A7, S2, S7, S9 tokens move) | 1 / 3,623 in all three (and all three of the PR run) |
+| diagram-design | 0.95 / 11,835; 0.95 / 11,931; 0.95 / 11,823 (Q14 rank 2 or 4; Q03, Q07, Q16 tokens move) | 0.95 / 11,823 in all three |
+| vectorcraft | 0.7 / 31,565 in all three | 0.7 / 31,565 in all three |
+| context-mode | 0.85 / 26,595; 0.85 / 26,609; 0.85 / 26,595 (W4, I4 tokens move) | 0.85 / 26,595 in all three |
+| rea | 0.7 / 25,424; 0.7 / 25,410; 0.7 / 25,424 (Q05 tokens move) | 0.7 / 25,410 in all three |
+
+Before, 11 questions moved between instances (one rank, the rest
+tokens-to-gold, at most 0.9 % of a suite's mean); after, none did: every
+instance gave the same rank and tokens-to-gold on every question.
+[INFERENCE] What moved before was the order of equal scores (row order, and
+ids that differ on every instance). The HNSW graph is still approximate: the
+lab instances index the same content in the same order, so their graphs
+likely match, but an index built in another order (a production instance)
+can still pick a different vector candidate when two distances are close.
 
 ## Agent trial
 
