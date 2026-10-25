@@ -283,6 +283,13 @@
       "breakpoints": true
     },
     {
+      "idx": 40,
+      "version": "7",
+      "when": 1792600000000,
+      "tag": "0040_repository_tree_hash",
+      "breakpoints": true
+    },
+    {
       "idx": 41,
       "version": "7",
       "when": 1792650000000,

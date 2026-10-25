@@ -438,7 +438,7 @@ function collapseToCommunities(graph: VaultGraph, pairs: ReadonlyArray<readonly 
 
   return {
     aggregated: true,
-    nodes: [...byCommunity.values()].sort((x, y) => y.size - x.size),
+    nodes: [...byCommunity.values()].sort((x, y) => y.size - x.size || x.community - y.community),
     edges: [...weights.values()],
     cappedGroups: graph.cappedGroups,
   }
