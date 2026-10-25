@@ -108,8 +108,8 @@ function elaraTools(repositoryId: string): ElaraTools {
       const r = await mcp.call('search', { query, repositoryId, limit: SEARCH_LIMIT })
       return { text: r.text, ms: r.ms, ok: r.ok }
     },
-    async readFile(path, cursor) {
-      const r = await mcp.call('read_file', { repositoryId, path, ...(cursor ? { cursor } : {}) })
+    async readFile(path, cursor, targets) {
+      const r = await mcp.call('read_file', { repositoryId, path, ...(targets ? { targets } : {}), ...(cursor ? { cursor } : {}) })
       return { text: r.text, ms: r.ms, ok: r.ok }
     },
   }

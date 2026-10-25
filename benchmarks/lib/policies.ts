@@ -3,8 +3,12 @@
 // index Elara builds. Both stop as soon as every gold range has been in
 // their context (an oracle stop, the same for both), or when a cap is hit.
 //
-//   elara  search(question) -> read_file of each hit, best first, page by
-//          page (the default 4,000-token budget) following its cursor
+//   elara  search(question) -> read_file of each hit, best first: a file
+//          that fits the default 4,000-token budget whole; for a larger one
+//          its outline (#417), then one `targets` read (#416) of the
+//          sections the question names and of the file's symbol hits,
+//          then, if the gold is still unseen, its pages from the outline's
+//          cursor
 //   grep   rg --count (files ranked by matching lines) -> rg -n over the
 //          top files (first matches of each) -> ranged reads around them
 //
@@ -111,8 +115,8 @@ export interface PolicyRun {
 export interface ElaraTools {
   /** MCP `search` {query, repositoryId, limit: 10}. */
   search(query: string): Promise<ToolResponse>
-  /** MCP `read_file` {repositoryId, path, cursor?}: one page of the file. */
-  readFile(path: string, cursor?: string): Promise<ToolResponse>
+  /** MCP `read_file` {repositoryId, path, cursor?, targets?}: the file whole, a page of it, its outline, or the parts `targets` names. */
+  readFile(path: string, cursor?: string, targets?: ReadonlyArray<{ lines: string }>): Promise<ToolResponse>
 }
 
 interface SearchHit {
@@ -198,6 +202,126 @@ export function readFilePage(json: unknown): { content: string; first: number; l
   return { content, first, lines: newlines + last, ...(cursor === undefined ? {} : { cursor }) }
 }
 
+/** `truncated.cursor` of an answer, if it has one. */
+function nextCursor(json: unknown): string | undefined {
+  const truncated: unknown = json && typeof json === 'object' ? Reflect.get(json, 'truncated') : undefined
+  const next: unknown = truncated && typeof truncated === 'object' ? Reflect.get(truncated, 'cursor') : undefined
+  return typeof next === 'string' ? next : undefined
+}
+
+export interface OutlineEntry {
+  /** The section's heading path or the symbol's `Class.method`; '' for a note's preamble. */
+  name: string
+  lines: [number, number]
+  tokens: number
+}
+
+/** The `outline` of a `read_file` answer (#417): a file over the budget, as its headings or symbols with their lines. */
+export function readFileOutline(json: unknown): OutlineEntry[] | null {
+  const outline: unknown = json && typeof json === 'object' ? Reflect.get(json, 'outline') : undefined
+  if (!Array.isArray(outline)) return null
+  return outline.flatMap((e: unknown): OutlineEntry[] => {
+    if (!e || typeof e !== 'object') return []
+    const lines: unknown = Reflect.get(e, 'lines')
+    if (!Array.isArray(lines) || typeof lines[0] !== 'number' || typeof lines[1] !== 'number') return []
+    const name: unknown = Reflect.get(e, 'symbol') ?? Reflect.get(e, 'heading') ?? ''
+    const tokens: unknown = Reflect.get(e, 'tokens')
+    return [{ name: typeof name === 'string' ? name : '', lines: [lines[0], lines[1]], tokens: typeof tokens === 'number' ? tokens : 0 }]
+  })
+}
+
+/**
+ * The lines a `targets` read (#416) showed: each part's `lines`, the last
+ * one only when it ends there (a line split across pages counts on the page
+ * where it ends).
+ */
+export function targetLines(json: unknown, path: string): LineRange[] {
+  const parts: unknown = json && typeof json === 'object' ? Reflect.get(json, 'targets') : undefined
+  if (!Array.isArray(parts)) return []
+  return parts.flatMap((part: unknown): LineRange[] => {
+    if (!part || typeof part !== 'object') return []
+    const lines: unknown = Reflect.get(part, 'lines')
+    const text: unknown = Reflect.get(part, 'text')
+    if (!Array.isArray(lines) || typeof lines[0] !== 'number' || typeof lines[1] !== 'number' || typeof text !== 'string') return []
+    const split = Reflect.get(part, 'next') !== undefined && !text.endsWith('\n')
+    const end = split ? lines[1] - 1 : lines[1]
+    return end >= lines[0] ? [{ path, start: lines[0], end }] : []
+  })
+}
+
+/** Words too common in questions to name a section. */
+const STOP_WORDS = new Set(
+  'and are for from how into its not that the then this what when where which who why with does did use used uses using file files code defined define implemented implement there their they them get set'.split(' '),
+)
+
+/** The words of a question or a name: identifiers split at case changes and non-letters, lower-cased, 3+ characters, no stop words. */
+export function words(text: string): Set<string> {
+  const split = text.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+  return new Set(
+    split
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 3 && !STOP_WORDS.has(w)),
+  )
+}
+
+/** Two words name the same thing: equal, or (4+ characters) one starts the other (`embed`, `embedding`). */
+const sameWord = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 4 && (a.startsWith(b) || b.startsWith(a)))
+
+/**
+ * What the agent reads of `path` once it answered its outline: the file's
+ * symbol hits from the search, then the outline entries whose names share
+ * the most words with the question (ties in file order), each within one
+ * read budget, none inside another or already seen, at most
+ * `ELARA.targetsPerFile`.
+ */
+export function sectionTargets(
+  question: string,
+  path: string,
+  outline: readonly OutlineEntry[],
+  symbolHits: readonly LineRange[],
+  seen: LineSet,
+): Array<{ lines: string }> {
+  const asked = [...words(question)]
+  const chosen: Array<[number, number]> = []
+  const add = (start: number, end: number) => {
+    if (chosen.length >= ELARA.targetsPerFile || chosen.some(([a, b]) => start >= a && end <= b) || seen.covers({ path, start, end })) return
+    chosen.push([start, end])
+  }
+  for (const hit of symbolHits) add(hit.start, hit.end)
+  const scored = outline
+    .map((entry, order) => {
+      const named = [...words(entry.name)]
+      return { entry, order, score: asked.filter((q) => named.some((n) => sameWord(q, n))).length }
+    })
+    .filter((s) => s.score > 0 && s.entry.tokens <= ELARA.readBudget)
+    .sort((a, b) => b.score - a.score || a.order - b.order)
+  for (const { entry } of scored) add(entry.lines[0], entry.lines[1])
+  return chosen.map(([a, b]) => ({ lines: `${a}-${b}` }))
+}
+
+/** Elara policy: parts one `targets` read asks for; the default read budget (#420) an outline entry must fit in. */
+export const ELARA = { targetsPerFile: 4, readBudget: 4_000 }
+
+/** Lines a symbol hit spans, whole (search's `startLine`/`endLine`): what a targets read of it shows. */
+function symbolSpan(hit: SearchHit): LineRange | null {
+  if (hit.resourceType !== 'symbol' || typeof hit.path !== 'string' || typeof hit.startLine !== 'number' || typeof hit.endLine !== 'number') return null
+  return { path: hit.path, start: hit.startLine, end: hit.endLine }
+}
+
+/** One `targets` read of `path`, following its cursor until the parts are read or the gold is seen. */
+async function readTargets(ep: Episode, tools: ElaraTools, path: string, targets: ReadonlyArray<{ lines: string }>): Promise<void> {
+  let cursor: string | undefined
+  do {
+    if (ep.done) return
+    const res = await tools.readFile(path, cursor, targets)
+    const cut = ep.clip(res.text)
+    const json = res.ok ? parseJson(res.text) : undefined
+    ep.record('read_file', `${path} targets`, cut.visible, cut.truncated, res.ms, res.ok, cut.truncated ? [] : targetLines(json, path))
+    cursor = cut.truncated ? undefined : nextCursor(json)
+  } while (cursor)
+}
+
 export async function runElara(question: string, gold: readonly LineRange[], tools: ElaraTools, caps: Caps = CAPS): Promise<PolicyRun> {
   const ep = new Episode(gold, caps)
   const res = await tools.search(question)
@@ -209,16 +333,26 @@ export async function runElara(question: string, gold: readonly LineRange[], too
   const ranking = dedupe(hits.map((h) => h.path).filter((p): p is string => typeof p === 'string'))
 
   for (const path of ranking.slice(0, caps.maxFiles)) {
-    // A long file comes in pages (#420): follow `truncated.cursor` until the gold is seen or the file ends.
+    // A long file comes in pages (#420): follow `truncated.cursor` until the gold is seen or the file ends. One over
+    // the budget answers its outline first (#417): read what the question names (#416), then page it if still needed.
     let cursor: string | undefined
+    let opened = false
     do {
       if (ep.done) break
       const file = await tools.readFile(path, cursor)
       const cut = ep.clip(file.text)
-      const page = readFilePage(file.ok ? parseJson(file.text) : undefined)
+      const json = file.ok ? parseJson(file.text) : undefined
+      const page = readFilePage(json)
       const lines = page ? (cut.truncated ? visibleContentLines(file.text, page.content, caps.perCallChars) : page.lines) : 0
       ep.record('read_file', path, cut.visible, cut.truncated, file.ms, file.ok, page && lines > 0 ? [{ path, start: page.first, end: page.first + lines - 1 }] : [])
-      cursor = cut.truncated ? undefined : page?.cursor
+      cursor = cut.truncated ? undefined : nextCursor(json)
+      const outline = opened || cut.truncated ? null : readFileOutline(json)
+      opened = true
+      if (outline) {
+        const spans = hits.map(symbolSpan).filter((r): r is LineRange => r !== null && r.path === path)
+        const targets = sectionTargets(question, path, outline, spans, ep.seen)
+        if (targets.length > 0) await readTargets(ep, tools, path, targets)
+      }
     } while (cursor)
   }
   return { ranking, episode: ep }
