@@ -382,7 +382,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable` |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
+| `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), identifier `keywords` written by extraction (#455, migration 0044; GIN `repository_files_keyword_idx` over both, see **Keyword channel** in §5.6), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -1349,7 +1349,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   parallel (note-keyword, note-semantic, code-keyword, code-semantic;
   six with symbols) and merges them with **Reciprocal Rank Fusion**
   (`k=60`), no score normalization to tune. Keyword hits use Postgres
-  `websearch_to_tsquery` + `ts_rank` + `ts_headline` snippets; semantic
+  full-text search + `ts_rank` + `ts_headline` snippets (see **Keyword
+  channel**); semantic
   hits use pgvector's `<=>` cosine-distance operator over partial HNSW
   indexes on `blocks`, one per kind of query, each query's WHERE naming the
   index predicate as SQL literals so the planner uses it:
@@ -1362,7 +1363,46 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   files by their `file` block, one hit per document (see **Blocks and the
   line contract**).
   `findSymbols()` does the same over symbols (keyword: `ILIKE` on the
-  whole query).
+  whole query, or the symbol's identifier keywords).
+  - **Keyword channel** (#455, `search/identifiers.ts`): note legs match
+    `notes.fts` (`to_tsvector('english', path || frontmatter || body)`,
+    stemmed) with `websearch_to_tsquery('english', q)`, unchanged.
+    Code legs also know identifiers. Postgres' parser keeps
+    `parseFrontmatter` as one word (`parsefrontmatt`), a member access
+    `fm.parseFrontmatter` or a name `mcp.server.ts` as one host lexeme
+    and a path as one file lexeme. So extraction stores identifier
+    lexemes beside `fts`. A compound (words joined by `.`, `-` or `::`;
+    a word is letters, digits, `_`, `$`) gives its lowercased whole, its
+    segments, its `_`/`$` words and their parts (camelCase/PascalCase
+    humps, acronyms, digit runs): `fm.parseFrontmatter` →
+    `fm.parsefrontmatter`, `fm`, `parsefrontmatter`, `parse`,
+    `frontmatter`. These are unstemmed and positionless
+    (`array_to_tsvector`), so no stemming touches them. Stored at
+    extraction, in the statements it already runs (migration 0044):
+    `repository_files.keywords` holds every path segment's lexemes and
+    those of each compound of the content that is not a plain word
+    (plain words are in `fts`, stemmed). A minified file stores its path
+    only, and at most 20,000 lexemes are kept per file. Symbol blocks'
+    `blocks.keywords` hold the lexemes of the symbol's `inner_path` and of
+    its file's path. Null until the file is extracted again
+    (`EXTRACTOR_VERSION` 5 re-extracts every file at the first boot;
+    vectors are reused). The query: each whitespace term matches as its
+    English query, or as its identifiers (a plain word unstemmed, unless
+    English drops it as a stop word; a compound as its whole lexeme or
+    all its parts, each part English or unstemmed); terms are ANDed. So
+    `frontmatter parse` and `parse_frontmatter` find `parseFrontmatter`,
+    and `mcp.server.ts` or `server.ts` find `src/mcp/server.ts`. A query
+    with websearch syntax (a `"`, a `-term`, a standalone `or`) keeps the
+    English query. The code file leg matches `fts || coalesce(keywords,
+    '')` (GIN `repository_files_keyword_idx`, which replaced
+    `repository_files_fts_idx`) and orders by whole-identifier match,
+    then the English match's `ts_rank` (the order before #455), then the
+    keyword `ts_rank`. The symbol leg ORs `keywords` with its `ILIKE`
+    (no index: the `ILIKE` reads the repository's symbols anyway) and
+    ranks exact, prefix and contains as before, then a whole-identifier
+    match, then a parts-only match. So an exact identifier outranks its
+    parts within each leg; rows matched before #455 keep their order.
+    The snippet's `ts_headline` uses the English query.
   - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
     `SearchResponse` = `{status, retrieval_mode, degraded, index?,
     results}`, served as is by REST and inside the budget envelope by MCP.
@@ -1409,9 +1449,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     (`semantic-edges.ts`) call the same helper with `ef_search` 100.
   - **Total order** (#623): every cut ends in a key that is unique and,
     where it can be, the same on two instances with the same content (ids
-    are random per instance). Keyword legs `ORDER BY rank DESC, path
-    COLLATE "C", id`; the symbol keyword leg its exact/prefix/contains
-    `CASE`, then `path COLLATE "C", start_line, id`; vector legs `ORDER BY
+    are random per instance). The note keyword leg `ORDER BY rank DESC, path
+    COLLATE "C", id`, the code keyword leg its ranks (see **Keyword
+    channel**) then `path COLLATE "C", id`; the symbol keyword leg its
+    exact/prefix/contains/whole/parts `CASE`, then `path COLLATE "C",
+    start_line, id`; vector legs `ORDER BY
     distance, path COLLATE "C", id` (symbols: `path, start_line, id`) at
     the HNSW limit itself (an Incremental Sort over the index scan, which
     still serves it) and again after the gate; the note leg's 200-block cut
@@ -2876,12 +2918,13 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
 #452, migrations 0035 and 0036). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 4; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+an integer, now 5; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
 top-level rule and the embed-budget order, #450; 4 re-exports, literal
 `import()`/`require()` and `import x = require()` as imports, #466, which
-embeds nothing again): bump it with any change to the grammars and queries,
-symbol kinds, the minified-file rule or the embed-budget order (the
+embeds nothing again; 5 the identifier `keywords` of files and symbols,
+#455, which embeds nothing again either): bump it with any change to the grammars and queries,
+symbol kinds, the minified-file rule, the embed-budget order or the stored identifier lexemes (the
 snippet cut and block texts are `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
 (`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus
 `+text<EMBED_TEXT_VERSION>`, the version of the 16,000-character cut; bump
