@@ -10,8 +10,9 @@ import { noteTransportLimit } from '../notes/size-cap.js'
 /**
  * MCP endpoint: stateless Streamable HTTP — a fresh server+transport per
  * request, authenticated per request against live permissions (spec 6:
- * access is recomputed on every call, no cross-connection caching — the
- * per-request lifecycle makes shared caching impossible by construction).
+ * access is recomputed on every call). An answer may be cached across
+ * connections only under the caching contract (cache/key.ts, ADR-004 §2.9,
+ * D7 on #930), looked up after those live checks.
  * Registers both canonical `/elara/mcp` and permanent backward-compatible `/mcp`.
  */
 export function mcpRoutes(app: FastifyInstance) {
