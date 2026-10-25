@@ -4,7 +4,7 @@ import { noteBlocks } from '../notes/note-blocks.js'
 import { replaceBlockSet, vectorsByEmbedKey } from './block-rows.js'
 import { CHUNK_VERSION, embedKey } from './embed-key.js'
 import { EMBEDDER_ID, embedder } from './embeddings.js'
-import { recomputeSemanticEdges } from './semantic-edges.js'
+import { refreshSemanticEdges } from './semantic-edges.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
   JOB_PRIORITY,
@@ -34,9 +34,6 @@ import {
  * embedding of each changed block per pending job.
  */
 export const EMBEDDING_JOB = 'embed_note'
-
-/** At most this many of a note's blocks, in body order, query its semantic neighbours (semantic-edges.ts). */
-export const EDGE_QUERY_BLOCKS = 16
 
 /** The key of the job that embeds note `noteId` at `seq` with the running embedder and chunker (#453, #452). */
 export function embeddingJobKey(noteId: string, seq: number | string): string {
@@ -249,9 +246,8 @@ async function processNote(noteId: string, jobSeq: number | undefined): Promise<
       WHERE id = ${noteId} AND (embedder_id IS DISTINCT FROM ${embedderId} OR chunk_version <> ${chunkVersion})`)
     return true
   })
-  // The note's neighbours follow its block vectors: a set that only kept vectors it had (a frontmatter edit) has the edges it had.
+  // The note's neighbours follow its block vectors: a set that only kept vectors it had (a frontmatter edit) has the
+  // edges it had. Otherwise its own and those of the nodes it can move (#1007: the vectors new to it).
   const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !keys.includes(k))
-  // A note's own neighbours come from its first EDGE_QUERY_BLOCKS blocks (the preamble and first sections): each
-  // costs one HNSW search per owner type, and a very long note has hundreds of blocks.
-  if (written && changed) await recomputeSemanticEdges('note', noteId, (vectors as number[][]).slice(0, EDGE_QUERY_BLOCKS))
+  if (written && changed) await refreshSemanticEdges('note', noteId, toEmbed.map((i) => keys[i]!))
 }

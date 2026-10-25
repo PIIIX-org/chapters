@@ -148,7 +148,7 @@ describe('recomputeSemanticEdges', () => {
       })
       .onConflictDoNothing()
 
-    await recomputeSemanticEdges('note', noteA, [embeddingA])
+    await recomputeSemanticEdges('note', noteA)
 
     const survivors = await db
       .select()
@@ -167,14 +167,14 @@ describe('recomputeSemanticEdges', () => {
       similarity: 0.9,
     })
 
-    await recomputeSemanticEdges('note', noteA, [embeddingA])
+    await recomputeSemanticEdges('note', noteA)
 
     const own = await edgesOwnedBy(noteA)
     expect(own.some((e) => e.targetId === stale)).toBe(false)
   })
 
   it('writes its rows source-first', async () => {
-    await recomputeSemanticEdges('note', noteA, [embeddingA])
+    await recomputeSemanticEdges('note', noteA)
 
     const own = await edgesOwnedBy(noteA)
     expect(own.length).toBeGreaterThan(0)
@@ -186,12 +186,12 @@ describe('recomputeSemanticEdges', () => {
     // C: one block far from everything, one equal to D's only block.
     const noteC = await createNote(vaultId, `sem-c-${randomUUID()}`, denseVector(50), denseVector(90))
     const noteD = await createNote(vaultId, `sem-d-${randomUUID()}`, denseVector(90))
-    await recomputeSemanticEdges('note', noteD, [denseVector(90)])
+    await recomputeSemanticEdges('note', noteD)
     const fromD = (await edgesOwnedBy(noteD)).filter((e) => e.targetId === noteC)
     expect(fromD).toHaveLength(1)
     expect(fromD[0]!.similarity).toBeGreaterThan(0.999)
 
-    await recomputeSemanticEdges('note', noteC, [denseVector(50), denseVector(90)])
+    await recomputeSemanticEdges('note', noteC)
     expect((await edgesOwnedBy(noteC)).some((e) => e.targetId === noteD && e.similarity > 0.999)).toBe(true)
   })
 })
@@ -242,7 +242,7 @@ describe('semantic neighbours stay within their vault or repository (#461)', () 
       [n2!, []],
       [n3!, []],
     ] as const) {
-      await recomputeSemanticEdges('note', id, [seed])
+      await recomputeSemanticEdges('note', id)
       expect(await targetsOf('note', id)).toEqual([...expected].sort())
     }
   })
@@ -260,7 +260,7 @@ describe('semantic neighbours stay within their vault or repository (#461)', () 
       [f2, []],
       [f3, []],
     ] as const) {
-      await recomputeSemanticEdges('code', id, [seed])
+      await recomputeSemanticEdges('code', id)
       expect(await targetsOf('code', id)).toEqual([...expected].sort())
     }
   })
@@ -275,11 +275,11 @@ describe('semantic neighbours stay within their vault or repository (#461)', () 
     const file = await createFile(repo, 'src/x.ts', seed)
     const theirFile = await createFile(theirRepo, 'src/x.ts', seed)
 
-    await recomputeSemanticEdges('code', file, [seed])
+    await recomputeSemanticEdges('code', file)
     expect(await targetsOf('code', file)).toEqual(keys('note', n1!, n2!).sort())
-    await recomputeSemanticEdges('note', n1!, [seed])
+    await recomputeSemanticEdges('note', n1!)
     expect(await targetsOf('note', n1!)).toEqual(keys('code', file))
-    await recomputeSemanticEdges('note', n3!, [seed])
+    await recomputeSemanticEdges('note', n3!)
     expect(await targetsOf('note', n3!)).toEqual(keys('code', theirFile))
   })
 
@@ -296,7 +296,7 @@ describe('semantic neighbours stay within their vault or repository (#461)', () 
       Array.from({ length: 300 }, (_, k) => denseVector(400 + 0.001 * (k + 1))),
     )
 
-    await recomputeSemanticEdges('note', s1!, [denseVector(400)])
+    await recomputeSemanticEdges('note', s1!)
     expect(await targetsOf('note', s1!)).toEqual(keys('note', s2!))
   })
 })

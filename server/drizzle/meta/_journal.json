@@ -288,6 +288,13 @@
       "when": 1792600000000,
       "tag": "0040_repository_tree_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1792900000000,
+      "tag": "0046_semantic_edge_rebuild",
+      "breakpoints": true
     }
   ]
 }

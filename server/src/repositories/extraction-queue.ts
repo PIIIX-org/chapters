@@ -6,7 +6,7 @@ import { failpoint } from '../failpoints.js'
 import { chunks, replaceBlockSet, vectorsByEmbedKey } from '../search/block-rows.js'
 import { CHUNK_VERSION, embedKey } from '../search/embed-key.js'
 import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
-import { recomputeSemanticEdges } from '../search/semantic-edges.js'
+import { refreshSemanticEdges } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import {
@@ -569,7 +569,10 @@ async function processFile(fileId: string): Promise<void> {
     failpoint('extract.before-commit')
     return true
   })
-  // The file's semantic neighbours are those of its file-level block (the first, always embedded);
-  // a file-level vector kept as it was has the edges it had.
-  if (written && toEmbed.includes(0)) await recomputeSemanticEdges('code', fileId, [vectors.get(0)!])
+  // The file's own neighbours are those of its file-level block, and a neighbour counts the file by its best block:
+  // a block set that kept every vector it had and lost none has the edges it had. Otherwise its own and those of the
+  // nodes it can move (#1007: the vectors new to it).
+  const current = new Set(keys.values())
+  const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !current.has(k))
+  if (written && changed) await refreshSemanticEdges('code', fileId, toEmbed.map((i) => keys.get(i)!))
 }

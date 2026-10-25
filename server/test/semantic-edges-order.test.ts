@@ -166,14 +166,14 @@ describe('semantic edges do not depend on the order nodes were embedded in (#100
 })
 
 describe('a tie in similarity is broken by path, not by id (#1007)', () => {
-  /** A vault of `count` notes `tie/<i>` whose only block is one shared vector, ids ascending (A) or descending (B) with i. */
-  async function tieVault(reverse: boolean, count: number): Promise<{ vaultId: string; ids: string[] }> {
+  /** A vault of `count` notes `tie/<i, two digits>` whose only block is one shared vector, ids ascending (A) or descending (B) with i. */
+  async function tieVault(reverse: boolean, count: number): Promise<string> {
     const owner = await createActiveUser()
     const [vault] = await db.insert(vaults).values({ name: `tie-${reverse ? 'b' : 'a'}`, ownerId: owner.id }).returning({ id: vaults.id })
     vaultIds.push(vault!.id)
     const ids = Array.from({ length: count }, (_, i) => rankedId(reverse ? 0xffffffff - i : i))
     await db.insert(notes).values(
-      ids.map((id, i) => ({ id, vaultId: vault!.id, type: 'notes', name: `tie-${i}`, path: `tie/${i}`, frontmatter: { type: 'notes' }, body: 'tie' })),
+      ids.map((id, i) => ({ id, vaultId: vault!.id, type: 'notes', name: `tie-${i}`, path: `tie/${String(i).padStart(2, '0')}`, frontmatter: { type: 'notes' }, body: 'tie' })),
     )
     const vector = Array.from({ length: 384 }, (_, d) => Math.sin(7 + d * 0.1))
     await db.insert(blocks).values(
@@ -194,19 +194,19 @@ describe('a tie in similarity is broken by path, not by id (#1007)', () => {
     )
     // Every note exists before any is computed: only the tie decides which neighbours each keeps.
     for (const id of reverse ? [...ids].reverse() : ids) await recomputeSemanticEdges('note', id)
-    return { vaultId: vault!.id, ids }
+    return vault!.id
   }
 
   it(`more than SEMANTIC_K equally similar neighbours: both worlds keep the same ${config.semanticK}`, async () => {
     const count = config.semanticK + 3
     const a = await tieVault(false, count)
     const b = await tieVault(true, count)
-    const rowsA = await storedRows([a.vaultId])
+    const rowsA = await storedRows([a])
     expect(rowsA).toHaveLength(count * config.semanticK)
-    // The nearest by path: tie/0 keeps tie/1 … tie/K.
-    expect(rowsA.filter((r) => r.startsWith('note:tie/0 →')).map((r) => r.split(' ')[2])).toEqual(
-      Array.from({ length: config.semanticK }, (_, i) => `note:tie/${i + 1}`).sort(),
+    // The nearest by path: tie/00 keeps tie/01 … tie/0K.
+    expect(rowsA.filter((r) => r.startsWith('note:tie/00 →')).map((r) => r.split(' ')[2])).toEqual(
+      Array.from({ length: config.semanticK }, (_, i) => `note:tie/${String(i + 1).padStart(2, '0')}`),
     )
-    expect(await storedRows([b.vaultId])).toEqual(rowsA)
+    expect(await storedRows([b])).toEqual(rowsA)
   })
 })
