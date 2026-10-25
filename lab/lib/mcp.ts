@@ -1,6 +1,7 @@
 // Minimal MCP client for the lab: stateless Streamable HTTP, JSON responses
 // (server/src/mcp/routes.ts uses enableJsonResponse + no session id), so one
 // POST per JSON-RPC call, no initialize handshake needed.
+import { answerJson } from './tool-answer.ts'
 
 export interface McpCallRecord {
   label: string
@@ -22,9 +23,9 @@ export interface ToolResult {
   ok: boolean
   /** The tool ran and returned isError: true (Elara's error envelope `{"error":{"code",...}}`, #439). */
   isError: boolean
-  /** Concatenated text content, or the HTTP/RPC/network error text. */
+  /** Concatenated text content (blocks joined by a newline), or the HTTP/RPC/network error text. */
   text: string
-  /** `text` parsed as JSON when it parses, else undefined. */
+  /** The answer's JSON when it parses (`answerJson`: read_note's body block in its key), else undefined. */
   json?: unknown
   ms: number
   retries429: number
@@ -172,10 +173,11 @@ export class McpClient {
       out = { httpStatus: 200, ok: false, isError: false, text: `RPC ERROR ${JSON.stringify(r.body?.error ?? r.text.slice(0, 2000))}`, ms: r.ms, retries429: r.retries429 }
     } else {
       const result = r.body.result
-      const text = (result.content ?? []).map((c) => c.text ?? '').join('\n')
-      out = { httpStatus: 200, ok: !result.isError, isError: Boolean(result.isError), text, ms: r.ms, retries429: r.retries429 }
+      const content = result.content ?? []
+      const text = content.map((c) => c.text ?? '').join('\n')
+      out = { httpStatus: 200, ok: !result.isError, isError: Boolean(result.isError), text, json: answerJson(content), ms: r.ms, retries429: r.retries429 }
     }
-    out.json = parseJson(out.text)
+    out.json ??= parseJson(out.text)
     mcpCallLog.push({
       label: this.label,
       tool,

@@ -194,7 +194,7 @@ describe('search', () => {
     expect(paths).not.toContain('projects/apollo')
   })
 
-  it('filters by since/until date range', async () => {
+  it('filters by since/until on the last change, not frontmatter timestamp (#446)', async () => {
     const paths = async (qs: string) => {
       const res = await app.inject({
         method: 'GET',
@@ -203,11 +203,15 @@ describe('search', () => {
       })
       return res.json<{ results: Array<{ path: string }> }>().results.map((r) => r.path)
     }
-
-    expect(await paths('since=2026-01-01')).toContain('notes/zeppelin-log')
-    expect(await paths('since=2026-06-01')).not.toContain('notes/zeppelin-log')
-    expect(await paths('until=2026-12-01')).toContain('notes/zeppelin-log')
-    expect(await paths('until=2026-01-01')).not.toContain('notes/zeppelin-log')
+    // Written just now, with a frontmatter timestamp of 2026-03-01: the write counts.
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString()
+    const inAnHour = new Date(Date.now() + 3_600_000).toISOString()
+    expect(await paths(`since=${hourAgo}`)).toContain('notes/zeppelin-log')
+    expect(await paths(`since=${inAnHour}`)).not.toContain('notes/zeppelin-log')
+    expect(await paths(`until=${inAnHour}`)).toContain('notes/zeppelin-log')
+    expect(await paths('until=2021-01-01')).not.toContain('notes/zeppelin-log')
+    // A bound that is no date matches nothing.
+    expect(await paths('since=yesterday')).not.toContain('notes/zeppelin-log')
   })
 
   it('per-vault and everywhere search filter identically', async () => {
