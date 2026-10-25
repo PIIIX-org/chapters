@@ -10,7 +10,7 @@ import { and, eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { blocks, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
 import { createNote, updateNote, type WrittenNote } from '../src/notes/store.js'
-import { flushExtraction, scheduleMissingExtractions } from '../src/repositories/extraction-queue.js'
+import { enqueueExtractions, flushExtraction, scheduleMissingExtractions } from '../src/repositories/extraction-queue.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushEmbeddings, scheduleMissingEmbeddings } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
@@ -194,14 +194,23 @@ describe('a repository file embeds no timestamp (#459)', () => {
     expect(await embedKeys('code', b.file.id)).toEqual(await embedKeys('code', a.file.id))
   })
 
-  it('a re-sync of the same content with a newer modification time embeds nothing', async () => {
-    const { repo, file } = await syncedCopy('stable-code-resync', new Date('2026-01-01T00:00:00Z'))
-    const before = await embedKeys('code', file.id)
-    const texts = await embeddedDuring(async () => {
-      await syncRepositoryFiles(repo.id, [{ path: FILE_PATH, content: FILE_CONTENT, sourceModifiedAt: new Date() }], [FILE_PATH])
+  it('the same file derived again after its timestamps moved embeds the same texts', async () => {
+    const { file, texts: before } = await syncedCopy('stable-code-rederive', new Date('2026-01-01T00:00:00Z'))
+    const keys = await embedKeys('code', file.id)
+    // A later modification and row update, then a full re-derivation (what `pnpm reindex` runs): without its old
+    // blocks the file reuses no vector, so every text is embedded again from the same content.
+    await db
+      .update(repositoryFiles)
+      .set({ sourceModifiedAt: new Date('2026-10-11T12:13:14Z'), updatedAt: new Date() })
+      .where(eq(repositoryFiles.id, file.id))
+    await db.delete(blocks).where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, file.id)))
+    const after = await embeddedDuring(async () => {
+      await enqueueExtractions([file.id], 'finished')
       await flushExtraction()
     })
-    expect(texts).toEqual([])
-    expect(await embedKeys('code', file.id)).toEqual(before)
+
+    expect(before.length).toBeGreaterThan(0)
+    expect([...after].sort()).toEqual([...before].sort())
+    expect(await embedKeys('code', file.id)).toEqual(keys)
   })
 })

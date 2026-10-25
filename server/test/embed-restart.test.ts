@@ -14,7 +14,7 @@
 // would crash-loop the instance); the doctor reports it and its repair
 // embeds the current text.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { and, eq, type SQL } from 'drizzle-orm'
+import { and, eq, sql, type SQL } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { blocks, jobs, vaults } from '../src/db/schema.js'
 import type * as Durable from '../src/jobs/durable.js'
@@ -70,22 +70,28 @@ afterEach(async () => {
 const V1 = '# Herons\nFirst text about herons at the lake.\n'
 const V2 = '# Herons\nSecond text about egrets on the river.\n'
 
-/** A note embedded at V1, then edited to V2 by a process that dies during the V2 embed job, `deaths` times in a row. */
-async function editedThenKilled(deaths: number) {
+/** A note embedded at V1. */
+async function embeddedNote() {
   const user = await createActiveUser()
   const [vault] = await db.insert(vaults).values({ name: 'embed-restart', ownerId: user.id }).returning()
   createdVaultIds.push(vault!.id)
   const note = await createNote(vault!.id, { path: `concepts/restart-${Math.random().toString(36).slice(2)}`, body: V1 })
   await flushEmbeddings()
   expect(await blockState(note.id)).toEqual({ seqs: [String(note.seq)], keys: keysOf(note, V1) })
+  return { vaultId: vault!.id, note }
+}
+
+/** A note embedded at V1, then edited to V2 by a process that dies during the V2 embed job, `deaths` times in a row. */
+async function editedThenKilled(deaths: number) {
+  const { vaultId, note } = await embeddedNote()
 
   vi.spyOn(console, 'error').mockImplementation(() => {})
   kill.noteId = note.id
   kill.runs = deaths
-  const edited = (await updateNote(vault!.id, note.path, { body: V2 }))!
+  const edited = (await updateNote(vaultId, note.path, { body: V2 }))!
   await flushEmbeddings()
   const key = embeddingJobKey(note.id, edited.seq)
-  return { vaultId: vault!.id, note, edited, key }
+  return { vaultId, note, edited, key }
 }
 
 /** The embed keys V1/V2 give the note's blocks, sorted. */
@@ -180,6 +186,30 @@ describe('a note edited just before the process died is embedded at its current 
     await flushEmbeddings()
 
     await expectCurrent(note, edited.seq)
+    expect(await embeddingState([vaultId])).toEqual({ notes: 1, pending: 0, failed: 0 })
+  })
+})
+
+describe('a note whose seq moved with no job queued is embedded at its current text at boot (#463)', () => {
+  // The boot catch-up's staleness check (blocks of the note's current seq), not a job row, is what finds it:
+  // a body changed in SQL (backup.md's rollback, code from before #494) moves `seq` through the 0021 trigger
+  // and queues nothing.
+  it('a body changed by SQL: the next boot embeds the new text', async () => {
+    const { vaultId, note } = await embeddedNote()
+    await db.execute(sql`UPDATE notes SET body = ${V2} WHERE id = ${note.id}`)
+    const [row] = (await db.execute(sql`SELECT seq FROM notes WHERE id = ${note.id}`)) as unknown as [{ seq: string }]
+    const seq = Number(row.seq)
+    expect(seq).toBeGreaterThan(note.seq)
+    const key = embeddingJobKey(note.id, seq)
+    expect(await jobByKey(key)).toBeUndefined()
+    expect(await blockState(note.id)).toEqual({ seqs: [String(note.seq)], keys: keysOf(note, V1) })
+    expect(await embeddingState([vaultId])).toEqual({ notes: 1, pending: 1, failed: 0 })
+
+    expect(await scheduleMissingEmbeddings()).toBeGreaterThanOrEqual(1)
+    await flushEmbeddings()
+
+    await expectCurrent(note, seq)
+    expect(await jobByKey(key)).toMatchObject({ attempts: 1, lastError: null, doneAt: expect.any(Date) })
     expect(await embeddingState([vaultId])).toEqual({ notes: 1, pending: 0, failed: 0 })
   })
 })
