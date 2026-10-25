@@ -1250,16 +1250,19 @@ give the same edges in any insertion order. REST graph routes return these
 fields as they are (additive: the canvas reads `source`/`target`/`kind`),
 and a link both ways is now two REST edges.
 
-Community detection runs `graphology-communities-louvain` over the
-undirected projection of the assembled graph (`EdgeList.pairs`: the first
-edge per unordered pair and kind, ends as first added: the edge list
-before #558, so keeping directions moves no community) on every call,
-seeded from the node ids. The community view's `weight` counts the same
-pairs. Its result
-also depends on node and edge insertion order, so every query feeding it
-(notes, repository files, note links, code imports, semantic edges) has
-an `ORDER BY` on ids (#816): unordered, the row order followed the index
-the planner picked, and two calls over the same data could differ. The merged cross-resource view
+Graph answers follow the content, never the per-database ids (#1006): the
+same notes and files give the same nodes, edges and communities in any
+database. Nodes are in `compareNodes` order (path in code-unit order, then
+`code` before `note`; container and node id only for one path and kind in
+two containers of a merged graph), an undirected edge names its earlier
+end as `source`, and edges sort by their ends' places, then kind, relation
+and source (`contentOrder`). Community detection runs
+`graphology-communities-louvain` over the undirected projection of the
+assembled graph (one pair per unordered pair and kind) on every call, nodes
+and pairs in that order, seeded from the nodes' `resourceType:path` keys;
+communities are numbered 0, 1, … by their first member in node order.
+The community view's `weight` counts the same pairs. No query's row order
+reaches Louvain. The merged cross-resource view
 additionally requires the resource owner's `mergeable` flag and the
 viewing user's own per-resource opt-in — three independent gates, all
 re-resolved live.
@@ -1298,7 +1301,7 @@ for a ref without an extension also against the extension-less file path,
 so `store.ts` never matches `store.ts.orig`);
 a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
 tier. One match is `{node}`; several are `{candidates, next, total}`
-(`{path, kind, id}`, shorter path first, then path and id; 10 shown,
+(`{path, kind, id}`, shorter path first, then path, kind and id; 10 shown,
 `next` the 11th as a `limit` + 1 read); none is `{suggestions}` (empty for
 a node id, so an id out of reach answers as a missing one): up to 5
 paths from a pool of at most 200 per table (same basename without

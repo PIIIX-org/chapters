@@ -58,7 +58,7 @@ const anyOf = (parts: SQL[]) => sql`(${sql.join(parts, sql` OR `)})`
 const endsWithSegment = (column: SQL, suffix: string) => sql`right(${column}, length(lower(${text(suffix)})) + 1) = '/' || lower(${text(suffix)})`
 
 const byRank = (a: NodeCandidate, b: NodeCandidate) =>
-  [...a.path].length - [...b.path].length || compareCodeUnits(a.path, b.path) || compareCodeUnits(a.id, b.id)
+  [...a.path].length - [...b.path].length || compareCodeUnits(a.path, b.path) || compareCodeUnits(a.kind, b.kind) || compareCodeUnits(a.id, b.id)
 const candidate = (n: InternalNode): NodeCandidate => ({ path: n.path, kind: n.resourceType, id: n.id })
 
 /** The nodes in `resources` whose id (tier 1) or path (tier 2) is `ref`. */

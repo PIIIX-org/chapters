@@ -194,6 +194,13 @@ describe('graph answers follow the content, not the ids (#1006)', () => {
     expect(await ask(B, args)).toBe(await ask(A, args))
   })
 
+  it('a path naming a note and a file: the candidates are listed alike', async () => {
+    const args = (w: World) => ({ vaultId: w.vaultId, repositoryId: w.repoId, neighborsOf: 'docs/plan' })
+    const a = await ask(A, args)
+    expect(a).toContain('candidates')
+    expect(await ask(B, args)).toBe(a)
+  })
+
   it('buildGraph: nodes, communities and edges (an undirected edge from its lower end) in content order', async () => {
     const graph = async (w: World) => mask(w, JSON.stringify(await buildGraph({ vaultIds: [w.vaultId], repositoryIds: [w.repoId] })))
     const a = await graph(A)

@@ -10,6 +10,7 @@ import {
   FILE_NODE_COLUMNS,
   NOTE_NODE_COLUMNS,
   STRUCTURAL_GROUP_CAP,
+  compareNodes,
   fileNode,
   groupKeys,
   importEdge,
@@ -41,7 +42,7 @@ export interface LocalNode extends InternalNode {
 }
 
 export interface LocalGraph {
-  /** Nearest first: by distance, then path and id in code-unit order; the centre first. */
+  /** Nearest first: by distance, then node order (`compareNodes`: path, then kind); the centre first. */
   nodes: LocalNode[]
   edges: GraphEdge[]
   /** Structural groups over the cap that a listed node belongs to, skipped as in `buildGraph`. */
@@ -337,8 +338,7 @@ async function groupMembers(walk: Walk, frontier: InternalNode[]): Promise<Map<s
   return byKey
 }
 
-const byNearest = (a: LocalNode, b: LocalNode) =>
-  a.distance - b.distance || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+const byNearest = (a: LocalNode, b: LocalNode) => a.distance - b.distance || compareNodes(a, b)
 
 /** The local graph around `center` (see the module comment). */
 export async function neighborhood(resources: GraphResourceSet, center: InternalNode, options: NeighborhoodOptions): Promise<LocalGraph> {

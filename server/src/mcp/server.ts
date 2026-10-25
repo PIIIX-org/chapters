@@ -86,7 +86,7 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
 import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
-import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
+import { EDGE_KINDS, buildGraph, compareNodes, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
 import { BACKLINK_CAP, backlinksOf, neighborhood, type Backlink } from '../graph/neighbors.js'
 import { MAX_CANDIDATES, resolveNode, type NodeCandidate } from '../graph/resolve-node.js'
@@ -2812,7 +2812,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
   )
 
-  /** A community edge's identity in a page guard and in the order edges are listed; also the order `find_graph_path` walks edges in. */
+  /** A community edge's identity in a page guard and in the order edges are listed. */
   const edgeKey = (e: { source: string; target: string; kind?: string }) => `${e.source}>${e.target}:${e.kind ?? ''}`
   const byEdgeKey = (a: { source: string; target: string; kind?: string }, b: { source: string; target: string; kind?: string }) =>
     compareCodeUnits(edgeKey(a), edgeKey(b))
@@ -2932,10 +2932,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         }
       }
       const { nodes, edges, cappedGroups, ...head } = await buildGraph(resources, filters)
-      // Best-connected first (edges listed), then path and id: what `limit` keeps.
+      // Best-connected first (edges listed), then node order (path, then kind): what `limit` keeps.
       const degree = new Map<string, number>()
       for (const e of edges) for (const id of [e.source, e.target]) degree.set(id, (degree.get(id) ?? 0) + 1)
-      const ranking = [...nodes].sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || compareCodeUnits(a.path, b.path) || compareCodeUnits(a.id, b.id))
+      const ranking = [...nodes].sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || compareNodes(a, b))
       const kept = ranking.slice(0, args.limit)
       // As for `neighborsOf`: the skipped groups a listed node belongs to.
       const listedGroups = new Set(kept.flatMap(groupKeys))
@@ -2974,8 +2974,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       if ('candidates' in source) return candidatesAnswer(source, { end: 'source' })
       if ('candidates' in target) return candidatesAnswer(target, { end: 'target' })
       const graph = await buildGraph(resources)
-      // Edges in a stable order, so of several shortest paths every page continues the same one.
-      const { nodes, edges, ...head } = findShortestPath({ ...graph, edges: [...graph.edges].sort(byEdgeKey) }, source.node.id, target.node.id)
+      // buildGraph's edges are in content order (#1006), so of several shortest paths every page and every database continues the same one.
+      const { nodes, edges, ...head } = findShortestPath(graph, source.node.id, target.node.id)
       return {
         head,
         sections: [
