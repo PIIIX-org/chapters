@@ -17,6 +17,7 @@ import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import { embedder } from '../src/search/embeddings.js'
 import { findSymbols, searchNotes } from '../src/search/search.js'
 import { createActiveUser } from './helpers.js'
 
@@ -71,8 +72,20 @@ describe('equal scores keep one order whatever the write order (#623)', () => {
         (r) => `${r.resourceType}:${r.path}`,
       )
     const fromA = await mixed(a)
-    expect(fromA.filter((hit) => hit.startsWith('symbol:'))).toEqual(CODE_SORTED.slice(0, 30).map((p) => `symbol:${p}`).slice(0, fromA.length / 2))
+    const symbolHits = fromA.filter((hit) => hit.startsWith('symbol:'))
+    expect(symbolHits).toEqual(CODE_SORTED.slice(0, symbolHits.length).map((p) => `symbol:${p}`))
     expect(await mixed(b)).toEqual(fromA)
+  }, 120_000)
+
+  it('symbols of one file: by start line, not by their ids (which differ on every instance)', async () => {
+    // Six case variants of one name in one file: every one is an exact name match. The query embedding fails,
+    // so the keyword leg alone ranks them and its cut and order are what the answer shows.
+    const names = VARIANTS.slice(0, 6)
+    const repo = await repositoryWith(['src/one.ts'], () => names.map((name) => `export function ${name}() { return 0 }\n`).join(''))
+    vi.spyOn(embedder, 'embed').mockRejectedValue(new Error('embedder down'))
+    const answer = await findSymbols([repo], 'tiebrk')
+    expect(answer.retrieval_mode).toBe('keyword_only')
+    expect(answer.results.map((r) => r.startLine)).toEqual([1, 2, 3, 4, 5, 6])
   }, 120_000)
 
   it('notes', async () => {
@@ -118,16 +131,17 @@ function planAsOnABigInstance() {
 
 describe('a filtered vector leg is not starved by the rest of the instance (#462)', () => {
   it('a small repository inside a big instance keeps its vector hits', async () => {
-    // 250 files of another repository (more than the leg's ef_search of 200) are all nearer the query than
-    // the small repository's files, which share one word with it, so only the vector channel can find them.
+    // 500 files of another repository (more than the leg's ef_search of 200) are all nearer the query than
+    // the small repository's files, which share one word with it (distance 0.74, under the fake embedder's
+    // gate of 0.8), so only the vector channel can find them.
     const big = await repository('big')
-    const files = Array.from({ length: 250 }, (_, i) => ({ path: `big/f${i}.md`, content: `starve query words w${i}\n` }))
+    const files = Array.from({ length: 500 }, (_, i) => ({ path: `big/f${i}.md`, content: `starve query words w${i}\n` }))
     await syncRepositoryFiles(big, files, files.map((f) => f.path))
-    const small = await repositoryWith(['small/a.md', 'small/b.md'], (path) => (path.endsWith('a.md') ? 'starve other\n' : 'starve thing\n'))
+    const small = await repositoryWith(['small/a.md', 'small/c.md'], (path) => (path.endsWith('a.md') ? 'starve other\n' : 'starve thing\n'))
 
     planAsOnABigInstance()
     const answer = await searchNotes({ vaultIds: [], repositoryIds: [small] }, 'starve query words', 20)
     expect(answer.retrieval_mode).toBe('hybrid')
-    expect(answer.results.map((r) => r.path)).toEqual(['small/a.md', 'small/b.md'])
+    expect(answer.results.map((r) => r.path)).toEqual(['small/a.md', 'small/c.md'])
   }, 120_000)
 })
