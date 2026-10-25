@@ -5,7 +5,8 @@
 -- extract it again: clear those vectors here. A no-op on any instance that
 -- never ran those heads. Additive (the 0021 rule, backup.md §5): older code
 -- never wrote code sections, and its re-extraction writes them unembedded too.
--- Numbered 0042 because open PRs hold 0039-0041; its `when` (1792700000000) is
--- above theirs, so it applies whatever order they merge in.
+-- Numbered 0044 (`when` 1792775000000): 0043 (#1009) merged first with a
+-- larger `when` than this file's earlier 0042, and drizzle applies only entries
+-- newer than the last one applied, so this must come after it.
 UPDATE "blocks" SET "embedding" = NULL, "embed_key" = NULL
 WHERE "owner_type" = 'code' AND "kind" = 'section' AND ("embedding" IS NOT NULL OR "embed_key" IS NOT NULL);
