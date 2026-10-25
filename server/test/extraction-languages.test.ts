@@ -169,6 +169,19 @@ describe('C and C++ (#464)', () => {
     const { symbols } = await extractStructure('c', src, 'db/db_impl.h')
     expect(brief(symbols)).toEqual(['2-7 namespace db (exported)', '3-6 class db.DBImpl (exported)', '5-5 method DBImpl.Get'])
   })
+
+  it('a macro-prefixed C declaration in a `.h` header is a function, not a method of its return type', async () => {
+    const src = ['#define CURL_EXTERN', 'CURL_EXTERN CURLcode curl_mime_name(curl_mimepart *part, const char *name);', 'CURL_EXTERN void curl_free(void *p);'].join('\n')
+    const { symbols } = await extractStructure('c', src, 'include/curl/curl.h')
+    expect(brief(symbols)).toEqual(['2-2 function curl_mime_name (exported)', '3-3 function curl_free (exported)'])
+  })
+
+  it('a class declared as `class A::B {}` is parent `B`, so its in-class prototype and out-of-line definition are one method', async () => {
+    const src = ['class A::B {', '  void f();', '};', 'void A::B::f() {}'].join('\n')
+    const { symbols } = await extractStructure('cpp', src, 'src/b.cc')
+    // The nested class defined out of line is not a class symbol of its own (its name is qualified); its method is one symbol.
+    expect(brief(symbols)).toEqual(['4-4 method B.f'])
+  })
 })
 
 describe('C# (#464)', () => {

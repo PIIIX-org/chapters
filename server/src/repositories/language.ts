@@ -3,7 +3,7 @@
  * filters). `.tsx`, `.mts` and `.cts` are all `typescript`, so one filter
  * finds every TypeScript file (#449, #451); extraction.ts picks the grammar
  * from the file extension (TSX for `.tsx`), not from this label. A `.h`
- * header is `c` (parsed as C). Markdown and HTML get heading outlines, not
+ * header is `c`, parsed with the C++ grammar (extraction.ts). Markdown and HTML get heading outlines, not
  * symbols (outline.ts, #464). A sync labels a file it writes; extraction
  * relabels an unchanged file whose label a new version of this table changed.
  */

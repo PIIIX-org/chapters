@@ -4,8 +4,8 @@
  * heading of the same or a higher level (a nested section overlaps its
  * parent, as a note's do), named by the heading titles from the top level
  * down joined with ` > ` (a note section's `inner_path`). code-blocks.ts makes
- * each one a `section` block: searchable and embedded, not a symbol, so
- * find_symbols and read_file's outline never list them. Pure; versioned by
+ * each one a `section` block: an outline block, never embedded and not a
+ * symbol, so find_symbols and read_file's outline never list them. Pure; versioned by
  * extraction.ts `EXTRACTOR_VERSION`.
  */
 import { headings } from '../text/blocks.js'

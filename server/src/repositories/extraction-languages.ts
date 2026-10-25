@@ -89,10 +89,10 @@ function typeName(node: Node | null): string | null {
   }
 }
 
-/** A container's name: its `name`, or the type an `impl` block is for; null for an anonymous namespace. */
+/** A container's name: its `name` (the last part of `class A::B {}`), or the type an `impl` block is for; null for an anonymous namespace. */
 function containerName(node: Node): string | null {
   const name = node.childForFieldName('name')
-  return name ? name.text : typeName(node.childForFieldName('type'))
+  return name ? (name.type === 'qualified_identifier' ? typeName(name) : name.text) : typeName(node.childForFieldName('type'))
 }
 
 type Place = { at: 'module' } | { at: 'namespace' | 'class'; name: string }
@@ -124,7 +124,10 @@ function lines(node: Node): { startLine: number; endLine: number } {
 /** A query match of a #464 grammar turned into a symbol, or null when it is not one. */
 export function scopedSymbol(match: QueryMatch, rules: ScopeRules): ScopedSymbol | null {
   const decl = match.captures.find((c) => c.name.startsWith('decl.'))
-  const nameNode = match.captures.find((c) => c.name === 'name')?.node
+  let nameNode = match.captures.find((c) => c.name === 'name')?.node
+  // `CURL_EXTERN CURLcode f(...)` in a `.h` read by the C++ grammar: the macro makes `CURLcode f` a
+  // qualified name with a MISSING `::`. It is the function `f`, not a method of `CURLcode`.
+  if (nameNode?.type === 'qualified_identifier' && nameNode.children.some((c) => c?.isMissing)) nameNode = nameNode.childForFieldName('name') ?? nameNode
   if (!decl || !nameNode) return null
   const node = decl.node
   const prototype = match.captures.some((c) => c.name === 'prototype')
