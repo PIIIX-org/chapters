@@ -1,13 +1,16 @@
+import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import {
   CallToolRequestSchema,
   ErrorCode,
+  InitializeRequestSchema,
   ListResourcesRequestSchema,
   ListToolsRequestSchema,
   McpError,
   type CallToolRequest,
   type CallToolResult,
+  type InitializeRequest,
   type ListResourcesResult,
   type ListToolsResult,
   type Tool,
@@ -411,8 +414,47 @@ export function listMcpTools(): readonly McpToolInfo[] {
   return toolCatalog
 }
 
+const SERVER_VERSION = '0.2.0'
+const definitionsVersions = new Map<ToolProfile, Promise<string>>()
+
+/**
+ * A profile's definitions version (#681): `0.2.0+` and the first 16 hex of
+ * the sha256 of the `tools/list`, `prompts/list` and instructions an
+ * account token of that profile with admin access is sent, read once from
+ * the registrations. It changes only when a definition does. initialize
+ * answers it as `serverInfo.version`, which no list or instruction text
+ * carries, so it costs the reader budget nothing.
+ */
+export function definitionsVersion(profile: ToolProfile): Promise<string> {
+  let version = definitionsVersions.get(profile)
+  if (!version) {
+    version = hashDefinitions(profile)
+    definitionsVersions.set(profile, version)
+  }
+  return version
+}
+
+async function hashDefinitions(profile: ToolProfile): Promise<string> {
+  const { server } = buildServer({ ...CATALOG_AUTH, connection: { ...CATALOG_AUTH.connection, profile } })
+  // The list handlers as a request calls them (`_requestHandlers` is private in the SDK's types).
+  const handlers: Map<string, (request: unknown, extra: unknown) => Promise<unknown>> = server.server['_requestHandlers']
+  const listed = async (method: string): Promise<string> => {
+    const handler = handlers.get(method)
+    return handler ? JSON.stringify(await handler({ method, params: {} }, {})) : ''
+  }
+  const hash = createHash('sha256')
+    .update(await listed('tools/list'))
+    .update('\0')
+    .update(await listed('prompts/list'))
+    .update('\0')
+    .update(instructionsFor(profile))
+    .digest('hex')
+  return `${SERVER_VERSION}+${hash.slice(0, 16)}`
+}
+
 function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] } {
-  const server = new McpServer({ name: 'elara', version: '0.2.0' }, { instructions: instructionsFor(auth.connection.profile) })
+  const serverInfo = { name: 'elara', version: SERVER_VERSION }
+  const server = new McpServer(serverInfo, { instructions: instructionsFor(auth.connection.profile) })
   const actor: Actor = { type: 'mcp', id: auth.connection.id }
   // Who editors see in "In this note now" (#481): the connection's label only.
   const presence = { key: auth.connection.id, name: auth.connection.name }
@@ -455,6 +497,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     schema: unknown,
     handler: unknown,
   ) => void
+  // initialize answers the profile's definitions version (#681); the SDK's
+  // own handler reads `serverInfo` when it answers (`_oninitialize` is
+  // private in its types).
+  setRequestHandler(InitializeRequestSchema, async (request: InitializeRequest) => {
+    serverInfo.version = await definitionsVersion(auth.connection.profile)
+    return server.server['_oninitialize'](request)
+  })
   server.server.setRequestHandler = (schema: unknown, handler: (...args: never[]) => unknown): void => {
     if (schema === ListToolsRequestSchema) {
       // This is the SDK's own tools/list handler: it lists every registered, enabled tool.
