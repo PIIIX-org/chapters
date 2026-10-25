@@ -297,7 +297,8 @@ describe('graph and reads', () => {
   })
 
   it('a read is never laddered: text pages by lines at full', async () => {
-    const pages = await walk('read_file', { repositoryId: repoId, path: 'src/ladder.ts', budget_tokens: 256 })
+    // `outline: false`: the body by pages, not the outline a read over its budget answers (#417).
+    const pages = await walk('read_file', { repositoryId: repoId, path: 'src/ladder.ts', budget_tokens: 256, outline: false })
     expect(pages.length).toBeGreaterThan(5)
     expect(pages.map((p) => p.content).join('')).toBe(ladderFile)
     for (const p of pages) expect(levelOf(p)).toBe('full')
@@ -308,7 +309,7 @@ describe('graph and reads', () => {
     expect(full.symbols).toHaveLength(5)
     let countedWithCursor = 0
     for (let budget = 256; budget <= 320; budget++) {
-      const pages = await walk('read_file', { repositoryId: outlineRepoId, path: 'src/outline.ts', budget_tokens: budget })
+      const pages = await walk('read_file', { repositoryId: outlineRepoId, path: 'src/outline.ts', budget_tokens: budget, outline: false })
       expect(pages.map((p) => p.content).join(''), `budget ${budget}`).toBe(outlineFile)
       for (const p of pages) {
         const t = p.truncated

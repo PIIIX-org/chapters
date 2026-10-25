@@ -2015,8 +2015,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   profile gets the same bytes (#681). Reader: tools with
   `budget_tokens` (characters / 4) fit it and end with `truncated`
   (`list_vaults` and `list_repositories` take no budget and
-  answer bare arrays), the cursor is the only way on (read_note/read_file
-  page long bodies only that way), manuals are
+  answer bare arrays), the cursor is the only way on, read_note/read_file
+  answer their outline with `outline: true` (opt-in: by default it cost
+  the premise benchmark more on every suite, #1002) and read parts with `targets` (#416,
+  #417: `mcp/read-targets.ts`, `text/targets.ts`; a target is
+  `{lines: "a-b"}`, `{block}`, `{heading: "A > B"}` or, on read_file,
+  `{symbol}`, each answered as a `part` text section of `response.ts`,
+  a miss as a per-target error item; the outline is section 0 and the
+  withheld body section 1, so a cursor at 0 pages the outline and one
+  past it the body; note lines count over the projected file, D3, with
+  `body_start_line`), manuals are
   `elara://manual/conventions` and one per family. Writer and admin (the
   same text) add the whole-`body` merge base (`base_rev`, else this
   token's last `read_note`, paged or not, within `READ_WINDOW_HOURS`,
@@ -2025,10 +2033,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `idempotency_key`": only the note writes take the key, admin's other
   writes refuse it). Keyed on profile only: a
   `read`-access token with the `writer` profile also gets the write
-  sentence. The reader text fits the 2,000-token budget because the
-  shared `budgetArgs` descriptions (`response.ts`) became `Max tokens;
-  default N` and `` `truncated.cursor` `` (the instructions explain
-  both). `test/mcp-instructions.test.ts` checks the rules per profile,
+  sentence. The reader text fits the 2,000-token budget (1,995 measured
+  with #416/#417) because the shared `budgetArgs` (`response.ts`) list
+  `Default N` and `Next page`, check the budget's 256-25,000 range in a
+  refinement instead of listing `minimum`/`maximum`, pinned ids say
+  `omit when pinned`, and the read targets are explained once here
+  rather than per tool. `test/mcp-instructions.test.ts` checks the rules per profile,
   that every manual named is in the token's `resources/list`, and the
   same bytes across two initializes and two vault pins per profile.
 - **Tool annotations** (#434, ADR-004 §2.6): `toolAnnotations()` in
