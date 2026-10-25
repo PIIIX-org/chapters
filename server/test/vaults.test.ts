@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
+import { randomUUID } from 'node:crypto'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { notifications } from '../src/db/schema.js'
+import { notifications, semanticEdges } from '../src/db/schema.js'
+import { createNote } from '../src/notes/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -125,6 +127,36 @@ describe('vault + share endpoints', () => {
       headers: { cookie: await loginCookie(app, next.email) },
     })
     expect((access.json() as { access: string }).access).toBe('owner')
+  })
+
+  it("a transfer drops the vault's note↔code semantic edges, which joined the previous owner's code (#461)", async () => {
+    const owner = await createActiveUser()
+    const next = await createActiveUser()
+    const ownerCookie = await loginCookie(app, owner.email)
+    const vault = (
+      await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie: ownerCookie }, body: { name: 'Handover edges' } })
+    ).json() as { id: string }
+    const note = await createNote(vault.id, { type: 'notes', name: `edges-${Date.now()}`, body: 'Transfer edges.' })
+    // The other ends are synthetic ids: the edge table has no foreign key, and the delete keys on the note's side.
+    // Edges the other ends own, so the note's own recompute (the embedding queue) cannot remove them first.
+    const [file, sibling] = [randomUUID(), randomUUID()]
+    await db.insert(semanticEdges).values([
+      { sourceType: 'code', sourceId: file, targetType: 'note', targetId: note.id, similarity: 0.9 },
+      { sourceType: 'note', sourceId: sibling, targetType: 'note', targetId: note.id, similarity: 0.9 },
+    ])
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/vaults/${vault.id}/transfer`,
+      headers: { cookie: ownerCookie },
+      body: { newOwnerId: next.id },
+    })
+    expect(res.statusCode).toBe(200)
+    const left = await db
+      .select()
+      .from(semanticEdges)
+      .where(and(eq(semanticEdges.targetType, 'note'), eq(semanticEdges.targetId, note.id)))
+    expect(left.map((e) => `${e.sourceType}:${e.sourceId}`)).toEqual([`note:${sibling}`])
   })
 
   it('team membership change notifies owners of vaults shared to that team', async () => {
