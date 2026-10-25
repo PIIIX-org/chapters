@@ -154,10 +154,11 @@ describe('code and symbol filters apply inside each leg (#454)', () => {
     await syncRepositoryFiles(row!.id, files, files.map((f) => f.path))
     await flushExtraction()
     const classes = TARGETS.map((i) => `symbol:z/c${i}.ts`)
+    // Sorted: the classes' vector distances differ by their paths' words (the order is not what this checks).
     const hits = async (filters: Filters) =>
-      (await searchNotes({ vaultIds: [], repositoryIds: [row!.id] }, 'widget', TARGETS.length, filters, { includeSymbols: true })).results.map(
-        (r) => `${r.resourceType}:${r.path}`,
-      )
+      (await searchNotes({ vaultIds: [], repositoryIds: [row!.id] }, 'widget', TARGETS.length, filters, { includeSymbols: true })).results
+        .map((r) => `${r.resourceType}:${r.path}`)
+        .sort()
     expect((await hits({})).filter((hit) => hit.startsWith('symbol:z/'))).toEqual([])
     await inBothPlans(() => hits({ kinds: ['class'] }), classes)
     await inBothPlans(() => hits({ types: ['class'] }), classes)
