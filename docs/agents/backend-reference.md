@@ -2655,9 +2655,15 @@ cut on line boundaries into pieces with the same kind and `inner_path`,
 numbered by `sibling_index`; each piece spans its own lines and the last
 ends where the section ends. The embedded text is
 `<path>\n<inner_path>\n<piece>` (a preamble: `<path>\n<piece>`): no frontmatter, so a
-frontmatter-only edit changes no block (the same spirit as #459), and no
+frontmatter-only edit changes no block, and no
 `title`/`type`/`tags` (`type` is the path's first segment, a title is
-usually the H1 already). Note block lines are **body-relative** (ADR-004
+usually the H1 already). No embedded text, note or code, carries a
+timestamp or another row field (#459): no frontmatter `timestamp`,
+`created` or `updated`, no `updated_at`, no file `source_modified_at`;
+only the path, heading path, body or content, and a symbol's kind, name
+and start line. So the same content embeds the same texts whenever it was
+written, and a timestamp-only change embeds nothing
+(`server/test/embed-text-stable.test.ts`). Note block lines are **body-relative** (ADR-004
 §2.2 storage rule); answers that render them add `body_start_line − 1`.
 *Rows*: `content_hash` is the
 sha256 of the block's lines, `owner_version` the file `content_hash` or
@@ -2962,11 +2968,16 @@ is the known cause, #496), so re-running it at every boot would turn one
 bad file into a crash loop of the instance. It is retried, bounded, when
 the code that crashed changes: a new `EXTRACTOR_VERSION` or `EMBEDDER_ID`
 changes the key, which gives the item one new job with 3 attempts; an
-operator re-runs a note's with `pnpm reindex`; a file's runs again when its content changes.
+operator re-runs a note's with `pnpm reindex` or `doctor --repair`
+(`vector-failed`); a file's runs again when its content changes.
 A job running at a graceful
 shutdown also keeps its claim (leases are not released). Crash recovery: a job a dead process held becomes claimable
 when its lease runs out; every drainer is woken every 5 s
-(`startJobPolling`, started at boot) for such jobs and for backoffs.
+(`startJobPolling`, started at boot) for such jobs and for backoffs. So a
+note edited just before the process died is embedded at its current text
+after the restart (#463): its job was inserted with the edit, and until it
+runs the note keeps its previous blocks and counts as pending
+(`server/test/embed-restart.test.ts`).
 Boot deletes successful jobs finished more than 7 days ago
 (`pruneFinishedJobs`); failed ones stay as the per-file and per-note
 status. A job that outlives its lease while still running can run twice
