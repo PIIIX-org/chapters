@@ -3027,6 +3027,18 @@ pnpm -C server test # vitest run — needs Postgres reachable at DATABASE_URL
   a transient download failure (network error, HTTP 408/429/5xx) reports
   it as skipped with the reason; a 404 or wrong model id fails it. The
   lab workflow's `real-model` job runs it nightly (see `lab.md`).
+- Deterministic answers (#473, ADR-004 §1.3): `test/mcp-deterministic-answers.test.ts`
+  builds one vault and repository in two accounts, with their rows inserted
+  in opposite orders. Each read tool's questions (`search`, `find_symbols`,
+  `graph`, `browse_*`, `read_note`, `read_file`, `repository_status`) must
+  give the same bytes twice in one database. In the other database they must
+  give the same bytes once that database's ids and the allowlisted time keys
+  are masked. A new read tool, or a new argument that changes an answer's
+  shape, adds its questions there. The answers that still differ across
+  databases name their issue and skip only that comparison: `search` symbol
+  ties (#623), graph order from ids (#1006), semantic edges from embed order
+  (#1007) and imports pushed before their target (#1008). #1007 and #1008
+  are also `it.fails` cases, which go red once fixed.
 - Live/e2e verification (booting a real server against a real database
   and exercising it over real HTTP) is a standing project discipline,
   not optional — several real bugs in this codebase (an extraction
