@@ -1992,6 +1992,26 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   rather than per tool. `test/mcp-instructions.test.ts` checks the rules per profile,
   that every manual named is in the token's `resources/list`, and the
   same bytes across two initializes and two vault pins per profile.
+- **Cacheable prompt** (#681): what a token is sent before its first
+  call opens every agent prompt, and providers bill a repeated prefix at
+  a fraction of the price only if its bytes repeat. `initialize`,
+  `tools/list` and `prompts/list` are the same bytes for every token of
+  one profile, scope and access, whoever minted it, whichever vault it
+  pins and on any date: tools and prompts list in registration order,
+  and no list or instruction text carries an id, name, date, count or
+  build sha. `initialize` answers `serverInfo.version` as `0.2.0+` and
+  `definitionsVersion(profile)` in `server.ts`: the first 16 hex of the
+  sha256 of the `tools/list`, `prompts/list` and instructions of an
+  account token of that profile with admin access, computed once per
+  process from the registrations, so it changes only when a definition
+  does. It is outside the counted lists and instructions, so the reader
+  budget is unchanged (7,980 characters, ~1,995 tokens).
+  `test/mcp-cacheable-prompt.test.ts` compares the raw bytes of two
+  accounts' tokens on two faked dates per profile and scope (account,
+  vault pin) and the version against the served bytes;
+  `test/mcp-definitions-version.test.ts` checks it stays the same across
+  builds and changes when a tool description, a prompt description
+  (writer and admin only) or the instructions change.
 - **Tool annotations** (#434, ADR-004 §2.6): `toolAnnotations()` in
   `server.ts` derives each tool's MCP `annotations` from its `tool()`
   record; `registerTool` lists them and `McpToolInfo` carries the same
