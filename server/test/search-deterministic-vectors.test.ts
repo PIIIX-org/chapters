@@ -17,7 +17,6 @@ import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
-import { embedder } from '../src/search/embeddings.js'
 import { findSymbols, searchNotes } from '../src/search/search.js'
 import { createActiveUser } from './helpers.js'
 
