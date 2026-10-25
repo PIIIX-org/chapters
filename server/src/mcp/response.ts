@@ -44,19 +44,21 @@ const MAX_BUDGET = 25_000
 
 /**
  * The arguments every budgeted tool takes, with its kind's default in the
- * description. What a token is and how the cursor is used is said once, in
- * `initialize.instructions` (#435, instructions.ts).
+ * description. What a token is, the budget's range and how the cursor is
+ * used are said once, in `initialize.instructions` (#435, instructions.ts):
+ * the range is checked here but not listed as `minimum`/`maximum`, which
+ * every budgeted tool would repeat in tools/list (#416 made room for read
+ * targets in the reader budget so).
  */
 export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
   return {
+    // `.int()` would list JS's safe-integer bounds as `minimum`/`maximum`: the integer check is in the refinement.
     budget_tokens: z
       .number()
-      .int()
-      .min(MIN_BUDGET)
-      .max(MAX_BUDGET)
+      .refine((n) => Number.isInteger(n) && n >= MIN_BUDGET && n <= MAX_BUDGET, { error: `budget_tokens is an integer from ${MIN_BUDGET} to ${MAX_BUDGET}` })
       .optional()
-      .describe(`Max tokens; default ${DEFAULT_BUDGET[kind]}`),
-    cursor: z.string().optional().describe('`truncated.cursor`'),
+      .describe(`Default ${DEFAULT_BUDGET[kind]}`),
+    cursor: z.string().optional().describe('Next page'),
   }
 }
 
@@ -141,20 +143,37 @@ export interface RankedSection<T> {
   id: (item: T) => string
   limit?: number
   ladder?: Ladder<T>
+  /** No items: the answer has no key for it (a read's outline outside outline mode, #417). */
+  omitEmpty?: boolean
 }
 
 /**
  * Text cut at line boundaries (a line longer than the budget is split). Its
- * shown/total/dropped count lines. `lines`: add `lines: [first, last]`
- * (1-based) to the answer when only part of the text is shown. `block`: send
- * this page's text as a text block of its own after the JSON (#445), on
- * every page, empty or not.
+ * shown/total/dropped count lines. `lines`: add `lines: [first, last]` to
+ * the answer when only part of the text is shown, numbered from
+ * `firstLine` (default 1; a note body's `body_start_line`, ADR-004 §2.2 D3).
+ * `block`: send this page's text as a text block of its own after the JSON
+ * (#445), on every page, empty or not.
+ *
+ * `withheld` (#417): the page shows none of it, counts all of it as
+ * dropped, and its cursor starts it (a read that answers its outline).
+ *
+ * `part` (#416): the text is one item of the list `name`, which the parts
+ * of that name make in order (one per read target): shown as `{...part,
+ * lines: [a, b], text, next?}` numbered from `firstLine`, where `next: "a-b"`
+ * names the lines of the part this page did not show; a part the page does
+ * not reach is `{...part, next}`, and one an earlier page finished is left
+ * out. With `lines` false a part has no text and is shown as it is (a
+ * target's error).
  */
 export interface TextSection {
   name: string
   text: string
   lines?: boolean
   block?: boolean
+  firstLine?: number
+  withheld?: boolean
+  part?: Record<string, unknown>
 }
 
 export type Section =
@@ -358,7 +377,7 @@ function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number)
   let any = false
   let counted = false
   for (const [n, slot] of slots.entries()) {
-    if (slot.start < 0) continue
+    if (slot.start < 0 || (slot.section.kind === 'text' && slot.section.withheld)) continue
     if (slot.section.kind === 'text') {
       if (counted) continue
       const { text } = slot.section
@@ -548,31 +567,66 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   // At counts and total: a list on this page was counted, so nothing after it is shown or continued.
   let counted = false
   let anyMore = false
+  // A withheld text (a read answering its outline, #417) puts the page at `locations`.
+  let withheld = false
   const values: Array<[string, unknown]> = []
+  const parts = new Map<string, unknown[]>()
   const blocks: Block[] = []
   for (const [n, slot] of plan.entries()) {
     const { section } = slot
     if (section.kind === 'text') {
+      if (slot.start < 0 && (section.part || section.withheld)) continue
+      if (section.withheld) {
+        const total = totalLines(section.text)
+        counts.shown[section.name] = 0
+        counts.total[section.name] = total
+        counts.dropped[section.name] = total
+        if (cursor === null && total > 0) cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: 0 }, g: guardOf(section.text) })
+        anyDropped ||= total > 0
+        withheld = true
+        continue
+      }
       const chunk = slot.start < 0 || counted ? '' : section.text.slice(slot.start, slot.start + shown[n]!)
       const rest = slot.start < 0 ? '' : section.text.slice(slot.start)
       // A line counts as shown on the page where it ends, so a line split across pages counts once.
       const shownLines = chunk.length < rest.length ? newlines(chunk) : totalLines(chunk)
       const total = totalLines(rest)
-      if (section.block) {
-        // content[0] is the JSON, so the blocks after it are content[1], content[2], ...
-        values.push([section.name, { in: `content[${blocks.length + 1}]` }])
-        blocks.push({ name: section.name, text: chunk })
+      // The first line this page shows (or would), in the document's numbering.
+      const first = (section.firstLine ?? 1) + newlines(section.text, slot.start)
+      if (section.part) {
+        let list = parts.get(section.name)
+        if (!list) {
+          list = []
+          parts.set(section.name, list)
+          values.push([section.name, list])
+        }
+        const last = (section.firstLine ?? 1) + totalLines(section.text) - 1
+        if (!section.lines) list.push(section.part)
+        else if (chunk === '') list.push({ ...section.part, next: `${first}-${last}` })
+        else {
+          const to = first + totalLines(chunk) - 1
+          // A line split across pages goes on from where this page cut it.
+          const next = chunk.length < rest.length ? { next: `${chunk.endsWith('\n') ? to + 1 : to}-${last}` } : {}
+          list.push({ ...section.part, lines: [first, to], text: chunk, ...next })
+        }
+        counts.shown[section.name] = (counts.shown[section.name] ?? 0) + shownLines
+        const before = counts.total[section.name]
+        counts.total[section.name] = (typeof before === 'number' ? before : 0) + total
+        counts.dropped[section.name] = (counts.dropped[section.name] ?? 0) + total - shownLines
       } else {
-        values.push([section.name, chunk])
-      }
-      counts.shown[section.name] = shownLines
-      counts.total[section.name] = total
-      counts.dropped[section.name] = total - shownLines
-      const partial = slot.start > 0 || chunk.length < rest.length
-      if (section.lines && partial && chunk !== '') {
+        if (section.block) {
+          // content[0] is the JSON, so the blocks after it are content[1], content[2], ...
+          values.push([section.name, { in: `content[${blocks.length + 1}]` }])
+          blocks.push({ name: section.name, text: chunk })
+        } else {
+          values.push([section.name, chunk])
+        }
+        counts.shown[section.name] = shownLines
+        counts.total[section.name] = total
+        counts.dropped[section.name] = total - shownLines
+        const partial = slot.start > 0 || chunk.length < rest.length
         // The lines this page touches, a split one included.
-        const first = newlines(section.text, slot.start) + 1
-        out.lines = [first, first + totalLines(chunk) - 1]
+        if (section.lines && partial && chunk !== '') out.lines = [first, first + totalLines(chunk) - 1]
       }
       if (cursor === null && !counted && chunk.length < rest.length) {
         cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: slot.start + chunk.length }, g: guardOf(section.text) })
@@ -580,6 +634,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       anyDropped ||= chunk.length < rest.length
       continue
     }
+    if (section.kind === 'ranked' && section.omitEmpty && section.items.length === 0) continue
     const exact = slot.start < 0 ? 0 : slot.avail.length
     counts.total[section.name] = slot.more ? `>${exact}` : exact
     if (aggregate && slot.start >= 0) {
@@ -611,7 +666,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   for (const [name, value] of values) out[name] = value
   // Below full every item lost its context or more, so the answer is never whole.
   const whole = cursor === null && !anyDropped && !anyMore && ctx.level === 'full'
-  const truncated: Truncated = whole ? false : { ...counts, level: ctx.level, cursor, narrow: ctx.narrow }
+  const truncated: Truncated = whole ? false : { ...counts, level: withheld && ctx.level === 'full' ? 'locations' : ctx.level, cursor, narrow: ctx.narrow }
   out.truncated = truncated
   return { text: JSON.stringify(out), blocks, truncated }
 }

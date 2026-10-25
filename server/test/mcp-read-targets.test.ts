@@ -243,6 +243,12 @@ describe('read_note targets (#416)', () => {
     const both = await call('read_note', { vaultId, path: 'docs/guide', targets: [{ lines: '1' }], outline: true })
     expect(both.isError).toBe(true)
     expect(both.text).toContain('INVALID_ARGUMENT')
+    // 1 to 20 targets; the budget's range is checked though tools/list no longer lists it as minimum/maximum.
+    for (const args of [{ targets: [] }, { targets: Array.from({ length: 21 }, () => ({ lines: '1' })) }, { budget_tokens: 255 }, { budget_tokens: 25_001 }, { budget_tokens: 1_000.5 }]) {
+      const r = await call('read_note', { vaultId, path: 'docs/guide', ...args })
+      expect(r.isError, JSON.stringify(args)).toBe(true)
+      expect(r.text).toContain('INVALID_ARGUMENT')
+    }
   })
 })
 

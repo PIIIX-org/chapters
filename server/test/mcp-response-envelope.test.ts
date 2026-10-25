@@ -281,22 +281,26 @@ describe('browse_vault and browse_repository', () => {
 })
 
 describe('reads cut at line boundaries and continue with the cursor', () => {
-  it('read_note: a 4,000-token page, `lines`, the whole body over the pages; a changed note makes the cursor stale', async () => {
+  it('read_note: a 4,000-token page, `lines` (whole-file numbering, D3), the whole body over the pages; a changed note makes the cursor stale', async () => {
     const body = bigBody('first')
+    // A body with no heading has no outline to answer instead (#417): it is paged.
     const pages = await walk('read_note', { vaultId, path: BIG })
     expect(pages.length).toBeGreaterThan(5)
     expect(pages.map((p) => p.body).join('')).toBe(body)
-    let next = 1
+    // Line 1 is the frontmatter's `---`; the body starts at body_start_line.
+    const bodyStart = pages[0]!.body_start_line as number
+    expect(bodyStart).toBeGreaterThan(3)
+    let next = bodyStart
     for (const p of pages) {
       const [a, b] = p.lines as [number, number]
       expect(a).toBe(next)
       next = b + 1
-      expect(p).toMatchObject({ path: BIG, frontmatter: expect.any(Object) })
+      expect(p).toMatchObject({ path: BIG, frontmatter: expect.any(Object), body_start_line: bodyStart, total_lines: bodyStart - 1 + 2_500 })
     }
-    expect(next - 1).toBe(2_500)
+    expect(next - 1).toBe(bodyStart - 1 + 2_500)
     const first = pages[0]!
     expect((first.body as string).endsWith('\n')).toBe(true)
-    expect(first.truncated).toMatchObject({ shown: { body: (first.lines as number[])[1] }, total: { body: 2_500 } })
+    expect(first.truncated).toMatchObject({ shown: { body: (first.lines as [number, number])[1] - bodyStart + 1 }, total: { body: 2_500 } })
 
     await updateNote(vaultId, BIG, { body: bigBody('second') })
     await refused('read_note', { vaultId, path: BIG, cursor: cursorOf(first) }, /stale cursor/)
@@ -394,7 +398,8 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     expect(pages.map((p) => p.body).join('')).toBe(bigBody('first'))
   })
 
-  it('read_file: content pages concatenate to the file, the outline is shown once, other paths refuse the cursor', async () => {
+  it('read_file: content pages concatenate to the file, the symbol list is shown once, other paths refuse the cursor', async () => {
+    // No symbols, so no outline to answer instead (#417): it is paged.
     const pages = await walk('read_file', { repositoryId: repoId, path: 'src/big.ts' })
     expect(pages.length).toBeGreaterThan(5)
     expect(pages.map((p) => p.content).join('')).toBe(bigFile)
@@ -406,15 +411,16 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     expect(alpha.truncated).toBe(false)
     expect(alpha.content).toBe(symbolFile)
     expect(alpha.symbols).toHaveLength(30)
-    const cut = await walk('read_file', { repositoryId: repoId, path: 'src/alpha.ts', budget_tokens: 256 })
+    // `outline: false`: the body by pages even where it does not fit (mcp-read-targets.test.ts has the outline).
+    const cut = await walk('read_file', { repositoryId: repoId, path: 'src/alpha.ts', budget_tokens: 256, outline: false })
     expect(cut.map((p) => p.content).join('')).toBe(symbolFile)
     expect(cut.flatMap((p) => p.symbols as unknown[])).toEqual(alpha.symbols)
-    // A cursor into the outline alone still guards the content: a changed file refuses it.
-    const inOutline = cut.map((p) => (p.truncated === false ? null : p.truncated.cursor)).find((c) => c !== null && JSON.parse(Buffer.from(c, 'base64url').toString()).k.s === 1)
+    // A cursor into the symbol list (section 2, after the outline and the content) still guards the content: a changed file refuses it.
+    const inOutline = cut.map((p) => (p.truncated === false ? null : p.truncated.cursor)).find((c) => c !== null && JSON.parse(Buffer.from(c, 'base64url').toString()).k.s === 2)
     expect(inOutline).toEqual(expect.any(String))
     const changed = `${symbolFile}\n// edited`
     await syncRepositoryFiles(repoId, [{ path: 'src/alpha.ts', content: changed }], REPO_PATHS)
-    await refused('read_file', { repositoryId: repoId, path: 'src/alpha.ts', budget_tokens: 256, cursor: inOutline }, /stale cursor/)
+    await refused('read_file', { repositoryId: repoId, path: 'src/alpha.ts', budget_tokens: 256, outline: false, cursor: inOutline }, /stale cursor/)
     await syncRepositoryFiles(repoId, [{ path: 'src/alpha.ts', content: symbolFile }], REPO_PATHS)
   })
 })
