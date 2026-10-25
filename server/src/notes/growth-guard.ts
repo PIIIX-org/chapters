@@ -136,7 +136,7 @@ export class NoteWriteQuarantinedError extends Error {
   ) {
     super(
       `write to ${path} quarantined: ${suspicionText(finding)}. The note keeps its current body; the refused body is kept as revision ${revisionId} ` +
-        `(action "quarantine": note_history / get_revision show it, revert_note restores it). ` +
+        `(action "quarantine": on an admin-profile token note_history / get_revision show it, revert_note restores it). ` +
         `If the change is intended, send it again with allowGrowth: true.`,
     )
     this.code = finding.rule

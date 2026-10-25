@@ -382,7 +382,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable` |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s code-unit-order pages (#424) |
+| `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -391,7 +391,7 @@ fold of that transaction keeps; the next fold clears it.
 
 | Table | Purpose |
 |---|---|
-| `semanticEdges` | polymorphic `(nodeAType, nodeAId, nodeBType, nodeBId)` — `note` or `code` on either side, no FK constraint (the id points at different tables depending on type, same posture as `vaultShares.granteeId`). Pairs canonically ordered so `(A,B)` and `(B,A)` never both exist. This is the mechanism that lets a note and a source file land as semantic neighbors — they share one 384-dimension embedding space by construction. |
+| `semanticEdges` | polymorphic `(nodeAType, nodeAId, nodeBType, nodeBId)` — `note` or `code` on either side, no FK constraint (the id points at different tables depending on type, same posture as `vaultShares.granteeId`). Pairs canonically ordered so `(A,B)` and `(B,A)` never both exist. This is the mechanism that lets a note and a source file land as semantic neighbors — they share one 384-dimension embedding space by construction. Both ends are in one scope (D10, #461): one vault, one repository, or a vault and a repository of one owner (`semantic-edges.ts`, §5.6). |
 
 **Design decisions worth remembering:**
 - Polymorphic grantee/node columns (`vaultShares.granteeId`,
@@ -466,6 +466,9 @@ collab socket and live view it opened closes at once (#498, §5.7).
   re-share rather than duplicated), ownership transfer, per-user
   merged-graph opt-in. Insufficient access returns 404, not 403 — "no
   access" and "doesn't exist" are made indistinguishable on purpose.
+  A transfer (here and in `admin-routes.ts`) deletes the vault's notes'
+  note↔code semantic edges in its transaction: they joined the previous
+  owner's repositories (D10, #461).
 - **`team-routes.ts`**: team CRUD, membership management. Adding/
   removing a member notifies both that user and every owner of a vault
   currently shared with the team.
@@ -1229,7 +1232,9 @@ one implementation, three callers. Nodes are the union of `notes` and
   folder" only means something within one repo). Groups larger than 50
   are **skipped and reported**, never silently truncated.
 - **semantic** — pulled from `semanticEdges`, filtered to the live node
-  set.
+  set. A stored edge never crosses a vault or a repository, and joins a
+  note and a file only of one owner (D10, #461), so a graph over several
+  of a user's vaults or repositories has no semantic edge between them.
 
 Every `GraphEdge` (#558) also carries `directed`, `relation` (`link`,
 `import`, `same_type`, `same_tag`, `same_language`, `same_folder`,
@@ -1506,6 +1511,23 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   file-level block of a file — one row per neighbour. The searches run before
   the transaction that locks the note (`FOR SHARE`, against a purge), so a
   long note's recompute never holds off writes to it.
+  Neighbours come from the node's scope only (D10 on #930, #461): of its
+  own type, its vault (a note) or its repository (a file), never another
+  one, even of the same owner; of the other type, the owner's repositories
+  (a note) or live vaults (a file), never another account's. Each HNSW leg
+  filters `container_id = ANY(<scope>)` during its scan, with
+  `hnsw.iterative_scan = relaxed_order` (set only where pgvector is 0.8 or
+  newer: older versions reserve the `hnsw.` prefix without that setting),
+  so the scan goes on past the `ef_search` (100) candidates until it has
+  100 blocks of the scope, up to `hnsw.max_scan_tuples` (default 20,000).
+  For a small container the planner reads its blocks by
+  `blocks_container_idx` and sorts them exactly. Measured on 95,530 note
+  blocks in four vaults (PR for #461): a 5,000-note vault (5 %) took the
+  HNSW plan and found 160/160 of its 20 notes' 8 neighbours (recall 0.98)
+  with the iterative scan, 113/160 (recall 0.71) without; vaults of 500
+  and 30 notes took the exact plan (recall 1.0). Migration 0038 deleted
+  the edges stored before (100,000 edges: about 150 ms); a vault transfer
+  deletes the vault's notes' note↔code edges (`deleteVaultCodeEdges`).
 
 ### 5.7 Real-time collaboration (`server/src/sync/`)
 
@@ -2838,7 +2860,8 @@ written in the same transaction) and `notes.embedder_id`, `chunk_version`
 `seq` as `owner_version`).
 
 *Upgrade to 0033.* The migration rewrites no row, so it holds the boot for
-well under a second: 244 ms measured locally on 100,000 notes (501 MB) and
+seconds at most: about 1.1 s on a quiet
+database and 3.5 s cold, measured locally on 100,000 notes (501 MB) and
 20,000 files (124 MB) with vectors (the review of #978 measured 590 s for a
 version that updated every row). It adds `notes.embedder_id` and
 `repository_files.embedder_id` with the constant default
@@ -3001,7 +3024,7 @@ flips both.
 | B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
 | `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
 | B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault); MCP's not-found is the same envelope bytes, with no suggestions from A's containers (#439) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
-| Semantic neighbours are chosen within the owner's reach | **defect #461**: the neighbour lookup spans every account; every read filters the stored edges | `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` (known defect) |
+| Semantic neighbours are chosen within the owner's reach | holds (#461, D10): a note's note neighbours come from its vault, a file's code neighbours from its repository, note↔code edges only between one owner's vaults and repositories; migration 0038 deleted the older edges; every read also filters the stored edges | `semantic-edges`, `migration-0038-semantic-edge-scope`, `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` |
 | Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading and before the prompt's own instructions | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
 
 ---
