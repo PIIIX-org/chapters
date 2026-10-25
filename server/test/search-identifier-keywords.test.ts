@@ -8,6 +8,7 @@
 // Uses only entry points that exist on the base (the fails-before job runs
 // this file against it).
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories, vaults } from '../src/db/schema.js'
 import { createNote } from '../src/notes/store.js'
@@ -94,8 +95,12 @@ describe('search by identifier (#455)', () => {
     expect(await search('frontmatter parse', 'symbol')).toContain('src/notes/frontmatter.ts#parseFrontmatter')
   })
 
-  it('finds a member-access call site by the whole identifier', async () => {
+  it('finds a member-access call site by the whole identifier, with its first lines as the snippet', async () => {
     expect(await search('parseFrontmatter', 'code')).toContain('src/load.ts')
+    // The English query matches nothing in it (`fm.parseFrontmatter` is one host lexeme), so no headline.
+    keywordOnly()
+    const { results } = await searchNotes({ vaultIds: [], repositoryIds: [repo] }, 'parseFrontmatter')
+    expect(results.find((r) => r.path === 'src/load.ts')?.snippet).toBe(FILES[3]!.content.slice(0, 200))
   })
 
   it('finds a file by a dotted path and by its file name', async () => {
@@ -119,5 +124,16 @@ describe('prose keeps its stemming (#455)', () => {
   it('a note and a Markdown file match inflected words', async () => {
     expect(await search('running jobs', 'note')).toEqual(['ops/scheduler'])
     expect(await search('index running', 'code')).toEqual(['docs/reading.md'])
+  })
+})
+
+describe('a file changed since its extraction (#455)', () => {
+  // Last: it rewrites a fixture file. A sync stores new content (its generated `fts` with it) before the file
+  // is extracted again; until then the leg reads that `fts`, not the identifiers of the old content.
+  it('matches its new content, not the identifiers of the old one', async () => {
+    await db.execute(sql`UPDATE repository_files SET content = 'export const renamedLoader = 1\n', content_hash = 'changed'
+      WHERE repository_id = ${repo} AND path = 'src/load.ts'`)
+    expect(await search('parseFrontmatter', 'code')).not.toContain('src/load.ts')
+    expect(await search('renamedLoader', 'code')).toEqual(['src/load.ts'])
   })
 })

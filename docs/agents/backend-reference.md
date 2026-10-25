@@ -382,7 +382,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable` |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), identifier `keywords` written by extraction (#455, migration 0044; GIN `repository_files_keyword_idx` over both, see **Keyword channel** in §5.6), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
+| `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0044; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -1391,31 +1391,38 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `fm.parsefrontmatter`, `fm`, `parsefrontmatter`, `parse`,
     `frontmatter`. These are unstemmed and positionless
     (`array_to_tsvector`), so no stemming touches them. Stored at
-    extraction, in the statements it already runs (migration 0044):
-    `repository_files.keywords` holds every path segment's lexemes and
-    those of each compound of the content that is not a plain word
-    (plain words are in `fts`, stemmed). A minified file stores its path
-    only, and at most 20,000 lexemes are kept per file. Symbol blocks'
-    `blocks.keywords` hold the lexemes of the symbol's `inner_path` and of
-    its file's path. Null until the file is extracted again
-    (`EXTRACTOR_VERSION` 5 re-extracts every file at the first boot;
-    vectors are reused). The query: each whitespace term matches as its
+    extraction, in the statements it already runs (migration 0044). A
+    file's lexemes are every path segment's and those of each compound of
+    the content that is not a plain word (plain words are in `fts`,
+    stemmed); a minified file gets its path's only, and at most 20,000 are
+    kept per file. `repository_files.keyword_fts` holds the row's `fts`
+    plus them: the code leg's document, stored whole because concatenating
+    at query time cost 3-4x the leg's time on rea's 3,757 files. Symbol
+    blocks' `blocks.keywords` hold the lexemes of the symbol's
+    `inner_path` and of its file's path. Both are null until the file is
+    extracted again (`EXTRACTOR_VERSION` 5 re-extracts every file at the
+    first boot; vectors are reused). The query: each whitespace term matches as its
     English query, or as its identifiers (a plain word unstemmed, unless
     English drops it as a stop word; a compound as its whole lexeme or
     all its parts, each part English or unstemmed); terms are ANDed. So
     `frontmatter parse` and `parse_frontmatter` find `parseFrontmatter`,
     and `mcp.server.ts` or `server.ts` find `src/mcp/server.ts`. A query
     with websearch syntax (a `"`, a `-term`, a standalone `or`) keeps the
-    English query. The code file leg matches `fts || coalesce(keywords,
-    '')` (GIN `repository_files_keyword_idx`, which replaced
-    `repository_files_fts_idx`) and orders by whole-identifier match,
+    English query. The code file leg's document is `keyword_fts` while
+    `extracted_hash = content_hash`, else `fts` (a sync that changed the
+    content, until the file is extracted again), indexed by GIN
+    `repository_files_keyword_idx`, which replaced
+    `repository_files_fts_idx`. The leg orders by whole-identifier match,
     then the English match's `ts_rank` (the order before #455), then the
     keyword `ts_rank`. The symbol leg ORs `keywords` with its `ILIKE`
     (no index: the `ILIKE` reads the repository's symbols anyway) and
     ranks exact, prefix and contains as before, then a whole-identifier
     match, then a parts-only match. So an exact identifier outranks its
     parts within each leg; rows matched before #455 keep their order.
-    The snippet's `ts_headline` uses the English query.
+    A code hit's snippet is the English query's `ts_headline`; a file that
+    only the identifier keywords match gets the vector leg's snippet (its
+    first 200 characters): a headline would highlight nothing and still
+    parse the whole file (about 20 ms a file on rea's larger files).
   - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
     `SearchResponse` = `{status, retrieval_mode, degraded, index?,
     results}`, served as is by REST and inside the budget envelope by MCP.

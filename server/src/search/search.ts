@@ -62,8 +62,11 @@ function keywordQuery(query: string): { match: SQL; whole: SQL | null } {
   return { match, whole: wholes.size === 0 ? null : sql.join([...wholes].map(lexeme), sql` || `) }
 }
 
-/** The code keyword leg's document: the English `fts` and the identifier `keywords` (#455), as `repository_files_keyword_idx` indexes it. */
-const CODE_DOCUMENT = sql.raw(`(fts || coalesce(keywords, ''::tsvector))`)
+/**
+ * The code keyword leg's document (#455), as `repository_files_keyword_idx` indexes it: `keyword_fts` (the
+ * English `fts` plus the identifier lexemes, written by extraction) while it is of the current content, else `fts`.
+ */
+const CODE_DOCUMENT = sql.raw(`(CASE WHEN keyword_fts IS NOT NULL AND extracted_hash = content_hash THEN keyword_fts ELSE fts END)`)
 
 /**
  * What a search keeps (#454). Every filter applies inside each leg's SQL,
@@ -369,25 +372,27 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
   const rows =
     mode === 'keyword'
       ? await db.execute(sql`
-          -- #455: the whole identifier first, then the English match by its rank (the order before identifiers),
-          -- then what only the identifier keywords match (parts of a name, a path segment), by their rank.
+          -- #455: the whole identifier first, then the English match by its rank
+          -- (the order before identifiers), then what only the identifier keywords match (parts of a name, a path
+          -- segment), by their rank. A row the English query does not match gets the vector leg's snippet: its
+          -- headline would highlight nothing and parse the whole file (about 20 ms a file on rea's larger files).
           WITH top_code AS (
             SELECT id, repository_id AS container_id, path, language, content, ${UPDATED_AT(sql`updated_at`)},
                    ${keyword.whole ? sql`${CODE_DOCUMENT} @@ (${keyword.whole})` : sql`false`} AS whole,
-                   CASE WHEN fts @@ ${english(query)} THEN ts_rank(fts, ${english(query)}) ELSE 0 END AS rank,
+                   CASE WHEN fts @@ ${english(query)} THEN ts_rank(fts, ${english(query)}) END AS rank,
                    ts_rank(${CODE_DOCUMENT}, ${keyword.match}) AS keyword_rank
             FROM repository_files f
             WHERE repository_id = ANY(${uuidArray(repositoryIds)})
               AND ${CODE_DOCUMENT} @@ (${keyword.match})
               ${filterSql}
-            ORDER BY whole DESC, rank DESC, keyword_rank DESC, path COLLATE "C", id
+            ORDER BY whole DESC, rank DESC NULLS LAST, keyword_rank DESC, path COLLATE "C", id
             LIMIT ${CANDIDATES}
           )
           SELECT id, container_id, path, language, updated_at,
-                 ts_headline('english', content, ${english(query)},
-                             'MaxWords=30, MinWords=10') AS snippet
+                 CASE WHEN rank IS NULL THEN left(content, 200)
+                   ELSE ts_headline('english', content, ${english(query)}, 'MaxWords=30, MinWords=10') END AS snippet
           FROM top_code
-          ORDER BY whole DESC, rank DESC, keyword_rank DESC, path COLLATE "C", id
+          ORDER BY whole DESC, rank DESC NULLS LAST, keyword_rank DESC, path COLLATE "C", id
         `)
       : await blockLeg(
           gated(sql`
