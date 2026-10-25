@@ -1,7 +1,7 @@
 // #464 review: a repository file's `section` blocks are never embedded. Earlier
 // heads of the #464 PR embedded them, and a file they extracted carries the
 // current EXTRACTOR_VERSION, so no catch-up would clear those vectors:
-// migration 0039 does. Runs its statement on rows shaped like what those heads
+// migration 0042 does. Runs its statement on rows shaped like what those heads
 // left; symbol and file vectors, and note sections, keep theirs.
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -13,7 +13,7 @@ import { createActiveUser } from './helpers.js'
 
 const vector = new Array(384).fill(0.1)
 
-describe('migration 0039 clears code section vectors (#464)', () => {
+describe('migration 0042 clears code section vectors (#464)', () => {
   it('a code section loses its vector and embed_key; a symbol, a file block and a note section keep theirs', async () => {
     const owner = await createActiveUser()
     const [repo] = await db.insert(repositories).values({ name: 'migration-0038', ownerId: owner.id, ingestionMethod: 'agent_push' }).returning()
@@ -41,7 +41,7 @@ describe('migration 0039 clears code section vectors (#464)', () => {
     const noteOwner = '00000000-0000-4000-8000-000000000038'
     await db.insert(blocks).values({ ...row('b_note_section', 'section'), ownerType: 'note', ownerId: noteOwner, containerId: noteOwner })
 
-    await pg.unsafe(await readFile(join(import.meta.dirname, '..', 'drizzle', '0039_unembed_code_sections.sql'), 'utf8'))
+    await pg.unsafe(await readFile(join(import.meta.dirname, '..', 'drizzle', '0042_unembed_code_sections.sql'), 'utf8'))
 
     const after = await db
       .select({ blockId: blocks.blockId, embedKey: blocks.embedKey, embedded: sql<boolean>`${blocks.embedding} IS NOT NULL` })
