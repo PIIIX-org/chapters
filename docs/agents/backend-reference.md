@@ -1566,11 +1566,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the shared test Postgres, so times are noisy), recomputes per embed went
   from 1 to 8.2 for the first push of the files, 3.6 per new note, 13.8
   per edited file and 5.2 per edited note (on average a node is in K
-  lists, so an embed moves about K of them); time per embed 89 → 107 ms
-  (push), 83 → 66 ms (new note), 106 → 556 ms (edited file, one push
-  each), 106 → 214 ms (edited note). With exact search (`enable_indexscan
-  = off`) the 15,891 rows left by all of that are those of a full rebuild,
-  row for row; with the HNSW plan 3 of them differ (HNSW recall, not
+  lists, so an embed moves about K of them); time per embed, base → this,
+  back to back on a quiet database: 59 → 109 ms (push), 19 → 48 ms (new
+  note), 47 → 147 ms (edited file, one push each), 33 → 77 ms (edited
+  note). With exact search (`enable_indexscan = off`) the 15,891 rows left
+  by all of that are those of a full rebuild, row for row; with the HNSW
+  plan 3 to 5 of them differ (HNSW recall, not
   order). A tie at a window's 100th block still goes by the scan's order.
   Deleting a node (trash, purge, a file gone) or moving a vault removes its
   rows, and the nodes that held it keep fewer than K until their next
@@ -1603,7 +1604,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   them once for the instances from before #1007, whose edges were each
   node's top-k among the nodes embedded before it; the server drains them
   in the background after boot. Measured: 1,987 nodes (the fixture above)
-  in 40–48 s, 20–24 ms a node; an instance the code before #1007 filled
+  in 19–48 s, 9.5–24 ms a node; an instance the code before #1007 filled
   with 10,512 nodes (the chapters tree pushed to 8 repositories, 1,016
   notes, 45,754 vectors): migration 0046's insert 127 ms, its jobs 133 s
   (12.7 ms a node).
