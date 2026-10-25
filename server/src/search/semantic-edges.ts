@@ -18,7 +18,8 @@ type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
  * each query vector its 100 nearest blocks (`hnsw.ef_search` is 100 in
  * recomputeSemanticEdges's transaction, so HNSW returns at most that many),
  * then one row per owner with its best block's similarity. Notes count only
- * while live.
+ * while live. The owner type is a literal, so the planner uses that type's
+ * partial HNSW index (migration 0036).
  */
 async function nearestOwners(
   client: DbOrTx,
@@ -31,7 +32,7 @@ async function nearestOwners(
     FROM unnest(${vecs}::text[]) AS q(vec)
     CROSS JOIN LATERAL (
       SELECT owner_id, embedding <=> q.vec::vector AS distance FROM blocks
-      WHERE owner_type = ${ownerType} AND embedding IS NOT NULL ${excludeId ? sql`AND owner_id <> ${excludeId}` : sql``}
+      WHERE owner_type = ${sql.raw(`'${ownerType}'`)} AND embedding IS NOT NULL ${excludeId ? sql`AND owner_id <> ${excludeId}` : sql``}
       ORDER BY embedding <=> q.vec::vector
       LIMIT 100
     ) nearest
@@ -72,6 +73,18 @@ export async function recomputeSemanticEdges(
   nodeId: string,
   vectors: readonly number[][],
 ): Promise<void> {
+  // The neighbours first, outside the transaction that locks the note: a note has a vector per block, so this
+  // can take a while, and the FOR SHARE below would hold off every write to the note meanwhile (#452).
+  const neighbors =
+    vectors.length === 0
+      ? []
+      : (
+          await db.transaction(async (tx) => {
+            // ponytail: tuned HNSW ef_search = 100 preserves 99.8% recall while avoiding full-table sequential scans on every note edit (DB-02).
+            await tx.execute(sql`set local hnsw.ef_search = 100`)
+            return knn(vectors, nodeType, nodeId, tx)
+          })
+        ).filter((n) => n.similarity >= config.semanticThreshold)
   await db.transaction(async (tx) => {
     // A note purged while it was embedded keeps no edges: the row is locked
     // (FOR SHARE) for the transaction, so a purge either waits for it and then
@@ -80,8 +93,6 @@ export async function recomputeSemanticEdges(
       const live = await tx.execute(sql`SELECT 1 FROM notes WHERE id = ${nodeId} FOR SHARE`)
       if ((live as unknown as unknown[]).length === 0) return
     }
-    // ponytail: tuned HNSW ef_search = 100 preserves 99.8% recall while avoiding full-table sequential scans on every note edit (DB-02).
-    await tx.execute(sql`set local hnsw.ef_search = 100`)
 
     // Only this node's OWN edges. kNN is asymmetric — B can hold A in its top-k
     // while A does not hold B — so deleting by either side would wipe an edge B
@@ -90,10 +101,6 @@ export async function recomputeSemanticEdges(
       .delete(semanticEdges)
       .where(and(eq(semanticEdges.sourceType, nodeType), eq(semanticEdges.sourceId, nodeId)))
 
-    if (vectors.length === 0) return
-    const neighbors = (await knn(vectors, nodeType, nodeId, tx)).filter(
-      (n) => n.similarity >= config.semanticThreshold,
-    )
     if (neighbors.length === 0) return
 
     const rows = neighbors.map((n) => ({

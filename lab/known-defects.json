@@ -7,23 +7,8 @@
     },
     {
       "test": "access-behaviour",
-      "check": "rate limit: the 429 body is a JSON-RPC error",
-      "issue": 440
-    },
-    {
-      "test": "access-behaviour",
-      "check": "rate limit: the 429 carries a Retry-After header",
-      "issue": 440
-    },
-    {
-      "test": "access-behaviour",
       "check": "semantic edges are stored only between notes of the same account",
       "issue": 461
-    },
-    {
-      "test": "attachments",
-      "check": "a query matching nothing returns no results",
-      "issue": 533
     },
     {
       "test": "attachments",
@@ -77,23 +62,8 @@
     },
     {
       "test": "export-roundtrip",
-      "check": "import a real OKF v0.2 bundle (open-knowledge-format bundles/acme_retail)",
-      "issue": 444
-    },
-    {
-      "test": "export-roundtrip",
       "check": "non-ASCII attachment name kept",
       "issue": 619
-    },
-    {
-      "test": "export-roundtrip",
-      "check": "OKF §4.1 free-text `type` (\"BigQuery Table\") is accepted",
-      "issue": 444
-    },
-    {
-      "test": "export-roundtrip",
-      "check": "OKF §5.2 `verified` exactly as the spec writes it ({by, at}, tier derived) is accepted",
-      "issue": 563
     },
     {
       "test": "export-roundtrip",
@@ -104,11 +74,6 @@
       "test": "export-roundtrip",
       "check": "OKF reference parser (open-knowledge-format document.py) reads every exported note as written",
       "issue": 564
-    },
-    {
-      "test": "multilingual-search",
-      "check": "normalization: Arabic kaf ك (\"فرش كاشان\" vs stored \"فرش کاشان\")",
-      "issue": 528
     },
     {
       "test": "multilingual-search",
@@ -135,11 +100,6 @@
       "test": "multilingual-search",
       "check": "Persian retrieval on par with English (hybrid hit@1)",
       "issue": 530
-    },
-    {
-      "test": "multilingual-search",
-      "check": "ranking is stable across identical copies of the corpus",
-      "issue": 459
     },
     {
       "test": "multilingual-search",

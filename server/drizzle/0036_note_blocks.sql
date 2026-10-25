@@ -30,4 +30,12 @@ INSERT INTO "blocks" ("owner_type", "owner_id", "container_id", "block_id", "kin
 -- embed-key.ts CHUNK_VERSION of a note's blocks (0: none yet); boot catch-up re-embeds a note of another version.
 ALTER TABLE "notes" ADD COLUMN "chunk_version" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 -- Drops `notes_embedding_idx` (HNSW) and `notes_missing_embeddings_idx` (0018) with it.
-ALTER TABLE "notes" DROP COLUMN "embedding";
+ALTER TABLE "notes" DROP COLUMN "embedding";--> statement-breakpoint
+-- 0035's HNSW index over every block is replaced by one per owner type: the note leg and note semantic edges
+-- walk a graph of note blocks only (a vault has ~12 blocks a note), and code semantic edges, which take any
+-- code block, one of code blocks. The code search legs keep 0035's kind = 'file' and kind = 'symbol' indexes.
+-- Each vector query names its predicate as literals so the planner can use the partial index. Built after the
+-- carry-over insert above.
+DROP INDEX "blocks_embedding_idx";--> statement-breakpoint
+CREATE INDEX "blocks_note_embedding_idx" ON "blocks" USING hnsw ("embedding" vector_cosine_ops) WHERE "owner_type" = 'note';--> statement-breakpoint
+CREATE INDEX "blocks_code_embedding_idx" ON "blocks" USING hnsw ("embedding" vector_cosine_ops) WHERE "owner_type" = 'code';

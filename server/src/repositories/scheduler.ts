@@ -1,12 +1,10 @@
-import { readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
 import { and, eq, ne } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { recordSyncFailure, syncGitRepository, type RepositorySyncStatus } from './git-sync.js'
-import { listFilesRecursive } from './fs-scan.js'
-import { IGNORED, startWatching } from './local-watch.js'
-import { syncRepositoryFiles, type FileUpdate } from './store.js'
+import { GitignoreRules, scanRepository, summarizeSkips } from './fs-scan.js'
+import { startWatching } from './local-watch.js'
+import { syncRepositoryFiles } from './store.js'
 import { recordJob } from '../monitoring/metrics.js'
 
 /**
@@ -123,30 +121,18 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
 
   await db.update(repositories).set({ syncStatus: 'syncing' }).where(eq(repositories.id, repositoryId))
   try {
-    const allPaths = await listFilesRecursive(root, IGNORED)
-    const currentPaths = allPaths.slice(0, 10_000)
-    const files: FileUpdate[] = []
-    for (const path of currentPaths) {
-      try {
-        const fullPath = join(root, path)
-        const fileStat = await stat(fullPath)
-        if (fileStat.size > 1_048_576) {
-          continue
-        }
-        const content = await readFile(fullPath, 'utf8')
-        if (content.includes('\0')) {
-          continue
-        }
-        files.push({ path, content })
-      } catch (err) {
-        // Vanished between listing and reading, or permission/read failure — log for diagnostics.
-        console.warn(`[scheduler] failed reading repository file ${path} at ${root}:`, err)
-      }
-    }
+    // A folder follows its .gitignore files (#465, D12). Skipped files leave
+    // currentPaths, so a stale row goes (#923).
+    const { files, currentPaths, skipped } = await scanRepository(root, new GitignoreRules(root), 'scheduler')
     await syncRepositoryFiles(repositoryId, files, currentPaths)
     await db
       .update(repositories)
-      .set({ syncStatus: 'idle', lastSyncedAt: new Date(), lastSyncError: null })
+      .set({
+        syncStatus: 'idle',
+        lastSyncedAt: new Date(),
+        lastSyncError: null,
+        skippedFiles: summarizeSkips(skipped),
+      })
       .where(eq(repositories.id, repositoryId))
     recordJob('sync', 'ok', repositoryId)
   } catch (err) {

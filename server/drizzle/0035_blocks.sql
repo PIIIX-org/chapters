@@ -5,9 +5,11 @@
 -- `owner_id` names a note or a file, so it has no foreign key: a statement
 -- trigger deletes a repository file's blocks with the file (a repository
 -- delete cascades to its files, which fires it too).
--- The columns are ADR-004 §2.5's plus `symbol_parent`: 0034's `parent`
--- carried over, since `inner_path` (`parent.name`) cannot be split back when a
--- name holds a `.` (`namespace A.B`, `declare module "x.js"`).
+-- The columns are ADR-004 §2.5's plus `symbol_parent` (0034's `parent`:
+-- `inner_path`, `parent.name`, cannot be split back when a name holds a `.`,
+-- `namespace A.B`) and `snippet` (the symbol text keyword search matches, as
+-- `repository_file_symbols.snippet` was). No separate (owner_type, owner_id)
+-- index: the unique index serves it.
 --
 -- Not additive: code from before 0035 reads the dropped table and column, so
 -- a code-only rollback over it needs the SQL in backup.md §5. The existing
@@ -28,6 +30,7 @@ CREATE TABLE "blocks" (
 	"inner_path" text NOT NULL,
 	"symbol_kind" text,
 	"symbol_parent" text,
+	"snippet" text,
 	"start_line" integer NOT NULL,
 	"end_line" integer NOT NULL,
 	"content_hash" text NOT NULL,
@@ -36,9 +39,7 @@ CREATE TABLE "blocks" (
 	"embedding" vector(384),
 	CONSTRAINT "blocks_owner_block" UNIQUE ("owner_type", "owner_id", "block_id")
 );--> statement-breakpoint
-CREATE INDEX "blocks_embedding_idx" ON "blocks" USING hnsw ("embedding" vector_cosine_ops);--> statement-breakpoint
 CREATE INDEX "blocks_container_idx" ON "blocks" USING btree ("container_id");--> statement-breakpoint
-CREATE INDEX "blocks_owner_idx" ON "blocks" USING btree ("owner_type", "owner_id");--> statement-breakpoint
 CREATE FUNCTION blocks_delete_repository_files() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   DELETE FROM blocks b USING old_files o WHERE b.owner_type = 'code' AND b.owner_id = o.id;
@@ -54,15 +55,27 @@ INSERT INTO "blocks" ("owner_type", "owner_id", "container_id", "block_id", "kin
     'legacy', 'legacy',
     -- embed-key.ts embedKey: what made the vector (#453's embedder_id) and its text, `<path>\n<content>` as a file block's
     -- (only when it was made from the current content).
-    CASE WHEN f.embedder_id IS NULL OR f.extracted_hash IS DISTINCT FROM f.content_hash THEN 'legacy'
+    -- A file not extracted since 0033 (no extracted_hash, extractor_version 0) has a vector of its current content
+    -- unless a job for that content is pending or failed (#453's legacyVectorCurrent rule).
+    CASE WHEN f.embedder_id IS NULL OR NOT (f.extracted_hash IS NOT DISTINCT FROM f.content_hash OR (f.extracted_hash IS NULL AND f.extractor_version = 0
+        AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.idempotency_key LIKE 'extract:' || f.id || ':' || f.content_hash || '%'
+          AND (j.done_at IS NULL OR j.last_error IS NOT NULL)))) THEN 'legacy'
       ELSE left(encode(sha256(convert_to(f.embedder_id || E'\n' || f.path || E'\n' || f.content, 'UTF8')), 'hex'), 16) END,
     f.embedding
   FROM "repository_files" f WHERE f.embedding IS NOT NULL;--> statement-breakpoint
-INSERT INTO "blocks" ("owner_type", "owner_id", "container_id", "block_id", "kind", "inner_path", "symbol_kind", "symbol_parent",
+INSERT INTO "blocks" ("owner_type", "owner_id", "container_id", "block_id", "kind", "inner_path", "symbol_kind", "symbol_parent", "snippet",
     "start_line", "end_line", "content_hash", "owner_version", "embed_key", "embedding")
-  SELECT 'code', s.file_id, f.repository_id, 'legacy:' || s.id, 'symbol', coalesce(s.parent || '.', '') || s.name, s.kind, s.parent,
+  SELECT 'code', s.file_id, f.repository_id, 'legacy:' || s.id, 'symbol', coalesce(s.parent || '.', '') || s.name, s.kind, s.parent, s.snippet,
     s.start_line, s.end_line, 'legacy', 'legacy', CASE WHEN s.embedding IS NULL THEN NULL ELSE 'legacy' END, s.embedding
   FROM "repository_file_symbols" s JOIN "repository_files" f ON f.id = s.file_id;--> statement-breakpoint
+-- Built after the bulk inserts above (one build instead of one insert at a time).
+CREATE INDEX "blocks_embedding_idx" ON "blocks" USING hnsw ("embedding" vector_cosine_ops);--> statement-breakpoint
+-- One per search leg: HNSW applies the leg's WHERE after it fetched its candidates, so a leg over one
+-- index of every kind found few or no file blocks of a repository among several (bench run 40079933785,
+-- diagram-design Q14). The files-only and symbols-only indexes keep the composition the old
+-- repository_files and repository_file_symbols indexes had.
+CREATE INDEX "blocks_file_embedding_idx" ON "blocks" USING hnsw ("embedding" vector_cosine_ops) WHERE "kind" = 'file';--> statement-breakpoint
+CREATE INDEX "blocks_symbol_embedding_idx" ON "blocks" USING hnsw ("embedding" vector_cosine_ops) WHERE "kind" = 'symbol';--> statement-breakpoint
 -- embed-key.ts CHUNK_VERSION of a file's blocks (0: none yet); boot catch-up re-extracts a file of another version.
 ALTER TABLE "repository_files" ADD COLUMN "chunk_version" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 DROP TABLE "repository_file_symbols";--> statement-breakpoint

@@ -35,6 +35,9 @@ import {
  */
 export const EMBEDDING_JOB = 'embed_note'
 
+/** At most this many of a note's blocks, in body order, query its semantic neighbours (semantic-edges.ts). */
+export const EDGE_QUERY_BLOCKS = 16
+
 /** The key of the job that embeds note `noteId` at `seq` with the running embedder and chunker (#453, #452). */
 export function embeddingJobKey(noteId: string, seq: number | string): string {
   return `${EMBEDDING_JOB}:${noteId}:${seq}:${EMBEDDER_ID}+chunk${CHUNK_VERSION}`
@@ -136,6 +139,26 @@ export async function scheduleMissingEmbeddings(limit?: number): Promise<number>
   return found
 }
 
+/**
+ * Embedding state of the live notes of these vaults: `pending`, notes whose
+ * embedding for their current `seq` is still to come (a pending job, or no
+ * job and no blocks of its current seq, embedder and chunker: the boot
+ * catch-up adds its job); `failed`, notes
+ * whose job for their current `seq` gave up; `notes`, all of them. Search
+ * reports it next to its results (#442).
+ */
+export async function embeddingState(vaultIds: string[]): Promise<{ notes: number; pending: number; failed: number }> {
+  if (vaultIds.length === 0) return { notes: 0, pending: 0, failed: 0 }
+  const [row] = (await db.execute(sql`
+    SELECT count(*)::int AS notes,
+      (count(*) FILTER (WHERE j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND NOT ${noteBlocksCurrentSql()}))::int AS pending,
+      (count(*) FILTER (WHERE j.done_at IS NOT NULL AND j.last_error IS NOT NULL))::int AS failed
+    FROM notes n
+    LEFT JOIN jobs j ON j.idempotency_key = ${embeddingJobKeySql(sql`n.id`, sql`n.seq`)}
+    WHERE n.vault_id = ANY(${`{${vaultIds.join(',')}}`}::uuid[]) AND n.deleted_at IS NULL`)) as unknown as [{ notes: number; pending: number; failed: number }]
+  return row ?? { notes: 0, pending: 0, failed: 0 }
+}
+
 async function drainOnce(): Promise<void> {
   await failCrashedJobs(EMBEDDING_JOB, 'embedding', 'noteId')
   for (;;) {
@@ -228,5 +251,7 @@ async function processNote(noteId: string, jobSeq: number | undefined): Promise<
   })
   // The note's neighbours follow its block vectors: a set that only kept vectors it had (a frontmatter edit) has the edges it had.
   const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !keys.includes(k))
-  if (written && changed) await recomputeSemanticEdges('note', noteId, vectors as number[][])
+  // A note's own neighbours come from its first EDGE_QUERY_BLOCKS blocks (the preamble and first sections): each
+  // costs one HNSW search per owner type, and a very long note has hundreds of blocks.
+  if (written && changed) await recomputeSemanticEdges('note', noteId, (vectors as number[][]).slice(0, EDGE_QUERY_BLOCKS))
 }

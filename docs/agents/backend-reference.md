@@ -196,7 +196,7 @@ revision bodies, so older code goes on a migrated database only after
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
 | `note_revisions.body_delta` / `delta_base_id` / `body_bytes` (migration 0026) | a compacted revision (#501, **Revision compaction** below): `body` is `''`, `body_delta` (jsonb) rebuilds the body from the revision `delta_base_id` (FK to `note_revisions`, NO ACTION, partial index `note_revisions_delta_base`), `body_bytes` is its UTF-8 size; all three null on a revision stored whole (check `note_revisions_delta_check`). SQL `note_revision_body(body, body_delta, delta_base_id)` returns any revision's body (`revisionBody` in store-tx.ts); `note_revision_patch(base, delta)` applies a delta. Kept out of the Drizzle model like `seq`. 0026 merged after 0027, so its journal `when` (1791750000000) is above 0027's: drizzle applies an entry only when its `when` is above the newest one already applied, so an instance that ran 0027 first still runs 0026 (`test/migration-order.test.ts`) |
 | `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
-| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` (only a read that returned the whole body, #420) and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
+| `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` (every page too: the `rev` it reports, #961) and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
 | `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
 | `note_projections` | per note and projection (`file`/`dir_index`/`embedding`): `target_seq`, `applied_seq`, `index_version`, lease and error columns; `note_projections_pending` indexes the work queue |
@@ -520,8 +520,18 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   restricted to a slug regex (`^[a-z0-9][a-z0-9-]*$`), which makes path
   traversal impossible by construction — this is the one validation
   function shared by every write path (REST, CRDT persistence, MCP).
-  `validateNote` also requires frontmatter `type` to equal the path's
-  first segment.
+  `validateNote` requires a non-empty string frontmatter `type`; it may
+  differ from the path's first segment (#444, D8). `withType` gives a note
+  without one the folder; `notes.type` is always the folder, which the
+  `types` filter and structural edges key on.
+  Any top-level key may hold a scalar, a list or a mapping (OKF §4.1 and
+  the §10 computation keys, #970), nested at most `MAX_FRONTMATTER_DEPTH`
+  (8) levels of lists and mappings (`assertFrontmatterDepth`, also run
+  first by `assertFrontmatterFits` so the size measure never walks a
+  deeper value); known keys (`type`, `title`, `tags`, `timestamp`,
+  `status`, ...) keep their shapes. A `verified` entry is OKF §5.2's
+  `{ by, at }`; `tier` is optional (#563), and an entry with a `tier` may
+  leave out `by` and `at`.
 - **Frontmatter fence** (#400, `parseNote`): the frontmatter runs from an
   opening `---` line to the first line that is exactly `---` (trailing
   spaces/tabs allowed); LF and CRLF files both parse, and the body is
@@ -534,8 +544,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   before the row or file is written): the note is serialized and parsed
   back; if that fails, or the frontmatter (deep-equal) or body (exact)
   differs, the write is refused with an `OkfValidationError`
-  (`note cannot be stored: ...`) — HTTP 400 over REST, an `isError`
-  result over MCP. The file projection renders the row, so a note its own
+  (`note cannot be stored: ...`) — HTTP 400 over REST, an `OKF_INVALID`
+  error over MCP (#439). The file projection renders the row, so a note its own
   file could not reproduce must never be stored.
 - **`store.ts`**: the note write path. Every write validates, then runs
   one store transaction (see "The S2a store" above): row, revision at the
@@ -557,8 +567,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `<file>.tmp` used to let two writes truncate and rename away each
   other's temp file (raw `ENOENT` naming server paths) and leave the row
   and the file on different writes. The MCP tool wrapper returns only the
-  code of a Node system error (`internal storage error (ENOENT)`); the
-  full error goes to the server log. The lock orders writes; it does not
+  code of a Node system error (an `INTERNAL` error `internal storage error
+  (ENOENT)`, #439); the full error goes to the server log. The lock orders writes; it does not
   merge them: a whole `body` write replaces the body, so two agents that
   each read a note and write it back with a line appended still keep only
   the later one (an `append` op resolves against the live text and keeps
@@ -758,7 +768,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   result; frontmatter keys whose values differ; null for rename, delete
   and restore), `concurrent_changes` (the `base_rev` report) and
   `indexed` (`noteIndexed`: the `file` and `dir_index` projections
-  applied at `seq` and the `embed_note:<id>:<seq>:…` job done). `dry_run`
+  applied at `seq` and the `embed_note:<id>:<seq>:<EMBEDDER_ID>+chunk<CHUNK_VERSION>` job done). `dry_run`
   (create, edit, append, upsert, revert) runs `compute` and returns before
   the transaction (`WriteOptions.dryRun`; `previewCreate` for a create):
   no restore point, and `propose`/the quarantine screen throw without
@@ -816,8 +826,10 @@ Every share/membership mutation calls `emitPermissionChange()` (see
 - **A whole body without `base_rev` uses the last read as its base**
   (#408, #476, `mcp/last-read.ts`): MCP `read_note` and `export_note`
   record, per connection and note id, the `rev` they served (`read_note`
-  only when it returned the whole body: a first page with `truncated:
-  false`, #420); an
+  on every page too: all pages of a cursor are that rev's text, since a
+  changed note refuses the cursor, so the base is exact; #961 replaced
+  #420's whole-body-only rule, which left no base after a paged read and
+  let the next whole body replace concurrent edits); an
   `edit_note` with `body` and no `base_rev` takes that revision as
   `NoteEdit.base` (stale-base merge above; the answer echoes it as
   `baseRev`). Each whole body the connection writes moves it to the
@@ -1071,7 +1083,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   the body it replaces, so a note stored before the cap can still shrink
   and take frontmatter edits. REST answers 413 `{ error: "note body is N
   bytes (UTF-8); the limit is L bytes (ELARA_NOTE_MAX_BYTES)" }`, MCP
-  `create_note`/`edit_note` an `isError` result with the same text,
+  `create_note`/`edit_note` a `TOO_LARGE` error with the same message and the limit as `rule` (#439),
   import lists the note in `skipped`; a revert to a revision over the cap
   (and larger than the current body) is refused the same way. A rename
   checks every body its link rewrite changes (the note's own self-links,
@@ -1268,9 +1280,34 @@ until the first boot with #453 re-extracts them: their file has `extractor_versi
 ladder a row's `locations` form is one line, `from -> to relation
 evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
 
+`resolve-node.ts` (#447) turns a node reference into a node for MCP
+`graph`'s `neighborsOf`, `find_graph_path`'s ends, the REST
+`/vaults/:id/graph/path` and `/graph/merged/path` routes and the
+`summarize_concept_chain` prompt. `resolveNode(resources, ref)` tries, in
+order: the id; the exact path (both indexed, the fast path); then one
+query per table with the tier as a `CASE` and `count(*) over (partition by
+tier)`, limit 11: the path in any case, a note path with `.md` or (for a
+ref without an extension) a file path without its extension; a path
+suffix on a `/` boundary (`right(lower(path), n + 1) = '/' || lower(ref)`,
+for a ref without an extension also against the extension-less file path,
+so `store.ts` never matches `store.ts.orig`);
+a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
+tier. One match is `{node}`; several are `{candidates, next, total}`
+(`{path, kind, id}`, shorter path first, then path and id; 10 shown,
+`next` the 11th as a `limit` + 1 read); none is `{suggestions}` (empty for
+a node id, so an id out of reach answers as a missing one): up to 5
+paths from a pool of at most 200 per table (same basename without
+extension, a folder ending like the ref's, a basename containing it or
+sharing its first two characters), ranked by the edit distance between the
+ref and the path's last as many segments. Every query is bounded by
+`resources` (live notes of its vaults, files of its repositories), which
+the caller's access resolved, so neither list can name a node outside its
+reach. MCP answers candidates as a budgeted `{end?, matches?, candidates,
+truncated}` (`end` for `find_graph_path`, `matches` past 10) and none as
+`NOT_FOUND` with `suggestions`; REST answers candidates `200 {end,
+candidates, truncated: false | n more}` and none `404 {error, suggestions?}`.
+
 `neighbors.ts` (#426) is the local graph without the whole graph:
-`resolveGraphNode(resources, ref)` takes a node id or exact path (none or
-several matches are refused, the latter with the ids; #447 widens it), and
 `neighborhood(resources, center, {depth, edgeTypes, types, tags, limit})`
 walks ring by ring in SQL over the frontier's ids only: links out and in
 (`note_links_target_idx`; `repo:` links to a frontier file by reading the
@@ -1304,13 +1341,83 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 
 - **`search.ts`**: `searchNotes()` — the single hybrid search function
   used by the UI routes and the MCP `search` tool. Runs four queries in
-  parallel (note-keyword, note-semantic, code-keyword, code-semantic)
-  and merges them with **Reciprocal Rank Fusion** (`k=60`), no score
-  normalization to tune. Keyword hits use Postgres
+  parallel (note-keyword, note-semantic, code-keyword, code-semantic;
+  six with symbols) and merges them with **Reciprocal Rank Fusion**
+  (`k=60`), no score normalization to tune. Keyword hits use Postgres
   `websearch_to_tsquery` + `ts_rank` + `ts_headline` snippets; semantic
-  hits use pgvector's `<=>` cosine-distance operator over the `blocks`
-  HNSW index, each note or file ranked by its best block, one hit per
-  document (see **Blocks and the line contract**).
+  hits use pgvector's `<=>` cosine-distance operator over partial HNSW
+  indexes on `blocks`, one per kind of query, each query's WHERE naming the
+  index predicate as SQL literals so the planner uses it:
+  `blocks_file_embedding_idx` (`kind = 'file'`, the code file leg) and
+  `blocks_symbol_embedding_idx` (`kind = 'symbol'`, the symbol legs) from
+  0035, `blocks_note_embedding_idx` (`owner_type = 'note'`, the note leg and
+  note semantic edges) and `blocks_code_embedding_idx` (`owner_type =
+  'code'`, code semantic edges, which take any code block) from 0036, which
+  drops 0035's index over every block. Notes are ranked by their best block,
+  files by their `file` block, one hit per document (see **Blocks and the
+  line contract**).
+  `findSymbols()` does the same over symbols (keyword: `ILIKE` on the
+  whole query).
+  - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
+    `SearchResponse` = `{status, retrieval_mode, degraded, index?,
+    results}`, served as is by REST and inside the budget envelope by MCP.
+  - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
+    (`ORDER BY distance LIMIT 30`, which the HNSW index serves) and keeps
+    those with cosine distance under `config.searchMaxDistance`
+    (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
+    default; 0.40 for bge-small, measured on the five benchmark corpora
+    as `config.ts` records; 0.8 for the fake embedder).
+    Keyword rows
+    always count. The gate cuts a suffix of a distance-ordered list, so the
+    RRF ranks of the rows it keeps do not change.
+  - **Degraded** (#458): a failed query embedding (`queryVector`) skips the
+    vector legs (`keyword_only`, `degraded: {reason: 'embedder_failed'}`);
+    a failed leg drops its whole channel (`vector_leg_failed` →
+    `keyword_only`, `keyword_leg_failed` → `vector_only`; neither →
+    `none`). The failure is logged; the search answers from the channel
+    that ran.
+  - **Status** (#442): `ok` with any result; otherwise `unavailable` when
+    no channel ran, `index_building` when notes, files or repositories
+    in scope are pending, `unavailable` when every item in scope failed
+    indexing, else `no_match`. `index` comes from `embeddingState()`
+    (notes: `embed_note:<id>:<seq>:…` job pending, or no job and no
+    blocks of the current `seq`; failed: that job gave up) and `extractionState()` (files:
+    the predicates of `countPendingExtractions` and `extractionFailures`;
+    repositories with no file whose `sync_status` is `syncing` or that
+    were never synced count in `pending_repositories`, those whose sync
+    failed count as failed items), read beside the query embedding; left
+    out when all zero.
+  - **Total order**: keyword legs `ORDER BY rank DESC, path COLLATE "C",
+    id`, vector legs re-sorted by `distance, path COLLATE "C", id` outside
+    the HNSW limit, final sort score descending then path and id by UTF-16
+    code unit (`compareCodeUnits`), so equal scores never depend on row
+    order. [INFERENCE] HNSW stays approximate: which rows make a vector
+    leg's 30 can still differ between instances.
+  - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
+    search and graph, saved perspectives) bound the last change,
+    `updatedAt`, never frontmatter `timestamp` (the creation time, which
+    edits leave alone). Note legs filter `notes.updated_at` in SQL; code
+    hits use `repository_files.updated_at` (the last sync that changed the
+    file's content: an unchanged hash leaves it) and symbol hits their
+    file's, filtered after the merge by `passesFilters` like `types`. A
+    bound goes through `timeBound`: `YYYY-MM-DD` or an ISO date-time
+    (`THH:MM`, `:SS`, a fraction cut to ms, `Z` or `±HH:MM`); one without
+    an offset is UTC, never the server's time zone; anything else (a
+    5-digit year, `2030/01/01`, `2030-02-30`) matches nothing. Both sides compare at millisecond precision (SQL
+    `date_trunc('milliseconds', updated_at)`, a JS `Date` in the graph), so
+    search and graph agree inside a bound's millisecond. A hit carries
+    only `updated`, the UTC day (`YYYY-MM-DD`) of its last change (REST
+    and MCP; coordinator decision on #446: a full instant on every hit
+    cost ~10 tokens each); MCP drops it with `snippet` at `no_context`.
+    Graph nodes and note reads keep the full `updatedAt`. `notes.updated_at` moves
+    only in `applyRowChange` (store-tx.ts), when a write changes the row:
+    every MCP and REST write, rename, trash and restore, and the CRDT
+    fold (`foldCrdt`, so collaborative typing counts once per debounced
+    fold); a write that changes nothing leaves it. A current-format backup
+    restore and a vault import with `.elara/history` keep the source's
+    `updated_at`; a format-1 backup and a plain import take the restore
+    time. No index: note legs are served by the FTS and HNSW indexes and
+    the graph filters in memory.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
@@ -1381,8 +1488,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   from both the note embedding queue and the repository extraction
   queue — this is the shared mechanism, not two parallel ones. Both sides
   roll up blocks (ADR-004 §2.5): a neighbour's similarity is its best
-  block's to the best of the node's query vectors — every block of a note,
-  the file-level block of a file — one row per neighbour.
+  block's to the best of the node's query vectors — a note's first 16
+  blocks (`EDGE_QUERY_BLOCKS`; each is one HNSW search per owner type), the
+  file-level block of a file — one row per neighbour. The searches run before
+  the transaction that locks the note (`FOR SHARE`, against a purge), so a
+  long note's recompute never holds off writes to it.
 
 ### 5.7 Real-time collaboration (`server/src/sync/`)
 
@@ -1591,9 +1701,28 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `sessionIdGenerator: undefined`, a fresh `McpServer` + transport
   built per HTTP request. No cross-connection caching is possible by
   construction; auth and permissions are recomputed every call.
+  With no session and no stream, the server can send nothing unasked
+  (#436): `GET` and `DELETE` on both paths answer `405` with
+  `Allow: POST` and the SDK transport's JSON-RPC error
+  (`{"jsonrpc":"2.0","error":{"code":-32000,"message":"Method not
+  allowed."},"id":null}`), before authentication, and `buildServer`
+  overrides the SDK's `listChanged: true` with `false` on each list
+  capability it has (`tools`; `resources` when a manual is registered;
+  `prompts` when they are registered: not with an allow-list, not on a
+  `reader` profile). A list changes only
+  with permissions, and the next `tools/list` shows it.
+  `test/mcp-list-changed.test.ts` covers both paths.
 - **Auth**: bearer token → `resolveMcpToken()` (same live-resolution
   guarantee as everywhere else) → per-connection rate limit
-  (`rate-limit.ts`, default 120/min, in-process — see §9).
+  (`rate-limit.ts`, default 120/min, in-process — see §9). The window
+  runs 60 s from its first request; `checkRateLimit` returns `{ok:
+  false, retryAfterMs}` (time left in the window, 1-60000) for a request
+  over the limit, and the route answers HTTP 429 with `Retry-After:
+  ceil(retryAfterMs / 1000)` and a JSON-RPC error (#440): `{jsonrpc:
+  "2.0", id, error: {code: -32000, message: "rate limit exceeded for this
+  connection", data: <the RATE_LIMITED error envelope: retryable,
+  retryAfterMs>}}`, `id` echoing the request's (null for a batch or a
+  notification). A 401 is still `{error}`.
 - **Scoping** (`server.ts`): an `account`-scoped connection can address
   any resource the user can reach; a `vault`- or `repository`-scoped
   connection is **hard-pinned** — passing a different id throws, it's
@@ -1720,12 +1849,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `test/mcp-tool-budget.test.ts` measures, per profile, the ADR-004 §2.6
   sum: characters / 4 of `tools/list`, `prompts/list` and the
   `initialize` instructions. It fails a reader account token over 2,000
-  tokens (no prompts on reader, #428; measured 7,949 characters with
-  #434's annotations, 7,676 before) and a writer one whose `tools/list`
-  plus instructions are over 4,000 (15,429 with #434; 15,036 with #433's
-  output schemas, 14,286 before; its `prompts/list`, 10,042, is
-  reported), reports admin (`tools/list` 42,101 with #434; 39,512 with
-  #433, 37,512 before; its ceiling, 43,000, is in
+  tokens (no prompts on reader, #428; measured 7,984 characters with
+  #435's instructions, of which `tools/list` 7,746 and instructions 238;
+  7,949 with #434's annotations, 7,676 before) and a writer one whose
+  `tools/list` plus instructions are over 4,000 (15,669 with #435:
+  15,226 + 443; 15,429 with #434; 15,036 with #433's output schemas,
+  14,286 before; its `prompts/list`, 10,042, is reported), reports admin
+  (`tools/list` 41,811 with #435, plus 443 of instructions; 42,101 with
+  #434; 39,512 with #433, 37,512 before; its ceiling, 43,000, is in
   `mcp-tool-schema.test.ts`), checks the
   `tools/list` bytes are the same on every call and for two vault pins of
   a reader token (a writer or admin list follows the live pin permission),
@@ -1734,12 +1865,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   pin, allow-list, live permission) and that every tool has exactly one
   entry.
 - **Structured content and output schemas** (#433, ADR-004 §2.1, D6
-  default): `tool()` answers every success through `answered(text)`:
-  `content[0].text` stays the whole JSON answer (clients that show the
-  model only `content` lose nothing), and when that text is an object
-  (it starts with `{`) `structuredContent` is `JSON.parse(text)`, so it
-  holds exactly what the text shows (dates as strings) and the two never
-  differ. Bare-array answers (`search`, the unbudgeted list tools) carry
+  default): `tool()` answers every success through `answered(text,
+  blocks)`: `content[0].text` is the JSON answer, followed by the
+  rendered `blocks` as text blocks of their own (`read_note`'s body,
+  #445, below; no other tool has one), so clients that show the model
+  only `content` lose nothing. When that text is an object (it starts
+  with `{`) `structuredContent` is `JSON.parse(text)` with each block's
+  text in its key in place of the `{"in": "content[n]"}` marker, so it
+  holds exactly what the blocks show (dates as strings) and is the whole
+  answer. Bare-array answers (the unbudgeted list tools) carry
   none: MCP's `structuredContent` is an object, and wrapping the array
   would make it differ from the text. A tool may declare `outputSchema`
   (a loose zod object, so other keys pass): today only the eight
@@ -1749,12 +1883,38 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   successful answer, after the write committed, and a mismatch would
   turn the answer into an `Output validation error`; the schema is
   therefore the fields every write answer has (applied, merged,
-  conflicted, retry, dry run, replay, delete). Errors stay `isError`
-  text without `structuredContent`, which the SDK does not check.
-  Read tools get no output schema until their shapes settle (#445,
-  #432, #439). `test/mcp-structured-content.test.ts` covers each tool
+  conflicted, retry, dry run, replay, delete). Errors are the error
+  envelope (#439, below) in `content[0].text` without `structuredContent`:
+  the SDK server does not check an `isError` answer, but the SDK client
+  checks any `structuredContent` against the listed outputSchema, error
+  or not, so `{error}` there would fail on a write tool.
+  Read tools get no output schema until their shapes settle (#957,
+  #432). `test/mcp-structured-content.test.ts` covers each tool
   family through the real client (which validates against the listed
   schema), every write answer shape and the errors.
+- **Instructions** (#435): `instructionsFor(profile)` in
+  `mcp/instructions.ts` is the `initialize` result's `instructions`
+  (`new McpServer(info, {instructions})` in `buildServer`): one constant
+  text per profile, with no id, name, date or pin, so every token of a
+  profile gets the same bytes (#681). Reader: tools with
+  `budget_tokens` (characters / 4) fit it and end with `truncated`
+  (`list_vaults` and `list_repositories` take no budget and
+  answer bare arrays), the cursor is the only way on (read_note/read_file
+  page long bodies only that way), manuals are
+  `elara://manual/conventions` and one per family. Writer and admin (the
+  same text) add the whole-`body` merge base (`base_rev`, else this
+  token's last `read_note`, paged or not, within `READ_WINDOW_HOURS`,
+  24 h, `last-read.ts`; `ops` edit the live text) and the retry
+  rule, scoped to note writes ("Retry a note write with the same
+  `idempotency_key`": only the note writes take the key, admin's other
+  writes refuse it). Keyed on profile only: a
+  `read`-access token with the `writer` profile also gets the write
+  sentence. The reader text fits the 2,000-token budget because the
+  shared `budgetArgs` descriptions (`response.ts`) became `Max tokens;
+  default N` and `` `truncated.cursor` `` (the instructions explain
+  both). `test/mcp-instructions.test.ts` checks the rules per profile,
+  that every manual named is in the token's `resources/list`, and the
+  same bytes across two initializes and two vault pins per profile.
 - **Tool annotations** (#434, ADR-004 §2.6): `toolAnnotations()` in
   `server.ts` derives each tool's MCP `annotations` from its `tool()`
   record; `registerTool` lists them and `McpToolInfo` carries the same
@@ -1812,8 +1972,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused; community numbers depend on `types`, `tags` and `edgeTypes`; `cappedGroups` is the whole graph's in the community view and the listed nodes' groups otherwise; `narrow` names `neighborsOf` by id), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
   - *Prompts*: 20, registered in `prompts.ts`.
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
-  Every handler is wrapped so thrown errors become a structured `isError`
-  result instead of an uncaught exception. Input schemas are strict
+  Every handler is wrapped so thrown errors become an `isError` result
+  instead of an uncaught exception. Input schemas are strict
   (#437): `tool()` wraps each zod shape with `strictArgs()`
   (`strict-input.ts`), so the SDK refuses an undeclared argument before
   anything runs, with a message that names it, suggests the parameter it
@@ -1823,6 +1983,80 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `filters`); free-form maps (`frontmatter`, the preference maps) are
   `z.record` and accept any key. `test/mcp-strict-args.test.ts` loops
   over every tool.
+- **Error envelope** (`mcp/errors.ts`, #439, ADR-004 §2.7): every failed
+  call answers `isError: true`, `content[0].text` =
+  `JSON.stringify({error: {code, message, retryable, retryAfterMs?, rule?,
+  field?, suggestions?}})` and no `structuredContent`. `envelope()` fixes
+  the key order and leaves absent fields out (never `suggestions: []`),
+  so one refusal is one byte string. A handler throws
+  `McpToolError(code, message, extra?)`; `toErrorEnvelope(err)` in the
+  `tool()` catch maps it and the domain errors: `CursorError` (its
+  code), `OkfValidationError` by its `refusal` (`OKF_INVALID`,
+  `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the depth limit),
+  `NoteTooLargeError` (`TOO_LARGE`, the limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
+  included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
+  quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
+  (`INVALID_ARGUMENT`), `NoteEditConflictError` and
+  `IdempotencyKeyReusedError` (`CONFLICT`), a failed query (`INTERNAL`
+  `a database query failed (<SQLSTATE>)`, #443: `databaseFailure()` in
+  `db/errors.ts` finds a `DrizzleQueryError` or postgres.js
+  `PostgresError` in the `cause` chain; drizzle's message is the SQL and
+  every parameter, so the driver error is logged with the statement
+  alone, `{query}`, no parameters), a Node system
+  error (`INTERNAL`, its code only, the error logged), anything else
+  (`INTERNAL` with its message). `CONFLICT`, `BUSY` and `QUARANTINED`
+  extend ADR-004's list, and `field` its envelope. The SDK's own
+  refusals (arguments its schema check rejects, an unknown tool, an
+  answer failing its outputSchema) are isError text it makes itself; a
+  wrapper on `CallToolRequestSchema` (next to the tools/list one) turns
+  every error result `tool()` did not make (a `WeakSet`) into the
+  envelope: arguments → `INVALID_ARGUMENT` (`argumentRefusal`: the tool's
+  strict schema re-parses the arguments; an unknown key first, `field`
+  its dotted path, `suggestions` the names strict-input would suggest,
+  else all of that object's keys; an enum's values, a discriminated
+  union's tag values for a bad `op`), an unknown tool →
+  `NOT_FOUND` (close names among `listedTools()`), else `INTERNAL`; the
+  message is the SDK's without `MCP error -32602: Input validation
+  error: `. The same wrapper refuses a NUL byte (U+0000) in any string
+  or object key of the arguments before the SDK's check, for every tool
+  (#443, `findNulByte()` in `nul-bytes.ts`): `INVALID_ARGUMENT`, `field`
+  its dotted path (a key: the key's own path, the NUL shown as `\0`, e.g.
+  `frontmatter.k\0`), message `<field>: NUL bytes (U+0000) are not
+  allowed` (` (in a key)` for a key). Postgres `text` and `jsonb` cannot
+  hold one; other control characters (tab, LF, CR and the rest) are kept.
+  Every other request the override sets (prompts/get, resources/read)
+  answers a NUL in its params as JSON-RPC InvalidParams and a failed
+  query as InternalError `a database query failed`. REST does the same
+  in app.ts: a root `preValidation` hook answers a NUL in path params,
+  query string or parsed body with 400 `{statusCode, error, message,
+  code: "INVALID_ARGUMENT", field}` (`params.<name>`, `query.<name>`, or
+  the body's field path). A route that handles a NUL in its body itself
+  names those body paths in its `config.nulBytesAllowed` (`*` any key or
+  index, `''` the whole body): the MCP routes `['']` (the MCP answer
+  above), agent push `['files.*.content']` (`syncRepositoryFiles` strips
+  NULs from file content and hashes the bytes as sent; paths and
+  `currentPaths` stay checked). Multipart uploads are streams, not
+  walked. The error handler answers a failed query 500 `a database query
+  failed` in every environment. Suggestions only from what the caller reaches: a `note not
+  found` after the access check carries `closest()` of
+  `nearbyNotePaths()` (live paths of that vault directly in the same
+  folder, and with the same last segment anywhere, each query up to 500;
+  at most 3 shown), while the access check's
+  own `not found` has none, so another account's id answers exactly
+  `{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}`
+  like a missing id (`account-separation`). The owner-only checks
+  (`requireVaultOwner`, `requireRepositoryOwner`, `requireTeamOwner`)
+  answer that same `NOT_FOUND` for a container the caller cannot reach
+  (a team it is not a member of) and `PERMISSION_REQUIRED` only for one
+  it can see. A graph node reference (#447, `graph/resolve-node.ts`)
+  that names several nodes is a successful candidates answer, not an
+  error; one that names none is `NOT_FOUND` with in-reach `suggestions`.
+  `rateLimitedError(ms)`
+  is the `RATE_LIMITED` envelope `routes.ts` sends as JSON-RPC
+  `error.data` with HTTP 429 (#440, **Auth** above). Write statuses stay
+  results: `status: 'retry'` (`write-result.ts`), `merged`,
+  `conflicted`. `test/mcp-errors.test.ts` covers the code families,
+  `retryable`, scoped suggestions and the wrapped SDK refusals.
 - **Budgets and the response envelope** (`response.ts`, #420, #422;
   ADR-004 §2.1): a tool registered with `budget: 'list' | 'read'`
   (`browse_vault`, `read_note`, `list_trash`, `note_history`,
@@ -1838,7 +2072,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     lists (the whole ranking recomputed per page, offset plus a guard:
     `find_symbols`, `graph`, `find_graph_path`, `read_file`'s outline) and
     `textSection` (a body or file cut at line boundaries; a line longer
-    than a page is split).
+    than a page is split). A `block: true` text section (`read_note`'s
+    body, #445) is not a JSON string: `compose()` puts the marker
+    `{"in": "content[n]"}` (n = 1 for the first block) in its key and
+    returns this page's text, unescaped, as a block that `answered()`
+    sends after the JSON, an empty one included (the shape is fixed).
+    `fill()` counts its lines by their raw characters, other text by
+    their JSON-escaped length.
   - `browse_repository` (#424) pages in SQL, not in memory:
     `listRepositoryFilesPage` (`repositories/store.ts`) reads `BROWSE_PAGE`
     (500) + 1 files after the cursor's path, `ORDER BY path COLLATE "C"`,
@@ -1882,11 +2122,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
     benchmark's estimate (it undercounts a real tokenizer by roughly
     10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
-    because it is what the benchmark gate measures, ADR-004 §5); the rendered text stays within the budget
+    because it is what the benchmark gate measures, ADR-004 §5); the rendered
+    answer, the JSON plus every block and one separator character per
+    block (`charsOf`; the benchmark's lab client joins blocks with a
+    newline, so both count the same), stays within the budget
     (items dropped whole from the end, a refill loop accounts for the
     `truncated` block), except that a text which would show nothing
     shows its first line (split when longer than the page), so paging
-    always moves on.
+    always moves on. The ladder and the `budget_tokens: N` suggestion
+    measure the same total.
   - Ladder (#421, ADR-004 §2.1): `render()` tries `full`, `no_context`,
     `locations`, `counts`, `total` in order, one level for the whole
     answer; a level no list on the page defines is skipped. An item level
@@ -1933,10 +2177,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `g` guards text (8 hex of the text's sha256) and rankings (of the ids
     before the position); a change refuses the cursor (`stale cursor`,
     `CURSOR_STALE`). The codes wait for the error envelope (#439).
-  - `read_note` records the last read (#864) in `Budgeted.rendered`, only
-    for a first page with `truncated: false` (the whole body).
-  - `search` keeps its bare array and has no budget (its envelope waits
-    for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
+  - `read_note` records the last read (#864) in `Budgeted.rendered`, on
+    every page: the `rev` it reports, the merge base of a later whole-body
+    edit (#961).
+  - `search` (#441) is budgeted like `find_symbols`: the
+    `SearchResponse` head (`status`, `retrieval_mode`, `degraded`,
+    `index`) then the ranked `results` (limit + 1 fetch; ladder: without
+    `snippet`/`frontmatter`, then the path or `path#La-Lb`; counted per
+    path). `test/search-envelope.test.ts` covers each status, the gate,
+    the fallbacks and the order through MCP and REST.
+    `test/mcp-response-envelope.test.ts` drives each
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
     each ladder level.
   `search` and `graph` call
@@ -2134,6 +2384,52 @@ is the history record, not Chapters).
    bearer sync-token auth, the client sends its own file list directly
    — the closest analog to how a coding agent itself already works.
 
+**Which files are indexed** — git and local_path share one scan
+(`scanRepository` in `fs-scan.ts`); they differ only in what is listed
+(#465, owner decision D12 in #930):
+- **git** lists every file of the clone except `.git`. A clone holds only
+  tracked files, so everything in it is source: a committed `build/`,
+  `dist/` or `node_modules/` is indexed.
+- **local_path** follows git's ignore rules, in the scan and in the
+  watcher (`GitignoreRules`): `.git/info/exclude`, the root `.gitignore`
+  and every nested `.gitignore`, the deepest decisive rule winning (a
+  nested `!keep.log` re-includes a root `*.log`), matched case-sensitively
+  like git's default unless the folder's `.git/config` sets
+  `core.ignorecase`. `.git` is always skipped. A folder with no root
+  `.gitignore` still skips `node_modules/` as a safety default. chokidar
+  never watches a directory it pruned, so when a `.gitignore`,
+  `.git/info/exclude` or `.git/config` changes, the watcher drops its
+  cached rules and replaces itself (once per debounced burst) before the
+  sync, so a newly un-ignored directory is watched and a newly ignored one
+  stops syncing.
+- **agent_push** has no filter: the client chose what to send.
+
+Both scans leave out binary assets by extension, then cap the listing at
+10,000 files (`MAX_INDEXED_FILES`; the rest are skipped as
+`over_file_cap`), then read: a file over `MAX_FILE_BYTES` (1 MiB on disk)
+or holding a NUL byte is skipped: a server-side scan can't tell a stray
+NUL in a text file from a binary format, so it takes the file as binary.
+A skipped file is left out of `currentPaths` as well, so a row indexed
+from an earlier version is deleted with its symbols, imports, embedding
+and semantic edges: a file that grows past the cap or gains a NUL byte
+leaves the index (`read_file` answers `NOT_FOUND`, search and
+`find_symbols` stop finding it) and comes back on the first sync after it
+is indexable again (#923). Every skip is reported: each sync stores
+`repositories.skipped_files` (`summarizeSkips`), a count per reason
+(`too_large`, `binary`, `ignored`, `over_file_cap`) plus a sample of up to
+5 paths per reason (an ignored directory is pruned, counted once and
+sampled as `dir/`). MCP `repository_status` and the REST repository row
+(`GET /api/repositories`) serve it as `skipped` (`skippedField`), omitted
+when nothing was skipped; the sync card shows one line. A git row whose
+`skipped_files` is still null (last synced before #465) skips the
+`ls-remote` shortcut once, so its committed `build/` gets indexed without
+waiting for a new commit. A file that fails to read (gone since the
+listing, no permission) stays current and keeps its row. agent_push is
+the exception: the client chose to send the content as text, so
+`syncRepositoryFiles` strips NUL bytes and indexes the rest, with no
+per-file size check (the request body limit bounds it), and reports no
+skips.
+
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
 credentials and webhook secrets. Reversible by design (a stored
@@ -2207,10 +2503,12 @@ native prebuilds in its install layer (Dockerfile), so a grammar costs the
 image about its `.wasm`. `language.ts` labels files by extension: `.ts`, `.tsx`, `.mts` and `.cts` are all
 `typescript` (#449, #451; the label is what `read_file`, `search` and the
 graph's language groups show, so one `typescript` filter finds them all),
-`.js`, `.jsx`, `.mjs` and `.cjs` are `javascript`. A sync labels the files
-it writes; extraction writes the label of the running `language.ts` on the
-row too, so a file synced before its language was labelled (`.kt`, `.md`)
-gets it at the `EXTRACTOR_VERSION` 5 re-extraction. The grammar comes from
+`.js`, `.jsx`, `.mjs` and `.cjs` are `javascript`. The path is the source
+of truth: `processFile` derives the language from it and writes it in the
+same update as `extractor_version`, so a row labelled under older rules
+(`.mts`/`.cts` rows had `language` null before #451, `.kt` and `.md` rows
+before #464, and a sync skips unchanged content) is relabelled and
+extracted at the version bump's catch-up. The grammar comes from
 the extension, not the label: `.tsx` parses with TSX
 (`tree-sitter-tsx.wasm`, #449), since JSX is not TypeScript syntax and the
 TypeScript grammar reads `<div>` as a type assertion; the other TypeScript
@@ -2326,19 +2624,20 @@ headings identically. For a note, `owner_id` is `notes.id` (it survives
 renames).
 *Code blocks* (`repositories/code-blocks.ts`): a `symbol` block per
 symbol; a `section` block per heading of a Markdown or HTML file (#464,
-below); a `file` block (lines 1..total, text `<path>\n<content>`) when
-the file is small — at most 300 lines (`SMALL_FILE_MAX_LINES`) and 16,000
-characters (the embedder's cut) — or has no symbols or sections (an
-unsupported language, a minified file, no declarations); otherwise a
-`skeleton` block for the file (`<path>` then every symbol's or heading's
-first line) and one per class
-with methods (`<kind> <Class> in <path>`, the class's first line, then its
-methods' first lines). Every file thus has one file-level block, always
-embedded. A symbol's embedded text is `<kind> <inner_path> in
-<path>\n<snippet>`, the snippet its first 30 lines cut to 1,500
-characters (`SNIPPET_LINES`, `SNIPPET_CHARS`; search computes hit
-snippets from `content` with the same numbers), with no line number, so a
-block whose lines only moved keeps its text. *Repository outlines*
+below); a `file` block for every file (lines 1..total, text
+`<path>\n<content>`, the old file vector's; the model reads its first 512
+tokens); and, when the file is not small — more than 300 lines
+(`SMALL_FILE_MAX_LINES`) or 16,000 characters (the embedder's cut) — and has
+symbols or sections, a `skeleton` block for the file (`<path>` then every
+symbol's or heading's first line) and one per class with methods (`<kind>
+<Class> in <path>`, the class's first line, then its methods' first lines).
+The file-level blocks are always embedded. A symbol's embedded text is
+`<kind> <inner_path> in <path>:<start line>\n<snippet>`, the snippet its
+first 30 lines cut to 1,500 code points (`SNIPPET_LINES`, `SNIPPET_CHARS`),
+stored on the block as `snippet` (the keyword legs match it and hits show
+it). The line stays in the text: without it chapters A13 fell out of the
+top 5 (bench run 40076821407 vs 40076707623), so a symbol whose lines moved
+is embedded again while its id stays. *Repository outlines*
 (`repositories/outline.ts`, #464): a Markdown file's ATX headings
 (`headings()`, so none inside a fence; a leading `---` front matter block
 is skipped) and an HTML file's `h1`–`h6` (a small scanner: comments,
@@ -2348,11 +2647,13 @@ a `section` block spanning its line through the line before the next
 heading of the same or a higher level, `inner_path` the heading titles
 joined with ` > ` (as a note's); its embedded text is `section <inner_path>
 in <path>\n<snippet>`, the snippet cut from its own text (up to its first
-subheading) as a symbol's is; it takes tier 1 of the embed budget. A
-section is **not a symbol** (no `symbol_kind`): `find_symbols`,
-`read_file`'s outline and the staleness check never see it; it serves the
-`search` code vector leg (a long README's matching section ranks its file).
-*Note blocks*
+subheading) as a symbol's is, with no stored `snippet`; it takes tier 1 of
+the embed budget. A section is **not a symbol** (no `symbol_kind`):
+`find_symbols`, the `search` symbol legs, `read_file`'s outline and the
+staleness check never see it. Today it feeds semantic edges (a file's
+similarity is its best block's) and is there for per-block hits
+(#414/#415); the `search` code vector leg still ranks files by their `file`
+block only (below). *Note blocks*
 (`notes/note-blocks.ts`, #452b): a `preamble` for the body before its first
 heading when it is not blank (a body with no heading that is empty or blank
 is one preamble whose embedded text is the path, so every note keeps a
@@ -2385,28 +2686,36 @@ owner_id, block_id)` with the blocks the content no longer has deleted, so
 a surviving block keeps its row (`find_symbols` `id`); a result for content
 that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same owner already has keeps that vector instead of being embedded again, so
-a line shift, an edit to another symbol or section, a frontmatter edit, or a
-version bump that leaves a block's text alone embeds nothing new for it.
-*Readers*: `search` note vector leg — the nearest 200 note blocks of the
-scoped vaults, then each live note's best block distance (filters applied
-to the note), one hit per note with the same `{…, snippet: left(body,
-200)}` as before; `search` code
-vector leg — the nearest 200 blocks of the scoped repositories
-(`hnsw.ef_search` 200), then each file's best block distance, one hit per
-file with the same `{…, snippet: left(content, 200)}` as before; `search`
-symbol legs and `find_symbols` — `kind = 'symbol'` blocks (never a
-repository `section`; name, then
-`Class.name`, then snippet text in a file whose content matches; vector:
-nearest symbol blocks); semantic edges (`semantic-edges.ts`) — a note's or file's
-similarity to another node is its best block's, the query vectors a note's
+an edit to another symbol or section, a frontmatter edit, or a version bump that leaves a block's text
+alone, embeds nothing new for it. *Readers*: `search` note vector leg — the nearest 200 note blocks of the
+scoped vaults (`hnsw.ef_search` 200, #967's distance gate on the best distance), then each live note's best block
+distance (filters applied to the note), one hit per note with the same
+`{…, snippet: left(body, 200)}` as before. A vault has about 12 times as
+many note blocks as notes; the partial `blocks_note_embedding_idx` keeps the
+leg on note blocks only (10k notes × 12 blocks on a quiet database: warm
+p95 28–34 ms against 22–32 ms for the old `notes.embedding` leg; the first
+query after a restart is slower, 190–700 ms against 30–70 ms, while the
+larger index pages in); `search` code
+vector leg — the nearest `file` blocks of the scoped repositories
+(their own partial HNSW index `blocks_file_embedding_idx`, as the old
+file index held only files; `hnsw.ef_search` 200; #967's distance gate), one hit per file with the
+same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
+the ADR-004 best-block roll-up let symbol blocks of large files crowd the
+leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
+outline put a 304-line hook above the answer to A13 (0.931), so both wait
+for #414/#415's per-block hits; `search` symbol legs and `find_symbols` —
+`kind = 'symbol'` blocks (never a repository `section`), keyword by name, `Class.name` or the stored
+`snippet`, vector by the nearest symbol blocks (`blocks_symbol_embedding_idx`); semantic edges (`semantic-edges.ts`) — a note's or file's
+similarity to another node is its best block's (`blocks_note_embedding_idx`,
+`blocks_code_embedding_idx`, which holds repository sections too), the query vectors a note's
 blocks or a file's file-level block; `read_file`'s outline, the REST file view's
 `symbols` and `listFileSymbols`; the staleness check (a `#anchor` is a
 symbol's bare name or its `Class.method`); the doctor (`blocks-missing`,
 `blocks-failed`; for notes `vector-missing`/`vector-failed`). Migration 0035 carries the existing vectors and symbols
 over as `legacy:` blocks so search keeps answering until the first boot
 re-extracts each file (a carried file vector made from the file's current
-content gets the `embed_key` of its text, so a small file is not embedded
-again). Migration 0036 does the same for notes: each `notes.embedding`
+content gets the `embed_key` of its text, so the `file` block is not
+embedded again). Migration 0036 does the same for notes: each `notes.embedding`
 becomes one `legacy:note` preamble block spanning the body (`embed_key`
 `legacy`: its text, with the frontmatter, is no block's), searchable until
 the first boot's catch-up re-embeds the note (`chunk_version` 0).
@@ -2416,10 +2725,14 @@ resolves a specifier only against files already known in the same
 repository. A `?query` or `#hash` suffix (Vite `?raw`, `?url`, `?worker`)
 is dropped before resolving; the stored `target_path` keeps the specifier
 as written. Then, in order: relative specifiers (`./x`, `../x`); the
-`paths` of the importing file's tsconfig/jsconfig; `#x` by the nearest
-package.json `imports`; the `@/` alias, mapped by convention to the
-importing file's package `src` directory (the path up to its first `src`
-segment); the tsconfig's `baseUrl`; a workspace package by name. Each
+`paths` of the importing file's tsconfig/jsconfig (a pattern that matches
+but finds no file skips the next three and goes to the packages, as tsc
+does); `#x` by the nearest package.json `imports`; the `@/` alias, mapped
+by convention to the importing file's package `src` directory (the path up
+to its first `src` segment); the tsconfig's `baseUrl`; a workspace package
+by name. Only a JS/TS importer (`.js/.jsx/.ts/.tsx/.mjs/.cjs/.mts/.cts`)
+uses the resolution context below: a Python or Go import resolves as before
+#466 (relative only). Each
 candidate path is tried as written and with extensions: TypeScript ESM
 specifiers name the compiled output, so `.js` tries `.ts` then `.tsx`,
 `.jsx` tries `.tsx`, `.mjs` tries `.mts`, `.cjs` tries `.cts`, before the
@@ -2463,8 +2776,8 @@ resolves to the same path under `src/`, and a `.d.ts` to its source next to
 it. *Path aliases:* `compilerOptions.paths` (exact keys, then one-`*`
 patterns, longest prefix wins; targets relative to `baseUrl`, else to the
 config's directory) and `baseUrl` apply to the files under the config's
-directory, the nearest directory with either winning (its configs merged,
-`tsconfig.json`/`jsconfig.json` first); configs are parsed as JSONC
+directory, the nearest directory with either winning (its configs merged:
+`tsconfig.json`/`jsconfig.json` first, then the others by name); configs are parsed as JSONC
 (comments, trailing commas) and `extends` is not followed. A manifest that
 does not parse is ignored.
 
@@ -2519,9 +2832,9 @@ new content's job), and replaces imports and the whole block set and writes
 `chunk_version` together; semantic edges are recomputed after the commit
 (skipped when the file-level block kept its vector).
 Import and block rows go in 1,000 a statement (`INSERT_CHUNK_ROWS`; one
-statement binds at most 65,534 parameters, 14 a block row), all in that
+statement binds at most 65,534 parameters, 15 a block row), all in that
 transaction, so a generated file with thousands of exported consts still
-commits whole (tested with 12,001 blocks). A
+commits whole (tested with 12,002 blocks). A
 failure or a crash anywhere before the commit leaves the previous imports,
 blocks and vectors whole and searchable. **Vector reuse:** a block whose
 `embed_key` (the running `EMBEDDER_ID` and its embedded text) one of the
@@ -2608,26 +2921,46 @@ written in the same transaction) and `notes.embedder_id`, `chunk_version`
 (out of the Drizzle `notes` model, like `seq`; a note's blocks carry its
 `seq` as `owner_version`).
 
-*Upgrade to 0033.* The migration stamps the vectors already stored with
-`Xenova/bge-small-en-v1.5+text1`, the id of what made them (the model,
+*Upgrade to 0033.* The migration rewrites no row, so it holds the boot for
+well under a second: 244 ms measured locally on 100,000 notes (501 MB) and
+20,000 files (124 MB) with vectors (the review of #978 measured 590 s for a
+version that updated every row). It adds `notes.embedder_id` and
+`repository_files.embedder_id` with the constant default
+`Xenova/bge-small-en-v1.5+text1`, which PostgreSQL (11+) gives the existing
+rows from the catalog, then drops the default, so later rows start
+without one. That is the id of what made the stored vectors: the model,
 pooling and the note, file and symbol embed texts are unchanged since
-1f05a6f, 3bc7a5b and 2c584d0), and sets `extracted_hash = content_hash` on
-files; rows whose pre-0033 job for their current content or `seq` is
-pending or failed are left unstamped. Every file keeps `extractor_version`
-0. So the first boot re-embeds only the notes and files without a vector
-or with a pending or failed job (about 100 ms a note and 640 ms a file with
-bge-small on CPU), and re-extracts every repository file once with its
-vectors reused, which costs a parse and a write: measured locally on this
-repository's 766 source files ×3 (2,298 files, 9,807 symbols, shared
-loaded Postgres), 2,298 files queued in 76 ms and drained in 56 s, 24 ms a
-file, with no file or symbol embedded; about 8 minutes for 20,000 files.
+1f05a6f, 3bc7a5b and 2c584d0. The id counts only where `embedding` is set;
+the catch-up and `processFile` check that first. The one UPDATE clears the
+id of the few notes whose pre-0033 job for their current `seq` is pending
+or failed (reached from `jobs` by primary key), so the catch-up embeds them.
+Files keep `extracted_hash` null and `extractor_version` 0, so the first
+boot re-extracts each once. `processFile` keeps such a file's vector unless
+its pre-0033 job `extract:<id>:<hash>` for the current content is pending
+or failed, and a push to it before then records the replaced content in
+`extracted_hash` (`syncRepositoryFiles`), so a vector is only kept for the
+content it was made from. So the first boot re-embeds only the notes and
+files without a vector or with a pending or failed job (about 100 ms a note
+and 640 ms a file with bge-small on CPU), and re-extracts every repository
+file once with its vectors reused, which costs a parse and a write. Measured
+locally on this repository's 766 source files ×3 (2,298 files, 9,807 symbols,
+shared loaded Postgres): queued in 76 ms and drained in 56 s, 24 ms a file,
+with no file or symbol embedded, so about 8 minutes for 20,000 files.
 That re-extraction is also the backfill of import `line`s from before 0031
 (#558, ADR-004 A7). A note written 2 s into that catch-up had its vector
 81 ms later and a file pushed then had its symbols in 99 ms: writes go
 first (**Durable jobs**). *Upgrade to 0036* (#452b): every note is
-re-embedded once as its blocks (`chunk_version` 0), about 12 blocks a note
-on the Chapters vault, and every file re-extracted once with no vector
-computed again (`CHUNK_VERSION` 2). *Later bumps:* an `EXTRACTOR_VERSION` bump costs
+re-embedded once as its blocks (`chunk_version` 0) and every file
+re-extracted once with no vector computed again (`CHUNK_VERSION` 2). The
+note re-embed is the cost: the Chapters vault snapshot has 11.95 blocks a
+note (206 notes, 2,461 blocks), and bge-small on CPU took about 0.2 s a
+block (491 s for those 2,461 blocks, in the worker's batches of 8, against
+50 s for one whole-note text each), so plan about 6.7 hours of background
+embedding per 10,000 notes of that shape (one embedder thread). Meanwhile
+the `legacy:note` blocks keep the note vector leg answering, and a note
+written during it is embedded first (its job has priority 0, the catch-up
+1). After that, an edit embeds only the blocks whose text changed.
+*Later bumps:* an `EXTRACTOR_VERSION` bump costs
 the same parse per file, plus embedding only symbols whose embed text
 changed; an `EMBEDDER_ID` bump re-embeds every note and file (the ~100 ms /
 640 ms above per item), in the background behind writes, the old vectors
@@ -2713,7 +3046,7 @@ are idempotent rewrites.
 - **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` (through a temp file of the same mode) in a `0700` directory, whatever the umask (#493). The restore CLI prints counts, and only a driver message and code on errors. The `backup.json` digests (#493) are integrity checks, not a signature: they catch damage and truncation, not someone who can rewrite the whole archive.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
-- **Ingestion bounds**: Git clone ingestion capped to 1MB per file and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`).
+- **Ingestion bounds**: git and local-path ingestion capped to 1 MiB per file (`MAX_FILE_BYTES`, `fs-scan.ts`) and 10,000 files (`MAX_INDEXED_FILES`); git skips only `.git`, local_path follows its `.gitignore` files (`node_modules` by default when there is none); a file over the cap or with a NUL byte is skipped and drops out of the index (§5.10, #923); every skip is counted per reason in `repository_status.skipped` (#465).
 - **Global perspective guards**: Unvaulted graph perspectives are created only by instance admins and listed to and deleted by their creator only (#550; §5.5).
 - Full findings and the design changes they drove:
   `docs/superpowers/specs/2026-07-12-security-audit-findings.md` and
@@ -2736,10 +3069,10 @@ flips both.
 | Tokens are stored only as a SHA-256 hash; the raw token is in neither the token's `mcp_connections` row, the audit events naming that connection nor the connection listing | holds | `mcp-token-lifecycle` | `token stored only as its SHA-256 hash` |
 | The MCP limit (`MCP_RATE_LIMIT`, default 120/min) refuses request N+1 with HTTP 429 | holds | `mcp-rate-limit` | `rate limit: request MCP_RATE_LIMIT+1 on one connection within a minute gets HTTP 429` |
 | The limit is per connection, not per user: a user with N tokens gets N x the limit | holds (by design today) | `mcp-rate-limit` | `rate limit: counted per connection (another token of the same user is not limited)` |
-| The 429 carries `Retry-After` and a JSON-RPC error body | **defect #440**: no header, body `{"error":"rate limit exceeded for this connection"}` | `mcp-rate-limit` (pins today's 429) | the two `rate limit: the 429 ...` checks (known defects) |
+| The 429 carries `Retry-After` and a JSON-RPC error body | holds (#440): `Retry-After` in seconds until the window ends, a JSON-RPC error with the request's `id` and the `RATE_LIMITED` envelope as `error.data` | `mcp-rate-limit` | the two `rate limit: the 429 ...` checks |
 | B's search, graph, `find_symbols`, related-note edges (local graph, backlinks), notifications, perspective listings, vaults, repositories and teams name nothing of A's | holds | `account-separation` | `separation: B's ... names nothing of A's` (six checks) |
 | `lookup_user` returns only `{id, email}` of an active account; deactivated and unknown emails answer alike | holds; any active account is found by exact email (sharing needs the id) | `account-separation` | `separation: B's lookup_user returns A's id and email only` |
-| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
+| B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault); MCP's not-found is the same envelope bytes, with no suggestions from A's containers (#439) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
 | Semantic neighbours are chosen within the owner's reach | **defect #461**: the neighbour lookup spans every account; every read filters the stored edges | `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` (known defect) |
 | Note text in a prompt sits in a separate, delimited data block, apart from the instructions | **defect #556**: `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) put it inside their one user-role instruction message, after a heading and before the prompt's own instructions | `mcp-prompt-note-content` (pins today's placement) | `prompt note text: placed in a separate data block, not inside the instructions` (known defect) |
 

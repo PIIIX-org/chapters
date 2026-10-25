@@ -60,6 +60,8 @@ const ENTRY_FIELDS = ['source', 'module', 'main', 'types', 'typings']
 const BUILD_DIRS = new Set(['dist', 'build', 'lib', 'out'])
 /** A bundler's `?raw`, `?url`, `?worker` or `#hash` after the path (not a leading `#`: subpath imports). */
 const QUERY_OR_HASH = /(?<=.)[?#].*$/s
+/** The importers the resolution context applies to: JavaScript and TypeScript sources. */
+const JS_SOURCE = /\.[cm]?[jt]sx?$/
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -83,12 +85,14 @@ const isUnder = (dir: string, path: string): boolean => dir === '' || path.start
  * - relative specifiers, with TypeScript ESM `./x.js` -> `x.ts`/`x.tsx`
  *   (TS source preferred over a same-named `.js`);
  * - the `paths` of the nearest tsconfig/jsconfig above the importing file;
+ *   a matching pattern that finds no file goes straight to the packages;
  * - `#x` by the nearest package.json `imports`;
  * - the `@/` alias, mapped by convention to the importing package's `src`
  *   directory;
  * - the nearest config's `baseUrl`;
  * - a workspace package by its package.json `name`, and its subpaths.
- * Anything else (npm packages, stdlib) never resolves.
+ * The context (all but relative specifiers and `@/`) applies to JS/TS
+ * importers only. Anything else (npm packages, stdlib) never resolves.
  */
 export function resolveImportPath(
   sourcePath: string,
@@ -100,14 +104,18 @@ export function resolveImportPath(
   if (own !== undefined) return own
   const specifier = rawSpecifier.replace(QUERY_OR_HASH, '')
   if (specifier.startsWith('.')) return resolveFile(join(dirOf(sourcePath), specifier), knownPaths)
+  // Manifests describe JavaScript module resolution: a Python or Go import never uses them.
+  if (!JS_SOURCE.test(sourcePath)) context = EMPTY_CONTEXT
 
   const aliases = context.aliases.find((a) => isUnder(a.dir, sourcePath))
   const alias = aliases && matchPattern(aliases.paths, specifier)
   if (alias) {
+    // As tsc: a matching pattern rules out the `@/` convention and `baseUrl`, but not a package (node_modules).
     for (const target of alias.value) {
       const resolved = resolveFile(target.replaceAll('*', alias.capture), knownPaths)
       if (resolved) return resolved
     }
+    return resolvePackage(context, specifier, knownPaths)
   }
   if (specifier.startsWith('#')) return resolveSubpathImport(context, sourcePath, specifier, knownPaths)
   if (specifier.startsWith('@/')) {
@@ -464,8 +472,11 @@ export function buildResolutionContext(files: Iterable<{ path: string; content: 
     }
   }
 
+  // By directory, then the directory's tsconfig.json/jsconfig.json before its other configs, then by name.
   const configRank = (name: string) => (name === 'tsconfig.json' || name === 'jsconfig.json' ? 0 : 1)
-  configs.sort((a, b) => (a.dir === b.dir ? configRank(a.name) - configRank(b.name) : 0))
+  configs.sort((a, b) =>
+    a.dir !== b.dir ? (a.dir < b.dir ? -1 : 1) : configRank(a.name) - configRank(b.name) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+  )
   const byDir = new Map<string, PathAliases>()
   for (const { dir, options } of configs) {
     const baseUrl = typeof options.baseUrl === 'string' ? join(dir, options.baseUrl) : null

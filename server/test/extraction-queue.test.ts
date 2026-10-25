@@ -298,7 +298,7 @@ describe('extraction queue', () => {
       await syncRepositoryFiles(repo.id, [{ path: 'src/store.ts', content }], ['src/store.ts'])
       await flushExtraction()
       expect(embedSpy.mock.calls.map(([texts]) => texts.slice(1).map((t) => t.split('\n')[0]))).toEqual([
-        ['class Store in src/store.ts', 'function load in src/store.ts', 'function helper in src/store.ts'],
+        ['class Store in src/store.ts:1', 'function load in src/store.ts:8', 'function helper in src/store.ts:7'],
       ])
     } finally {
       embedSpy.mockRestore()
@@ -325,7 +325,7 @@ describe('extraction queue', () => {
 
   it('stores a file with more blocks and imports than one INSERT can bind, and replaces them (#450 review, #413)', async () => {
     // 14 parameters a block row and 4 an import row: one statement would pass
-    // postgres.js's 65,534-parameter cap (12,001 x 14 and 17,000 x 4). Generated
+    // postgres.js's 65,534-parameter cap (12,002 x 15 and 17,000 x 4). Generated
     // constant tables reach this now that exported consts are symbols.
     vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '4')
     const repo = await makeRepo()
@@ -342,8 +342,8 @@ describe('extraction queue', () => {
       const file = await fileByPath(repo.id, 'src/table.ts')
       expect(await fileEmbedding(file.id)).not.toBeNull()
       expect(file.extractorVersion).toBe(EXTRACTOR_VERSION)
-      // The file skeleton and one block per constant.
-      expect(await countBlocks(file.id)).toBe(12_001)
+      // The file block, the file skeleton and one block per constant.
+      expect(await countBlocks(file.id)).toBe(12_002)
       const [importRows] = await db.select({ n: count() }).from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file.id))
       expect(importRows!.n).toBe(17_000)
 
@@ -353,7 +353,7 @@ describe('extraction queue', () => {
       const replaced = await fileByPath(repo.id, 'src/table.ts')
       expect(replaced.extractedHash).toBe(replaced.contentHash)
       expect(replaced.contentHash).not.toBe(file.contentHash)
-      expect(await countBlocks(file.id)).toBe(6_001)
+      expect(await countBlocks(file.id)).toBe(6_002)
     } finally {
       warnSpy.mockRestore()
       errorSpy.mockRestore()

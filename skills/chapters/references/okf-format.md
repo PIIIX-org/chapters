@@ -14,9 +14,10 @@ Specification references:
    - Every segment must match `^[a-z0-9][a-z0-9-]*$`: lowercase letters, digits, and hyphens, starting with a letter or digit. No uppercase, underscores, dots, or spaces. `decisions/adr-001-crdt-relay` is valid; `decisions/ADR-001` is not.
    - `.`/`..` segments, hidden segments, and leading, trailing, or double slashes are refused.
 
-2. **`type` equals the first path segment (enforced)**:
-   - `domains/auth/index` must have `type: domains`; `specs/login-flow` must have `type: specs`; a root note such as `index` must have `type: index`.
-   - `create_note` fills `type` in from the path when you omit it, and refuses a different value. `edit_note` always keeps the note's current type. Moving a note with `rename_note` (full path in `toName`) rewrites `type` to the new first segment.
+2. **`type` is the note's OKF type; the folder is the first path segment**:
+   - `type` may be any non-empty string (OKF §4.1): `Metric`, `BigQuery Table`, `decision`. A note at `notes/adr-007` can have `type: decision`.
+   - Left out (or empty), `type` is the first path segment: `create_note` at `specs/login-flow` without a `type` stores `type: specs`, and a root note such as `index` gets `type: index`. `edit_note` keeps the current `type` unless you set it; removing it (`removeKeys: ["type"]`) puts the folder back. Moving a note with `rename_note` (full path in `toName`) rewrites a `type` equal to the old folder to the new folder and keeps any other `type`; `revert_note` to a revision from before a move does the same with the folder the note had then (a move recorded before the revision-events migration, 0023, is not known, so a revert across it keeps the revision's `type`).
+   - The folder, not the frontmatter `type`, is the note's `type` field in replies and what the `types` filter of `search` (REST) and `graph`, and structural graph edges, match. The frontmatter `type` shows in `frontmatter` (reads, search hits) and in generated `index.md` tables. Filtering by the frontmatter `type` is not supported yet.
 
 3. **Datetimes with an explicit offset (enforced)**:
    - `timestamp`, `stale_after`, `generated.at`, `verified.at`, `sources[].last_modified`, `usage_window.from`, and `usage_window.to` must be ISO 8601 datetimes with `Z` or an offset: `2026-09-22T12:00:00Z`, `2026-09-22T17:30:00+03:30`.
@@ -24,7 +25,7 @@ Specification references:
    - `timestamp` defaults to the creation time when `create_note` doesn't set it.
 
 4. **Frontmatter values (enforced)**:
-   - `generated`, `sources`, `verified`, `usage_window`, and `properties` may hold objects (shapes in §3). Every other top-level key must be a scalar (string, number, boolean, null) or a list of scalars.
+   - Any top-level key may hold a scalar (string, number, boolean, null), a list, or a mapping, nested up to 8 levels of lists and mappings; deeper values are refused. Your own keys and the OKF §10 computation keys can hold objects and lists of objects (`parameters: [{ name: year, type: integer, required: true }]`, `executor: { resource: ... }`). The keys in §3 keep their shapes: `title`, `description` and `resource` are strings, `tags` a list of strings, and so on.
    - The note must survive being saved and read back. If its serialized file would parse to different frontmatter or body, the write is refused.
    - The frontmatter block in a file starts with a `---` line and ends at the first line that is exactly `---` (trailing spaces allowed). LF and CRLF files both parse. A `---` inside a value or in the body is content, not a fence.
 
@@ -35,7 +36,7 @@ Specification references:
 
 6. **Provenance, trust, and lifecycle fields** (validated when present):
    - **`status`**: `draft`, `active`, `stable`, `deprecated`, `superseded`, or `archived`.
-   - **`verified`**: object or list of objects with `tier` (`unverified`, `machine-confirmed`, `human-reviewed`), optional `by`, optional `at`.
+   - **`verified`**: a `{ by, at }` object or a list of them (OKF §5.2): `by` an actor (`human:taha`, `process:nightly`), `at` a datetime. `tier` (`unverified`, `machine-confirmed`, `human-reviewed`) is optional; an entry with a `tier` may leave out `by` and `at`.
    - **`generated`**: `{ by, at }`, both required.
    - **`sources`**: list of objects, each with a string `resource`; `id`, `title`, `last_modified`, `hash`, `author` are optional.
    - **`usage_window`**: `{ from, to? }`.
@@ -107,7 +108,7 @@ Through MCP, frontmatter is passed to `create_note` / `edit_note` as a JSON obje
 ```yaml
 ---
 # === Identity ===
-type: domains                       # REQUIRED. Must equal the first path segment.
+type: domains                       # REQUIRED in OKF; any non-empty string. Defaults to the first path segment.
 title: "Authentication & Security"  # Display title.
 description: "Handles user sessions, MFA verification, and permission checks." # One-sentence summary.
 
@@ -119,10 +120,9 @@ stale_after: "2026-12-31T23:59:59Z"    # Optional. Explicit offset required.
 
 # === Lifecycle & trust ===
 status: active                      # draft | active | stable | deprecated | superseded | archived
-verified:
-  tier: human-reviewed              # unverified | machine-confirmed | human-reviewed
-  by: "human:taha"
-  at: "2026-09-22T05:00:00Z"
+verified:                           # one { by, at } or a list of them
+  - by: "human:taha"
+    at: "2026-09-22T05:00:00Z"
 
 # === Provenance ===
 generated:
@@ -146,12 +146,12 @@ properties:
 
 ### 3.1 Field Notes
 
-- **`type`**: not a free-form category. It is the first path segment, so the folder decides it. Use folders to group notes (`domains/`, `specs/`, `models/`, `decisions/`, `guides/`, ...).
+- **`type`**: the kind of concept, free text (`Metric`, `Policy`, `decision`). The folder (first path segment) groups notes and is what the `types` filter matches; `type` defaults to it when left out.
 - **`description`**: one dense sentence; shown in search snippets and index tables.
 - **`resource`**: a string such as `repo:<repo>/server/src/auth/sessions.ts` or an external URL. It is metadata only; it does not create a graph edge. Put a bare `[[repo:...]]` link in the body for that.
-- **`timestamp`**: creation or modification time with an explicit offset. A key named `created` is not treated as a datetime; use `timestamp`.
+- **`timestamp`**: creation time with an explicit offset; edits leave it as it is. Recency (`updatedAt`, search and graph `since`/`until`) is the note's last change. A key named `created` is not treated as a datetime; use `timestamp`.
 - **`generated`** / **`sources`**: who produced the note and from which artifacts.
-- **`verified`**: how much the note can be trusted. A single object or a list.
+- **`verified`**: who confirmed the note and when. A single `{ by, at }` object or a list. OKF derives the trust tier from `by`: a `human:` actor means human-reviewed, any other actor machine-confirmed, no `verified` unverified.
 
 ---
 

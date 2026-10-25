@@ -11,22 +11,27 @@
  *   path (`Guide > Install`), as a note section's. Embedded text:
  *   `section <inner_path> in <path>\n<snippet>`, the snippet cut from its own
  *   text (up to its first subsection) as a symbol's is. Not a symbol: it has
- *   no `symbol_kind`, so find_symbols and read_file's outline never list it.
- * - `file`: the whole file, when it is small (at most `SMALL_FILE_MAX_LINES`
- *   lines and `MAX_EMBED_CHARS` characters, so its text reaches the embedder
- *   uncut) or has no symbols or sections (an unsupported language, a minified
- *   bundle, no declarations). Embedded text: `<path>\n<content>`, as the file
- *   vector was.
- * - `skeleton`: the outline of a file that is not small and has symbols or
- *   sections (`<path>` then each one's first line), and of each class in it
- *   with methods (`<kind> <Class> in <path>`, the class's first line, then
- *   each method's first line).
+ *   no `symbol_kind` and no stored snippet, so find_symbols and read_file's
+ *   outline never list it.
+ * - `file`: the whole file, for every file. Embedded text:
+ *   `<path>\n<content>`, as the file vector was (the model reads its first
+ *   512 tokens); search's code vector leg ranks files by it.
+ * - `skeleton`: the outline of a file that is not small (more than
+ *   `SMALL_FILE_MAX_LINES` lines or `MAX_EMBED_CHARS` characters, so its
+ *   `file` vector covers only its head) and has symbols or sections
+ *   (`<path>` then each one's first line), and of each class in it with
+ *   methods (`<kind> <Class> in <path>`, the class's first line, then each
+ *   method's first line).
  *
- * So every file has exactly one file-level block (`file` or the file
- * `skeleton`), always embedded. A symbol's embedded text is
- * `<kind> <inner_path> in <path>\n<snippet>`, the snippet being its first
- * `SNIPPET_LINES` lines cut to `SNIPPET_CHARS` characters: no line number,
- * so a block whose lines only moved keeps its text and its vector.
+ * The file-level blocks (`file`, and a file `skeleton`) are always
+ * embedded; the `file` block comes first. Ranking a file by its skeleton
+ * instead of its head was measured worse (chapters A13: a 304-line hook's
+ * outline outranked the 80-line answer, hit@5 0.9655 -> 0.931). A symbol's embedded text is
+ * `<kind> <inner_path> in <path>:<start line>\n<snippet>`, the snippet being
+ * its first `SNIPPET_LINES` lines cut to `SNIPPET_CHARS` code points. The
+ * line stays in the text: without it chapters A13 left the top 5 (bench run
+ * 40076821407 vs 40076707623, hit@5 0.9655 vs 1), so a symbol whose lines
+ * moved is embedded again (its id stays).
  * An empty file's `file` block spans no line (1..0).
  */
 import { createHash } from 'node:crypto'
@@ -37,7 +42,7 @@ import type { ExtractedSymbol, SymbolKind } from './extraction.js'
 import type { OutlineSection } from './outline.js'
 
 export const SMALL_FILE_MAX_LINES = 300
-/** A symbol snippet (search hits, embedded text): its first lines, cut to this many characters. Search's SQL uses the same two numbers. */
+/** A symbol snippet (stored on the block; search hits, embedded text): its first lines, cut to this many code points. */
 export const SNIPPET_LINES = 30
 export const SNIPPET_CHARS = 1500
 
@@ -53,6 +58,8 @@ export interface CodeBlock {
   endLine: number
   /** sha256 (hex) of lines startLine..endLine of the stored text. */
   contentHash: string
+  /** A symbol block's snippet (stored, matched and returned by search); null on the others. */
+  snippet: string | null
   embedText: string
   /**
    * A symbol's or section's place in the per-file embed budget (#496, #450):
@@ -77,7 +84,9 @@ export function codeBlocks(
   const small = total <= SMALL_FILE_MAX_LINES && content.length <= MAX_EMBED_CHARS
   const hash = (start: number, end: number) => createHash('sha256').update(sliceLines(content, start, end, starts)).digest('hex')
   const firstLine = (line: number) => sliceLines(content, line, line, starts)
-  const snippet = (start: number, end: number) => sliceLines(content, start, Math.min(end, start + SNIPPET_LINES - 1), starts).slice(0, SNIPPET_CHARS)
+  // Cut by code point, so an astral character is never split.
+  const snippetOf = (start: number, end: number) =>
+    [...sliceLines(content, start, Math.min(end, start + SNIPPET_LINES - 1), starts)].slice(0, SNIPPET_CHARS).join('')
   const methodsOf = new Map<string, ExtractedSymbol[]>()
   for (const m of small ? [] : symbols) {
     if (m.kind !== 'method' || !m.parent) continue
@@ -87,14 +96,16 @@ export function codeBlocks(
   }
 
   const drafts: Array<Omit<CodeBlock, 'blockId'>> = []
-  const whole = { innerPath: '', symbolKind: null, symbolParent: null, startLine: 1, endLine: total, contentHash: hash(1, total), budgetTier: null }
+  const whole = { innerPath: '', symbolKind: null, symbolParent: null, snippet: null, startLine: 1, endLine: total, contentHash: hash(1, total), budgetTier: null }
+  drafts.push({ ...whole, kind: 'file', embedText: `${path}\n${content}` })
   const outlined = [...symbols, ...sections]
-  if (small || outlined.length === 0) drafts.push({ ...whole, kind: 'file', embedText: `${path}\n${content}` })
-  else drafts.push({ ...whole, kind: 'skeleton', embedText: [path, ...outlined.map((s) => firstLine(s.startLine))].join('\n') })
+  if (!small && outlined.length > 0) {
+    drafts.push({ ...whole, kind: 'skeleton', embedText: [path, ...outlined.map((s) => firstLine(s.startLine))].join('\n') })
+  }
 
   for (const s of symbols) {
     const innerPath = s.parent ? `${s.parent}.${s.name}` : s.name
-    const text = snippet(s.startLine, s.endLine)
+    const snippet = snippetOf(s.startLine, s.endLine)
     const span = { innerPath, startLine: s.startLine, endLine: s.endLine, contentHash: hash(s.startLine, s.endLine) }
     const at =
       drafts.push({
@@ -102,7 +113,8 @@ export function codeBlocks(
         kind: 'symbol',
         symbolKind: s.kind,
         symbolParent: s.parent ?? null,
-        embedText: `${s.kind} ${innerPath} in ${path}\n${text}`,
+        snippet,
+        embedText: `${s.kind} ${innerPath} in ${path}:${s.startLine}\n${snippet}`,
         budgetTier: s.kind === 'method' ? 2 : s.exported ? 0 : 1,
       }) - 1
     const methods = s.kind === 'class' ? (methodsOf.get(s.name) ?? []) : []
@@ -112,6 +124,7 @@ export function codeBlocks(
         kind: 'skeleton',
         symbolKind: null,
         symbolParent: null,
+        snippet: null,
         embedText: [`${s.kind} ${innerPath} in ${path}`, firstLine(s.startLine), ...methods.map((m) => firstLine(m.startLine))].join('\n'),
         budgetTier: null,
         outlineOf: at,
@@ -124,10 +137,11 @@ export function codeBlocks(
       innerPath: s.innerPath,
       symbolKind: null,
       symbolParent: null,
+      snippet: null,
       startLine: s.startLine,
       endLine: s.endLine,
       contentHash: hash(s.startLine, s.endLine),
-      embedText: `section ${s.innerPath} in ${path}\n${snippet(s.startLine, s.ownEndLine)}`,
+      embedText: `section ${s.innerPath} in ${path}\n${snippetOf(s.startLine, s.ownEndLine)}`,
       budgetTier: 1,
     })
   }

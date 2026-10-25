@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositories, repositoryShares, teamMemberships, users } from '../db/schema.js'
 import { redactGitSecrets, redactUrlQuery, splitGitUrlCredential } from './git-remote.js'
+import { skippedField, type SkipSummary } from './fs-scan.js'
 
 export type RepoAccess = 'owner' | 'viewer'
 
@@ -170,6 +171,8 @@ export interface RepositoryFields {
    */
   webhookConfigured: boolean
   createdAt: Date
+  /** What the last sync left out and why (#465); absent when nothing. */
+  skipped?: SkipSummary
 }
 
 /**
@@ -220,6 +223,7 @@ export function repositoryFields(
     lastWebhookAt: r.lastWebhookAt,
     webhookConfigured: r.webhookSecretEncrypted !== null,
     createdAt: r.createdAt,
+    ...skippedField(r.skippedFiles),
   }
 }
 

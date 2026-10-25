@@ -9,7 +9,6 @@ import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
-import { detectLanguage } from './language.js'
 import { hasOutline, outlineSections } from './outline.js'
 import {
   RESOLUTION_MANIFEST_PATTERN,
@@ -17,6 +16,7 @@ import {
   resolveImportPath,
   type ResolutionContext,
 } from './import-resolution.js'
+import { detectLanguage } from './language.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
   JOB_PRIORITY,
@@ -37,7 +37,7 @@ import {
 /**
  * Extraction runs from durable `jobs` rows (#494, ADR-003 S5; see
  * jobs/durable.ts): kind `extract`, payload `{fileId, repositoryId}`, key
- * `extract:<fileId>:<contentHash>:<EXTRACTOR_VERSION>:<EMBEDDER_ID>` (#453).
+ * `extractionJobKey` below (#453, #452).
  * Fair across repositories (#497): each turn
  * claims at most `EXTRACTION_TURN_FILES` jobs of one repository, then the
  * repository with claimable jobs that was served least recently goes next
@@ -315,20 +315,50 @@ export async function scheduleMissingExtractions(): Promise<number> {
   return found
 }
 
+/** What `extractionState` reports for a set of repositories. */
+export interface ExtractionState {
+  /** Files of the repositories. */
+  files: number
+  /** Files whose extraction for their current content is still to come: a pending (queued or running) job, or no job and no block of its current content (the boot scan adds its job). */
+  pending: number
+  /** Files whose job for their current content gave up (`extractionFailures` lists them). */
+  failed: number
+  /** Repositories with no file yet whose first sync is running or has not happened (a git clone in progress, an agent_push repository before its first push); a repository being synced again counts too. */
+  syncing: number
+  /** Repositories with no file whose sync failed. */
+  syncFailed: number
+}
+
 /**
- * Files of a repository whose extraction for their current content is still
- * to come: a pending (queued or running) job, or no job and no current
- * blocks (the boot scan adds its job). Failed files
- * are not counted: `extractionFailures` lists them. 0 = extraction finished.
+ * Extraction and sync state of these repositories, reported by search next to
+ * its results (#442): an answer with no hit says `index_building` while files
+ * or whole repositories are still to come, `unavailable` when nothing in scope
+ * could be indexed.
  */
-export async function countPendingExtractions(repositoryId: string): Promise<number> {
+export async function extractionState(repositoryIds: string[]): Promise<ExtractionState> {
+  if (repositoryIds.length === 0) return { files: 0, pending: 0, failed: 0, syncing: 0, syncFailed: 0 }
   const [row] = (await db.execute(sql`
-    SELECT count(*)::int AS pending
-    FROM repository_files f
-    LEFT JOIN jobs j ON j.idempotency_key = ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}
-    WHERE f.repository_id = ${repositoryId}
-      AND (j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND NOT ${hasCurrentBlocksSql()})`)) as unknown as [{ pending: number }]
-  return row?.pending ?? 0
+    WITH per_repo AS (
+      SELECT f.repository_id, count(*) AS files,
+        count(*) FILTER (WHERE j.id IS NOT NULL AND j.done_at IS NULL OR j.id IS NULL AND NOT ${hasCurrentBlocksSql()}) AS pending,
+        count(*) FILTER (WHERE j.done_at IS NOT NULL AND j.last_error IS NOT NULL) AS failed
+      FROM repository_files f
+      LEFT JOIN jobs j ON j.idempotency_key = ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}
+      WHERE f.repository_id = ANY(${`{${repositoryIds.join(',')}}`}::uuid[])
+      GROUP BY f.repository_id
+    )
+    SELECT coalesce(sum(p.files), 0)::int AS files, coalesce(sum(p.pending), 0)::int AS pending, coalesce(sum(p.failed), 0)::int AS failed,
+      (count(*) FILTER (WHERE r.sync_status = 'syncing' OR r.sync_status <> 'error' AND r.last_synced_at IS NULL AND p.files IS NULL))::int AS syncing,
+      (count(*) FILTER (WHERE r.sync_status = 'error' AND p.files IS NULL))::int AS "syncFailed"
+    FROM repositories r
+    LEFT JOIN per_repo p ON p.repository_id = r.id
+    WHERE r.id = ANY(${`{${repositoryIds.join(',')}}`}::uuid[])`)) as unknown as [ExtractionState]
+  return row ?? { files: 0, pending: 0, failed: 0, syncing: 0, syncFailed: 0 }
+}
+
+/** Files of a repository whose extraction for their current content is still to come (`extractionState`); 0 = extraction finished. */
+export async function countPendingExtractions(repositoryId: string): Promise<number> {
+  return (await extractionState([repositoryId])).pending
 }
 
 /**
@@ -434,8 +464,8 @@ export const extractionWork = { processFile }
  * older `owner_version`) is dropped: that push enqueued the job of the new
  * content. Blocks are upserted by `block_id`, so a block that survives keeps
  * its row; one whose `embedKey` (model + embedded text) a block of the file
- * already has keeps that vector instead of being embedded again, so a line
- * shift, an edit elsewhere or a version bump re-embeds only changed texts.
+ * already has keeps that vector instead of being embedded again, so an edit
+ * elsewhere or a version bump re-embeds only changed texts.
  */
 async function processFile(fileId: string): Promise<void> {
   const row = (await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, fileId)))[0]
@@ -444,7 +474,10 @@ async function processFile(fileId: string): Promise<void> {
   const embedderId = EMBEDDER_ID
   const chunkVersion = CHUNK_VERSION
 
-  // The label of this code's language.ts: a file synced before a language was labelled (#464) gets it now.
+  // The language comes from the path, not the stored label: a row indexed
+  // before its extension was mapped (`.mts`/`.cts` before #451, `.kt`, `.md`
+  // before #464) keeps a stale label, since a sync skips unchanged content.
+  // It is written back below.
   const language = detectLanguage(row.path)
   const structured = !looksMinified(row.content)
   // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
@@ -511,6 +544,7 @@ async function processFile(fileId: string): Promise<void> {
     innerPath: b.innerPath,
     symbolKind: b.symbolKind,
     symbolParent: b.symbolParent,
+    snippet: b.snippet,
     startLine: b.startLine,
     endLine: b.endLine,
     contentHash: b.contentHash,

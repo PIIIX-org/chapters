@@ -14,7 +14,7 @@ import {
 } from '../notes/store.js'
 import { NoteWriteWouldQuarantineError, suspiciousWrite, type QuarantineRules } from '../notes/growth-guard.js'
 import { assertBodyFits, assertFrontmatterFits } from '../notes/size-cap.js'
-import { OkfValidationError, validateNote, type Frontmatter } from '../notes/okf.js'
+import { OkfValidationError, validateNote, withType, type Frontmatter } from '../notes/okf.js'
 
 /** Where an edit and the changes made since its base revision meet (#475): body lines and frontmatter keys. */
 export interface EditChanges {
@@ -128,14 +128,15 @@ export function requestedEdit(args: {
  * frontmatter alone. A merge is shallow: a key's value (a nested map too) is
  * replaced whole, and `null` is a value like any other; only `removeKeys`
  * and `frontmatter_remove` delete. Frontmatter ops apply last, in order.
- * `type` always stays the note's type, as `updateNote` enforces.
+ * A `type` the edit leaves out or removes is the note's folder, as
+ * `updateNote` does (#444: any other value is the note's own OKF type).
  */
 function nextFrontmatter(current: Record<string, unknown>, edit: NoteEdit, type: string): Frontmatter | undefined {
   if (edit.frontmatter === undefined && !edit.removeKeys?.length && !edit.ops?.some(isFrontmatterOp)) return undefined
   const next: Record<string, unknown> =
     edit.frontmatterMode === 'merge' ? { ...current, ...edit.frontmatter } : { ...(edit.frontmatter ?? current) }
   for (const key of edit.removeKeys ?? []) delete next[key]
-  return { ...applyFrontmatterOps(next, edit.ops ?? []), type }
+  return withType(applyFrontmatterOps(next, edit.ops ?? []), type)
 }
 
 /** An edit rebased onto the live note (#475): the state to write and what happened since the base, or what it overlaps. */
@@ -162,7 +163,7 @@ function rebase(edit: NoteEdit & { base: EditBase }, live: { frontmatter: Record
   if (text.concurrent.length > 0) concurrent.lines = text.concurrent
   if (frontmatter.concurrent.length > 0) concurrent.frontmatterKeys = frontmatter.concurrent
   return {
-    frontmatter: wanted ? { ...applyFrontmatterOps(frontmatter.frontmatter, edit.ops ?? []), type } : nextFrontmatter(live.frontmatter, edit, type),
+    frontmatter: wanted ? withType(applyFrontmatterOps(frontmatter.frontmatter, edit.ops ?? []), type) : nextFrontmatter(live.frontmatter, edit, type),
     body: typeof edit.body === 'string' ? text.text : undefined,
     report: concurrent.lines || concurrent.frontmatterKeys ? { status: 'merged', concurrentChanges: concurrent } : { status: 'applied' },
   }
@@ -191,7 +192,7 @@ async function propose(
   if (typeof edit.body === 'string') body = edit.body
   else if (ops.some((op) => !isFrontmatterOp(op))) body = applyBodyOps(liveBody, ops, note.body)
   const wanted = nextFrontmatter(base.frontmatter, { ...edit, ops: undefined }, note.type) ?? base.frontmatter
-  const proposal = { frontmatter: { ...applyFrontmatterOps(wanted, ops), type: note.type }, body }
+  const proposal = { frontmatter: withType(applyFrontmatterOps(wanted, ops), note.type), body }
   // A proposal revision is stored whole: its frontmatter is bounded like the note's (#933).
   assertFrontmatterFits(proposal.frontmatter, note.frontmatter as Record<string, unknown>)
   if (dryRun) throw new NoteEditConflictError(note.path, null, conflicts)
@@ -282,10 +283,8 @@ export async function writeThroughCollab(
         body = input.body
         screened = true
       }
-      const frontmatter = (rebased ? rebased.frontmatter : nextFrontmatter(current.frontmatter, input, existing.type)) ?? {
-        ...current.frontmatter,
-        type: existing.type,
-      }
+      const frontmatter =
+        (rebased ? rebased.frontmatter : nextFrontmatter(current.frontmatter, input, existing.type)) ?? withType(current.frontmatter, existing.type)
       // Before any revision is written, a quarantine one included (#933).
       assertFrontmatterFits(frontmatter, existing.frontmatter as Record<string, unknown>)
       if (screened) {
@@ -346,5 +345,7 @@ function explainInheritedKeys(
   const keys = culprits.map((key) => `"${key}"`).join(', ')
   return new OkfValidationError(
     `${err.message} (frontmatter ${keys} is already on the note, not in this edit; send a valid value, list it in \`removeKeys\`, or pass \`replace: true\` with the whole map)`,
+    err.refusal,
+    err.rule,
   )
 }
