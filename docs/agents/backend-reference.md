@@ -1536,46 +1536,69 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   node's kNN against both notes and code, from its stored block vectors,
   filtered to `similarity >= SEMANTIC_THRESHOLD` (default 0.75), capped to
   `SEMANTIC_K` (default 8) per node, written as the rows the node owns
-  (directed, #91). Both sides roll up blocks (ADR-004 §2.5): a neighbour's
+  (directed, #91) in one statement (rows it no longer has deleted, the
+  others upserted). Both sides roll up blocks (ADR-004 §2.5): a neighbour's
   similarity is its best block's to the best of the node's query vectors —
   a note's first 16 blocks in body order (`EDGE_QUERY_BLOCKS`; each is one
   HNSW search per owner type), the file-level block of a file — one row
-  per neighbour. Equal similarities go by path (`COLLATE "C"`), then type,
-  then id (#1007): never by id alone, which differs between two instances
-  of one content. One transaction holds an advisory lock on the node
-  (`hashtextextended('semantic_edges:<type>:<id>')`; writes to the note go
-  on) from reading its vectors to writing its rows, so two recomputes of
-  one node never leave the older vectors' rows; it locks the note row
+  per neighbour, `similarity` stored as the double computed (`double
+  precision` since migration 0046). Equal similarities go by path, type,
+  the name of the vault or repository, then id, strings in byte order
+  (`COLLATE "C"`, `byRank`; #1007): only two nodes of one path and type in
+  two containers of one name fall to the id. One transaction holds an
+  advisory lock on the node (`hashtextextended('semantic_edges:<type>:<id>')`,
+  taken by the statement that reads its scope; writes to the note go on)
+  from reading its vectors to writing its rows, so two recomputes of one
+  node never leave the older vectors' rows; it locks the note row
   (`FOR SHARE`, against a purge) only after the searches, so a long note's
   recompute never holds off writes to it.
   **The stored rows are a function of the content, not of the order it was
-  embedded in** (#1007, ADR-004 §1.3). The note embedding queue and the
+  embedded in** (#1007, ADR-004 §1.3): each node's rows are its true top-k.
+  The search per query vector reads its 100 nearest blocks; when the far
+  end of a full window reaches the K-th owner found (or the threshold below
+  K), an owner outside could rank among them or tie with the K-th and come
+  first by path, so the windows widen to 1,000 blocks, then to every block
+  of the scope (`exactNearestOwners`). The note embedding queue and the
   repository extraction queue (the shared mechanism, not two parallel ones)
-  call `refreshSemanticEdges(type, id, newKeys)` after a write that
-  embedded or dropped a vector of the node: it recomputes the node, every
-  live node holding a row to it (its vectors moved), and every node whose
-  top-k it now enters through the vectors new to it (`newKeys`). The last
-  set: per new vector its 100 nearest query-capable blocks in the node's
-  reach (any note block, a file's `file` block); when every such window is
-  full and its edge is still above the threshold, also every node in reach
-  whose stored K-th similarity (the threshold below K rows) is at most that
-  edge (a weak list far from the node); then each candidate's exact
-  similarity from its own query vectors against its stored K-th: only those
-  it beats are recomputed. Measured on the chapters tree at fe9e5b30 (1,187
-  files and 800 notes of one owner, fake embedder at threshold 0.2, K 8;
-  the shared test Postgres, so times are noisy), recomputes per embed went
-  from 1 to 8.2 for the first push of the files, 3.6 per new note, 13.8
-  per edited file and 5.2 per edited note (on average a node is in K
-  lists, so an embed moves about K of them); time per embed, base → this,
-  back to back on a quiet database: 59 → 109 ms (push), 19 → 48 ms (new
-  note), 47 → 147 ms (edited file, one push each), 33 → 77 ms (edited
-  note). With exact search (`enable_indexscan = off`) the 15,891 rows left
-  by all of that are those of a full rebuild, row for row; with the HNSW
-  plan 3 to 5 of them differ (HNSW recall, not
-  order). A tie at a window's 100th block still goes by the scan's order.
-  Deleting a node (trash, purge, a file gone) or moving a vault removes its
-  rows, and the nodes that held it keep fewer than K until their next
-  recompute or a rebuild (#1015).
+  queue a `semantic_edges` refresh job in the transaction that writes a
+  node's blocks when a vector was embedded or dropped, run it inline after
+  the commit and complete it; one that fails there runs again when its
+  one-minute lease ends (`queueSemanticEdgeRefresh`,
+  `runSemanticEdgeRefresh`). `refreshSemanticEdges(type, id, newKeys)`
+  recomputes the node and every live node holding a row to it (its vectors
+  moved), then merges it into the lists it now enters through the vectors
+  new to it (`newKeys`), in one transaction. Candidates (`enteredBy`, one
+  statement): per new vector, the owners of its 100 nearest query-capable
+  blocks in the node's reach (any note block, a file's `file` block), plus,
+  when every window is full and its far end (the edge) reaches the
+  threshold, every node in reach whose stored K-th similarity (the
+  threshold below K rows) is at most that edge. Each has a bound from the
+  windows (its best block's similarity where a window holds one, the edge
+  where none does); only one whose bound reaches the threshold and its K-th
+  gets its exact similarity, one lateral subquery over its own query
+  vectors (one aggregate over every candidate × new vector pair spilled
+  gigabytes for a long note). It enters when it has fewer than K rows, a
+  K-th below the similarity, or a K-th of the same similarity whose
+  target's tie key comes after the node's. The lists it enters are locked
+  in id order (up to 256 per transaction) and changed in one statement: the
+  new row in, the last row out; a list whose last row names a node that is
+  gone is recomputed instead. Measured on the chapters tree at 65bdb534
+  (1,187 files and 800 notes of one owner, fake embedder at threshold 0.2,
+  K 8, the shared test Postgres), base → this, back to back: 54 → 39 ms per
+  file of the first push (1 recompute and 7.1 lists merged into per file),
+  25 → 29 ms per new note (1 and 2.5), 48 → 126 ms per edited file (13.6
+  recomputes: the nodes holding it), 31 → 62 ms per edited note (4.7).
+  One content in many files (`def setup(): pass` in `pkg<i>/__init__.py`,
+  one push): 100 files flush in 1.21 → 1.56 s pushed in path order, 1.18 →
+  1.9–3.0 s in reverse (each file then enters every earlier list); 200 files
+  2.44 → 3.5 s and 2.49 → 4.2 s; 2 HNSW scans per file
+  (`server/test/semantic-edges-cost.test.ts`). A 300-block note in a vault
+  of 10,000 notes (45,000 blocks, threshold 0.75): 3.8 → 0.4 s, no
+  temporary file. With exact search the rows left by all of that are those
+  of a full rebuild, row for row; with the HNSW plan a few differ (HNSW
+  recall, not order). Deleting a node (trash, purge, a file gone) or moving
+  a vault removes its rows, and the nodes that held it keep fewer than K
+  until their next recompute or a rebuild (#1015).
   Neighbours come from the node's scope only (D10 on #930, #461): of its
   own type, its vault (a note) or its repository (a file), never another
   one, even of the same owner; of the other type, the owner's repositories
@@ -1593,21 +1616,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   and 30 notes took the exact plan (recall 1.0). Migration 0038 deleted
   the edges stored before (100,000 edges: about 150 ms); a vault transfer
   deletes the vault's notes' note↔code edges (`deleteVaultCodeEdges`).
-  **Rebuild** (#1007): durable kind `semantic_edges`, payload `{nodeType,
-  nodeId}`, key `semantic_edges:<type>:<id>`, monitoring job kind
-  `semantic-edges`; each job runs `recomputeSemanticEdges` for one node.
+  **Jobs** (#1007): durable kind `semantic_edges`, monitoring job kind
+  `semantic-edges`. A refresh (above): payload `{nodeType, nodeId,
+  newKeys}`, no key, write priority, queued with its lease running. The
+  rebuild: payload `{nodeType, nodeId}`, key `semantic_edges:<type>:<id>`,
+  each job runs `recomputeSemanticEdges` for one node;
   `enqueueSemanticEdgeRebuild(rerun)` queues one for every live note and
   every repository file (keyset pages of 1,000, catch-up priority, no
   drain started: the server's job polling or `runSemanticEdgeRebuild`
   runs them). `pnpm reindex` queues them with `'finished'` after its
-  re-embed and drains them. Migration 0046 (`when` 1792900000000) queued
-  them once for the instances from before #1007, whose edges were each
-  node's top-k among the nodes embedded before it; the server drains them
-  in the background after boot. Measured: 1,987 nodes (the fixture above)
-  in 19–48 s, 9.5–24 ms a node; an instance the code before #1007 filled
-  with 10,512 nodes (the chapters tree pushed to 8 repositories, 1,016
-  notes, 45,754 vectors): migration 0046's insert 127 ms, its jobs 133 s
-  (12.7 ms a node).
+  re-embed and drains them. Migration 0046 (`when` 1792900000000) makes
+  `similarity` a `double precision` (values kept) and queues them once for
+  the instances from before #1007, whose edges were each node's top-k
+  among the nodes embedded before it; the server drains them in the
+  background after boot. Measured: 1,987 nodes (the fixture above) in
+  14.8 s (7.4 ms a node); an instance the code before #1007 filled with
+  10,512 nodes (the chapters tree pushed to 8 repositories, 1,016 notes,
+  45,754 vectors, 83,232 edges): migration 0046 248 ms, its jobs 80 s
+  (7.7 ms a node); a vault of 10,000 notes (45,000 blocks) 86 s.
 
 ### 5.7 Real-time collaboration (`server/src/sync/`)
 

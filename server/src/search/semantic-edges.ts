@@ -267,18 +267,28 @@ interface ChangedNode {
   container: string
 }
 
-/** The node's blocks whose embed key is one of `newKeys` (its vectors new to it), as `vec`. */
+/**
+ * The CTE `newv(ord, vec)`, materialized once per statement: the node's blocks whose embed key is one of
+ * `newKeys` (its vectors new to it).
+ */
 function newVectors(node: ChangedNode, newKeys: readonly string[]): SQL {
-  return sql`SELECT b.embedding AS vec FROM blocks b
+  return sql`newv AS MATERIALIZED (
+    SELECT row_number() OVER () AS ord, b.embedding AS vec FROM blocks b
     WHERE b.owner_type = ${node.type} AND b.owner_id = ${node.id} AND b.embed_key = ANY(${`{${newKeys.map((k) => JSON.stringify(k)).join(',')}}`}::text[])
-      AND b.embedding IS NOT NULL`
+      AND b.embedding IS NOT NULL)`
 }
 
-/** Candidate `c`'s similarity to the new vectors `vectors`, from its own query vectors, as `d.similarity`. */
-function similarityTo(ownerType: SemanticNodeType, vectors: SQL): SQL {
+/**
+ * Candidate `c`'s similarity to the new vectors (`newv`), from its own query vectors, as `d.similarity`, and
+ * its stored rows' count and lowest similarity as `s.n` and `s.kth`: one lateral per candidate, each query
+ * vector against every new vector (never one aggregate over every candidate × new vector pair, which spills
+ * both vectors of each pair for a long note).
+ */
+function similarityTo(ownerType: SemanticNodeType): SQL {
   return sql`CROSS JOIN LATERAL (
-      SELECT 1 - min(q.vec <=> v.vec) AS similarity
-      FROM (${queryVectors(ownerType, sql`ARRAY[c.id]`)}) q CROSS JOIN (${vectors}) v
+      SELECT 1 - min(x.distance) AS similarity
+      FROM (${queryVectors(ownerType, sql`ARRAY[c.id]`)}) q
+      CROSS JOIN LATERAL (SELECT min(q.vec <=> v.vec) AS distance FROM newv v) x
     ) d
     CROSS JOIN LATERAL (
       SELECT count(*)::int AS n, min(e.similarity) AS kth FROM semantic_edges e WHERE e.node_a_type = ${ownerType} AND e.node_a_id = c.id
@@ -291,61 +301,63 @@ function similarityTo(ownerType: SemanticNodeType, vectors: SQL): SQL {
  * which `mergeEntered` decides exactly. The stored top-k of every node is that
  * of the content (`exactNearestOwners`), so a node's top-k changes only if it
  * holds `node` (`refreshSemanticEdges` takes those from the rows) or `node`
- * now beats its K-th, and the new vectors are the only way in. Three steps:
+ * now beats its K-th, and the new vectors are the only way in. One statement:
  * 1. per new vector, its WINDOW nearest query-capable blocks (a note's blocks,
  *    of which its query vectors are the first EDGE_QUERY_BLOCKS; a file's
- *    file-level block) in the containers: their owners;
- * 2. a node in none of the windows has a similarity to the new vectors of at
- *    most the nearest window edge (a window short of WINDOW blocks holds every
- *    such block in reach: then there is no such node). When every window is
- *    full and that edge is still above the threshold, such a node may admit
- *    `node` anyway if its own list is weak (an outlier whose nearest node is
- *    this one): every node whose stored K-th similarity (the threshold below
- *    K rows) is at most that edge;
- * 3. each candidate's similarity to the new vectors, from its own query
- *    vectors (one per candidate, in a lateral subquery: never one aggregate
- *    over every candidate × new vector pair, which spills both vectors of each
- *    pair for a long note): kept when it reaches the threshold and, with K
- *    rows, ranks before the last one: a higher similarity than the K-th, or
- *    the same and a tie key before one of the rows of that similarity (only
- *    then are the targets' keys read). So nodes of equal similarities (one
- *    content in many files) do not touch the lists they cannot change.
+ *    file-level block) in the containers. They all read one set of blocks,
+ *    so either every window is full or every one holds every block;
+ * 2. a bound on each owner's similarity to the new vectors: for a vector
+ *    whose window holds one of its blocks, that block's similarity is at
+ *    least its query vectors'; for the others, a full window's far end (the
+ *    edge). An owner in none of the windows is bounded by the edge alone:
+ *    when that reaches the threshold, such a node may admit `node` anyway if
+ *    its own list is weak (an outlier whose nearest node is this one), so
+ *    every node whose stored K-th similarity (the threshold below K rows) is
+ *    at most the edge is a candidate too;
+ * 3. only for a candidate whose bound reaches the threshold and, with K rows,
+ *    its K-th similarity: its exact similarity (`similarityTo`), kept when it
+ *    ranks before the last row: a higher similarity than the K-th, or the
+ *    same and a tie key before one of the rows of that similarity (only then
+ *    are the targets' keys read). So nodes of equal similarities (one content
+ *    in many files) do not touch the lists they cannot change, and a long
+ *    note computes few exact similarities.
  */
 async function enteredBy(client: DbOrTx, node: ChangedNode, newKeys: readonly string[], ownerType: SemanticNodeType, containers: string): Promise<string[]> {
-  const vectors = newVectors(node, newKeys)
   const owners =
     ownerType === 'note'
       ? sql`SELECT id FROM notes WHERE vault_id = ANY(${containers}::uuid[]) AND deleted_at IS NULL`
       : sql`SELECT id FROM repository_files WHERE repository_id = ANY(${containers}::uuid[])`
-  // One statement: the windows, their edge, the weak lists when that edge reaches the threshold, then the check.
   const kept = (await client.execute(sql`
-    WITH q AS (SELECT row_number() OVER () AS ord, v.vec FROM (${vectors}) v),
+    WITH ${newVectors(node, newKeys)},
     nearest AS (
-      SELECT q.ord, w.owner_id, w.distance FROM q
+      SELECT v.ord, w.owner_id, w.distance FROM newv v
       CROSS JOIN LATERAL (
-        SELECT owner_id, embedding <=> q.vec AS distance FROM blocks
+        SELECT owner_id, embedding <=> v.vec AS distance FROM blocks
         WHERE owner_type = ${sql.raw(`'${ownerType}'`)} AND embedding IS NOT NULL AND container_id = ANY(${containers}::uuid[])
           ${ownerType === 'code' ? sql`AND kind = 'file'` : sql``} AND owner_id <> ${node.id}
-        ORDER BY embedding <=> q.vec
+        ORDER BY embedding <=> v.vec
         LIMIT ${WINDOW}
       ) w),
     edge AS (
       SELECT CASE WHEN bool_and(n = ${WINDOW}) THEN 1 - min(far) END AS similarity
       FROM (SELECT count(*) AS n, max(distance) AS far FROM nearest GROUP BY ord) f),
-    cands AS (
-      SELECT owner_id AS id FROM nearest
-      UNION
-      SELECT o.id FROM edge CROSS JOIN (${owners}) o
-      CROSS JOIN LATERAL (
-        SELECT count(*) AS n, min(e.similarity) AS kth FROM semantic_edges e WHERE e.node_a_type = ${ownerType} AND e.node_a_id = o.id
-      ) s
-      WHERE edge.similarity >= ${config.semanticThreshold} AND o.id <> ${node.id}
-        AND (s.n < ${config.semanticK} OR s.kth <= edge.similarity))
+    bounded AS (
+      SELECT nearest.owner_id AS id, greatest(1 - min(nearest.distance), max(edge.similarity)) AS bound
+      FROM nearest CROSS JOIN edge GROUP BY nearest.owner_id
+      UNION ALL
+      SELECT o.id, edge.similarity FROM edge CROSS JOIN (${owners}) o
+      WHERE edge.similarity >= ${config.semanticThreshold} AND o.id <> ${node.id}),
+    cands AS MATERIALIZED (
+      SELECT b.id, max(b.bound) AS bound FROM bounded b GROUP BY b.id)
     SELECT c.id
     FROM cands c
+    CROSS JOIN LATERAL (
+      SELECT count(*)::int AS n, min(e.similarity) AS kth FROM semantic_edges e WHERE e.node_a_type = ${ownerType} AND e.node_a_id = c.id
+    ) pre
     ${liveOwner(ownerType, sql`c.id`)}
-    ${similarityTo(ownerType, vectors)}
-    WHERE d.similarity >= ${config.semanticThreshold}
+    ${similarityTo(ownerType)}
+    WHERE c.bound >= ${config.semanticThreshold} AND (pre.n < ${config.semanticK} OR c.bound >= pre.kth)
+      AND d.similarity >= ${config.semanticThreshold}
       AND (s.n < ${config.semanticK} OR d.similarity > s.kth
         OR (d.similarity = s.kth AND EXISTS (
           SELECT 1 FROM semantic_edges t
@@ -387,7 +399,6 @@ const MERGE_CHUNK = 256
  */
 async function mergeEntered(tx: DbOrTx, node: ChangedNode, newKeys: readonly string[], ownerType: SemanticNodeType, ids: readonly string[]): Promise<string[]> {
   if (ids.length === 0) return []
-  const vectors = newVectors(node, newKeys)
   const sorted = `{${[...ids].sort().join(',')}}`
   // In one order (notes, then files, each by id), so two merges never wait on each other; a recompute holds one
   // lock and waits on none.
@@ -395,11 +406,12 @@ async function mergeEntered(tx: DbOrTx, node: ChangedNode, newKeys: readonly str
     SELECT count(pg_advisory_xact_lock(hashtextextended('semantic_edges:' || ${ownerType}::text || ':' || x.id::text, 0)))
     FROM (SELECT id FROM unnest(${sorted}::uuid[]) AS u(id) ORDER BY id) x`)
   const stale = (await tx.execute(sql`
-    WITH cand AS (
+    WITH ${newVectors(node, newKeys)},
+    cand AS (
       SELECT c.id, d.similarity, s.n, s.kth
       FROM unnest(${sorted}::uuid[]) AS c(id)
       ${liveOwner(ownerType, sql`c.id`)}
-      ${similarityTo(ownerType, vectors)}
+      ${similarityTo(ownerType)}
       WHERE d.similarity >= ${config.semanticThreshold} AND (s.n < ${config.semanticK} OR d.similarity >= s.kth)),
     ranked AS (
       SELECT cand.*, w.type AS w_type, w.id AS w_id, coalesce(w.gone, false) AS gone, w.path AS w_path, w.container AS w_container

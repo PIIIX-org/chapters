@@ -1,6 +1,7 @@
-// #1007: migration 0046 queues the semantic-edge rebuild (search/semantic-edges.ts, kind `semantic_edges`) of
-// every live note and repository file of an instance from before it, once, at catch-up priority. Builds an
-// instance before 0046, then applies the real journal.
+// #1007: migration 0046 makes `semantic_edges.similarity` a double precision (keeping the stored values) and
+// queues the semantic-edge rebuild (search/semantic-edges.ts, kind `semantic_edges`) of every live note and
+// repository file of an instance from before it, once, at catch-up priority. Builds an instance before 0046,
+// then applies the real journal.
 import { afterAll, describe, expect, it } from 'vitest'
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -22,7 +23,7 @@ afterAll(async () => {
 })
 
 describe('migration 0046 queues the semantic-edge rebuild of every node (#1007)', { timeout: 60_000 }, () => {
-  it('one job per live note and per file, none for a trashed note', async () => {
+  it('one job per live note and per file, none for a trashed note; similarity a double, its values kept', async () => {
     const journal = JSON.parse(await readFile(join(source, 'meta', '_journal.json'), 'utf8')) as { entries: Array<{ when: number; tag: string }> }
     const at0046 = journal.entries.find((e) => e.tag === '0046_semantic_edge_rebuild')
     expect(at0046).toBeDefined()
@@ -48,8 +49,13 @@ describe('migration 0046 queues the semantic-edge rebuild of every node (#1007)'
       const live = await note('live', false)
       await note('trashed', true)
       const [file] = await client`insert into repository_files (repository_id, path, content, content_hash, size) values (${repo!.id}, 'x.ts', '', 'x', 0) returning id`
+      await client`insert into semantic_edges (node_a_type, node_a_id, node_b_type, node_b_id, similarity) values ('note', ${live}, 'code', ${file!.id}, 0.8125)`
 
       await migrate(drizzle(client), { migrationsFolder: source })
+
+      const [column] = await client`select data_type from information_schema.columns where table_name = 'semantic_edges' and column_name = 'similarity'`
+      expect(column!.data_type).toBe('double precision')
+      expect((await client`select similarity from semantic_edges`).map((r) => r.similarity)).toEqual([0.8125])
 
       const queued = await client`select payload, idempotency_key, priority, done_at from jobs where kind = 'semantic_edges' order by idempotency_key`
       expect(queued.map((j) => ({ ...j }))).toEqual(
