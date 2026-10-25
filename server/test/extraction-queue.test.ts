@@ -117,6 +117,46 @@ describe('extraction queue', () => {
     })
   })
 
+  it('extracts .mts files and resolves `./x.mjs` to x.mts; a .tsx component with JSX keeps its symbols (#449, #451)', async () => {
+    const repo = await makeRepo()
+    await syncRepositoryFiles(
+      repo.id,
+      [
+        { path: 'tools/gen.mts', content: "import { load } from './load.mjs'\nexport function gen() { return load() }" },
+        { path: 'tools/load.mts', content: 'export function load() { return 1 }' },
+        {
+          path: 'client/src/Card.tsx',
+          content: [
+            "import { gen } from '../../tools/gen.mjs'",
+            'export function Card() {',
+            '  return <div className="card">{gen()}</div>',
+            '}',
+            'export default function Page() { return <Card /> }',
+          ].join('\n'),
+        },
+      ],
+      ['tools/gen.mts', 'tools/load.mts', 'client/src/Card.tsx'],
+    )
+    await flushExtraction()
+
+    const gen = await fileByPath(repo.id, 'tools/gen.mts')
+    const load = await fileByPath(repo.id, 'tools/load.mts')
+    const card = await fileByPath(repo.id, 'client/src/Card.tsx')
+    expect(gen.language).toBe('typescript')
+    const genImports = await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, gen.id))
+    expect(genImports.map((i) => [i.targetPath, i.resolvedTargetFileId])).toEqual([['./load.mjs', load.id]])
+    const genSymbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, gen.id))
+    expect(genSymbols.map((s) => s.name)).toEqual(['gen'])
+
+    const cardSymbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, card.id))
+    expect(cardSymbols.map((s) => [s.name, s.startLine, s.endLine]).sort()).toEqual([
+      ['Card', 2, 4],
+      ['Page', 5, 5],
+    ])
+    const cardImports = await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, card.id))
+    expect(cardImports.map((i) => [i.targetPath, i.resolvedTargetFileId])).toEqual([['../../tools/gen.mjs', gen.id]])
+  })
+
   it('backfills imports stored unresolved by an older resolver, from their raw target path', async () => {
     const repo = await makeRepo()
     await syncRepositoryFiles(

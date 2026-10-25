@@ -2412,9 +2412,24 @@ either (#577). A query-string token stays at rest in `gitUrl`: it is
 not userinfo, so nothing moves it.
 
 **Code extraction** (`extraction.ts`): `web-tree-sitter` (WASM), four
-supported languages — TypeScript, JavaScript, Python, Go. Each
-language's grammar is loaded from its own npm package's `.wasm` file;
-parsers are cached and initialized once. Per language, a tree-sitter
+supported languages — TypeScript, JavaScript, Python, Go. `language.ts`
+labels files by extension: `.ts`, `.tsx`, `.mts` and `.cts` are all
+`typescript` (#449, #451; the label is what `read_file`, `search` and the
+graph's language groups show, so one `typescript` filter finds them all),
+`.js`, `.jsx`, `.mjs` and `.cjs` are `javascript`. The path is the source
+of truth: `processFile` derives the language from it and writes it in the
+same update as `extractor_version`, so a row labelled under older rules
+(`.mts`/`.cts` rows had `language` null before #451, and a sync skips
+unchanged content) is relabelled and extracted at the version bump's
+catch-up. The grammar comes from
+the extension, not the label: `.tsx` parses with TSX
+(`tree-sitter-tsx.wasm`, #449), since JSX is not TypeScript syntax and the
+TypeScript grammar reads `<div>` as a type assertion; the other TypeScript
+files keep the TypeScript grammar, which accepts the `<T>value` casts TSX
+refuses. Each grammar is loaded from its npm package's `.wasm` file
+(`tree-sitter-typescript` ships both TypeScript ones) the first time a file
+needs it, and cached; the TSX and TypeScript queries are the same. Per
+grammar, a tree-sitter
 query extracts import statements and top-level symbol declarations
 (function/class/interface/type, per language's actual grammar).
 Extraction is deferred until the *entire* sync batch has been
@@ -2433,7 +2448,8 @@ directory (the path up to its first `src` segment; no `src`, no
 resolution — `tsconfig` paths are not read). TypeScript ESM specifiers
 name the compiled output, so `.js` tries `.ts` then `.tsx`, `.jsx` tries
 `.tsx`, `.mjs` tries `.mts`, `.cjs` tries `.cts`, before the literal
-path, then the path plus `.ts/.tsx/.js/.jsx/.py/.go`, then
+path, then the path plus `.ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs/.py/.go`
+(TypeScript sources first, #451), then
 `<path>/index.<ext>`. Every other specifier (npm packages, stdlib) is
 stored with no resolved target and produces no graph edge.
 `backfillUnresolvedImports()` runs at boot and re-resolves every stored
@@ -2523,7 +2539,8 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033). Two constants name
 what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 1): bump it with any change to the grammars and queries,
+an integer, now 2; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+support, #449/#451): bump it with any change to the grammars and queries,
 symbol kinds, the minified-file rule, the snippet cut or the symbol embed
 text. `EMBEDDER_ID` (`search/embeddings.ts`): the model
 (`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus

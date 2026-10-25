@@ -15,8 +15,10 @@ const require = createRequire(import.meta.url)
  * stay searchable until each file's new result commits).
  * 1: tree-sitter TypeScript, JavaScript, Python, Go, imports with their line
  * (#558). Rows extracted before #453 carry 0.
+ * 2: `.tsx` parsed with the TSX grammar (#449); `.mts`/`.cts` extracted as
+ * TypeScript, and `.mts/.cts/.mjs/.cjs` import candidates (#451).
  */
-export const EXTRACTOR_VERSION = 1
+export const EXTRACTOR_VERSION = 2
 
 export type SymbolKind = 'function' | 'class' | 'interface' | 'type'
 
@@ -55,18 +57,30 @@ interface GrammarConfig {
   symbolQuery: string
 }
 
-const GRAMMARS: Record<SupportedLanguage, GrammarConfig> = {
-  typescript: {
-    wasm: wasmPath('tree-sitter-typescript', 'tree-sitter-typescript.wasm'),
-    importQuery: `(import_statement source: (string (string_fragment) @src))`,
-    symbolQuery: `
+/** A grammar: the language's own, or TSX for a `.tsx` file (#449). */
+type Grammar = SupportedLanguage | 'tsx'
+
+const TYPESCRIPT_IMPORT_QUERY = `(import_statement source: (string (string_fragment) @src))`
+const TYPESCRIPT_SYMBOL_QUERY = `
       [
         (function_declaration name: (identifier) @name) @decl.function
         (class_declaration name: (type_identifier) @name) @decl.class
         (interface_declaration name: (type_identifier) @name) @decl.interface
         (type_alias_declaration name: (type_identifier) @name) @decl.type
       ]
-    `,
+    `
+
+const GRAMMARS: Record<Grammar, GrammarConfig> = {
+  typescript: {
+    wasm: wasmPath('tree-sitter-typescript', 'tree-sitter-typescript.wasm'),
+    importQuery: TYPESCRIPT_IMPORT_QUERY,
+    symbolQuery: TYPESCRIPT_SYMBOL_QUERY,
+  },
+  // TypeScript plus JSX, from the same package; the node types match, so do the queries.
+  tsx: {
+    wasm: wasmPath('tree-sitter-typescript', 'tree-sitter-tsx.wasm'),
+    importQuery: TYPESCRIPT_IMPORT_QUERY,
+    symbolQuery: TYPESCRIPT_SYMBOL_QUERY,
   },
   javascript: {
     wasm: wasmPath('tree-sitter-javascript', 'tree-sitter-javascript.wasm'),
@@ -114,11 +128,11 @@ const SYMBOL_KIND_BY_CAPTURE: Record<string, SymbolKind> = {
 }
 
 let initPromise: Promise<void> | null = null
-const languageCache = new Map<SupportedLanguage, Language>()
+const languageCache = new Map<Grammar, Language>()
 const queryCache = new Map<string, Query>()
 
-function getCompiledQuery(lang: Language, language: SupportedLanguage, type: 'import' | 'symbol', queryString: string): Query {
-  const key = `${language}:${type}`
+function getCompiledQuery(lang: Language, grammar: Grammar, type: 'import' | 'symbol', queryString: string): Query {
+  const key = `${grammar}:${type}`
   let query = queryCache.get(key)
   if (!query) {
     query = new Query(lang, queryString)
@@ -127,25 +141,33 @@ function getCompiledQuery(lang: Language, language: SupportedLanguage, type: 'im
   return query
 }
 
-async function loadLanguage(language: SupportedLanguage): Promise<Language> {
+/** Loads a grammar's `.wasm` the first time a file needs it. */
+async function loadLanguage(grammar: Grammar): Promise<Language> {
   initPromise ??= Parser.init()
   await initPromise
-  let lang = languageCache.get(language)
+  let lang = languageCache.get(grammar)
   if (!lang) {
-    const wasmBytes = await readFile(GRAMMARS[language].wasm)
+    const wasmBytes = await readFile(GRAMMARS[grammar].wasm)
     lang = await Language.load(wasmBytes)
-    languageCache.set(language, lang)
+    languageCache.set(grammar, lang)
   }
   return lang
 }
 
-/** Tree-sitter, file-level extraction (spec 9): import edges + cheap top-level "contains" symbols. */
-export async function extractStructure(language: string, content: string): Promise<ExtractionResult> {
+/**
+ * Tree-sitter, file-level extraction (spec 9): import edges + cheap top-level
+ * "contains" symbols. `path` picks the grammar where a language has several.
+ */
+export async function extractStructure(language: string, content: string, path: string): Promise<ExtractionResult> {
   if (!isSupportedLanguage(language)) {
     throw new Error(`unsupported language for extraction: ${language}`)
   }
-  const config = GRAMMARS[language]
-  const lang = await loadLanguage(language)
+  // The grammar comes from the extension, not the label: a `.tsx` file is
+  // labelled `typescript` (language.ts) but JSX only parses with TSX, and TSX
+  // cannot parse the `<T>value` casts `.ts/.mts/.cts` allow.
+  const grammar: Grammar = language === 'typescript' && /\.tsx$/i.test(path) ? 'tsx' : language
+  const config = GRAMMARS[grammar]
+  const lang = await loadLanguage(grammar)
   const parser = new Parser()
   parser.setLanguage(lang)
 
@@ -154,13 +176,13 @@ export async function extractStructure(language: string, content: string): Promi
     tree = parser.parse(content)
     if (!tree) return { imports: [], symbols: [] }
 
-    const importQuery = getCompiledQuery(lang, language, 'import', config.importQuery)
+    const importQuery = getCompiledQuery(lang, grammar, 'import', config.importQuery)
     const imports: ExtractedImport[] = []
     for (const match of importQuery.matches(tree.rootNode)) {
       for (const capture of match.captures) imports.push({ target: capture.node.text, line: capture.node.startPosition.row + 1 })
     }
 
-    const symbolQuery = getCompiledQuery(lang, language, 'symbol', config.symbolQuery)
+    const symbolQuery = getCompiledQuery(lang, grammar, 'symbol', config.symbolQuery)
     const symbols: ExtractedSymbol[] = []
     for (const match of symbolQuery.matches(tree.rootNode)) {
       const nameCapture = match.captures.find((c) => c.name === 'name')

@@ -7,6 +7,7 @@ import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { resolveImportPath } from './import-resolution.js'
+import { detectLanguage } from './language.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
   JOB_PRIORITY,
@@ -378,10 +379,14 @@ async function processFile(fileId: string): Promise<void> {
   const extractorVersion = EXTRACTOR_VERSION
   const embedderId = EMBEDDER_ID
 
+  // The language comes from the path, not the stored label: a row indexed
+  // before its extension was mapped (`.mts`/`.cts` before #451) keeps a stale
+  // label, since a sync skips unchanged content. It is written back below.
+  const language = detectLanguage(row.path)
   // An unsupported or minified file gets its file vector only, and still loses the imports/symbols an earlier content left.
   const { imports, symbols }: ExtractionResult =
-    isSupportedLanguage(row.language) && !looksMinified(row.content)
-      ? await extractStructure(row.language, row.content)
+    isSupportedLanguage(language) && !looksMinified(row.content)
+      ? await extractStructure(language, row.content, row.path)
       : { imports: [], symbols: [] }
 
   const importRows: Array<typeof repositoryFileImports.$inferInsert> = []
@@ -479,7 +484,7 @@ async function processFile(fileId: string): Promise<void> {
     }
     await tx
       .update(repositoryFiles)
-      .set({ embedding: fileEmbedding, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId })
+      .set({ language, embedding: fileEmbedding, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId })
       .where(eq(repositoryFiles.id, fileId))
     failpoint('extract.before-commit')
     return true

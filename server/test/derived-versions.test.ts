@@ -298,6 +298,101 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
       .where(and(eq(jobs.kind, 'extract'), sql`${jobs.payload}->>'fileId' = ${file!.id}`, sql`${jobs.doneAt} IS NULL`))
     expect(pending).toHaveLength(0)
   })
+
+  // #449/#451 bumped EXTRACTOR_VERSION to 2: a .tsx file version 1 parsed with
+  // the TypeScript grammar lost the symbols after its first JSX element, and
+  // gets them at the next boot without a push.
+  it('a .tsx row extractor version 1 produced is extracted again with the TSX grammar', async () => {
+    const owner = await createActiveUser()
+    const [repo] = await db
+      .insert(repositories)
+      .values({ name: 'versions-tsx-v1', ownerId: owner.id, ingestionMethod: 'agent_push' })
+      .returning()
+    const content = [
+      'export function Card() {',
+      '  return <div className="card"><span>hi</span></div>',
+      '}',
+      'export default function Page() { return <Card /> }',
+      'export interface PageProps { id: string }',
+    ].join('\n')
+    // Pushed and extracted while version 1 ran: the row and its job key carry 1.
+    versions.extractor = 1
+    await syncRepositoryFiles(repo!.id, [{ path: 'src/Page.tsx', content }], ['src/Page.tsx'])
+    await flushExtraction()
+    const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
+    expect((await fileVersions(file!.id)).extractor_version).toBe(1)
+    // Stand-in for the broken outline version 1's TypeScript grammar left:
+    // the declaration before the JSX, none of those after it.
+    await db
+      .delete(repositoryFileSymbols)
+      .where(and(eq(repositoryFileSymbols.fileId, file!.id), inArray(repositoryFileSymbols.name, ['Page', 'PageProps'])))
+    const [cardBefore] = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    versions.extractor = shipped.extractor
+    await othersCurrent(repo!.id, null)
+    const texts = embeddedTexts()
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
+    await flushExtraction()
+
+    expect(await fileVersions(file!.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
+    const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    const byLine = symbols.sort((a, b) => a.startLine - b.startLine)
+    expect(byLine.map((s) => [s.name, s.kind, s.startLine, s.endLine])).toEqual([
+      ['Card', 'function', 1, 3],
+      ['Page', 'function', 4, 4],
+      ['PageProps', 'interface', 5, 5],
+    ])
+    // The bump costs a parse: the file vector and Card's vector are kept; only
+    // the two symbols the TSX grammar recovers are embedded.
+    const embeddedHere = texts.filter((t) => t.includes(file!.path))
+    expect(embeddedHere.map((t) => t.split('\n')[0])).toEqual([
+      `function Page in ${file!.path}:4`,
+      `interface PageProps in ${file!.path}:5`,
+    ])
+    expect(byLine[0]!.embedding).toEqual(cardBefore!.embedding)
+    expect(byLine.every((s) => s.embedding !== null)).toBe(true)
+  })
+
+  // #451: before it, `.mts`/`.cts` had no language, so their rows carry
+  // `language` NULL. A sync skips unchanged content and never relabels them;
+  // the catch-up derives the language from the path and writes it back.
+  it('a .mts row indexed with no language is labelled typescript and extracted at boot', async () => {
+    const owner = await createActiveUser()
+    const [repo] = await db
+      .insert(repositories)
+      .values({ name: 'versions-mts-null-language', ownerId: owner.id, ingestionMethod: 'agent_push' })
+      .returning()
+    const content = "import { load } from './load.mjs'\nexport function gen() { return load() }\n"
+    versions.extractor = 1
+    await syncRepositoryFiles(repo!.id, [{ path: 'tools/gen.mts', content }], ['tools/gen.mts'])
+    await flushExtraction()
+    const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
+    // What version 1 left: no language, so a file vector and nothing else.
+    await db.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    await db.execute(sql`UPDATE repository_files SET language = NULL WHERE id = ${file!.id}`)
+    expect(await fileVersions(file!.id)).toEqual({ extractor_version: 1, embedder_id: EMBEDDER_ID })
+    versions.extractor = shipped.extractor
+    await othersCurrent(repo!.id, null)
+    const texts = embeddedTexts()
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
+    await flushExtraction()
+
+    const [after] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file!.id))
+    expect([after!.language, after!.extractorVersion]).toEqual(['typescript', EXTRACTOR_VERSION])
+    expect(after!.embedding).toEqual(file!.embedding)
+    const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    expect(symbols.map((s) => [s.name, s.kind, s.startLine])).toEqual([['gen', 'function', 2]])
+    // Only the new symbol is embedded, not the file again.
+    expect(texts.filter((t) => t.includes(file!.path)).map((t) => t.split('\n')[0])).toEqual([`function gen in ${file!.path}:2`])
+
+    // A later sync of the same content changes nothing.
+    await syncRepositoryFiles(repo!.id, [{ path: 'tools/gen.mts', content }], ['tools/gen.mts'])
+    await flushExtraction()
+    const [resynced] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file!.id))
+    expect([resynced!.language, resynced!.extractorVersion]).toEqual(['typescript', EXTRACTOR_VERSION])
+    expect(await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))).toHaveLength(1)
+  })
 })
 
 describe('files extracted before migration 0033 (#453)', () => {
