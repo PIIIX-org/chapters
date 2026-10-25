@@ -187,10 +187,12 @@ describe('code and symbol filters apply inside each leg (#454)', () => {
   }, 120_000)
 })
 
-describe('repository scope applies inside the symbol vector leg (#454)', () => {
+describe('repository scope and a kind inside the symbol vector leg (#454)', () => {
   it('a small repository crowded out by a big one keeps its symbols', async () => {
     // 300 symbols of another repository (more than the leg's ef_search of 200) are all nearer the query than the
-    // small repository's 5, which share one word with it, so only the vector leg can find them.
+    // small repository's 5, which share one word with it, so only the vector leg can find them. The scope half
+    // already holds on the base (#462's iterative scan; with `hnsw.iterative_scan` off it answers []); the kind
+    // half fails there, where `kinds` is ignored.
     const owner = await createActiveUser()
     const repo = async (name: string, files: Array<{ path: string; content: string }>) => {
       const [row] = await db.insert(repositories).values({ name, ownerId: owner.id, ingestionMethod: 'agent_push' }).returning()
