@@ -62,7 +62,7 @@ const test: LabTest = {
       ? []
       : await ctx.docker
           .psqlRows(`select f.path, j.attempts, j.lease_until, j.done_at, j.last_error from repository_files f
-            join jobs j on j.idempotency_key = 'extract:' || f.id || ':' || f.content_hash
+            join jobs j on j.idempotency_key like 'extract:' || f.id || ':' || f.content_hash || ':%'
             where f.repository_id = '${repo.id}' and j.done_at is null order by f.path limit 5`)
           .catch((e: unknown) => [{ error: String(e).slice(0, 300) }])
     const noSymbols = Number(

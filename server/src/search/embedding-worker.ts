@@ -9,9 +9,14 @@
 // parent's execArgv) and under Node's own type stripping (vitest starts it
 // outside Vite's transform pipeline, where `./x.js` -> `./x.ts` does not map).
 import { pipeline } from '@huggingface/transformers'
-import { parentPort } from 'node:worker_threads'
+import { parentPort, workerData } from 'node:worker_threads'
 
-const EMBEDDING_MODEL = 'Xenova/bge-small-en-v1.5'
+/** embeddings.ts `LOCAL_EMBEDDING_MODEL`, the model `EMBEDDER_ID` names (#453), sent as `workerData.model`. */
+function modelName(data: unknown): string {
+  if (data && typeof data === 'object' && 'model' in data && typeof data.model === 'string') return data.model
+  throw new Error('embedding worker started without workerData.model')
+}
+const EMBEDDING_MODEL = modelName(workerData)
 
 /** One batch: texts already cut to their maximum length by the caller. */
 export interface EmbedBatchRequest {
