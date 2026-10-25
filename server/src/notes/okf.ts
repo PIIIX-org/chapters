@@ -299,11 +299,55 @@ export function parseNote(raw: string): OkfNote {
   return { frontmatter, body: match[2] ?? '' }
 }
 
-/** A `[[wikilink]]` of a note body: its target and the body lines (1-based, inclusive) it is written on. */
+/** The most code points a link's `context` holds (#472). */
+export const LINK_CONTEXT_MAX = 200
+
+/**
+ * A `[[wikilink]]` of a note body: its target, the body lines (1-based,
+ * inclusive) it is written on, and its `context` (#472): the paragraph it is
+ * in (the non-blank lines around it) when that is at most `LINK_CONTEXT_MAX`
+ * code points, else its own lines when they are, else that many code points
+ * of its lines around it, `…` marking each cut end. Line ends lose their `\r`.
+ */
 export interface WikilinkLocation {
   target: string
   startLine: number
   endLine: number
+  context: string
+}
+
+const isHigh = (unit: number) => unit >= 0xd800 && unit <= 0xdbff
+const isLow = (unit: number) => unit >= 0xdc00 && unit <= 0xdfff
+
+/**
+ * `text` cut to `LINK_CONTEXT_MAX` code points around [from, to) (UTF-16
+ * offsets): the link first, then a code point before and after it in turn;
+ * an ellipsis takes the place of the outermost code point at each cut end.
+ * Never splits a surrogate pair; O(LINK_CONTEXT_MAX) whatever the text's length.
+ */
+function contextWindow(text: string, from: number, to: number): string {
+  const before = (at: number) => (at >= 2 && isLow(text.charCodeAt(at - 1)) && isHigh(text.charCodeAt(at - 2)) ? 2 : 1)
+  const after = (at: number) => (isHigh(text.charCodeAt(at)) && isLow(text.charCodeAt(at + 1)) ? 2 : 1)
+  let start = from
+  let end = from
+  let n = 0
+  for (; end < to && n < LINK_CONTEXT_MAX; n++) end += after(end)
+  for (let left = true; n < LINK_CONTEXT_MAX && (start > 0 || end < text.length); n++, left = !left) {
+    if ((left && start > 0) || end >= text.length) start -= before(start)
+    else end += after(end)
+  }
+  if (start > 0) start += after(start)
+  if (end < text.length) end -= before(end)
+  return `${start > 0 ? '…' : ''}${text.slice(start, end)}${end < text.length ? '…' : ''}`
+}
+
+/** Whether `text` has at most `LINK_CONTEXT_MAX` code points (a UTF-16 length over twice that never does). */
+function fits(text: string): boolean {
+  if (text.length <= LINK_CONTEXT_MAX) return true
+  if (text.length > 2 * LINK_CONTEXT_MAX) return false
+  let n = 0
+  for (let i = 0; i < text.length; i++) if (!isLow(text.charCodeAt(i)) || !isHigh(text.charCodeAt(i - 1))) n++
+  return n <= LINK_CONTEXT_MAX
 }
 
 /** Every `[[wikilink]]` of a note body, in document order (a target linked twice is listed twice). */
@@ -315,15 +359,42 @@ export function extractWikilinkLocations(body: string): WikilinkLocation[] {
     .replace(/```[\s\S]*?```/g, blank)
     .replace(/`[^`\n]+`/g, blank)
     .replace(/<!--[\s\S]*?-->/g, blank)
+  const matches = [...stripped.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)].filter((m) => m[1]!.trim() !== '')
+  if (matches.length === 0) return []
+  // Line i (0-based) is body[starts[i], ends[i]) without its `\r`; a paragraph runs from first[i] to last[i].
+  const starts = [0]
+  for (let i = body.indexOf('\n'); i !== -1; i = body.indexOf('\n', i + 1)) starts.push(i + 1)
+  const ends = starts.map((s, i) => (i + 1 < starts.length ? starts[i + 1]! - 1 : body.length))
+  for (let i = 0; i < ends.length; i++) if (ends[i]! > starts[i]! && body.charCodeAt(ends[i]! - 1) === 13) ends[i]!--
+  const isBlank = starts.map((s, i) => body.slice(s, ends[i]).trim() === '')
+  const first = new Array<number>(starts.length)
+  const last = new Array<number>(starts.length)
+  for (let i = 0; i < starts.length; i++) first[i] = !isBlank[i] && i > 0 && !isBlank[i - 1] ? first[i - 1]! : i
+  for (let i = starts.length - 1; i >= 0; i--) last[i] = !isBlank[i] && i + 1 < starts.length && !isBlank[i + 1] ? last[i + 1]! : i
+  const lines = (a: number, b: number) => {
+    const parts: string[] = []
+    for (let i = a; i <= b; i++) parts.push(body.slice(starts[i], ends[i]))
+    return parts.join('\n')
+  }
+
   const links: WikilinkLocation[] = []
-  let line = 1
-  let counted = 0
-  for (const match of stripped.matchAll(/\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g)) {
-    const target = match[1]!.trim()
-    if (!target) continue
-    for (; counted < match.index; counted++) if (stripped.charCodeAt(counted) === 10) line++
-    const breaks = match[0].split('\n').length - 1
-    links.push({ target, startLine: line, endLine: line + breaks })
+  let line = 0
+  for (const match of matches) {
+    while (line + 1 < starts.length && starts[line + 1]! <= match.index) line++
+    const endLine = line + match[0].split('\n').length - 1
+    const [a, b] = [first[line]!, last[endLine]!]
+    // A paragraph over 4 × the cap in UTF-16 units is taken as too long without reading it.
+    const paragraph = ends[b]! - starts[a]! <= 4 * LINK_CONTEXT_MAX ? lines(a, b).trim() : null
+    let context: string
+    if (paragraph !== null && fits(paragraph)) {
+      context = paragraph
+    } else {
+      const own = lines(line, endLine)
+      // Its first line keeps everything before the link (only line ends lost their `\r`).
+      const at = match.index - starts[line]!
+      context = fits(own.trim()) ? own.trim() : contextWindow(own, at, Math.min(own.length, at + match[0].length))
+    }
+    links.push({ target: match[1]!.trim(), startLine: line + 1, endLine: endLine + 1, context })
   }
   return links
 }

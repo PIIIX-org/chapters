@@ -27,7 +27,8 @@ describe('extractWikilinkLocations', () => {
       'Split [[c/', // 8
       'three]] link.', // 9
     ].join('\n')
-    expect(extractWikilinkLocations(body)).toEqual([
+    // Their contexts (#472) are tested in note-link-context.test.ts (toEqual ignores an undefined key).
+    expect(extractWikilinkLocations(body).map((l) => ({ ...l, context: undefined }))).toEqual([
       { target: 'a/one', startLine: 1, endLine: 1 },
       { target: 'b/two', startLine: 1, endLine: 1 },
       { target: 'a/one', startLine: 5, endLine: 5 },

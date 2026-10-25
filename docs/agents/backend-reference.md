@@ -173,7 +173,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages |
 | `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order |
-| `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558), PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows. 0 = not located yet (rows from before 0031, or written by older code after a rollback; the column default keeps that working): `backfillLinkLines()` (`notes/store-tx.ts`) rewrites them from the body under the note lock, in the background after `listen` at every boot (about 8 ms a note: 5,000 notes took 40 s locally; until then those edges have `evidence: null`), and the doctor's `links-differ` lists any left |
+| `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558) and `context` (migration 0039, #472: the link's paragraph, the non-blank lines around it, when at most 200 code points; else its own lines; else 200 code points of them around the link with `…` at each cut end; never half a surrogate pair; `okf.ts` `extractWikilinkLocations`). PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows, and of two links to one target on one line the row is the first (no count kept). Null `context` = not filled yet (rows from before 0039; rows from before 0031 also have line 0; or written by older code after a rollback; the column defaults keep that working): the boot `note_links` catch-up jobs (**Link catch-up**, §5) rewrite them from the body under the note lock at catch-up priority (5,000 notes with 30,000 rows: queued in 79 ms, rewritten in 62 s, 12 ms a note, locally; until then a backlink has `context: null` and an unlocated edge `evidence: null`), and the doctor's `links-differ` lists any whose targets or lines differ from the body |
 | `exportLinks` | expiring/revocable vault export download links |
 
 **ADR-003 store schema (migration 0021; S2a: Postgres is the only authority
@@ -1319,8 +1319,21 @@ for the nodes reached, applies `types`/`tags` as `passesFilters` does (the
 centre is always kept), stops at the ring that reaches `limit` + 1 nodes,
 and reads the edges among the kept outer-ring nodes in a last round, so
 the result is `buildGraph`'s graph restricted to the neighbourhood (the
-test compares the two). No Louvain: nodes carry `distance`. #472's
-`neighbors(depth)` (REST local graph, backlinks) is meant to reuse it.
+test compares the two). No Louvain: nodes carry `distance`. The REST
+local graph (`getLocalGraph`, `notes/store.ts`) does not use it yet (#472).
+
+`backlinksOf(center, {types, tags})` (#472, same module) lists the links to
+a note centre for MCP `graph {neighborsOf}`'s `backlinks` section: one row
+of `note_links` per item, `{path, location, context}`, from live notes of
+the centre's vault other than itself, matched by the exact path as link
+edges are (`note_links_target_idx`), by path (`COLLATE "C"`) then line, at
+most `BACKLINK_CAP` (1,000) + 1. Each linking note's `bodyStartLine` turns
+its body-relative lines into `path#La` of its file; a row with line 0 gives
+the bare path. The section is listed after `nodes` and `edges` when the
+centre is a note and `edgeTypes` includes `extracted`, with the ladder
+`{path, location}` → `location` → counts per linking note. The REST route
+`/vaults/:id/backlinks/*` (`getIncomingLinks`) is unchanged: one item per
+linking note, no lines.
 
 **Saved perspectives** (`graph_perspectives`; REST `GET/POST
 /graph/perspectives`, `DELETE /graph/perspectives/:id`, and the three MCP
@@ -2703,9 +2716,9 @@ import row the same way, so a renamed package loses its old name's edges
 and the new name gains them without the importers changing. That request
 is in memory: after a crash the boot backfill restores the targets gained,
 and a row whose target the change removed keeps that stale target until its file is
-extracted again. After `listen`, in the
-background, `backfillLinkLines()` (#558) writes wikilink rows without
-lines again from their note's body.
+extracted again. Wikilink rows without lines or a context are rewritten
+from their note's body by the `note_links` catch-up jobs (#472, see **Link
+catch-up** below), queued before `listen`.
 
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,
@@ -2910,6 +2923,18 @@ Boot deletes successful jobs finished more than 7 days ago
 status. A job that outlives its lease while still running can run twice
 only if a second process shares the database; extraction and embedding
 are idempotent rewrites.
+
+**Link catch-up** (`notes/link-catch-up.ts`, #472): durable kind
+`note_links`, payload `{noteId}`, key `note_links:<noteId>:<seq>`,
+monitoring job kind `links`. `scheduleLinkCatchUp()` runs at boot after the
+embedding and extraction catch-ups: keyset pages of 1,000 notes that have a
+`note_links` row with a null `context` (partial index
+`note_links_unfilled_idx`), one statement each, queued at
+`JOB_PRIORITY.catchUp` with the `errored` rerun rule (a pending job is left
+alone). Each job rewrites the note's rows from its body with `replaceLinks`
+in a store transaction (the note lock), as the doctor's `links-differ`
+repair does. No write queues this kind: a body save rewrites its rows
+itself.
 
 `docs/superpowers/specs/2026-07-18-repository-ingestion-design.md` and
 `2026-07-18-code-graph-integration-design.md` are the full specs.

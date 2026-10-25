@@ -111,7 +111,8 @@ const rows = (noteId: string) =>
     .from(noteLinks)
     .where(eq(noteLinks.sourceNoteId, noteId))
     .orderBy(asc(noteLinks.startLine), asc(noteLinks.targetPath))
-    .then((found) => found.map(({ sourceNoteId: _, ...row }) => row))
+    // Every column but the note id (toEqual ignores an undefined key).
+    .then((found) => found.map((row) => ({ ...row, sourceNoteId: undefined })))
 
 beforeAll(async () => {
   app = await buildApp()
@@ -151,7 +152,7 @@ describe('note_links rows carry their context (#472)', () => {
 
   it('a body edit moves the rows; a frontmatter-only edit leaves them as they are', async () => {
     const note = await createNote(vaultId, { path: 'rows/edited', body: 'Top.\n\nSee [[rows/t]] here.\n' })
-    await edit('rows/edited', { ops: [{ op: 'prepend', text: 'New first paragraph.\n' }] })
+    await edit('rows/edited', { ops: [{ op: 'prepend', text: 'Intro line.\nSecond intro line.' }] })
     const afterBody = await rows(note.id)
     expect(afterBody).toEqual([{ targetPath: 'rows/t', startLine: 5, endLine: 5, context: 'See [[rows/t]] here.' }])
     await edit('rows/edited', { frontmatter: { summary: 'a frontmatter line', tags: ['one', 'two'] } })
@@ -181,6 +182,9 @@ describe('graph neighborsOf answers the backlinks of a note (#472)', () => {
       { path: 'bl/b', location: await lineOf('bl/b', 'Only [[bl/target#Heading]]'), context: 'Only [[bl/target#Heading]] once.' },
     ] satisfies Backlink[])
     expect(json.truncated).toBe(false)
+    // The backlinks alone: the centre is the only node, so there is no edge.
+    const alone = await graph({ neighborsOf: 'bl/target', edgeTypes: ['extracted'], limit: 1, budget_tokens: 25_000 })
+    expect(alone).toMatchObject({ nodes: [{ path: 'bl/target' }], edges: [], backlinks: json.backlinks })
   })
 
   it('locations follow a frontmatter-only edit of the linking note', async () => {
