@@ -104,16 +104,17 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
 
     await simpleGit({ timeout: { block: 300_000 } }).clone(cloneUrl, workDir, ['--depth', '1'])
 
-    // A clone holds only tracked files, and every tracked file is source
-    // (#465, D12): no ignore rules, only .git, binaries, size and the file cap.
-    // Skipped files leave currentPaths, so a stale row goes (#923).
-    const { files, currentPaths, skipped } = await scanRepository(workDir, null, 'git-sync')
-    await syncRepositoryFiles(repositoryId, files, currentPaths)
-
     // A depth-1 clone checks out the remote's default branch, so the name of
     // the clone's HEAD *is* the default branch — no extra network call.
     const defaultBranch = (await simpleGit(workDir).revparse(['--abbrev-ref', 'HEAD'])).trim()
     const headCommit = (await simpleGit(workDir).revparse(['HEAD'])).trim()
+
+    // A clone holds only tracked files, and every tracked file is source
+    // (#465, D12): no ignore rules, only .git, binaries, size and the file cap.
+    // Skipped files leave currentPaths, so a stale row goes (#923).
+    const { files, currentPaths, skipped } = await scanRepository(workDir, null, 'git-sync')
+    // The index is HEAD's files: its commit is recorded with them (#471).
+    await syncRepositoryFiles(repositoryId, files, currentPaths, { commit: headCommit })
 
     await db
       .update(repositories)
@@ -122,7 +123,6 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
         lastSyncedAt: new Date(),
         lastSyncError: null,
         defaultBranch,
-        lastSyncedCommit: headCommit,
         skippedFiles: summarizeSkips(skipped),
       })
       .where(eq(repositories.id, repositoryId))
