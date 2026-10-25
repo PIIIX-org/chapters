@@ -88,7 +88,8 @@ dumping ground.
    blows a budget is a bug, not a trade-off.
 5. **Permission checks are single indexed queries** — live-checked per
    request per the specs, never cached across connections (sub-project
-   6's hard rule), so they must be cheap by construction.
+   6's hard rule), so they must be cheap by construction. Answers may be
+   cached only under the caching contract (`backend-reference.md` §5.11).
 6. **UI phase**: initial bundle < 300KB gzipped; animations
    (GSAP/anime.js) animate `transform`/`opacity` only — compositor-
    friendly, 60fps; heavy views (graph) lazy-load.
