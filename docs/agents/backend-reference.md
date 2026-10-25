@@ -1405,9 +1405,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     at query time made the leg about 3x slower on rea's 3,757 files (53-65
     ms against 21 ms for `evidence id`). Symbol
     blocks' `blocks.keywords` hold the lexemes of the symbol's
-    `inner_path` and of its file's path. Both are null until the file is
+    `inner_path` only (its file's path is the code file leg's: `server`
+    must not find every symbol under `server/`). Both are null until the file is
     extracted again (`EXTRACTOR_VERSION` 6 re-extracts every file at the
-    first boot; vectors are reused). The query: each whitespace term matches as its
+    first boot; vectors are reused). A query lexeme longer than 200
+    characters (never stored) matches nothing instead of failing the
+    leg. The query: each whitespace term matches as its
     English query, or as its identifiers (a plain word unstemmed, unless
     English drops it as a stop word; a compound as its whole lexeme or
     all its parts, each part English or unstemmed); terms are ANDed. So
@@ -1415,8 +1418,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     and `mcp.server.ts` or `server.ts` find `src/mcp/server.ts`. A query
     with websearch syntax (a `"`, a `-term`, a standalone `or`) keeps the
     English query. The code file leg's document is `keyword_fts` while
-    `extracted_hash = content_hash`, else `fts` (a sync that changed the
-    content, until the file is extracted again), indexed by GIN
+    `extracted_hash = content_hash` and `extractor_version >= 6`, else
+    `fts` (a sync that changed the content, or older code that
+    re-extracted the file after a rollback, until it is extracted again), indexed by GIN
     `repository_files_keyword_idx`, which replaced
     `repository_files_fts_idx`. The leg orders by whole-identifier match,
     then the English match's `ts_rank` (the order before #455), then the
@@ -1424,7 +1428,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     (no index: the `ILIKE` reads the repository's symbols anyway) and
     ranks exact, prefix and contains as before, then a whole-identifier
     match, then a parts-only match. So an exact identifier outranks its
-    parts within each leg; rows matched before #455 keep their order.
+    parts within each leg. In the code leg, the rows the English query
+    matched keep their relative order except that whole-identifier
+    matches move ahead; in the symbol leg the rows the base matched keep
+    their order. A whole-identifier row the English query did not match
+    (a member access) can push English matches out of the 30-row cut.
     A code hit's snippet is the English query's `ts_headline`; a file that
     only the identifier keywords match gets the vector leg's snippet (its
     first 200 characters): a headline would highlight nothing and still

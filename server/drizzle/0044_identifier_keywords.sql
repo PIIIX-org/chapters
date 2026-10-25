@@ -4,9 +4,10 @@
 -- column or trigger recomputes them on other writes:
 -- - `repository_files.keyword_fts`: the code keyword leg's document of the extracted content, the row's `fts`
 --   plus those lexemes (stored whole: concatenating them at query time made the leg about 3x slower on rea's
---   3,757 files, 53-65 ms against 21 ms for `evidence id`). Current while `extracted_hash = content_hash`; a sync
---   that changes the content makes the leg read `fts` until the file is extracted again.
--- - `blocks.keywords`: a symbol's lexemes (its inner_path and its file's path).
+--   3,757 files, 53-65 ms against 21 ms for `evidence id`). Current while `extracted_hash = content_hash` and
+--   `extractor_version >= 6` (the version that writes it): a sync that changes the content, or older code
+--   re-extracting the file after a rollback, makes the leg read `fts` until the file is extracted again.
+-- - `blocks.keywords`: a symbol's lexemes (its inner_path only; its file's path belongs to the code file leg).
 -- Both are null until a file is extracted again: EXTRACTOR_VERSION 6 makes the first boot re-extract every file
 -- (no vector is embedded again), and meanwhile the legs match as before.
 -- The GIN index on the code leg's document replaces the one on `fts`, which nothing else queries. Code from
@@ -17,4 +18,5 @@ ALTER TABLE "repository_files" ADD COLUMN "keyword_fts" tsvector;--> statement-b
 ALTER TABLE "blocks" ADD COLUMN "keywords" tsvector;--> statement-breakpoint
 DROP INDEX IF EXISTS "repository_files_fts_idx";--> statement-breakpoint
 CREATE INDEX "repository_files_keyword_idx" ON "repository_files" USING gin
-  ((CASE WHEN "keyword_fts" IS NOT NULL AND "extracted_hash" = "content_hash" THEN "keyword_fts" ELSE "fts" END));
+  ((CASE WHEN "keyword_fts" IS NOT NULL AND "extracted_hash" = "content_hash" AND "extractor_version" >= 6
+    THEN "keyword_fts" ELSE "fts" END));

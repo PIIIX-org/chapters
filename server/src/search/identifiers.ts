@@ -105,11 +105,13 @@ export function fileKeywords(path: string, content: string | null): string[] {
   return [...out]
 }
 
-/** A symbol's keyword lexemes: every lexeme of its `inner_path` (`Class.method`) and of its file's path. */
-export function symbolKeywords(path: string, innerPath: string): string[] {
+/**
+ * A symbol's keyword lexemes: every lexeme of its `inner_path` (`Class.method`). Not its file's path, which
+ * the code file leg matches: `server` must not find every symbol of every file under `server/`.
+ */
+export function symbolKeywords(innerPath: string): string[] {
   const out = new Set<string>()
   for (const id of identifiers(innerPath)) addAll(out, id.lexemes)
-  pathLexemes(path, out)
   return [...out]
 }
 

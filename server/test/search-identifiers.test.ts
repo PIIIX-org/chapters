@@ -46,10 +46,8 @@ describe('keywords stored', () => {
     expect(fileKeywords('a.ts', content)).toHaveLength(MAX_FILE_KEYWORDS)
   })
 
-  it('a symbol: its inner path and its file path, plain words included', () => {
-    expect(symbolKeywords('py/notes_io.py', 'Reader.parse').sort()).toEqual(
-      ['reader.parse', 'reader', 'parse', 'py', 'notes_io.py', 'notes_io', 'notes', 'io'].sort(),
-    )
+  it('a symbol: its inner path only, plain words included', () => {
+    expect(symbolKeywords('Reader.parse').sort()).toEqual(['reader.parse', 'reader', 'parse'].sort())
   })
 })
 

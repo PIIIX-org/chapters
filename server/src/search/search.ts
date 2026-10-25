@@ -5,7 +5,7 @@ import { textArray } from './block-rows.js'
 import { embedder } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
 import { setHnswScan } from './hnsw.js'
-import { isPlainWord, keywordTerms } from './identifiers.js'
+import { MAX_KEYWORD_LENGTH, isPlainWord, keywordTerms } from './identifiers.js'
 import { extractionState } from '../repositories/extraction-queue.js'
 import { timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
@@ -18,8 +18,12 @@ function uuidArray(ids: string[]): SQL {
 /** The English full-text query of `text`, as every keyword leg ran it before #455 (note legs still do). */
 const english = (text: string): SQL => sql`websearch_to_tsquery('english', ${text})`
 
-/** A query of one exact lexeme: quoted, so no parser or stemming touches it. */
-const lexeme = (l: string): SQL => sql`${`'${l.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`}::tsquery`
+/**
+ * A query of one exact lexeme: quoted, so no parser or stemming touches it. One longer than
+ * `MAX_KEYWORD_LENGTH` is never stored, and Postgres refuses a tsquery word over 2,047 bytes: the empty query.
+ */
+const lexeme = (l: string): SQL =>
+  l.length > MAX_KEYWORD_LENGTH ? sql`''::tsquery` : sql`${`'${l.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`}::tsquery`
 
 /** All of `queries` (empty: the empty query, which `&&` ignores). Every operand is parenthesised: `||` and `&&` bind alike in SQL. */
 function allOf(queries: SQL[]): SQL {
@@ -53,7 +57,7 @@ function keywordQuery(query: string): { match: SQL; whole: SQL | null } {
       if (identifiers.every(isPlainWord)) return word(text, allOf(identifiers.map((id) => lexeme(id.whole))))
       const alternatives = identifiers.map((id) => {
         if (isPlainWord(id)) return word(id.whole, lexeme(id.whole))
-        wholes.add(id.whole)
+        if (id.whole.length <= MAX_KEYWORD_LENGTH) wholes.add(id.whole)
         return sql`(${lexeme(id.whole)}) || (${allOf(id.parts.map((p) => word(p, lexeme(p))))})`
       })
       return sql`(${english(text)}) || (${allOf(alternatives)})`
@@ -64,9 +68,13 @@ function keywordQuery(query: string): { match: SQL; whole: SQL | null } {
 
 /**
  * The code keyword leg's document (#455), as `repository_files_keyword_idx` indexes it: `keyword_fts` (the
- * English `fts` plus the identifier lexemes, written by extraction) while it is of the current content, else `fts`.
+ * English `fts` plus the identifier lexemes, written by extraction) while it is of the current content and was
+ * written by an extractor that has keywords (6, the version that added them, as a literal: the index has it;
+ * code from before 0044 re-extracting a file after a rollback writes a lower version), else `fts`.
  */
-const CODE_DOCUMENT = sql.raw(`(CASE WHEN keyword_fts IS NOT NULL AND extracted_hash = content_hash THEN keyword_fts ELSE fts END)`)
+const CODE_DOCUMENT = sql.raw(
+  `(CASE WHEN keyword_fts IS NOT NULL AND extracted_hash = content_hash AND extractor_version >= 6 THEN keyword_fts ELSE fts END)`,
+)
 
 /**
  * What a search keeps (#454). Every filter applies inside each leg's SQL,

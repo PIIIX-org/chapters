@@ -25,6 +25,10 @@ const FILES = [
   { path: 'src/mcp/server.ts', content: "export const UUID_ARG = 'uuid'\n\nexport function startServer(): void {}\n" },
   { path: 'src/load.ts', content: 'export function load(fm: Reader): string {\n  return fm.parseFrontmatter(read())\n}\n' },
   { path: 'docs/reading.md', content: '# Reading a note\n\nWe parse the frontmatter first, then the body. Indexing runs nightly.\n' },
+  { path: 'src/notes/reader.ts', content: "export class NoteReader {\n  loadBody(): string {\n    return ''\n  }\n}\n" },
+  // A symbol named `server`, and symbols in files under `server/` (Python, so they hold no `ts` for `server.ts`).
+  { path: 'py/app.py', content: 'def server():\n    return 1\n' },
+  ...Array.from({ length: 5 }, (_, i) => ({ path: `server/handler${i}.py`, content: `def handle_${i}():\n    return ${i}\n` })),
 ]
 
 let repo: string
@@ -79,8 +83,19 @@ describe('find_symbols by identifier parts (#455)', () => {
     expect(await symbols('uuid arg')).toEqual(['src/mcp/server.ts#UUID_ARG'])
   })
 
-  it('a dotted module path', async () => {
-    expect(await symbols('notes_io.parse_frontmatter')).toEqual(['py/notes_io.py#parse_frontmatter'])
+  it('a dotted name path', async () => {
+    expect(await symbols('reader.load_body')).toEqual(['src/notes/reader.ts#loadBody'])
+  })
+
+  it('not by its file path: a name, not every symbol under a folder of that name', async () => {
+    expect(await symbols('server')).toEqual(['py/app.py#server', 'src/mcp/server.ts#startServer'])
+  })
+
+  it('a query token too long for a tsquery word leaves the keyword leg answering', async () => {
+    expect(await symbols('b'.repeat(2100))).toEqual([])
+    // The over-long whole and part match nothing; the term still matches by its `parse` part.
+    expect(await symbols(`parse${'X'.repeat(2100)}`)).toEqual(['py/notes_io.py#parse_frontmatter', 'src/notes/frontmatter.ts#parseFrontmatter'])
+    expect(await search(`parse_${'x'.repeat(2100)} frontmatter`, 'code')).toBeInstanceOf(Array)
   })
 
   it('the exact identifier ranks before a match on its parts alone', async () => {

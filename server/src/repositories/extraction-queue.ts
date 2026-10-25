@@ -548,7 +548,7 @@ async function processFile(fileId: string): Promise<void> {
     symbolKind: b.symbolKind,
     symbolParent: b.symbolParent,
     snippet: b.snippet,
-    keywords: b.kind === 'symbol' ? symbolKeywords(row.path, b.innerPath) : null,
+    keywords: b.kind === 'symbol' ? symbolKeywords(b.innerPath) : null,
     startLine: b.startLine,
     endLine: b.endLine,
     contentHash: b.contentHash,

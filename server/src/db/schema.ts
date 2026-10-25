@@ -918,8 +918,8 @@ export const blocks = pgTable(
     snippet: text('snippet'),
     /**
      * A symbol block's identifier lexemes (#455, migration 0044;
-     * search/identifiers.ts `symbolKeywords`: its `inner_path` and its file's
-     * path, split, unstemmed), which the symbol keyword leg matches beside
+     * search/identifiers.ts `symbolKeywords`: its `inner_path` only, split,
+     * unstemmed), which the symbol keyword leg matches beside
      * `inner_path` and `snippet`. Null on other blocks and on a symbol not
      * extracted since 0044 (`EXTRACTOR_VERSION` 6 extracts it again).
      */
