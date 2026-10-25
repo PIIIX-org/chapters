@@ -379,7 +379,7 @@ fold of that transaction keeps; the next fold clears it.
 
 | Table | Purpose |
 |---|---|
-| `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable` |
+| `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable`, the indexed version (`last_synced_commit`, `tree_hash`; migration 0040, #471, see §5.10) |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
@@ -2405,8 +2405,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   past the restored rows before the `instance_restored` event.
   Restored MCP and sync tokens keep working (their hashes are
   restored). Restored repositories get `last_synced_at`,
-  `last_synced_commit` and `last_webhook_at` cleared so the next poll
-  re-indexes git repositories. A
+  `last_synced_commit`, `tree_hash` and `last_webhook_at` cleared so the
+  next poll re-indexes git repositories. A
   format-1 archive (`account-dump.json`) still restores: notes get ids
   derived from vault and path, tokens pinned to a repository are left
   out with a warning.
@@ -2444,6 +2444,10 @@ is the history record, not Chapters).
 3. **agent_push** (`push-routes.ts`) — `POST /repositories/sync`,
    bearer sync-token auth, the client sends its own file list directly
    — the closest analog to how a coding agent itself already works.
+   Body `{files: [{path, content}], currentPaths: string[], commit?}`:
+   `commit` (optional, #471) is the git object name the pushed files
+   are, 40 or 64 lowercase hex (anything else is a 400); a push without
+   it clears the stored commit. The answer is the `SyncResult` counts.
 
 **Which files are indexed** — git and local_path share one scan
 (`scanRepository` in `fs-scan.ts`); they differ only in what is listed
@@ -2490,6 +2494,51 @@ the exception: the client chose to send the content as text, so
 `syncRepositoryFiles` strips NUL bytes and indexes the rest, with no
 per-file size check (the request body limit bounds it), and reports no
 skips.
+
+**Indexed version** (#471, owner decision D11 in #930, ADR-004 §2.9):
+every repository records the version of its stored file contents, so an
+agent knows which snapshot it reads. `syncRepositoryFiles` writes both
+columns at the end of each sync:
+- `tree_hash`, for every method: the first 16 hex characters of sha256
+  over one `path NUL content_hash LF` line per stored file, in path byte
+  (UTF-8, Postgres `COLLATE "C"`) order (`computeTreeHash`); a sync that
+  leaves no file gives `e3b0c44298fc1c14` (sha256 of nothing), null only
+  before the first sync. It is computed from the rows the sync already
+  loaded plus its own batch, not by a rescan: on 20,000 files the hash
+  takes ~6 ms and a no-op sync goes from ~78 to ~86 ms (a SQL recompute
+  over the rows takes ~19 ms). Migration 0040 backfills it in SQL with the
+  same lines, and with the empty tree for a synced repository with no
+  files.
+- `last_synced_commit`, when a commit describes the stored files: git
+  HEAD of the clone; for local_path, HEAD when, after the scan, the folder
+  is in a git work tree, `git --no-optional-locks status --porcelain -- .`
+  is empty and every indexed path is in `git ls-files -- .`. Status alone
+  is not enough: it hides untracked files that rules the scan never reads
+  ignore (a parent folder's `.gitignore`, the repository's `info/exclude`
+  for a subfolder, `core.excludesFile`), and the scan indexes them; the
+  tracked list comes from git's index, without walking ignored trees. Any
+  failed check gives null, as do a folder outside git and one owned by
+  another user (git refuses it under `safe.directory`). The four git calls
+  take ~60-80 ms on 20,000 files. For agent_push, the body's `commit`, else
+  null. A commit alone changes no watched file, so a local folder records
+  it on its next sync.
+
+Answers name it once, never per item, as `commit` when known, else
+`tree` (`indexedVersion`): MCP `repository_status`, the head of
+`read_file` and `browse_repository`, and the head of `search` and
+`find_symbols` when their scope is exactly one repository (an answer over
+several repositories carries neither). It names the stored content and
+paths, which change with the sync; the derived index (symbols, outline,
+snippets, vectors) follows when extraction catches up, i.e. once
+`filesPendingExtraction` is 0. `search` and `find_symbols` report the lag
+in `index`; `read_file` reads the file, its repository's version and its
+extraction state in one query (`readRepositoryFile`) and adds
+`index: 'pending'` (its job is queued or running, or none exists and no
+block of its content does) or `'failed'` (the job gave up; the outline is
+from earlier content), the rule of `extractionState` for one file. Files
+carry no version of their own beyond `content_hash`. `list_repositories`
+and the REST rows do not carry it. Git history (`changed_since`, `diff`,
+reads at a `ref`) is deferred (D11).
 
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
