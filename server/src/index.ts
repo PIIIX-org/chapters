@@ -14,8 +14,9 @@ import { bootStore } from './notes/store-reconcile.js'
 import { bootCollab } from './sync/collab-backfill.js'
 import { flushProjections, sweepOrphanFiles } from './notes/projector.js'
 import { holdSharedLockOrExit } from './notes/maintenance-lock.js'
+import { LINK_ROWS_JOB, scheduleLinkCatchUp } from './notes/link-catch-up.js'
 import { scheduleRevisionCompaction } from './notes/revision-compaction.js'
-import { COMPACT_REVISIONS_JOB, backfillLinkLines } from './notes/store-tx.js'
+import { COMPACT_REVISIONS_JOB } from './notes/store-tx.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 
@@ -69,12 +70,18 @@ try {
   // derived from other content or by another EXTRACTOR_VERSION / EMBEDDER_ID
   // (#453), that have no job for their current key, and re-run jobs of the
   // current key that failed with an error (an outage that outlasted the retries).
-  const pruned = await pruneFinishedJobs([EMBEDDING_JOB, EXTRACTION_JOB, COMPACT_REVISIONS_JOB])
+  const pruned = await pruneFinishedJobs([EMBEDDING_JOB, EXTRACTION_JOB, COMPACT_REVISIONS_JOB, LINK_ROWS_JOB])
   if (pruned > 0) console.log(`pruned ${pruned} finished background job(s)`)
   const missing = await scheduleMissingEmbeddings()
   if (missing > 0) console.log(`embedding catch-up: ${missing} notes without a current embedding or with a failed job`)
   const missingFiles = await scheduleMissingExtractions()
   if (missingFiles > 0) console.log(`extraction catch-up: ${missingFiles} repository files without a current extraction or with a failed job`)
+  // Wikilink rows without a context (#472: before migration 0039) or lines
+  // (#558: before 0031), or written by older code after a rollback: one
+  // catch-up job per note rewrites them from its body. Until then such a
+  // backlink has `context: null`, and an unlocated one no line.
+  const unfilled = await scheduleLinkCatchUp()
+  if (unfilled > 0) console.log(`wikilink catch-up: ${unfilled} notes with link rows to fill`)
   // Long revision histories stored whole (#501): queued in the background, never awaited by boot.
   scheduleRevisionCompaction()
   startJobPolling()
@@ -98,15 +105,6 @@ try {
       if (moved.length > 0) console.warn(`moved ${moved.length} orphan note file(s) to .orphans/`)
     })
     .catch((err: unknown) => console.error('orphan sweep failed:', err))
-  // In the background too: wikilink rows without lines (#558: before
-  // migration 0031, or written by older code) are located from the bodies,
-  // about 8 ms a note (5,000 notes took 40 s), too slow to hold the listen.
-  // Until then those edges answer with `evidence: null`.
-  void backfillLinkLines()
-    .then((located) => {
-      if (located > 0) console.log(`located the wikilinks of ${located} note(s)`)
-    })
-    .catch((err: unknown) => console.error('wikilink line backfill failed:', err))
   // Hocuspocus used to install these itself inside its `listen()`. Without
   // them a redeploy drops every note edit still inside the store debounce.
   // After the relay's last stores commit, the projector gets a bounded drain

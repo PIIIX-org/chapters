@@ -1,7 +1,8 @@
 // #558: wikilinks are stored with the body lines they are written on (one
-// row per link, a target linked twice is two rows), the file line where a
-// body begins turns them into whole-file lines, and rows written without
-// lines (before migration 0031, or by older code) are located at boot.
+// row per link, a target linked twice is two rows), and the file line where
+// a body begins turns them into whole-file lines. Rows written without lines
+// (before migration 0031, or by older code) are rewritten by the `note_links`
+// catch-up jobs (note-link-catch-up.test.ts, #472).
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { asc, eq, sql } from 'drizzle-orm'
@@ -11,7 +12,6 @@ import { noteLinks } from '../src/db/schema.js'
 import { extractWikilinkLocations, type Frontmatter } from '../src/notes/okf.js'
 import { bodyStartLine, renderNoteFile } from '../src/notes/projector.js'
 import { createNote } from '../src/notes/store.js'
-import { backfillLinkLines } from '../src/notes/store-tx.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 describe('extractWikilinkLocations', () => {
@@ -27,7 +27,8 @@ describe('extractWikilinkLocations', () => {
       'Split [[c/', // 8
       'three]] link.', // 9
     ].join('\n')
-    expect(extractWikilinkLocations(body)).toEqual([
+    // Their contexts (#472) are tested in note-link-context.test.ts (toEqual ignores an undefined key).
+    expect(extractWikilinkLocations(body).map((l) => ({ ...l, context: undefined }))).toEqual([
       { target: 'a/one', startLine: 1, endLine: 1 },
       { target: 'b/two', startLine: 1, endLine: 1 },
       { target: 'a/one', startLine: 5, endLine: 5 },
@@ -88,27 +89,5 @@ describe('note_links rows (#558)', () => {
     const note = await createNote(vaultId, { path: 'lines/crowded', body })
     const [row] = (await db.execute(sql`SELECT count(*)::int AS n FROM note_links WHERE source_note_id = ${note.id}`)) as unknown as Array<{ n: number }>
     expect(row?.n).toBe(20_000)
-  })
-
-  it('the boot backfill locates rows written without lines, and leaves located notes alone', async () => {
-    const old = await createNote(vaultId, { path: 'lines/old', body: 'intro\n[[lines/a]]\n\n[[lines/b]]\n' })
-    const fresh = await createNote(vaultId, { path: 'lines/fresh', body: '[[lines/a]]\n' })
-    // As migration 0031 leaves rows written before it (or older code writes them): line 0.
-    await db.execute(sql`DELETE FROM note_links WHERE source_note_id = ${old.id}`)
-    await db.execute(sql`INSERT INTO note_links (source_note_id, target_path) VALUES (${old.id}, 'lines/a'), (${old.id}, 'lines/b')`)
-    expect(await rows(old.id)).toEqual([
-      { target: 'lines/a', start: 0, end: 0 },
-      { target: 'lines/b', start: 0, end: 0 },
-    ])
-    const freshBefore = await rows(fresh.id)
-
-    expect(await backfillLinkLines()).toBeGreaterThanOrEqual(1)
-    expect(await rows(old.id)).toEqual([
-      { target: 'lines/a', start: 2, end: 2 },
-      { target: 'lines/b', start: 4, end: 4 },
-    ])
-    expect(await rows(fresh.id)).toEqual(freshBefore)
-    // Nothing left to locate: a second boot does nothing.
-    expect(await backfillLinkLines()).toBe(0)
   })
 })
