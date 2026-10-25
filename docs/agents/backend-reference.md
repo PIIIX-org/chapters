@@ -1406,7 +1406,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     goes on, up to `hnsw.max_scan_tuples` (20,000 by default), until the
     leg has its rows. Relaxed order can return rows slightly out of
     distance order: every leg re-sorts its cut. Semantic edges
-    (`semantic-edges.ts`) take their own `ef_search` (100).
+    (`semantic-edges.ts`) call the same helper with `ef_search` 100.
   - **Total order** (#623): every cut ends in a key that is unique and,
     where it can be, the same on two instances with the same content (ids
     are random per instance). Keyword legs `ORDER BY rank DESC, path
@@ -1529,8 +1529,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   one, even of the same owner; of the other type, the owner's repositories
   (a note) or live vaults (a file), never another account's. Each HNSW leg
   filters `container_id = ANY(<scope>)` during its scan, with
-  `hnsw.iterative_scan = relaxed_order` (set only where pgvector is 0.8 or
-  newer: older versions reserve the `hnsw.` prefix without that setting),
+  `hnsw.iterative_scan = relaxed_order` (`setHnswScan`, set only where
+  pgvector is 0.8 or newer: older versions reserve the `hnsw.` prefix without that setting),
   so the scan goes on past the `ef_search` (100) candidates until it has
   100 blocks of the scope, up to `hnsw.max_scan_tuples` (default 20,000).
   For a small container the planner reads its blocks by
