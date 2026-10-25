@@ -921,7 +921,7 @@ export const blocks = pgTable(
      * search/identifiers.ts `symbolKeywords`: its `inner_path` and its file's
      * path, split, unstemmed), which the symbol keyword leg matches beside
      * `inner_path` and `snippet`. Null on other blocks and on a symbol not
-     * extracted since 0044 (`EXTRACTOR_VERSION` 5 extracts it again).
+     * extracted since 0044 (`EXTRACTOR_VERSION` 6 extracts it again).
      */
     keywords: tsvector('keywords'),
     startLine: integer('start_line').notNull(),

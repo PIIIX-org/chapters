@@ -1406,7 +1406,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     ms against 21 ms for `evidence id`). Symbol
     blocks' `blocks.keywords` hold the lexemes of the symbol's
     `inner_path` and of its file's path. Both are null until the file is
-    extracted again (`EXTRACTOR_VERSION` 5 re-extracts every file at the
+    extracted again (`EXTRACTOR_VERSION` 6 re-extracts every file at the
     first boot; vectors are reused). The query: each whitespace term matches as its
     English query, or as its identifiers (a plain word unstemmed, unless
     English drops it as a stop word; a compound as its whole lexeme or
@@ -3000,11 +3000,11 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
 #452, migrations 0035 and 0036). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 5; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+an integer, now 6; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
 top-level rule and the embed-budget order, #450; 4 re-exports, literal
 `import()`/`require()` and `import x = require()` as imports, #466, which
-embeds nothing again; 5 the identifier `keywords` of files and symbols,
+embeds nothing again; 5 is #998's; 6 the identifier `keywords` of files and symbols,
 #455, which embeds nothing again either): bump it with any change to the grammars and queries,
 symbol kinds, the minified-file rule, the embed-budget order or the stored identifier lexemes (the
 snippet cut and block texts are `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model

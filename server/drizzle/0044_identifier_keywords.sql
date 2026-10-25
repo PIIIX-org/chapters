@@ -7,7 +7,7 @@
 --   3,757 files, 53-65 ms against 21 ms for `evidence id`). Current while `extracted_hash = content_hash`; a sync
 --   that changes the content makes the leg read `fts` until the file is extracted again.
 -- - `blocks.keywords`: a symbol's lexemes (its inner_path and its file's path).
--- Both are null until a file is extracted again: EXTRACTOR_VERSION 5 makes the first boot re-extract every file
+-- Both are null until a file is extracted again: EXTRACTOR_VERSION 6 makes the first boot re-extract every file
 -- (no vector is embedded again), and meanwhile the legs match as before.
 -- The GIN index on the code leg's document replaces the one on `fts`, which nothing else queries. Code from
 -- before 0044 still works over it (its `fts @@` scans the repository's files). Symbol keywords have no index:
