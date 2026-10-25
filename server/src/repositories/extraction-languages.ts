@@ -235,7 +235,12 @@ function cFunctions(cpp: boolean): string {
     `(pointer_declarator declarator: (function_declarator declarator: ${name}))`,
     `(pointer_declarator declarator: (pointer_declarator declarator: (function_declarator declarator: ${name})))`,
   ]
-  if (cpp) declarators.push(`(reference_declarator (function_declarator declarator: ${name}))`)
+  if (cpp) {
+    declarators.push(`(reference_declarator (function_declarator declarator: ${name}))`)
+    // `CURL_EXTERN T *f(...)` in a `.h` read by the C++ grammar: the macro makes it a qualified name with a
+    // MISSING `::` around a pointer declarator (see `scopedSymbol` for the non-pointer case).
+    declarators.push('(qualified_identifier name: (pointer_type_declarator declarator: (function_declarator declarator: (type_identifier) @name)))')
+  }
   return declarators
     .flatMap((d) => [
       `(function_definition declarator: ${d}) @decl.function`,

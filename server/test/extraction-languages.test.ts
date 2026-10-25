@@ -171,9 +171,18 @@ describe('C and C++ (#464)', () => {
   })
 
   it('a macro-prefixed C declaration in a `.h` header is a function, not a method of its return type', async () => {
-    const src = ['#define CURL_EXTERN', 'CURL_EXTERN CURLcode curl_mime_name(curl_mimepart *part, const char *name);', 'CURL_EXTERN void curl_free(void *p);'].join('\n')
+    const src = [
+      '#define CURL_EXTERN',
+      'CURL_EXTERN CURLcode curl_mime_name(curl_mimepart *part, const char *name);',
+      'CURL_EXTERN void curl_free(void *p);',
+      'CURL_EXTERN curl_version_info_data *curl_version_info(CURLversion stamp);',
+    ].join('\n')
     const { symbols } = await extractStructure('c', src, 'include/curl/curl.h')
-    expect(brief(symbols)).toEqual(['2-2 function curl_mime_name (exported)', '3-3 function curl_free (exported)'])
+    expect(brief(symbols)).toEqual([
+      '2-2 function curl_mime_name (exported)',
+      '3-3 function curl_free (exported)',
+      '4-4 function curl_version_info (exported)',
+    ])
   })
 
   it('a class declared as `class A::B {}` is parent `B`, so its in-class prototype and out-of-line definition are one method', async () => {
