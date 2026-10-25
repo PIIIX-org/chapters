@@ -483,7 +483,8 @@ async function processFile(fileId: string): Promise<void> {
   // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
   const { imports, symbols }: ExtractionResult =
     structured && isSupportedLanguage(language) ? await extractStructure(language, row.content, row.path) : { imports: [], symbols: [] }
-  const sections = structured && hasOutline(language) ? outlineSections(language, row.content) : []
+  // The minified rule is about code: a Markdown file with one long line (a table, a paragraph) keeps its outline.
+  const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, row.content) : []
 
   const importRows: Array<typeof repositoryFileImports.$inferInsert> = []
   if (imports.length > 0) {
@@ -513,9 +514,10 @@ async function processFile(fileId: string): Promise<void> {
     embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolOrder.length} symbols embedded, the rest are keyword-searchable only`
     console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${embeddingNote}`)
   }
-  // The file-level block first, then the symbols in budget order, then the class skeletons.
+  // The file-level blocks first, then the symbols in budget order, then the class skeletons. Sections
+  // (Markdown/HTML outline blocks, #464) are never embedded: their rows keep a null embed_key.
   const embedOrder = [
-    ...fileBlocks.flatMap((b, i) => (b.budgetTier === null && b.outlineOf === undefined ? [i] : [])),
+    ...fileBlocks.flatMap((b, i) => (b.budgetTier === null && b.outlineOf === undefined && b.kind !== 'section' ? [i] : [])),
     ...symbolOrder.filter(({ i }) => budgeted.has(i)).map(({ i }) => i),
     ...fileBlocks.flatMap((b, i) => (b.outlineOf !== undefined && budgeted.has(b.outlineOf) ? [i] : [])),
   ]

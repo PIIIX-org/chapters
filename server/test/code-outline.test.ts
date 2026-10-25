@@ -42,18 +42,18 @@ describe('outlineSections (#464)', () => {
 })
 
 describe('section blocks (#464)', () => {
-  it('a Markdown file keeps its file block and gains one section block per heading, under the embed budget as module-level', () => {
+  it('a Markdown file keeps its file block and gains one section block per heading, outside the embed budget', () => {
     const content = fixture('guide.md')
     const blocks = codeBlocks(FILE, 'docs/guide.md', content, [], outlineSections('markdown', content))
     expect(blocks.map((b) => [b.kind, b.innerPath, b.startLine, b.endLine, b.symbolKind, b.budgetTier])).toEqual([
       ['file', '', 1, 24, null, null],
-      ['section', 'Elara guide', 5, 23, null, 1],
-      ['section', 'Elara guide > Install', 9, 19, null, 1],
-      ['section', 'Elara guide > Install > From source', 16, 19, null, 1],
-      ['section', 'Elara guide > Usage', 20, 23, null, 1],
-      ['section', 'Appendix', 24, 24, null, 1],
+      ['section', 'Elara guide', 5, 23, null, null],
+      ['section', 'Elara guide > Install', 9, 19, null, null],
+      ['section', 'Elara guide > Install > From source', 16, 19, null, null],
+      ['section', 'Elara guide > Usage', 20, 23, null, null],
+      ['section', 'Appendix', 24, 24, null, null],
     ])
-    // Its own text only (up to its first child heading), under a header naming it.
+    // What it would embed (#414/#415 decide): its own text only, up to its first child heading.
     expect(blocks[2]!.embedText).toBe(['section Elara guide > Install in docs/guide.md', '## Install', '', '```sh', '# not a heading: inside a fence', 'pnpm install', '```', ''].join('\n'))
     expect(new Set(blocks.map((b) => b.blockId)).size).toBe(blocks.length)
   })

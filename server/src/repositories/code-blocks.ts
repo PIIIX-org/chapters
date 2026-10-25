@@ -8,11 +8,14 @@
  *   `Class.method` for a method (#450's `parent`), the bare name otherwise.
  * - `section`: one per heading of a Markdown or HTML file (outline.ts,
  *   #464), its lines (its subsections included); `inner_path` is the heading
- *   path (`Guide > Install`), as a note section's. Embedded text:
- *   `section <inner_path> in <path>\n<snippet>`, the snippet cut from its own
- *   text (up to its first subsection) as a symbol's is. Not a symbol: it has
- *   no `symbol_kind` and no stored snippet, so find_symbols and read_file's
- *   outline never list it.
+ *   path (`Guide > Install`), as a note section's. An outline block, never
+ *   embedded (null `embed_key`): no search leg reads sections yet, and
+ *   embedding them made indexing 2-3x slower on doc-heavy repositories
+ *   (bench run 40193946217); #414/#415 decide whether they get vectors.
+ *   `embedText` (`section <inner_path> in <path>\n<snippet>`, the snippet cut
+ *   from its own text up to its first subsection, as a symbol's is) is what
+ *   one would embed. Not a symbol: it has no `symbol_kind` and no stored
+ *   snippet, so find_symbols and read_file's outline never list it.
  * - `file`: the whole file, for every file. Embedded text:
  *   `<path>\n<content>`, as the file vector was (the model reads its first
  *   512 tokens); search's code vector leg ranks files by it.
@@ -62,10 +65,10 @@ export interface CodeBlock {
   snippet: string | null
   embedText: string
   /**
-   * A symbol's or section's place in the per-file embed budget (#496, #450):
-   * 0 exported, 1 other top-level (and every section, #464), 2 method.
-   * Null: not under the budget (file-level blocks are always embedded; a
-   * class skeleton follows `outlineOf`).
+   * A symbol's place in the per-file embed budget (#496, #450): 0 exported,
+   * 1 other top-level, 2 method. Null: not under the budget (file-level
+   * blocks are always embedded; a class skeleton follows `outlineOf`; a
+   * section is never embedded).
    */
   budgetTier: 0 | 1 | 2 | null
   /** A class skeleton: the index of its class's symbol block; embedded only when that block is. */
@@ -142,7 +145,7 @@ export function codeBlocks(
       endLine: s.endLine,
       contentHash: hash(s.startLine, s.endLine),
       embedText: `section ${s.innerPath} in ${path}\n${snippetOf(s.startLine, s.ownEndLine)}`,
-      budgetTier: 1,
+      budgetTier: null,
     })
   }
 

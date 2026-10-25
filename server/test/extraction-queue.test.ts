@@ -243,6 +243,30 @@ describe('extraction queue', () => {
     expect(await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file.id))).toHaveLength(0)
   })
 
+  it('keeps the outline of a Markdown file with a line over the minified limit; its sections are never embedded (#464)', async () => {
+    const repo = await makeRepo()
+    const content = ['# Guide', '', 'x'.repeat(1_500), '', '## Install', '', 'Run it.', ''].join('\n')
+    const embedSpy = vi.spyOn(embedder, 'embed')
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'docs/guide.md', content }], ['docs/guide.md'])
+      await flushExtraction()
+      // The file block only.
+      expect(embedSpy.mock.calls.map(([texts]) => texts.length)).toEqual([1])
+    } finally {
+      embedSpy.mockRestore()
+    }
+    const file = await fileByPath(repo.id, 'docs/guide.md')
+    const sections = await db
+      .select({ innerPath: blocks.innerPath, embedKey: blocks.embedKey, embedding: blocks.embedding })
+      .from(blocks)
+      .where(and(eq(blocks.ownerId, file.id), eq(blocks.kind, 'section')))
+      .orderBy(blocks.startLine)
+    expect(sections).toEqual([
+      { innerPath: 'Guide', embedKey: null, embedding: null },
+      { innerPath: 'Guide > Install', embedKey: null, embedding: null },
+    ])
+  })
+
   it('embeds at most ELARA_EMBED_MAX_SYMBOLS_PER_FILE symbols of a file, keeps every symbol, and records why (#496)', async () => {
     vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '3')
     const repo = await makeRepo()

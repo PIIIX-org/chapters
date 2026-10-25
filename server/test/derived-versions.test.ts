@@ -532,7 +532,7 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
   // version 4 left with only its file block is extracted again at the next
   // boot; a `.kt` or `.md` row synced before the new labels gets its label.
   // The bump costs a parse: the file vectors are kept (same text), only the
-  // new symbol and section texts are embedded.
+  // new symbol texts are embedded; sections are outline blocks, never embedded.
   it('rows extractor version 4 produced gain the new languages’ symbols, labels and Markdown sections; file vectors are kept', async () => {
     const owner = await createActiveUser()
     const [repo] = await db
@@ -576,13 +576,13 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
       ['register', 'method', 'Registry'],
     ])
     const sections = await db
-      .select({ innerPath: blocks.innerPath, startLine: blocks.startLine, endLine: blocks.endLine })
+      .select({ innerPath: blocks.innerPath, startLine: blocks.startLine, endLine: blocks.endLine, embedKey: blocks.embedKey })
       .from(blocks)
       .where(and(eq(blocks.ownerId, byPath.get('docs/guide.md')!.id), eq(blocks.kind, 'section')))
       .orderBy(blocks.startLine)
     expect(sections).toEqual([
-      { innerPath: 'Guide', startLine: 1, endLine: 7 },
-      { innerPath: 'Guide > Install', startLine: 5, endLine: 7 },
+      { innerPath: 'Guide', startLine: 1, endLine: 7, embedKey: null },
+      { innerPath: 'Guide > Install', startLine: 5, endLine: 7, embedKey: null },
     ])
     expect(await Promise.all(rows.map((r) => fileEmbedding(r.id)))).toEqual(fileVectorsBefore)
     const firstLines = texts.map((t) => t.split('\n')[0]!).filter((line) => files.some((f) => line.includes(` in ${f.path}`)))
@@ -591,8 +591,6 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
       'class Store in src/store.rs:1',
       'method Registry.register in src/Registry.kt:2',
       'method Store.open in src/store.rs:4',
-      'section Guide > Install in docs/guide.md',
-      'section Guide in docs/guide.md',
     ])
   })
 })
