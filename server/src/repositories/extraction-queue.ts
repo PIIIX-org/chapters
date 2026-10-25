@@ -47,8 +47,11 @@ import {
 const EXTRACTION_TURN_FILES = 10
 export const EXTRACTION_JOB = 'extract'
 
-/** The versions part of an extraction job key: `<EXTRACTOR_VERSION>:<EMBEDDER_ID>+chunk<CHUNK_VERSION>`. */
-function versionsKey(): string {
+/**
+ * The versions part of an extraction job key: `<EXTRACTOR_VERSION>:<EMBEDDER_ID>+chunk<CHUNK_VERSION>`.
+ * Also the `derived` part of a cache key (cache/key.ts): answers built from blocks and vectors of other versions differ.
+ */
+export function versionsKey(): string {
   return `${EXTRACTOR_VERSION}:${EMBEDDER_ID}+chunk${CHUNK_VERSION}`
 }
 

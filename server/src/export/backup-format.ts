@@ -81,7 +81,8 @@ export interface BackupTable {
  * a note's blocks are its embeddings: boot catch-up re-embeds every restored
  * note, #452),
  * `write_idempotency` (MCP write answers kept 24 h for retries, #477),
- * `note_reads` (each MCP connection's last read of a note, kept 24 h, #408).
+ * `note_reads` (each MCP connection's last read of a note, kept 24 h, #408),
+ * `index_epochs` (cache-key epochs, #680: derived; the restore's own writes bump them).
  */
 export const BACKUP_TABLES: BackupTable[] = [
   { name: 'users', table: users, unique: [{ columns: ['email'] }], legacyKey: 'users' },
