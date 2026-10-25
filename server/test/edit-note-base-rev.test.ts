@@ -29,7 +29,7 @@ import { config } from '../src/config.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { getBaseRevision, getLiveNote, updateNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
-import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
 
@@ -72,7 +72,7 @@ async function call(name: string, args: Args, client = mcp): Promise<{ isError: 
   resetRateLimits()
   const result = await client.callTool({ name, arguments: args })
   const content = result.content as Array<{ type: string; text?: string }>
-  return { isError: result.isError === true, text: content.map((c) => c.text ?? '').join('') }
+  return { isError: result.isError === true, text: toolText(content) }
 }
 
 async function must<T>(name: string, args: Args, client = mcp): Promise<T> {

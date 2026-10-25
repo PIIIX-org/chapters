@@ -51,7 +51,7 @@ import * as Y from 'yjs'
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { onJobConflict } from '../jobs/durable.js'
-import { EMBEDDING_JOB } from '../search/embedding-queue.js'
+import { EMBEDDING_JOB, embeddingJobKeySql } from '../search/embedding-queue.js'
 import { sameContent } from './frontmatter-order.js'
 import { compareNoteFile, orphanFiles } from './integrity.js'
 import { PROJECTION_VERSIONS, noteFileRel, sha256 } from './projector.js'
@@ -322,7 +322,7 @@ export async function runDoctor(
     const embedJobs = new Map<string, { done: boolean; last_error: string | null }>()
     for (const row of (await client.execute(sql`
       SELECT n.id, j.done_at IS NOT NULL AS done, j.last_error FROM notes n
-      JOIN jobs j ON j.idempotency_key = ${EMBEDDING_JOB} || ':' || n.id || ':' || n.seq
+      JOIN jobs j ON j.idempotency_key = ${embeddingJobKeySql(sql`n.id`, sql`n.seq`)}
       WHERE n.id = ANY(${ids}::uuid[])`)) as unknown as Array<{ id: string; done: boolean; last_error: string | null }>) {
       embedJobs.set(row.id, row)
     }
@@ -578,7 +578,7 @@ async function repairProblem(p: DoctorProblem): Promise<boolean> {
       // `finished`: an operator's repair runs the job again however it ended (an error, a crash, or a success that left no vector).
       return affected(sql`
         INSERT INTO jobs (kind, payload, idempotency_key)
-        SELECT ${EMBEDDING_JOB}, jsonb_build_object('noteId', n.id::text, 'seq', n.seq), ${EMBEDDING_JOB} || ':' || n.id || ':' || n.seq
+        SELECT ${EMBEDDING_JOB}, jsonb_build_object('noteId', n.id::text, 'seq', n.seq), ${embeddingJobKeySql(sql`n.id`, sql`n.seq`)}
         FROM notes n WHERE n.id = ${id} AND n.deleted_at IS NULL
         ${onJobConflict('finished')} RETURNING id`)
     default:

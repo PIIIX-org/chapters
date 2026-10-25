@@ -18,7 +18,7 @@ A good codebase map is an **executable mental model**, not a file inventory:
 3. **Dense Note-to-Note Links**: Link related concepts with full-path links (`[[domains/auth/index]]`) so the graph forms meaningful Louvain communities. Full-path links survive `rename_note`; bare-name links don't.
 4. **Progressive Disclosure**: Organize the bundle into folders (`domains/`, `specs/`, `models/`, `decisions/`). The server generates an `index.md` per directory; write your own `<dir>/index` note where a directory needs a real summary.
 5. **Server-Valid Frontmatter** (enforced on every write):
-   - `type` must equal the first path segment: `domains/...` → `type: domains`, `specs/...` → `type: specs`, root `index` → `type: index`.
+   - `type` is free text and defaults to the first path segment. The templates below use the folder (`domains/...` → `type: domains`, root `index` → `type: index`), so the `types` filter (which matches the folder) and the `type` agree.
    - Every path segment matches `^[a-z0-9][a-z0-9-]*$`: lowercase only, so `decisions/adr-001-crdt-relay`, never `ADR-001`.
    - `timestamp` (and every other datetime) is ISO 8601 with `Z` or an offset.
    - Also include `title`, `description`, `tags`, `status`, `generated` (agent attribution), and `sources` (code provenance).

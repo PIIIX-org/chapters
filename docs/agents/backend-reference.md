@@ -303,7 +303,8 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   `docs/self-hosting/backup.md` §5.
 - **Failpoints** (`failpoints.ts`): `ELARA_FAILPOINTS=<name>[,…]` SIGKILLs
   the process at that store boundary; inert when unset. The lab's
-  `store-failpoints` test uses them.
+  `store-failpoints` test uses them. Extraction has two (#453):
+  `extract.after-embed-before-write` and `extract.before-commit`.
 - `check-notes` is read-only: it compares a file with its row only where
   the `file` projection is applied; `--wait-idle[=<s>]` waits for the
   projector, `--fail-on-pending` fails on pending projections (CI). It
@@ -382,7 +383,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s code-unit-order pages (#424) |
-| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (#453) |
+| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
 | `repositoryFileSymbols` | per-file top-level declarations (function/class/interface/type), surfaced as a file "outline" — **not** emitted as a graph edge despite the schema comment calling them "contains" edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
 
@@ -519,8 +520,18 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   restricted to a slug regex (`^[a-z0-9][a-z0-9-]*$`), which makes path
   traversal impossible by construction — this is the one validation
   function shared by every write path (REST, CRDT persistence, MCP).
-  `validateNote` also requires frontmatter `type` to equal the path's
-  first segment.
+  `validateNote` requires a non-empty string frontmatter `type`; it may
+  differ from the path's first segment (#444, D8). `withType` gives a note
+  without one the folder; `notes.type` is always the folder, which the
+  `types` filter and structural edges key on.
+  Any top-level key may hold a scalar, a list or a mapping (OKF §4.1 and
+  the §10 computation keys, #970), nested at most `MAX_FRONTMATTER_DEPTH`
+  (8) levels of lists and mappings (`assertFrontmatterDepth`, also run
+  first by `assertFrontmatterFits` so the size measure never walks a
+  deeper value); known keys (`type`, `title`, `tags`, `timestamp`,
+  `status`, ...) keep their shapes. A `verified` entry is OKF §5.2's
+  `{ by, at }`; `tier` is optional (#563), and an entry with a `tier` may
+  leave out `by` and `at`.
 - **Frontmatter fence** (#400, `parseNote`): the frontmatter runs from an
   opening `---` line to the first line that is exactly `---` (trailing
   spaces/tabs allowed); LF and CRLF files both parse, and the body is
@@ -757,7 +768,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   result; frontmatter keys whose values differ; null for rename, delete
   and restore), `concurrent_changes` (the `base_rev` report) and
   `indexed` (`noteIndexed`: the `file` and `dir_index` projections
-  applied at `seq` and the `embed_note:<id>:<seq>` job done). `dry_run`
+  applied at `seq` and the `embed_note:<id>:<seq>:<EMBEDDER_ID>` job done). `dry_run`
   (create, edit, append, upsert, revert) runs `compute` and returns before
   the transaction (`WriteOptions.dryRun`; `previewCreate` for a create):
   no restore point, and `propose`/the quarantine screen throw without
@@ -1258,7 +1269,7 @@ shifted to whole-file lines by `bodyStartLine(row)` from
 projector writes; an adopted file keeps its own bytes and may differ), `path#Ln` for an
 import, `type:`/`tag:`/`language:`/`folder:` for structural, null for
 semantic and for import rows extracted before migration 0031 (`line` null
-until #453's extractor-version bump extracts them again). On the budget
+until the first boot with #453 re-extracts them: their file has `extractor_version` 0). On the budget
 ladder a row's `locations` form is one line, `from -> to relation
 evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
 
@@ -1323,11 +1334,73 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 
 - **`search.ts`**: `searchNotes()` — the single hybrid search function
   used by the UI routes and the MCP `search` tool. Runs four queries in
-  parallel (note-keyword, note-semantic, code-keyword, code-semantic)
-  and merges them with **Reciprocal Rank Fusion** (`k=60`), no score
-  normalization to tune. Keyword hits use Postgres
+  parallel (note-keyword, note-semantic, code-keyword, code-semantic;
+  six with symbols) and merges them with **Reciprocal Rank Fusion**
+  (`k=60`), no score normalization to tune. Keyword hits use Postgres
   `websearch_to_tsquery` + `ts_rank` + `ts_headline` snippets; semantic
   hits use pgvector's `<=>` cosine-distance operator over HNSW indexes.
+  `findSymbols()` does the same over symbols (keyword: `ILIKE` on the
+  whole query).
+  - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
+    `SearchResponse` = `{status, retrieval_mode, degraded, index?,
+    results}`, served as is by REST and inside the budget envelope by MCP.
+  - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
+    (`ORDER BY distance LIMIT 30`, which the HNSW index serves) and keeps
+    those with cosine distance under `config.searchMaxDistance`
+    (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
+    default; 0.40 for bge-small, measured on the five benchmark corpora
+    as `config.ts` records; 0.8 for the fake embedder).
+    Keyword rows
+    always count. The gate cuts a suffix of a distance-ordered list, so the
+    RRF ranks of the rows it keeps do not change.
+  - **Degraded** (#458): a failed query embedding (`queryVector`) skips the
+    vector legs (`keyword_only`, `degraded: {reason: 'embedder_failed'}`);
+    a failed leg drops its whole channel (`vector_leg_failed` →
+    `keyword_only`, `keyword_leg_failed` → `vector_only`; neither →
+    `none`). The failure is logged; the search answers from the channel
+    that ran.
+  - **Status** (#442): `ok` with any result; otherwise `unavailable` when
+    no channel ran, `index_building` when notes, files or repositories
+    in scope are pending, `unavailable` when every item in scope failed
+    indexing, else `no_match`. `index` comes from `embeddingState()`
+    (notes: `embed_note:<id>:<seq>:<EMBEDDER_ID>` job pending, or no job and no
+    embedding; failed: that job gave up) and `extractionState()` (files:
+    the predicates of `countPendingExtractions` and `extractionFailures`;
+    repositories with no file whose `sync_status` is `syncing` or that
+    were never synced count in `pending_repositories`, those whose sync
+    failed count as failed items), read beside the query embedding; left
+    out when all zero.
+  - **Total order**: keyword legs `ORDER BY rank DESC, path COLLATE "C",
+    id`, vector legs re-sorted by `distance, path COLLATE "C", id` outside
+    the HNSW limit, final sort score descending then path and id by UTF-16
+    code unit (`compareCodeUnits`), so equal scores never depend on row
+    order. [INFERENCE] HNSW stays approximate: which rows make a vector
+    leg's 30 can still differ between instances.
+  - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
+    search and graph, saved perspectives) bound the last change,
+    `updatedAt`, never frontmatter `timestamp` (the creation time, which
+    edits leave alone). Note legs filter `notes.updated_at` in SQL; code
+    hits use `repository_files.updated_at` (the last sync that changed the
+    file's content: an unchanged hash leaves it) and symbol hits their
+    file's, filtered after the merge by `passesFilters` like `types`. A
+    bound goes through `timeBound`: `YYYY-MM-DD` or an ISO date-time
+    (`THH:MM`, `:SS`, a fraction cut to ms, `Z` or `±HH:MM`); one without
+    an offset is UTC, never the server's time zone; anything else (a
+    5-digit year, `2030/01/01`, `2030-02-30`) matches nothing. Both sides compare at millisecond precision (SQL
+    `date_trunc('milliseconds', updated_at)`, a JS `Date` in the graph), so
+    search and graph agree inside a bound's millisecond. A hit carries
+    only `updated`, the UTC day (`YYYY-MM-DD`) of its last change (REST
+    and MCP; coordinator decision on #446: a full instant on every hit
+    cost ~10 tokens each); MCP drops it with `snippet` at `no_context`.
+    Graph nodes and note reads keep the full `updatedAt`. `notes.updated_at` moves
+    only in `applyRowChange` (store-tx.ts), when a write changes the row:
+    every MCP and REST write, rename, trash and restore, and the CRDT
+    fold (`foldCrdt`, so collaborative typing counts once per debounced
+    fold); a write that changes nothing leaves it. A current-format backup
+    restore and a vault import with `.elara/history` keep the source's
+    `updated_at`; a format-1 backup and a plain import take the restore
+    time. No index: note legs are served by the FTS and HNSW indexes and
+    the graph filters in memory.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
@@ -1363,16 +1436,24 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `node --import tsx`, inherited through `execArgv`) and under Node's own
   type stripping (vitest).
 - **`embedding-queue.ts`**: durable jobs (#494, see **Durable jobs**
-  below), kind `embed_note`, key `embed_note:<noteId>:<seq>` —
+  below), kind `embed_note`, key `embed_note:<noteId>:<seq>:<EMBEDDER_ID>`
+  (#453, see **Derived-artifact versions**) —
   `scheduleEmbedding()` never blocks the caller (notes/store.ts calls
   it fire-and-forget on create/update/revert); it inserts the job in
   the background and `flushEmbeddings()` awaits that insert and the
-  drain. The job embeds the note as it is when it runs. A boot-time scan
-  (`scheduleMissingEmbeddings`) adds a job (idempotently) for any live
-  note with a null embedding, and re-runs the job of the note's current
-  `seq` if it failed with an error (not a `LeaseExpired` crash loop),
-  also when an earlier version left an embedding. `pnpm reindex` re-runs finished jobs
-  (`enqueueEmbeddings(ids, 'finished')`). A failure is logged and
+  drain. The job embeds the note as it is when it runs and writes the
+  vector and `notes.embedder_id` only if the note is still at the `seq` it
+  read (an edit meanwhile queued its own job; the result is dropped). A
+  boot-time scan (`scheduleMissingEmbeddings`, keyset pages of 1,000, at
+  catch-up priority: a note saved meanwhile is embedded first) adds a job
+  (idempotently) for any live note with a null embedding or one
+  another `EMBEDDER_ID` produced and no job for its current key, and
+  re-runs the job of the note's current key if it failed with an error
+  (not a `LeaseExpired` crash loop), also when an earlier version left an
+  embedding. `pnpm reindex` re-runs finished jobs
+  (`enqueueEmbeddings(ids, 'finished', JOB_PRIORITY.catchUp)`, behind the
+  server's writes): a changed model or embed text no longer needs it (bump
+  `EMBEDDER_ID`), a restore out-of-band still does. A failure is logged and
   retried with backoff, never stops the drain.
 - **`semantic-edges.ts`**: `recomputeSemanticEdges()` — kNN against
   both notes and code, filtered to `similarity >= SEMANTIC_THRESHOLD`
@@ -1751,12 +1832,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   pin, allow-list, live permission) and that every tool has exactly one
   entry.
 - **Structured content and output schemas** (#433, ADR-004 §2.1, D6
-  default): `tool()` answers every success through `answered(text)`:
-  `content[0].text` stays the whole JSON answer (clients that show the
-  model only `content` lose nothing), and when that text is an object
-  (it starts with `{`) `structuredContent` is `JSON.parse(text)`, so it
-  holds exactly what the text shows (dates as strings) and the two never
-  differ. Bare-array answers (`search`, the unbudgeted list tools) carry
+  default): `tool()` answers every success through `answered(text,
+  blocks)`: `content[0].text` is the JSON answer, followed by the
+  rendered `blocks` as text blocks of their own (`read_note`'s body,
+  #445, below; no other tool has one), so clients that show the model
+  only `content` lose nothing. When that text is an object (it starts
+  with `{`) `structuredContent` is `JSON.parse(text)` with each block's
+  text in its key in place of the `{"in": "content[n]"}` marker, so it
+  holds exactly what the blocks show (dates as strings) and is the whole
+  answer. Bare-array answers (the unbudgeted list tools) carry
   none: MCP's `structuredContent` is an object, and wrapping the array
   would make it differ from the text. A tool may declare `outputSchema`
   (a loose zod object, so other keys pass): today only the eight
@@ -1771,8 +1855,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   the SDK server does not check an `isError` answer, but the SDK client
   checks any `structuredContent` against the listed outputSchema, error
   or not, so `{error}` there would fail on a write tool.
-  Read tools get no output schema until their shapes settle (#445,
-  #432, #439). `test/mcp-structured-content.test.ts` covers each tool
+  Read tools get no output schema until their shapes settle (#957,
+  #432). `test/mcp-structured-content.test.ts` covers each tool
   family through the real client (which validates against the listed
   schema), every write answer shape and the errors.
 - **Instructions** (#435): `instructionsFor(profile)` in
@@ -1781,7 +1865,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   text per profile, with no id, name, date or pin, so every token of a
   profile gets the same bytes (#681). Reader: tools with
   `budget_tokens` (characters / 4) fit it and end with `truncated`
-  (`search`, `list_vaults` and `list_repositories` take no budget and
+  (`list_vaults` and `list_repositories` take no budget and
   answer bare arrays), the cursor is the only way on (read_note/read_file
   page long bodies only that way), manuals are
   `elara://manual/conventions` and one per family. Writer and admin (the
@@ -1875,9 +1959,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `McpToolError(code, message, extra?)`; `toErrorEnvelope(err)` in the
   `tool()` catch maps it and the domain errors: `CursorError` (its
   code), `OkfValidationError` by its `refusal` (`OKF_INVALID`,
-  `TYPE_MISMATCH`, `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the
-  type rule, the depth limit), `NoteTooLargeError` (`TOO_LARGE`, the
-  limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
+  `ALREADY_EXISTS`) with its `rule` (`SLUG_RULE`, the depth limit),
+  `NoteTooLargeError` (`TOO_LARGE`, the limit as `rule`), `StoreBusyError` (its `NoteNotMigratedError`
   included) and `MaintenanceInProgressError` (`BUSY`, retryable), the
   quarantine errors (`QUARANTINED`, the rule), `NoteEditError`
   (`INVALID_ARGUMENT`), `NoteEditConflictError` and
@@ -1956,7 +2039,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     lists (the whole ranking recomputed per page, offset plus a guard:
     `find_symbols`, `graph`, `find_graph_path`, `read_file`'s outline) and
     `textSection` (a body or file cut at line boundaries; a line longer
-    than a page is split).
+    than a page is split). A `block: true` text section (`read_note`'s
+    body, #445) is not a JSON string: `compose()` puts the marker
+    `{"in": "content[n]"}` (n = 1 for the first block) in its key and
+    returns this page's text, unescaped, as a block that `answered()`
+    sends after the JSON, an empty one included (the shape is fixed).
+    `fill()` counts its lines by their raw characters, other text by
+    their JSON-escaped length.
   - `browse_repository` (#424) pages in SQL, not in memory:
     `listRepositoryFilesPage` (`repositories/store.ts`) reads `BROWSE_PAGE`
     (500) + 1 files after the cursor's path, `ORDER BY path COLLATE "C"`,
@@ -2000,11 +2089,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - Size: `approxTokens` = `ceil(text.length / 4)`, the premise
     benchmark's estimate (it undercounts a real tokenizer by roughly
     10-20 % on code and JSON and 1.3-4x on Persian or Chinese text; kept
-    because it is what the benchmark gate measures, ADR-004 §5); the rendered text stays within the budget
+    because it is what the benchmark gate measures, ADR-004 §5); the rendered
+    answer, the JSON plus every block and one separator character per
+    block (`charsOf`; the benchmark's lab client joins blocks with a
+    newline, so both count the same), stays within the budget
     (items dropped whole from the end, a refill loop accounts for the
     `truncated` block), except that a text which would show nothing
     shows its first line (split when longer than the page), so paging
-    always moves on.
+    always moves on. The ladder and the `budget_tokens: N` suggestion
+    measure the same total.
   - Ladder (#421, ADR-004 §2.1): `render()` tries `full`, `no_context`,
     `locations`, `counts`, `total` in order, one level for the whole
     answer; a level no list on the page defines is skipped. An item level
@@ -2054,8 +2147,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - `read_note` records the last read (#864) in `Budgeted.rendered`, on
     every page: the `rev` it reports, the merge base of a later whole-body
     edit (#961).
-  - `search` keeps its bare array and has no budget (its envelope waits
-    for #441/#442/#458). `test/mcp-response-envelope.test.ts` drives each
+  - `search` (#441) is budgeted like `find_symbols`: the
+    `SearchResponse` head (`status`, `retrieval_mode`, `degraded`,
+    `index`) then the ranked `results` (limit + 1 fetch; ladder: without
+    `snippet`/`frontmatter`, then the path or `path#La-Lb`; counted per
+    path). `test/search-envelope.test.ts` covers each status, the gate,
+    the fallbacks and the order through MCP and REST.
+    `test/mcp-response-envelope.test.ts` drives each
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
     each ladder level.
   `search` and `graph` call
@@ -2369,13 +2467,15 @@ stored with no resolved target and produces no graph edge.
 `backfillUnresolvedImports()` runs at boot and re-resolves every stored
 import row whose target is still null with the current rules, so
 repositories indexed before #398 gain their import edges without a
-re-sync (unchanged files are never re-extracted). After `listen`, in the
+re-sync (an unchanged file is re-extracted only when `EXTRACTOR_VERSION`
+or `EMBEDDER_ID` changes, #453). After `listen`, in the
 background, `backfillLinkLines()` (#558) writes wikilink rows without
 lines again from their note's body.
 
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,
-repositoryId}`, key `extract:<fileId>:<contentHash>`; `syncRepositoryFiles`
+repositoryId}`, key `extract:<fileId>:<contentHash>:<EXTRACTOR_VERSION>:<EMBEDDER_ID>`
+(#453, see **Derived-artifact versions** below); `syncRepositoryFiles`
 enqueues the changed files in one statement after the batch is persisted.
 Enqueueing a key whose job already succeeded runs it again (content went
 back to an earlier version) under a new id, so it queues behind the
@@ -2386,8 +2486,29 @@ serial worker, fair across repositories (#497): each turn claims at most
 the repository with claimable jobs that was served least recently goes
 next (ties: oldest job), so a large repository's backlog delays another
 repository's files by at most one turn per other busy repository, not by
-the whole backlog; a repository's own files keep their order. A file
-whose extraction throws is logged and retried with backoff; the drain goes on. A file
+the whole backlog; a repository's own files keep their order. Turns go to
+the lowest job priority present (#453): while a push's jobs (`write`) are
+claimable only those get turns, fair among their repositories as above,
+and a catch-up turn ends as soon as a push's job is waiting, so a push
+during a boot catch-up waits for at most the one file being extracted. A
+file whose extraction throws is logged and retried with backoff; the drain goes on.
+**Atomic per file** (#453): `processFile` parses, resolves imports and
+embeds the file and its symbols (the slow part) outside any transaction,
+then one short transaction locks the file row, drops the result if
+`content_hash` changed meanwhile (the push that changed it enqueued the
+new content's job), and replaces imports and symbols and writes the file
+vector, `embedding_note`, `extracted_hash`, `extractor_version` and
+`embedder_id` together; semantic edges are recomputed after the commit
+(skipped when the file vector is reused). A failure or a crash anywhere
+before the commit leaves the previous imports, symbols and vectors whole
+and searchable. **Vector reuse:** when the row's `embedder_id` is the
+running one, the file vector is kept if `extracted_hash = content_hash` (or,
+for a file not extracted since 0033, see *Upgrade to 0033* below),
+and a symbol's vector is kept if its embed text (kind, name, path, start
+line, snippet) equals one of the previous rows'; only the rest is
+embedded. A re-extraction of unchanged content (an `EXTRACTOR_VERSION`
+bump) therefore calls the embedder only for symbols the new extractor
+finds or words differently. A file
 with a line longer than 1,000
 characters (minified, bundled or generated code) gets its file embedding
 but no symbols or imports. **Per-file budget** (#496): a file's symbols
@@ -2405,26 +2526,90 @@ each text cut to 16,000 characters, one file costs at most 1 + budget
 texts (the 700 KB lab bundle with 900 declarations: 33 batches instead of
 113). The boot-time scan
 (`scheduleMissingExtractions`) adds a job, idempotently, for every file
-with a null embedding that has none for its current content (rows from
-before the jobs table; a re-sync only enqueues files whose content
-changed, #404), re-runs the job of a file's current content if it failed
+whose derived rows are not those of its current content by the running
+code, unless a job for its current key exists: a null embedding (rows from
+before the jobs table), an `extracted_hash` other than `content_hash` (a
+push the process died in before it enqueued; a re-sync only enqueues
+files whose content changed, #404), or another `extractor_version` /
+`embedder_id`. It re-runs the job of a file's current key if it failed
 with an error (an outage that outlasted the retries; a restart repaired
-that before #494 too), also for an updated file that kept the embedding
-of its previous content, and wakes the worker. A job failed as `LeaseExpired` is not re-run
+that before #494 too), also for an updated file that kept the rows
+of its previous content, and wakes the worker. It reads and enqueues in
+keyset pages of 1,000 files by repository and path
+(`catchUpLimits.batchSize`), one SELECT and one INSERT each, so a version
+bump never enqueues an instance in one transaction (20,000 files, measured
+locally: 14-33 ms when nothing is to do, 0.57 s to find and enqueue all of
+them after a bump). A job failed as `LeaseExpired` is not re-run
 at boot, so a file whose extraction kills the process cannot crash every
-boot. `repository_status` reports `filesPendingExtraction` (files whose
-extraction for the current content is still to come: a pending job, or
+boot; a version bump changes its key, so it gets one new job (3 attempts)
+per new extractor or embedder. `repository_status` reports `filesPendingExtraction` (files whose
+extraction for the current key is still to come: a pending job, or
 no job and no embedding; 0 means extraction is finished) and
 `extractionFailures: {total, files: [{path, attempts, lastError}]}` (all
-files whose job for the current content gave up, counted in `total`, the
+files whose job for the current key gave up, counted in `total`, the
 first 5 by path listed).
+
+**Derived-artifact versions** (#453, migration 0033). Two constants name
+what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
+an integer, now 1): bump it with any change to the grammars and queries,
+symbol kinds, the minified-file rule, the snippet cut or the symbol embed
+text. `EMBEDDER_ID` (`search/embeddings.ts`): the model
+(`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus
+`+text<EMBED_TEXT_VERSION>`, the version of the note, file and symbol embed
+texts and the 16,000-character cut; bump `EMBED_TEXT_VERSION` with any
+change to those. Both are in the job keys and stored as plain columns
+(chosen over one jsonb so the catch-up compares them directly):
+`repository_files.extracted_hash`, `extractor_version`, `embedder_id`
+(they also stand for the file's imports and symbols, written in the same
+transaction) and `notes.embedder_id` (out of the Drizzle `notes` model, like
+`seq`).
+
+*Upgrade to 0033.* The migration rewrites no row, so it holds the boot for
+well under a second: 244 ms measured locally on 100,000 notes (501 MB) and
+20,000 files (124 MB) with vectors (the review of #978 measured 590 s for a
+version that updated every row). It adds `notes.embedder_id` and
+`repository_files.embedder_id` with the constant default
+`Xenova/bge-small-en-v1.5+text1`, which PostgreSQL (11+) gives the existing
+rows from the catalog, then drops the default, so later rows start
+without one. That is the id of what made the stored vectors: the model,
+pooling and the note, file and symbol embed texts are unchanged since
+1f05a6f, 3bc7a5b and 2c584d0. The id counts only where `embedding` is set;
+the catch-up and `processFile` check that first. The one UPDATE clears the
+id of the few notes whose pre-0033 job for their current `seq` is pending
+or failed (reached from `jobs` by primary key), so the catch-up embeds them.
+Files keep `extracted_hash` null and `extractor_version` 0, so the first
+boot re-extracts each once. `processFile` keeps such a file's vector unless
+its pre-0033 job `extract:<id>:<hash>` for the current content is pending
+or failed, and a push to it before then records the replaced content in
+`extracted_hash` (`syncRepositoryFiles`), so a vector is only kept for the
+content it was made from. So the first boot re-embeds only the notes and
+files without a vector or with a pending or failed job (about 100 ms a note
+and 640 ms a file with bge-small on CPU), and re-extracts every repository
+file once with its vectors reused, which costs a parse and a write. Measured
+locally on this repository's 766 source files ×3 (2,298 files, 9,807 symbols,
+shared loaded Postgres): queued in 76 ms and drained in 56 s, 24 ms a file,
+with no file or symbol embedded, so about 8 minutes for 20,000 files.
+That re-extraction is also the backfill of import `line`s from before 0031
+(#558, ADR-004 A7). A note written 2 s into that catch-up had its vector
+81 ms later and a file pushed then had its symbols in 99 ms: writes go
+first (**Durable jobs**). *Later bumps:* an `EXTRACTOR_VERSION` bump costs
+the same parse per file, plus embedding only symbols whose embed text
+changed; an `EMBEDDER_ID` bump re-embeds every note and file (the ~100 ms /
+640 ms above per item), in the background behind writes, the old vectors
+searchable until each new one commits. `filesPendingExtraction` shows the
+progress.
 
 **Durable jobs** (`jobs/durable.ts`, ADR-003 S5, #494; table `jobs` from
 migration 0021). A job is claimable when `done_at` is null and
 `lease_until` is null or past. `claimJob` is one statement (`UPDATE … WHERE
-id = (SELECT … ORDER BY id LIMIT 1 FOR UPDATE SKIP LOCKED)`) that sets
+id = (SELECT … ORDER BY priority, id LIMIT 1 FOR UPDATE SKIP LOCKED)`) that sets
 `lease_until = now() + 60 s` and `attempts + 1`, and only claims a job
-with `attempts < MAX_JOB_ATTEMPTS`; `completeJob` sets `done_at` and
+with `attempts < MAX_JOB_ATTEMPTS`. `jobs.priority` (migration 0033, #453;
+`JOB_PRIORITY`): 0 for a job a write queued (a note save, a push, the
+doctor's repair), 1 for boot catch-up and `pnpm reindex`, so writes are
+served before any backlog; index `jobs_claim` (`kind, priority, id`, pending
+rows) serves that order, and a job run again takes the priority of the
+enqueue that runs it. `completeJob` sets `done_at` and
 clears `last_error`; `failJob` stores `last_error` (error name and
 message, or those of its `Error` cause, so a Drizzle "Failed query: <SQL>"
 keeps the Postgres error; URL credentials redacted, at most 500
@@ -2437,7 +2622,15 @@ gets one report then (earlier failures count as `repeated`). `attempts`
 counts claims, so a job whose runs kill the process stops at 3 too:
 before claiming, each drain runs `failCrashedJobs`, which marks failed
 every job of its kind with 3 claims and an expired lease (`last_error`
-`LeaseExpired: …`) and reports it once. A job running at a graceful
+`LeaseExpired: …`) and reports it once. Boot catch-up re-runs jobs that
+failed with an error, never `LeaseExpired` ones (decision kept in #453):
+such a job took the process down 3 times (an out-of-memory parse or embed
+is the known cause, #496), so re-running it at every boot would turn one
+bad file into a crash loop of the instance. It is retried, bounded, when
+the code that crashed changes: a new `EXTRACTOR_VERSION` or `EMBEDDER_ID`
+changes the key, which gives the item one new job with 3 attempts; an
+operator re-runs a note's with `pnpm reindex`; a file's runs again when its content changes.
+A job running at a graceful
 shutdown also keeps its claim (leases are not released). Crash recovery: a job a dead process held becomes claimable
 when its lease runs out; every drainer is woken every 5 s
 (`startJobPolling`, started at boot) for such jobs and for backoffs.

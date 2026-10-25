@@ -11,6 +11,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  smallint,
   text,
   real,
   timestamp,
@@ -341,7 +342,9 @@ export const instanceState = pgTable('instance_state', {
  *
  * Migration 0021 (ADR-003 §4) also adds `seq bigint NOT NULL DEFAULT 1`
  * (bumped by the `notes_bump_seq` trigger on any change of body, frontmatter,
- * path or deleted_at) and `frontmatter_src json`. They are deliberately not
+ * path or deleted_at) and `frontmatter_src json`; migration 0033 (#453) adds
+ * `embedder_id text` (search/embeddings.ts `EMBEDDER_ID` of the embedding;
+ * null before #453). They are deliberately not
  * in this model: rows are returned whole by REST and MCP, so declaring them
  * would add fields to responses. The store reads them with SQL
  * (store-tx.ts `storedColumns`).
@@ -549,8 +552,14 @@ export const jobs = pgTable(
     leaseUntil: timestamp('lease_until', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     doneAt: timestamp('done_at', { withTimezone: true }),
+    /** jobs/durable.ts `JOB_PRIORITY` (#453, migration 0033): 0 a write's job, 1 catch-up; claims take the lowest first. */
+    priority: smallint('priority').notNull().default(0),
   },
-  (t) => [index('jobs_pending').on(t.kind, t.createdAt).where(sql`done_at is null`)],
+  (t) => [
+    index('jobs_pending').on(t.kind, t.createdAt).where(sql`done_at is null`),
+    // claimJob's order: the next claimable job is the first index entry that passes the lease and attempts checks.
+    index('jobs_claim').on(t.kind, t.priority, t.id).where(sql`done_at is null`),
+  ],
 )
 
 /** The first result of an MCP write sent with an `idempotency_key` (#477, migration 0025), per connection and key. */
@@ -769,6 +778,16 @@ export const repositoryFiles = pgTable(
      * per-file symbol budget); null when it embedded everything.
      */
     embeddingNote: text('embedding_note'),
+    /**
+     * What produced this file's imports, symbols and vectors (#453, migration
+     * 0033), written in one transaction with them: the `content_hash` they
+     * were extracted from, extraction.ts `EXTRACTOR_VERSION` (0: before #453)
+     * and embeddings.ts `EMBEDDER_ID` (null: before #453). Boot catch-up
+     * re-extracts a file whose values differ from its content and the running code.
+     */
+    extractedHash: text('extracted_hash'),
+    extractorVersion: integer('extractor_version').notNull().default(0),
+    embedderId: text('embedder_id'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),

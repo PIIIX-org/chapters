@@ -117,6 +117,7 @@ import {
   ranked,
   render,
   textSection,
+  type Block,
   type BudgetKind,
   type Budgeted,
   type Ladder,
@@ -294,14 +295,20 @@ function withoutDefaults(tool: Tool): Tool {
 }
 
 /**
- * A successful tool answer (#433, ADR-004 §2.1): `text` is the whole JSON
- * answer, and when it is an object, `structuredContent` is the same object
- * (parsed from `text`, so it holds exactly what the text shows: dates as
- * their strings). A bare array has none: MCP's structuredContent is an object.
+ * A successful tool answer (#433, ADR-004 §2.1): `text` is the JSON answer,
+ * and when it is an object, `structuredContent` is the same object (parsed
+ * from `text`, so it holds exactly what the text shows: dates as their
+ * strings). A bare array has none: MCP's structuredContent is an object.
+ * `blocks` (read_note's body, #445) follow `text` as text blocks of their
+ * own, unescaped, where `text` holds `{"in": "content[n]"}`; in
+ * `structuredContent` each is its key's string, so that object is whole.
  */
-function answered(text: string): CallToolResult {
-  const content = [{ type: 'text' as const, text }]
-  return text.startsWith('{') ? { content, structuredContent: JSON.parse(text) as Record<string, unknown> } : { content }
+function answered(text: string, blocks: readonly Block[] = []): CallToolResult {
+  const content = [{ type: 'text' as const, text }, ...blocks.map((block) => ({ type: 'text' as const, text: block.text }))]
+  if (!text.startsWith('{')) return { content }
+  const structuredContent = JSON.parse(text) as Record<string, unknown>
+  for (const block of blocks) structuredContent[block.name] = block.text
+  return { content, structuredContent }
 }
 
 /**
@@ -787,9 +794,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         const at = typeof args.cursor === 'string' ? decodeCursor(args.cursor, name, fingerprint) : null
         const answer = (await handler(args, scoped, new Page(at))) as Budgeted
         const budgetTokens = typeof args.budget_tokens === 'number' ? args.budget_tokens : DEFAULT_BUDGET[budget]
-        const { text, truncated } = render(answer, { tool: name, fingerprint, budget: budgetTokens, at })
+        const { text, blocks, truncated } = render(answer, { tool: name, fingerprint, budget: budgetTokens, at })
         await answer.rendered?.(truncated)
-        return answered(text)
+        return answered(text, blocks)
       } catch (err) {
         const result = errorResult(toErrorEnvelope(err))
         toolErrors.add(result)
@@ -1367,7 +1374,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           indexed: await noteIndexed(note.row.id, note.row.seq),
           ...(note.foldError ? { fold_error: note.foldError } : {}),
         },
-        sections: [textSection({ name: 'body', text: note.body, lines: true })],
+        // The body is sent as plain text after the JSON, not as an escaped string in it (#445).
+        sections: [textSection({ name: 'body', text: note.body, lines: true, block: true })],
         // Every page reports `rev` and is that rev's text (a changed note refuses the cursor), so every read
         // records it: the base a later whole-body edit three-way merges from (#864, #961). It replaces an older read.
         rendered: async () => {
@@ -2709,18 +2717,39 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Hybrid keyword and semantic search over notes and code, as in the app.',
+        'Keyword and semantic search over notes and code.',
       inputSchema: {
         query: z.string().describe('Search text'),
         vaultId: UUID_ARG.optional().describe('Vault to search'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Search every accessible vault and repository (account tokens)'),
-        symbols: z.boolean().optional().describe('Include code symbols as results'),
+        everywhere: z.boolean().optional().describe('Every accessible vault and repository (account tokens)'),
+        symbols: z.boolean().optional().describe('Include code symbols'),
         limit: z.number().int().min(1).max(100).optional().describe('Max results'),
       },
+      budget: 'list',
     },
     async (args: { query: string; symbols?: boolean; limit?: number }, { resources }) => {
-      return searchNotes(resources, args.query, args.limit, {}, { includeSymbols: args.symbols ?? true })
+      const limit = args.limit ?? 20
+      // The first `limit` hits of the ranking, plus one to know whether more match.
+      const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true })
+      return {
+        head,
+        sections: [
+          ranked({
+            name: 'results',
+            items: results,
+            id: (r) => `${r.resourceType}:${r.id}`,
+            limit,
+            // Down the ladder: without snippet, frontmatter and updated, then the path (`path#La-Lb` for a symbol); counted per path.
+            ladder: {
+              no_context: (r) => ({ ...r, snippet: undefined, frontmatter: undefined, updated: undefined }),
+              locations: (r) => (r.startLine !== undefined && r.endLine !== undefined ? location(r.path, r.startLine, r.endLine) : r.path),
+              group: (r) => r.path,
+            },
+          }),
+        ],
+        narrow: args.symbols === false ? [] : ['symbols: false'],
+      }
     },
   )
 
@@ -2731,12 +2760,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Search code symbols (functions, classes, interfaces, types) by meaning, signature or name. Returns `{results}`: declarations with line ranges, snippets and file paths, without reading whole files.',
+        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets, without reading whole files.',
       inputSchema: {
-        query: z.string().describe('Symbol name, signature or meaning'),
-        kind: z.enum(['function', 'class', 'interface', 'type']).optional().describe('Filter by symbol kind'),
+        query: z.string().describe('Name, signature or meaning'),
+        kind: z.enum(['function', 'class', 'interface', 'type']).optional().describe('Symbol kind'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Search every accessible repository (account tokens)'),
+        everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
         limit: z.number().int().min(1).max(50).optional().describe('Max results'),
       },
       budget: 'list',
@@ -2752,9 +2781,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
       const limit = args.limit ?? 20
       // The first `limit` symbols of the ranking, plus one to know whether more match.
-      const results = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
+      const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
       return {
-        head: {},
+        head,
         sections: [
           ranked({
             name: 'results',

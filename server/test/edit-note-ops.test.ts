@@ -17,7 +17,7 @@ import { config } from '../src/config.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { getLiveNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
-import { createActiveUser, loginCookie, loginToken, noteDocName } from './helpers.js'
+import { createActiveUser, loginCookie, loginToken, noteDocName, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
 
@@ -37,7 +37,7 @@ async function call(name: string, args: Args): Promise<{ isError: boolean; text:
   resetRateLimits()
   const result = await mcp.callTool({ name, arguments: args })
   const content = result.content as Array<{ type: string; text?: string }>
-  const text = content.map((c) => c.text ?? '').join('')
+  const text = toolText(content)
   if (result.isError !== true) return { isError: false, text }
   const envelope = JSON.parse(text) as { error: ErrorBody }
   return { isError: true, text, error: envelope.error }
