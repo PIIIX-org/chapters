@@ -2987,14 +2987,24 @@ in each:
   single scope, and a global counter moves whenever a per-scope one would.
   Permission changes are rare, so invalidating every entry on each costs
   little.
-- **Mechanism.** The triggers are deferred constraint triggers. Each bump
-  runs at commit, inside the writing transaction, so a reader sees the
-  change and the new epoch together or neither. A scope is bumped once per
-  transaction: its row records the bumping transaction (`bumped_xid`), so
-  each later event of that transaction costs one primary-key probe,
-  however many rows and scopes it changed. A 200,000-row insert took
-  803 ms with the trigger and 237 ms without over 3 scopes, and 1,363 ms
-  vs 590 ms over 2,000 scopes.
+- **Mechanism.** Each bump runs at commit, inside the writing transaction,
+  so a reader sees the change and the new epoch together or neither, and an
+  epoch row is locked only while a transaction commits.
+  - Index epochs take two steps. Statement-level triggers, one per table
+    and event, read their transition tables and queue the distinct scopes
+    in the unlogged `index_epoch_pending` (transaction id, scope, id;
+    `ON CONFLICT DO NOTHING`). A deferred constraint trigger on that table
+    then bumps each queued scope once, at commit. Constraint triggers can
+    only be row-level, so this table carries the commit-time step and the
+    content tables pay no call per row.
+  - The permission epoch stays on deferred row triggers. Its tables change
+    a few rows per statement, and a transaction-local flag ends every event
+    after the first.
+  - Cost of a 200,000-row insert (Postgres 17): over 3 scopes, 207–286 ms
+    with the triggers and 252–272 ms without; over 2,000 scopes, 741 ms vs
+    697–740 ms. A row trigger per changed row took 829–1,058 ms and
+    1,431–1,799 ms. For one-row transactions the two designs are within
+    run-to-run noise.
   - The index epochs have their own table rather than `vaults` /
     `repositories` columns. Code locks those rows for its own reasons (the
     projector holds its vault FOR SHARE while it writes). A commit-time bump

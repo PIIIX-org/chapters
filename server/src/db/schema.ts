@@ -342,9 +342,10 @@ export const instanceState = pgTable('instance_state', {
  * The index epoch of a vault or a repository (ADR-004 §2.9, #680, migration
  * 0041): bumped at commit by triggers on every change an answer about it
  * could show; no row is epoch 0. Cache keys carry it (cache/key.ts). Derived
- * state, so a backup leaves it out. The column `bumped_xid xid8` (the
- * transaction that last bumped the row: one bump per transaction) is only
- * the triggers' and stays out of this model.
+ * state, so a backup leaves it out. Statement triggers queue the scopes a
+ * transaction touched in the unlogged `index_epoch_pending` (out of this
+ * model: only the triggers use it), and a deferred trigger bumps each once
+ * at commit.
  */
 export const indexEpochs = pgTable(
   'index_epochs',
