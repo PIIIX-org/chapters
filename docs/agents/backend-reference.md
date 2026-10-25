@@ -69,7 +69,10 @@ message* on an open collaboration socket. This is a deliberate,
 spec-mandated trade-off (cost of a query vs. the risk of stale
 authorization) and it's why revoking a share kicks a live editing
 session within one message round-trip instead of waiting for
-reconnect.
+reconnect. Answer caches (§5.11) do not change this: a cache is
+consulted only after the call's live checks pass, and its keys carry the
+account and a permission epoch that every share, team, token or account
+change moves.
 
 ---
 
@@ -131,6 +134,7 @@ chapters/
 │   │   ├── mcp/                    # MCP server, tools, rate limiting, CRDT-aware writes
 │   │   ├── export/                 # backup/restore, vault export, share links, import
 │   │   ├── repositories/           # codebase ingestion (git/local/agent-push), extraction
+│   │   ├── cache/                  # caching contract: epochs, cacheKey (§5.11)
 │   │   ├── email/                  # nodemailer wrapper
 │   │   └── scripts/                # CLI entry points (reindex, restore-backup, check-notes, doctor, rows-from-files, migrate-store)
 │   └── test/                       # one file per subsystem, Vitest
@@ -379,7 +383,7 @@ fold of that transaction keeps; the next fold clears it.
 
 | Table | Purpose |
 |---|---|
-| `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable` |
+| `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable`, the indexed version (`last_synced_commit`, `tree_hash`; migration 0040, #471, see §5.10) |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
@@ -392,6 +396,7 @@ fold of that transaction keeps; the next fold clears it.
 | Table | Purpose |
 |---|---|
 | `semanticEdges` | polymorphic `(nodeAType, nodeAId, nodeBType, nodeBId)` — `note` or `code` on either side, no FK constraint (the id points at different tables depending on type, same posture as `vaultShares.granteeId`). Pairs canonically ordered so `(A,B)` and `(B,A)` never both exist. This is the mechanism that lets a note and a source file land as semantic neighbors — they share one 384-dimension embedding space by construction. Both ends are in one scope (D10, #461): one vault, one repository, or a vault and a repository of one owner (`semantic-edges.ts`, §5.6). |
+| `index_epochs` (migration 0041, #680) | `(scope 'vault'\|'repository', scope_id)` → `epoch bigint`: bumped at commit on every change an answer about that vault or repository could show; no row = 0. With `instance_state.permission_epoch` (same migration) it is what every cache key carries; see **5.11 Caching contract**. Not in backups (derived) |
 
 **Design decisions worth remembering:**
 - Polymorphic grantee/node columns (`vaultShares.granteeId`,
@@ -1760,8 +1765,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
 - **Transport**: `POST /mcp` and `POST /elara/mcp` (same handler; unprefixed, not under `/api`). There is no stdio transport. The
   official SDK's `StreamableHTTPServerTransport`, **stateless** —
   `sessionIdGenerator: undefined`, a fresh `McpServer` + transport
-  built per HTTP request. No cross-connection caching is possible by
-  construction; auth and permissions are recomputed every call.
+  built per HTTP request; auth and permissions are recomputed every call.
+  Answers may be cached across connections only under the caching
+  contract (§5.11, D7 on #930); none is cached yet (#685).
   With no session and no stream, the server can send nothing unasked
   (#436): `GET` and `DELETE` on both paths answer `405` with
   `Allow: POST` and the SDK transport's JSON-RPC error
@@ -2405,8 +2411,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   past the restored rows before the `instance_restored` event.
   Restored MCP and sync tokens keep working (their hashes are
   restored). Restored repositories get `last_synced_at`,
-  `last_synced_commit` and `last_webhook_at` cleared so the next poll
-  re-indexes git repositories. A
+  `last_synced_commit`, `tree_hash` and `last_webhook_at` cleared so the
+  next poll re-indexes git repositories. A
   format-1 archive (`account-dump.json`) still restores: notes get ids
   derived from vault and path, tokens pinned to a repository are left
   out with a warning.
@@ -2444,6 +2450,10 @@ is the history record, not Chapters).
 3. **agent_push** (`push-routes.ts`) — `POST /repositories/sync`,
    bearer sync-token auth, the client sends its own file list directly
    — the closest analog to how a coding agent itself already works.
+   Body `{files: [{path, content}], currentPaths: string[], commit?}`:
+   `commit` (optional, #471) is the git object name the pushed files
+   are, 40 or 64 lowercase hex (anything else is a 400); a push without
+   it clears the stored commit. The answer is the `SyncResult` counts.
 
 **Which files are indexed** — git and local_path share one scan
 (`scanRepository` in `fs-scan.ts`); they differ only in what is listed
@@ -2490,6 +2500,51 @@ the exception: the client chose to send the content as text, so
 `syncRepositoryFiles` strips NUL bytes and indexes the rest, with no
 per-file size check (the request body limit bounds it), and reports no
 skips.
+
+**Indexed version** (#471, owner decision D11 in #930, ADR-004 §2.9):
+every repository records the version of its stored file contents, so an
+agent knows which snapshot it reads. `syncRepositoryFiles` writes both
+columns at the end of each sync:
+- `tree_hash`, for every method: the first 16 hex characters of sha256
+  over one `path NUL content_hash LF` line per stored file, in path byte
+  (UTF-8, Postgres `COLLATE "C"`) order (`computeTreeHash`); a sync that
+  leaves no file gives `e3b0c44298fc1c14` (sha256 of nothing), null only
+  before the first sync. It is computed from the rows the sync already
+  loaded plus its own batch, not by a rescan: on 20,000 files the hash
+  takes ~6 ms and a no-op sync goes from ~78 to ~86 ms (a SQL recompute
+  over the rows takes ~19 ms). Migration 0040 backfills it in SQL with the
+  same lines, and with the empty tree for a synced repository with no
+  files.
+- `last_synced_commit`, when a commit describes the stored files: git
+  HEAD of the clone; for local_path, HEAD when, after the scan, the folder
+  is in a git work tree, `git --no-optional-locks status --porcelain -- .`
+  is empty and every indexed path is in `git ls-files -- .`. Status alone
+  is not enough: it hides untracked files that rules the scan never reads
+  ignore (a parent folder's `.gitignore`, the repository's `info/exclude`
+  for a subfolder, `core.excludesFile`), and the scan indexes them; the
+  tracked list comes from git's index, without walking ignored trees. Any
+  failed check gives null, as do a folder outside git and one owned by
+  another user (git refuses it under `safe.directory`). The four git calls
+  take ~60-80 ms on 20,000 files. For agent_push, the body's `commit`, else
+  null. A commit alone changes no watched file, so a local folder records
+  it on its next sync.
+
+Answers name it once, never per item, as `commit` when known, else
+`tree` (`indexedVersion`): MCP `repository_status`, the head of
+`read_file` and `browse_repository`, and the head of `search` and
+`find_symbols` when their scope is exactly one repository (an answer over
+several repositories carries neither). It names the stored content and
+paths, which change with the sync; the derived index (symbols, outline,
+snippets, vectors) follows when extraction catches up, i.e. once
+`filesPendingExtraction` is 0. `search` and `find_symbols` report the lag
+in `index`; `read_file` reads the file, its repository's version and its
+extraction state in one query (`readRepositoryFile`) and adds
+`index: 'pending'` (its job is queued or running, or none exists and no
+block of its content does) or `'failed'` (the job gave up; the outline is
+from earlier content), the rule of `extractionState` for one file. Files
+carry no version of their own beyond `content_hash`. `list_repositories`
+and the REST rows do not carry it. Git history (`changed_since`, `diff`,
+reads at a `ref`) is deferred (D11).
 
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
@@ -3108,6 +3163,128 @@ itself.
 `docs/superpowers/specs/2026-07-18-repository-ingestion-design.md` and
 `2026-07-18-code-graph-integration-design.md` are the full specs.
 
+### 5.11 Caching contract (`server/src/cache/`, ADR-004 §2.9, #680)
+
+The rules every cache of an answer follows. No answer is cached yet: the
+search and graph result cache (#685, which also adds per-cache hit/miss
+metrics and the test that a cached answer is never served stale) and
+per-session de-duplication (#683) build on this contract, and none may
+cache without it. D7 on #930
+replaced the old promise of no cross-connection caching (§5.8) with this
+contract. Permission checks themselves stay live (§1): a cache never
+authorizes anything.
+
+**Epochs** (migration 0041). Triggers bump them, so every writer is
+covered (MCP, REST, the collab relay, the workers, the CLIs) without a call
+in each:
+- **Index epoch**, one per vault and per repository (`index_epochs`, no
+  row = 0). It is bumped by:
+  - notes: insert and delete; an update when `seq` moves (body,
+    frontmatter, path, trash), or the vault, `updated_at` or the block
+    versions change;
+  - `note_revisions` insert and delete (a revision purge);
+  - `blocks` (block replace, embedding and extraction completion);
+  - `note_links`, `repository_files` and `repository_file_imports`;
+  - `semantic_edges`, counted on the source's scope: an answer shows an
+    edge only when both ends are in its resources;
+  - `embed_note` and `extract` jobs, when they are enqueued, re-run, finish,
+    fail for good or are deleted (search reports pending and failed items);
+  - any change of the vault or repository row itself (name, trash, owner,
+    sync status and version), and its delete, which drops its row.
+  It is not bumped by reads (`note_reads`, a token's `last_used_at`),
+  collab typing that is logged but not folded yet (`note_updates`), job
+  claims and retried attempts, revision compaction, or projections.
+- **Permission epoch**, one per instance (`instance_state.permission_epoch`).
+  It is bumped by:
+  - `vault_shares`, `repository_shares` and `team_memberships`;
+  - `mcp_connections`: a mint, a delete, or a change of anything but
+    `last_used_at` and `name` (a revoke, an expiry, access, profile,
+    allow-list);
+  - `users`: insert and delete, and a change of `status` or `role`;
+  - `vaults` and `repositories`: insert and delete, and an owner change;
+    for vaults also `deleted_at`.
+  It is global, not per scope: team membership and account status have no
+  single scope, and a global counter moves whenever a per-scope one would.
+  Permission changes are rare, so invalidating every entry on each costs
+  little.
+- **Mechanism.** Each bump runs at commit, inside the writing transaction,
+  so a reader sees the change and the new epoch together or neither, and an
+  epoch row is locked only while a transaction commits.
+  - Index epochs take two steps. Statement-level triggers, one per table
+    and event, read their transition tables and queue the distinct scopes
+    in the unlogged `index_epoch_pending` (transaction id, scope, id;
+    `ON CONFLICT DO NOTHING`). A deferred constraint trigger on that table
+    then bumps each queued scope once, at commit. Constraint triggers can
+    only be row-level, so this table carries the commit-time step and the
+    content tables pay no call per row.
+  - The permission epoch stays on deferred row triggers. Its tables change
+    a few rows per statement, and a transaction-local flag ends every event
+    after the first.
+  - Cost of a 200,000-row insert (Postgres 17): over 3 scopes, 207–286 ms
+    with the triggers and 252–272 ms without; over 2,000 scopes, 741 ms vs
+    697–740 ms. A row trigger per changed row took 829–1,058 ms and
+    1,431–1,799 ms. For one-row transactions the two designs are within
+    run-to-run noise.
+  - The index epochs have their own table rather than `vaults` /
+    `repositories` columns. Code locks those rows for its own reasons (the
+    projector holds its vault FOR SHARE while it writes). A commit-time bump
+    of such a row deadlocked a note restore against the projector.
+  - Only two transactions that each bump two scopes, in opposite orders,
+    can still deadlock. Postgres then aborts one.
+
+**The key** (`cacheKey(tool, args, resources, epochs, caller)`) is the
+sha256 of:
+- the tool;
+- the caller (`cacheCaller(auth)`): account, connection scope with its pin
+  (`account`, `vault:<id>`, `repo:<id>`), access, profile, sorted
+  allow-list;
+- each resolved vault and repository with its index epoch (sorted;
+  `everywhere` expanded);
+- the derived-artifact versions (extraction-queue.ts `versionsKey`:
+  extractor, embedder, chunker);
+- the permission epoch;
+- `argsFingerprint(args, resources)` (`mcp/response.ts`).
+
+An entry is the whole result (ids and spans, never rendered text): a call's
+`cursor` and `budget_tokens` page and budget it, so they are not in the key.
+Argument order, resource order and allow-list order do not change the key.
+
+**What a cached answer may assume:**
+1. Same key, same answer. Every input that can change the answer is in the
+   key: content (index epochs), who asks and what the token allows, the
+   arguments, and the code that derived the index.
+2. Nothing about access. A cache lookup happens only after the call's live
+   checks passed (token, expiry, capability, profile, scope resolution,
+   `resolveAccess` / `resolveRepositoryAccess`). An expiry is a time, not a
+   write, so only the live check sees it.
+
+**When a cache must refuse** (compute the answer, store nothing, serve
+nothing):
+- `cacheKey` returns null: an epoch for one of the resources is missing
+  (the vault or repository is gone).
+- The epochs were read after the answer's queries. `readEpochs` must run
+  first, or in the answer's own snapshot. A write that commits in between
+  then leaves a newer answer under the older key, never an older answer
+  under the newer one.
+- The answer depends on something no epoch covers: anything other than a
+  vault's or a repository's content and index state. That includes
+  account settings, teams, notifications, graph perspectives and
+  preferences, and token lists (a token's `last_used_at` moves on every
+  call). Such answers are not cached under this contract.
+- An entry is never served to another account, nor under another
+  permission epoch. Both are in the key, so this follows. A cache that
+  holds entries by another index must still compare the whole key.
+- A cache that outlives the process (a Postgres table) must also key on the
+  running build or be emptied at boot, because ranking code is not in
+  `versionsKey`. An in-process cache is emptied by every restart.
+
+Epochs are internal: no answer carries them, and `tools/list` and
+`initialize.instructions` are unchanged (0 tokens). Answers carry content
+versions (`rev`, file `hash`, `commit` / `tree`) as ADR-004 §2.9 lists.
+Tests: `cache-epochs.test.ts` (every write path bumps its own scope and no
+other; reads bump nothing) and `cache-key.test.ts` (key fields, refusals,
+real epochs around writes and reads).
+
 ---
 
 ## 6. Security posture
@@ -3121,7 +3298,9 @@ itself.
   `gitUrl` (#383).
 - **Permission checks**: always live, never cached (see §1) — this is
   the load-bearing security property the whole audit trail and
-  revocation-kick behavior depends on.
+  revocation-kick behavior depends on. An answer cache (§5.11) is
+  consulted only after them and never serves an entry to another account
+  or after the permission epoch moved.
 - **Anti-enumeration**: signup, login, and password-reset responses are
   identical whether or not an account exists.
 - **Access-denial shape**: insufficient vault/repository access returns
