@@ -3,6 +3,7 @@ import { db } from '../db/client.js'
 import { config } from '../config.js'
 import { embedder } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
+import { setHnswScan } from './hnsw.js'
 import { extractionState } from '../repositories/extraction-queue.js'
 import { passesFilters, timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
@@ -99,8 +100,9 @@ export interface SearchNotesOptions {
  * - `index`: the scope's notes and files still to be indexed, its
  *   repositories whose first sync is running or has not happened (no file
  *   yet), and the items whose indexing failed; left out when all are 0.
- * - `results`: in one total order, score descending, then path and id by
- *   UTF-16 code unit (`COLLATE "C"` in SQL).
+ * - `results`: in one total order, score descending, then path by UTF-16
+ *   code unit (`COLLATE "C"` in SQL), then resource type (`code`, `note`,
+ *   `symbol`), then a symbol's start line, then id (#623).
  */
 export type SearchStatus = 'ok' | 'no_match' | 'index_building' | 'unavailable'
 export type RetrievalMode = 'hybrid' | 'keyword_only' | 'vector_only' | 'none'
@@ -128,10 +130,14 @@ const RRF_K = 60
  */
 const BLOCK_CANDIDATES = 200
 
-/** A vector leg over `blocks`, its HNSW search widened to `BLOCK_CANDIDATES` (the default 40 would cap it). */
+/**
+ * A vector leg over `blocks` (#462): its HNSW search widened to
+ * `BLOCK_CANDIDATES` (the default 40 would cap it) and iterative where
+ * pgvector has it (`setHnswScan`); each leg re-sorts its cut (`gated`).
+ */
 async function blockLeg(query: SQL): Promise<unknown> {
   return db.transaction(async (tx) => {
-    await tx.execute(sql.raw(`SET LOCAL hnsw.ef_search = ${BLOCK_CANDIDATES}`))
+    await setHnswScan(tx, BLOCK_CANDIDATES)
     return tx.execute(query)
   })
 }
@@ -170,14 +176,14 @@ interface SymbolRow {
 
 /**
  * The `CANDIDATES` nearest rows of `nearest` (a query ordered by `distance`
- * alone, so the HNSW index serves it), cut at the relevance gate (#441) and
- * re-sorted with the total order's tie-break.
+ * first, so the HNSW index serves it, then by the leg's tie-break), cut at the
+ * relevance gate (#441) and re-sorted by distance then `ties`.
  */
-function gated(nearest: SQL): SQL {
+function gated(nearest: SQL, ties: SQL = sql`path COLLATE "C", id`): SQL {
   return sql`
     SELECT * FROM (${nearest} LIMIT ${CANDIDATES}) nearest
     WHERE distance < ${config.searchMaxDistance}
-    ORDER BY distance, path COLLATE "C", id`
+    ORDER BY distance, ${ties}`
 }
 
 async function noteRows(
@@ -213,12 +219,14 @@ async function noteRows(
       : await blockLeg(
           gated(sql`
             -- A note's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per note, as before
-            -- blocks; #967's relevance gate applies to that best distance.
+            -- blocks; #967's relevance gate applies to that best distance. Equal distances at the 200-block cut go by
+            -- owner (#623; an Incremental Sort over the index scan, which the HNSW index still serves; no join to
+            -- notes there, which would add a lookup per block), the 30-note cut below by path.
             WITH nearest AS (
               SELECT owner_id, embedding <=> ${vec}::vector AS distance
               FROM blocks
               WHERE owner_type = 'note' AND container_id = ANY(${uuidArray(vaultIds)}) AND embedding IS NOT NULL
-              ORDER BY embedding <=> ${vec}::vector
+              ORDER BY embedding <=> ${vec}::vector, owner_id
               LIMIT ${BLOCK_CANDIDATES}
             ), best AS (
               SELECT owner_id, min(distance) AS distance FROM nearest GROUP BY owner_id
@@ -228,7 +236,7 @@ async function noteRows(
             FROM best JOIN notes ON notes.id = best.owner_id
             WHERE notes.deleted_at IS NULL
               ${filterSql}
-            ORDER BY best.distance, notes.id`),
+            ORDER BY best.distance, notes.path COLLATE "C", notes.id`),
         )
   return rows as unknown as Row[]
 }
@@ -266,7 +274,7 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
             -- kind = 'file' alone (only code has file blocks): naming owner_type too would let the planner take the
             -- owner_type = 'code' index (migration 0036), whose post-filter is what the files-only index avoids.
             WHERE b.kind = 'file' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL
-            ORDER BY b.embedding <=> ${vec}::vector`),
+            ORDER BY b.embedding <=> ${vec}::vector, f.path COLLATE "C", f.id`),
         )
   return rows as unknown as Row[]
 }
@@ -296,7 +304,7 @@ async function symbolRows(
               WHEN lower(${SYMBOL_NAME}) LIKE lower(${`${query}%`}) THEN 2
               ELSE 3
             END,
-            f.path COLLATE "C", b.id
+            f.path COLLATE "C", b.start_line, b.id
           LIMIT ${CANDIDATES}
         `)
       : await blockLeg(
@@ -306,7 +314,9 @@ async function symbolRows(
             -- kind = 'symbol' alone, so the planner takes the symbols-only index (see codeRows).
             WHERE b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
               AND b.embedding IS NOT NULL
-            ORDER BY b.embedding <=> ${vec}::vector`),
+            ORDER BY b.embedding <=> ${vec}::vector, f.path COLLATE "C", b.start_line, b.id`,
+            sql`path COLLATE "C", start_line, id`,
+          ),
         )
   return rows as unknown as SymbolRow[]
 }
@@ -385,9 +395,28 @@ function respond<H>(
   return { status, retrieval_mode, degraded, ...shown, results }
 }
 
-/** The total order of every answer: score descending, then path, then id, by code unit. */
-function byScore(a: { score: number; path: string; id: string }, b: { score: number; path: string; id: string }): number {
-  return b.score - a.score || compareCodeUnits(a.path, b.path) || compareCodeUnits(a.id, b.id)
+interface Ranked {
+  score: number
+  path: string
+  resourceType?: ResourceType
+  startLine?: number
+  id: string
+}
+
+/**
+ * The total order of every answer: score descending, then path by code unit,
+ * then resource type (a note and a code file can share a path; a file sorts
+ * before its symbols), then a symbol's start line, then id. Ids are random per
+ * instance, so they decide only what the rest leaves tied (#623).
+ */
+function byScore(a: Ranked, b: Ranked): number {
+  return (
+    b.score - a.score ||
+    compareCodeUnits(a.path, b.path) ||
+    compareCodeUnits(a.resourceType ?? '', b.resourceType ?? '') ||
+    (a.startLine ?? 0) - (b.startLine ?? 0) ||
+    compareCodeUnits(a.id, b.id)
+  )
 }
 
 /** The answer to an empty query or an empty scope: nothing was searched. */

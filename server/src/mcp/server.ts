@@ -88,7 +88,7 @@ import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
-import { neighborhood } from '../graph/neighbors.js'
+import { BACKLINK_CAP, backlinksOf, neighborhood, type Backlink } from '../graph/neighbors.js'
 import { MAX_CANDIDATES, resolveNode, type NodeCandidate } from '../graph/resolve-node.js'
 import { isInstanceAdmin, visibleGlobalPerspectives } from '../graph/perspective-access.js'
 import { buildVaultZip } from '../export/archive.js'
@@ -364,6 +364,13 @@ const GRAPH_EDGE_LADDER: Ladder<EdgeRow | CommunityEdge> = {
     return `${end(e.from)} ${e.directed ? '->' : '--'} ${end(e.to)} ${why.join(' ')}`
   },
   group: (e) => ('kind' in e ? e.kind : 'community'),
+}
+
+/** A note's backlinks (#472) down the ladder: without the context, then the location alone; counted per linking note. */
+const BACKLINK_LADDER: Ladder<Backlink> = {
+  no_context: (b) => ({ path: b.path, location: b.location }),
+  locations: (b) => b.location,
+  group: (b) => b.path,
 }
 
 /**
@@ -885,7 +892,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           ladder: BROWSED_NOTE_LADDER,
         })
       const narrowTo = (counts: Iterable<[string, number]>) =>
-        [...counts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([child]) => `path: ${JSON.stringify(dir ? `${dir}/${child}` : child)}`)
+        [...counts].sort((a, b) => b[1] - a[1] || compareCodeUnits(a[0], b[0])).slice(0, 3).map(([child]) => `path: ${JSON.stringify(dir ? `${dir}/${child}` : child)}`)
 
       if (args.recursive === true) {
         // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
@@ -2124,7 +2131,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
             ladder: { no_context: ({ path, language }) => ({ path, language }), locations: (f) => f.path, group: (f) => folderOf(f.path) },
           }),
         ],
-        narrow: [...children].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([child]) => `path: ${JSON.stringify(child)}`),
+        narrow: [...children].sort((a, b) => b[1] - a[1] || compareCodeUnits(a[0], b[0])).slice(0, 3).map(([child]) => `path: ${JSON.stringify(child)}`),
       }
     },
   )
@@ -2895,12 +2902,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         const center = found.node
         const depth = args.depth ?? 1
         const local = await neighborhood(resources, center, { depth, edgeTypes: args.edgeTypes, types: args.types, tags: args.tags, limit: args.limit })
+        // Who links to a note centre, and where (#472): every link, one per line, where the edges show one per note pair.
+        const backlinks = center.resourceType === 'note' && (args.edgeTypes ?? EDGE_KINDS).includes('extracted') ? await backlinksOf(center, { types: args.types, tags: args.tags }) : null
         return {
           head: { center: { id: center.id, path: center.path }, depth, cappedGroups: local.cappedGroups },
           sections: [
             // Already ranked: nearest first, the centre at the top; `next` only says that more exist.
             ranked({ name: 'nodes', items: local.next ? [...local.nodes, local.next] : local.nodes, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
             ranked({ name: 'edges', items: await rowsAmong(local.edges, local.nodes, resources), id: edgeRowKey, ladder: GRAPH_EDGE_LADDER }),
+            ...(backlinks ? [ranked({ name: 'backlinks', items: backlinks, id: (b) => b.location, limit: BACKLINK_CAP, ladder: BACKLINK_LADDER })] : []),
           ],
           narrow: [...(depth > 1 ? [`depth: ${depth - 1}`] : []), ...(args.edgeTypes ? [] : ['edgeTypes: ["extracted"]']), ...typeGroups(local.nodes.slice(1))],
         }

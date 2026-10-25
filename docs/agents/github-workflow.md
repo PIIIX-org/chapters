@@ -510,7 +510,7 @@ start-up/config, the image's dependencies or the benchmark; all five
 suites run nightly, on every PR to `prod` and by hand
 (`-f tier=none -f bench=all`). The gate
 (`.github/scripts/bench-gate.mjs`, base copy on PRs) fails when Elara's
-hit@5 drops by more than two questions of a suite or its mean
+hit@5 drops by more than one question of a suite or its mean
 tokens-to-gold rises by more than 10 % against the **base** commit's
 `benchmarks/baseline.json`; when the suite changed (questions, keywords,
 policy config or harness source) unless the PR has the label
