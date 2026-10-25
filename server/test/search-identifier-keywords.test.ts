@@ -2,7 +2,9 @@
 // found by the parts of a camelCase, PascalCase, snake_case or dotted name
 // (in any order), by the whole identifier inside a member access, and by a
 // dotted path; within a keyword leg the exact whole identifier ranks before
-// a match on its parts alone. Prose keeps its stemming. Every check runs on
+// a match on its parts alone. In the code leg an identifier in the query
+// matches its own spellings, not a file that only holds its words (the
+// benchmark regression of #1014). Prose keeps its stemming. Every check runs on
 // the keyword channel alone: the query embedding fails, so search answers
 // `keyword_only` and the order of each resource type is its keyword leg's.
 // Uses only entry points that exist on the base (the fails-before job runs
@@ -29,6 +31,15 @@ const FILES = [
   // A symbol named `server`, and symbols in files under `server/` (Python, so they hold no `ts` for `server.ts`).
   { path: 'py/app.py', content: 'def server():\n    return 1\n' },
   ...Array.from({ length: 5 }, (_, i) => ({ path: `server/handler${i}.py`, content: `def handle_${i}():\n    return ${i}\n` })),
+  // A class, and a document holding every word of a question about it but not its name.
+  {
+    path: 'src/hopper/HopperRequestQueue.ts',
+    content: "// One request to Hopper at a time; it handles a timeout and a caller's cancellation.\nexport class HopperRequestQueue {}\n",
+  },
+  { path: 'docs/hopper.md', content: '# Hopper\n\nEach request to Hopper waits in a queue, which handles a timeout and a caller cancellation.\n' },
+  // `host/platform` as written, and its two words apart: one in a compound, one in the path.
+  { path: 'src/detect.ts', content: "// Detects the host/platform in priority order.\nexport function detect(): string {\n  return 'env'\n}\n" },
+  { path: 'docs/platform-support.md', content: '# Platforms\n\nHost-specific hooks are detected in priority order.\n' },
 ]
 
 let repo: string
@@ -127,11 +138,27 @@ describe('search by identifier (#455)', () => {
     expect(await search('uuid arg', 'code')).toEqual(['src/mcp/server.ts'])
   })
 
-  it('ranks the exact identifier before a match on its parts alone', async () => {
-    // The first two hold `parseFrontmatter`; the others only its parts (`parse_frontmatter`, "parse the frontmatter").
-    const code = await search('parseFrontmatter', 'code')
-    expect(code.slice(0, 2)).toEqual(['src/notes/frontmatter.ts', 'src/load.ts'])
-    expect(code.slice(2).sort()).toEqual(['docs/reading.md', 'py/notes_io.py'])
+  it('ranks the exact identifier before its other spellings', async () => {
+    // The first two hold `parseFrontmatter`, the third its snake_case spelling; "parse the frontmatter" in
+    // `docs/reading.md` has only its words, which do not match a compound in the code leg.
+    expect(await search('parseFrontmatter', 'code')).toEqual(['src/notes/frontmatter.ts', 'src/load.ts', 'py/notes_io.py'])
+  })
+
+  it('in a question, an identifier does not match a file that only holds its words (#1014 benchmark)', async () => {
+    // `docs/hopper.md` has hopper, request and queue and every other word of the question, but not the name. As a
+    // match of the code leg it got a keyword rank on top of its vector rank, and the fusion put it (and on the
+    // benchmark's rea corpus, its long release notes and guides) above the file that defines the name.
+    expect(await search('How does `HopperRequestQueue` handle a timeout and caller cancellation?', 'code')).toEqual([
+      'src/hopper/HopperRequestQueue.ts',
+    ])
+    // Its words still find it.
+    expect(await search('hopper request queue', 'code')).toContain('src/hopper/HopperRequestQueue.ts')
+  })
+
+  it('a term of words joined by a slash keeps its English reading in the code leg (#1014 benchmark)', async () => {
+    // `host/platform` holds no identifier. Its words apart (`host` from `Host-specific`, `platform` from the path)
+    // made `docs/platform-support.md` a match; on context-mode that moved the platform guide above the detector.
+    expect(await search('Which host/platform is detected in priority order?', 'code')).toEqual(['src/detect.ts'])
   })
 })
 

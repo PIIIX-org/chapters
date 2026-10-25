@@ -31,14 +31,17 @@ describe('splitIdentifier', () => {
 })
 
 describe('keywords stored', () => {
-  it('a file: its path segments and the compounds of its content, not its plain words', () => {
+  it('a file: its path segments, its dotted tails and the compounds of its content, not its plain words', () => {
     expect(fileKeywords('src/mcp/server.ts', 'export const UUID_ARG = fm.parseFrontmatter(text)\n').sort()).toEqual(
-      ['src', 'mcp', 'server.ts', 'server', 'ts', 'uuid_arg', 'uuid', 'arg', 'fm.parsefrontmatter', 'fm', 'parsefrontmatter', 'parse', 'frontmatter'].sort(),
+      [
+        ...['src', 'mcp', 'server.ts', 'server', 'ts', 'mcp.server.ts', 'mcp.server', 'src.mcp.server.ts', 'src.mcp.server'],
+        ...['uuid_arg', 'uuid', 'arg', 'fm.parsefrontmatter', 'fm', 'parsefrontmatter', 'parse', 'frontmatter'],
+      ].sort(),
     )
   })
 
   it('a minified file: its path only', () => {
-    expect(fileKeywords('dist/app.min.js', null).sort()).toEqual(['dist', 'app.min.js', 'app', 'min', 'js'].sort())
+    expect(fileKeywords('dist/app.min.js', null).sort()).toEqual(['dist', 'app.min.js', 'app', 'min', 'js', 'dist.app.min.js', 'dist.app.min'].sort())
   })
 
   it('at most MAX_FILE_KEYWORDS lexemes per file', () => {
