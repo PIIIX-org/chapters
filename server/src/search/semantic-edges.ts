@@ -14,17 +14,24 @@ interface Neighbor {
 type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0]
 
 /**
- * The nearest owners of one type to any of `vecs` (ADR-004 §2.5 roll-up): for
- * each query vector its 100 nearest blocks (`hnsw.ef_search` is 100 in
- * recomputeSemanticEdges's transaction, so HNSW returns at most that many),
+ * The nearest owners of one type to any of `vecs` (ADR-004 §2.5 roll-up),
+ * among the blocks of `containers` (a Postgres uuid[] literal of vault or
+ * repository ids; D10, #461): for each query vector its 100 nearest blocks,
  * then one row per owner with its best block's similarity. Notes count only
  * while live. The owner type is a literal, so the planner uses that type's
- * partial HNSW index (migration 0036).
+ * partial HNSW index (migration 0036), and the container filter applies
+ * during its scan: with `hnsw.iterative_scan` (recomputeSemanticEdges's
+ * transaction) the scan goes on past `hnsw.ef_search` candidates until 100
+ * blocks of the containers are found, so a small vault in a big instance
+ * still gets its neighbours. The ids are a literal too, so for a container
+ * small enough the planner reads its blocks by `blocks_container_idx` and
+ * sorts them exactly instead.
  */
 async function nearestOwners(
   client: DbOrTx,
   ownerType: SemanticNodeType,
   vecs: string,
+  containers: string,
   excludeId: string | null,
 ): Promise<Array<{ id: string; similarity: number }>> {
   return (await client.execute(sql`
@@ -32,7 +39,8 @@ async function nearestOwners(
     FROM unnest(${vecs}::text[]) AS q(vec)
     CROSS JOIN LATERAL (
       SELECT owner_id, embedding <=> q.vec::vector AS distance FROM blocks
-      WHERE owner_type = ${sql.raw(`'${ownerType}'`)} AND embedding IS NOT NULL ${excludeId ? sql`AND owner_id <> ${excludeId}` : sql``}
+      WHERE owner_type = ${sql.raw(`'${ownerType}'`)} AND embedding IS NOT NULL AND container_id = ANY(${containers}::uuid[])
+        ${excludeId ? sql`AND owner_id <> ${excludeId}` : sql``}
       ORDER BY embedding <=> q.vec::vector
       LIMIT 100
     ) nearest
@@ -41,22 +49,42 @@ async function nearestOwners(
     LIMIT ${config.semanticK}`)) as unknown as Array<{ id: string; similarity: number }>
 }
 
+/**
+ * Where a node's neighbours may come from (D10, #461), as uuid[] literals per
+ * owner type: of its own type only its vault or repository (not another one
+ * of the same owner), of the other type the owner's repositories or live
+ * vaults. Null when the node is gone.
+ */
+async function neighbourScope(
+  client: DbOrTx,
+  nodeType: SemanticNodeType,
+  nodeId: string,
+): Promise<Record<SemanticNodeType, string> | null> {
+  const [scope] = (await client.execute(
+    nodeType === 'note'
+      ? sql`SELECT ARRAY[n.vault_id]::text AS note,
+          ARRAY(SELECT r.id FROM repositories r WHERE r.owner_id = v.owner_id ORDER BY r.id)::text AS code
+          FROM notes n JOIN vaults v ON v.id = n.vault_id WHERE n.id = ${nodeId}`
+      : sql`SELECT ARRAY[f.repository_id]::text AS code,
+          ARRAY(SELECT v.id FROM vaults v WHERE v.owner_id = r.owner_id AND v.deleted_at IS NULL ORDER BY v.id)::text AS note
+          FROM repository_files f JOIN repositories r ON r.id = f.repository_id WHERE f.id = ${nodeId}`,
+  )) as unknown as Array<Record<SemanticNodeType, string>>
+  return scope ?? null
+}
+
 async function knn(
   vectors: readonly number[][],
-  excludeType: SemanticNodeType,
-  excludeId: string,
+  nodeType: SemanticNodeType,
+  nodeId: string,
   client: DbOrTx = db,
 ): Promise<Neighbor[]> {
+  const scope = await neighbourScope(client, nodeType, nodeId)
+  if (!scope) return []
   // One Postgres text[] of vector literals: `[a,b,…]` holds no comma-quoting hazard inside `{"…","…"}`.
   const vecs = `{${vectors.map((v) => `"${JSON.stringify(v)}"`).join(',')}}`
-  const noteRows = await nearestOwners(client, 'note', vecs, excludeType === 'note' ? excludeId : null)
-  const codeRows = await nearestOwners(client, 'code', vecs, excludeType === 'code' ? excludeId : null)
-  return [
-    ...noteRows.map((r) => ({ type: 'note' as const, id: r.id, similarity: r.similarity })),
-    ...codeRows.map((r) => ({ type: 'code' as const, id: r.id, similarity: r.similarity })),
-  ]
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, config.semanticK)
+  const nearest = async (type: SemanticNodeType) =>
+    scope[type] === '{}' ? [] : (await nearestOwners(client, type, vecs, scope[type], type === nodeType ? nodeId : null)).map((r) => ({ type, id: r.id, similarity: r.similarity }))
+  return [...(await nearest('note')), ...(await nearest('code'))].sort((a, b) => b.similarity - a.similarity).slice(0, config.semanticK)
 }
 
 /**
@@ -82,6 +110,12 @@ export async function recomputeSemanticEdges(
           await db.transaction(async (tx) => {
             // ponytail: tuned HNSW ef_search = 100 preserves 99.8% recall while avoiding full-table sequential scans on every note edit (DB-02).
             await tx.execute(sql`set local hnsw.ef_search = 100`)
+            // The container filter applies inside the HNSW scan (#461): pgvector 0.8+ goes on scanning until the LIMIT
+            // is met (up to `hnsw.max_scan_tuples`, default 20,000). Older versions reserve the `hnsw.` prefix without
+            // the setting, so it is set only where it exists; there a container whose blocks are not among the
+            // ef_search nearest gets no neighbours from the HNSW plan.
+            await tx.execute(sql`SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true) FROM pg_extension
+              WHERE extname = 'vector' AND string_to_array(extversion, '.')::int[] >= '{0,8}'`)
             return knn(vectors, nodeType, nodeId, tx)
           })
         ).filter((n) => n.similarity >= config.semanticThreshold)
@@ -140,4 +174,16 @@ export async function deleteSemanticEdgesFor(
         and(eq(semanticEdges.targetType, nodeType), inArray(semanticEdges.targetId, nodeIds)),
       ),
     )
+}
+
+/**
+ * After a vault changes owner (inside the transfer's transaction): its notes' note↔code edges, both
+ * directions, joined the previous owner's repositories, so they go (D10, #461). Each end gets the new
+ * owner's code neighbours at its next recompute; note→note edges stay, the vault is the same.
+ */
+export async function deleteVaultCodeEdges(vaultId: string, client: DbOrTx = db): Promise<void> {
+  await client.execute(sql`
+    DELETE FROM semantic_edges e USING notes n WHERE n.vault_id = ${vaultId}
+      AND ((e.node_a_type = 'note' AND e.node_a_id = n.id AND e.node_b_type = 'code')
+        OR (e.node_b_type = 'note' AND e.node_b_id = n.id AND e.node_a_type = 'code'))`)
 }

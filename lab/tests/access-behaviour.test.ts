@@ -307,7 +307,7 @@ const test: LabTest = {
       ]),
     )
 
-    // Ground truth: semantic neighbours are picked across every account (#461); reads filter them.
+    // Ground truth: semantic neighbours come from the note's own vault (#461, D10), so no edge joins A's and B's notes.
     const crossEdges = await ctx.docker.psqlRows<{ n: number }>(
       `select count(*)::int as n from semantic_edges where (node_a_id = '${noteA.id}' and node_b_id = '${noteB.id}') or (node_a_id = '${noteB.id}' and node_b_id = '${noteA.id}')`,
     )
