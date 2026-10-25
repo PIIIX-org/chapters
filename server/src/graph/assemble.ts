@@ -52,6 +52,7 @@ import {
   repositoryFileImports,
   repositoryFiles,
   semanticEdges,
+  vaults,
 } from '../db/schema.js'
 import { compareCodeUnits } from '../mcp/response.js'
 
@@ -204,14 +205,39 @@ export function fileNode(r: { id: string; repositoryId: string; path: string; la
   }
 }
 
+type NodeKey = Pick<InternalNode, 'id' | 'resourceType' | 'resourceId' | 'path'>
+
 /**
  * The order of graph nodes (#1006): path in code-unit order, then resource
- * type (`code` before `note`). The container and node ids decide only what
- * the content leaves tied: one path and type in two containers of a merged
- * graph.
+ * type (`code` before `note`), then the name of the node's vault or
+ * repository (`names`, from `containerNames`: one path and type in two
+ * containers of a merged graph). The container and node ids decide only
+ * what the content leaves tied: two containers of one name.
  */
-export const compareNodes = (a: Pick<InternalNode, 'id' | 'resourceType' | 'resourceId' | 'path'>, b: Pick<InternalNode, 'id' | 'resourceType' | 'resourceId' | 'path'>): number =>
-  compareCodeUnits(a.path, b.path) || compareCodeUnits(a.resourceType, b.resourceType) || compareCodeUnits(a.resourceId, b.resourceId) || compareCodeUnits(a.id, b.id)
+export const nodeOrder =
+  (names: ReadonlyMap<string, string>) =>
+  (a: NodeKey, b: NodeKey): number =>
+    compareCodeUnits(a.path, b.path) ||
+    compareCodeUnits(a.resourceType, b.resourceType) ||
+    compareCodeUnits(names.get(a.resourceId) ?? '', names.get(b.resourceId) ?? '') ||
+    compareCodeUnits(a.resourceId, b.resourceId) ||
+    compareCodeUnits(a.id, b.id)
+
+/**
+ * The names of the call's vaults and repositories by id, read only for a
+ * kind it holds several of (only then can two nodes share a path and type):
+ * what `nodeOrder` compares before ids.
+ */
+export async function containerNames(resources: GraphResourceSet): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  if (resources.vaultIds.length > 1) {
+    for (const v of await db.select({ id: vaults.id, name: vaults.name }).from(vaults).where(inArray(vaults.id, resources.vaultIds))) names.set(v.id, v.name)
+  }
+  if (resources.repositoryIds.length > 1) {
+    for (const r of await db.select({ id: repositories.id, name: repositories.name }).from(repositories).where(inArray(repositories.id, resources.repositoryIds))) names.set(r.id, r.name)
+  }
+  return names
+}
 
 /**
  * The file a `repo:<name>/<path>` (or `code:`, or `<name>:<path>`) wikilink
@@ -395,7 +421,7 @@ export function passesFilters(
 
 /**
  * Puts `edges` in content order (#1006), given each node's place in node
- * order (`compareNodes`): an undirected edge names its earlier end as
+ * order (`nodeOrder`): an undirected edge names its earlier end as
  * `source`; edges sort by their earlier end, then their later end, kind,
  * relation and (a link or import both ways) source. Returns the undirected
  * projection Louvain and the community weights read, in that order: one
@@ -523,7 +549,8 @@ export async function buildGraph(
   // Node order is content order (#1006): Louvain's partition depends on the
   // order it reads nodes and edges in, so no row order a query happens to
   // give (or an id order, which differs per database) may reach it.
-  internalNodes = internalNodes.filter((n) => passesFilters(n, filters)).sort(compareNodes)
+  const order = nodeOrder(await containerNames(resources))
+  internalNodes = internalNodes.filter((n) => passesFilters(n, filters)).sort(order)
   const kinds = new Set(filters.edgeTypes ?? EDGE_KINDS)
 
   const byId = new Map(internalNodes.map((n) => [n.id, n]))
@@ -638,7 +665,7 @@ export async function buildGraph(
     const members = assembled.nodes.filter((n) => n.community === filters.community)
     const sliced = members
       .slice()
-      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '') || compareNodes(a, b))
+      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '') || order(a, b))
       .slice(0, COMMUNITY_MEMBER_CAP)
     const ids = new Set(sliced.map((n) => n.id))
     return {

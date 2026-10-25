@@ -16,7 +16,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { notes, repositoryFiles, semanticEdges } from '../src/db/schema.js'
+import { notes, repositoryFiles, semanticEdges, vaults } from '../src/db/schema.js'
 import { buildGraph } from '../src/graph/assemble.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote } from '../src/notes/store.js'
@@ -68,9 +68,23 @@ const SEMANTIC: Array<[string, string, number]> = [
   ['note:alpha/three', 'code:src/b.ts', 0.4],
 ]
 
+/**
+ * A second vault of the same owner whose paths repeat the first's: in the
+ * merged graph each pair ties on path and kind, so only the vaults' names
+ * tell them apart. Its id sorts after the first vault's in A and before it in B.
+ */
+const ARCHIVE = 'content order archive'
+const ARCHIVE_NOTES: Array<{ path: string; tags?: string[]; body: string }> = [
+  { path: 'index', body: 'Start at [[alpha/one]] or [[docs/plan]].\n' },
+  { path: 'alpha/one', tags: ['bridge'], body: 'Back to [[index]].\n' },
+  { path: 'docs/plan', body: 'Archived.\n' },
+]
+
 interface World {
   agent: Client
+  cookie: string
   vaultId: string
+  archiveId: string
   repoId: string
   /** Generated id → its label, longest first. */
   labels: Array<[string, string]>
@@ -84,7 +98,12 @@ let B: World
 async function buildWorld(name: string, reverse: boolean): Promise<World> {
   const owner = await createActiveUser()
   const cookie = await loginCookie(app, owner.email)
-  const vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: VAULT } })).json<{ id: string }>().id
+  // Both vaults mergeable (the owner's own are in its merged graph), their ids in fixture order in A and reversed in B.
+  const vaultAt = (index: number) => rankedId(0x70000000 + (reverse ? 1 - index : index))
+  const [vaultId, archiveId] = [vaultAt(0), vaultAt(1)]
+  for (const [id, vaultName] of reverse ? [[archiveId, ARCHIVE], [vaultId, VAULT]] : [[vaultId, VAULT], [archiveId, ARCHIVE]]) {
+    await db.insert(vaults).values({ id: id!, name: vaultName!, ownerId: owner.id, mergeable: true })
+  }
   const repoId = (
     await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: REPO, ingestionMethod: 'agent_push' } })
   ).json<{ id: string }>().id
@@ -107,6 +126,14 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
     if (created.id !== id || queuedIds.length > 0) throw new Error(`${n.path}: createNote did not take the queued id ${id} (got ${created.id})`)
     idOf.set(`note:${n.path}`, id)
   }
+  const archiveOf = new Map<string, string>()
+  for (const n of inOrder(ARCHIVE_NOTES)) {
+    const id = idAt(NOTES.length + ARCHIVE_NOTES.indexOf(n))
+    queuedIds.push(id)
+    const created = await createNote(archiveId, { path: n.path, body: n.body, ...(n.tags ? { frontmatter: { tags: n.tags } } : {}) })
+    if (created.id !== id || queuedIds.length > 0) throw new Error(`archive ${n.path}: createNote did not take the queued id ${id} (got ${created.id})`)
+    archiveOf.set(n.path, id)
+  }
   // A file's row is inserted empty under its id, then the one push fills every row (an update keeps the id).
   for (const f of inOrder(FILES)) {
     const id = idAt(FILES.indexOf(f))
@@ -118,7 +145,7 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
   await flushEmbeddings()
 
   // The semantic rows are fixed per content; only their stored direction follows the world.
-  const ids = [...idOf.values()]
+  const ids = [...idOf.values(), ...archiveOf.values()]
   await db.delete(semanticEdges).where(or(inArray(semanticEdges.sourceId, ids), inArray(semanticEdges.targetId, ids)))
   for (const [a, b, similarity] of SEMANTIC) {
     const [from, to] = reverse ? [b, a] : [a, b]
@@ -128,14 +155,17 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
 
   const labels: Array<[string, string]> = [
     [vaultId, '<vault>'],
+    [archiveId, '<archive>'],
     [repoId, '<repository>'],
     ...[...idOf].map(([key, id]): [string, string] => [id, `<${key}>`]),
+    ...[...archiveOf].map(([path, id]): [string, string] => [id, `<archive:${path}>`]),
     // Names carry the container's first 8 id characters (`name#1a2b3c4d`).
     [vaultId.slice(0, 8), '<vault8>'],
+    [archiveId.slice(0, 8), '<archive8>'],
     [repoId.slice(0, 8), '<repository8>'],
   ]
   labels.sort((x, y) => y[0].length - x[0].length)
-  return { agent, vaultId, repoId, labels }
+  return { agent, cookie, vaultId, archiveId, repoId, labels }
 }
 
 /** `raw` with the world's ids replaced by their labels and the values of TIME_KEYS by `<time>`. */
@@ -161,11 +191,12 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   A = await buildWorld('a', false)
   B = await buildWorld('b', true)
-  // The precondition: B's note and file ids sort in the reverse order of A's.
+  // The precondition: B's vault, note and file ids sort in the reverse order of A's.
   const order = async (w: World) => {
     const label = (id: string) => w.labels.find(([known]) => known === id)![1]
     return [
-      (await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, w.vaultId)).orderBy(notes.id)).map((r) => label(r.id)),
+      (await db.select({ id: vaults.id }).from(vaults).where(inArray(vaults.id, [w.vaultId, w.archiveId])).orderBy(vaults.id)).map((r) => label(r.id)),
+      (await db.select({ id: notes.id }).from(notes).where(inArray(notes.vaultId, [w.vaultId, w.archiveId])).orderBy(notes.id)).map((r) => label(r.id)),
       (await db.select({ id: repositoryFiles.id }).from(repositoryFiles).where(eq(repositoryFiles.repositoryId, w.repoId)).orderBy(repositoryFiles.id)).map((r) => label(r.id)),
     ]
   }
@@ -224,5 +255,19 @@ describe('graph answers follow the content, not the ids (#1006)', () => {
     const undirected = parsed.edges.filter((e) => !e.directed)
     expect(undirected.length).toBeGreaterThan(0)
     for (const e of undirected) expect(ids.indexOf(e.source), `${e.source} - ${e.target}`).toBeLessThan(ids.indexOf(e.target))
+  })
+
+  it('the merged graph over two vaults sharing paths (vault ids in opposite order): nodes, edges, communities and candidates alike', async () => {
+    const urls = ['/api/graph/merged', '/api/graph/merged?aggregate=community', '/api/graph/merged/path?source=alpha/one&target=beta/three']
+    const get = async (w: World, url: string) => {
+      const res = await app.inject({ method: 'GET', url, headers: { cookie: w.cookie } })
+      expect(res.statusCode, res.body.slice(0, 300)).toBe(200)
+      return mask(w, res.body)
+    }
+    for (const url of urls) expect(await get(B, url), url).toBe(await get(A, url))
+    // One path and kind in two vaults: by the vaults' names (`content order archive` before `content order vault`).
+    const ids = (JSON.parse(await get(A, urls[0]!)) as { nodes: Array<{ id: string }> }).nodes.map((n) => n.id)
+    expect(ids.slice(0, 2)).toEqual(['<archive:alpha/one>', '<note:alpha/one>'])
+    expect(ids.indexOf('<archive:index>') + 1).toBe(ids.indexOf('<note:index>'))
   })
 })

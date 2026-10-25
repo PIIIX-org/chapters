@@ -1257,9 +1257,11 @@ and a link both ways is now two REST edges.
 
 Graph answers follow the content, never the per-database ids (#1006): the
 same notes and files give the same nodes, edges and communities in any
-database. Nodes are in `compareNodes` order (path in code-unit order, then
-`code` before `note`; container and node id only for one path and kind in
-two containers of a merged graph), an undirected edge names its earlier
+database. Nodes are in `nodeOrder` (path in code-unit order, then `code`
+before `note`, then the vault or repository name, read by `containerNames`
+only when the call holds several of a kind: one path and kind in two
+containers of a merged graph); the container and node ids decide only two
+containers of one name, the one tie left. An undirected edge names its earlier
 end as `source`, and edges sort by their ends' places, then kind, relation
 and source (`contentOrder`). Community detection runs
 `graphology-communities-louvain` over the undirected projection of the
@@ -1306,7 +1308,7 @@ for a ref without an extension also against the extension-less file path,
 so `store.ts` never matches `store.ts.orig`);
 a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
 tier. One match is `{node}`; several are `{candidates, next, total}`
-(`{path, kind, id}`, shorter path first, then path, kind and id; 10 shown,
+(`{path, kind, id}`, shorter path first, then `nodeOrder`; 10 shown,
 `next` the 11th as a `limit` + 1 read); none is `{suggestions}` (empty for
 a node id, so an id out of reach answers as a missing one): up to 5
 paths from a pool of at most 200 per table (same basename without

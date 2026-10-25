@@ -3,7 +3,7 @@ import { db } from '../db/client.js'
 import { notes, repositoryFiles } from '../db/schema.js'
 import { editDistance } from '../mcp/strict-input.js'
 import { compareCodeUnits } from '../mcp/response.js'
-import { FILE_NODE_COLUMNS, NOTE_NODE_COLUMNS, fileNode, noteNode, type GraphResourceSet, type InternalNode } from './assemble.js'
+import { FILE_NODE_COLUMNS, NOTE_NODE_COLUMNS, containerNames, fileNode, nodeOrder, noteNode, type GraphResourceSet, type InternalNode } from './assemble.js'
 
 /**
  * The graph node a reference names (#447): what `graph`'s `neighborsOf`,
@@ -22,7 +22,7 @@ import { FILE_NODE_COLUMNS, NOTE_NODE_COLUMNS, fileNode, noteNode, type GraphRes
  *
  * Graph nodes are notes and files, not symbols, so a symbol name is not a
  * tier. One node resolves; several are candidates, shorter path first,
- * then path (code-unit order) and id, the first MAX_CANDIDATES shown with
+ * then node order (`nodeOrder`: path in code-unit order, kind, container name), the first MAX_CANDIDATES shown with
  * the total; none gives up to MAX_SUGGESTIONS nearby paths (none for a
  * node id). Every query reads only `resources` (live notes of its vaults,
  * files of its repositories), the set the graph is built from and which the
@@ -57,9 +57,11 @@ const anyOf = (parts: SQL[]) => sql`(${sql.join(parts, sql` OR `)})`
 /** `column` ends with `/` + `suffix`, both lowercased. */
 const endsWithSegment = (column: SQL, suffix: string) => sql`right(${column}, length(lower(${text(suffix)})) + 1) = '/' || lower(${text(suffix)})`
 
-const byRank = (a: NodeCandidate, b: NodeCandidate) =>
-  [...a.path].length - [...b.path].length || compareCodeUnits(a.path, b.path) || compareCodeUnits(a.kind, b.kind) || compareCodeUnits(a.id, b.id)
-const candidate = (n: InternalNode): NodeCandidate => ({ path: n.path, kind: n.resourceType, id: n.id })
+/** `nodes` as candidates, shorter path first, then node order. */
+async function ranked(resources: GraphResourceSet, nodes: InternalNode[]): Promise<NodeCandidate[]> {
+  const order = nodeOrder(await containerNames(resources))
+  return nodes.sort((a, b) => [...a.path].length - [...b.path].length || order(a, b)).map((n) => ({ path: n.path, kind: n.resourceType, id: n.id }))
+}
 
 /** The nodes in `resources` whose id (tier 1) or path (tier 2) is `ref`. */
 async function exact(resources: GraphResourceSet, by: 'id' | 'path', ref: string): Promise<InternalNode[]> {
@@ -205,8 +207,8 @@ export async function resolveNode(resources: GraphResourceSet, ref: string): Pro
   if (found.length === 1) return { node: found[0]! }
   if (found.length > 1) {
     // A note and a file with one path (or one path in two vaults).
-    const ranked = found.map(candidate).sort(byRank)
-    return { candidates: ranked.slice(0, MAX_CANDIDATES), next: ranked[MAX_CANDIDATES] ?? null, total: ranked.length }
+    const candidates = await ranked(resources, found)
+    return { candidates: candidates.slice(0, MAX_CANDIDATES), next: candidates[MAX_CANDIDATES] ?? null, total: candidates.length }
   }
   // An id names one node or none: no partial match, and no suggestions, so an
   // id out of reach answers as a missing one.
@@ -220,6 +222,6 @@ export async function resolveNode(resources: GraphResourceSet, ref: string): Pro
   let total = 0
   for (const kind of ['note', 'code'] as const) total += tierRows.find((r) => r.node.resourceType === kind)?.total ?? 0
   if (total === 1) return { node: tierRows[0]!.node }
-  const ranked = tierRows.map((r) => candidate(r.node)).sort(byRank)
-  return { candidates: ranked.slice(0, MAX_CANDIDATES), next: ranked[MAX_CANDIDATES] ?? null, total }
+  const candidates = await ranked(resources, tierRows.map((r) => r.node))
+  return { candidates: candidates.slice(0, MAX_CANDIDATES), next: candidates[MAX_CANDIDATES] ?? null, total }
 }
