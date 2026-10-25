@@ -20,6 +20,7 @@ import { createActiveUser, loginCookie } from './helpers.js'
  * `outputSchema` on the 8 write tools (#433, 250 characters each): 39,512. Annotations on all 60 tools (#434:
  * `readOnlyHint` on the reads, `destructiveHint` and `idempotentHint` on the writes): 42,101. `search` takes
  * `budget_tokens` and `cursor`, with shorter `search`/`find_symbols` texts to keep the reader budget (#441): 41,719.
+ * On dev after #985 (envelope, profiles, two-block read_note, structured errors): 41,732.
  * The reader and writer budgets are in mcp-tool-budget.test.ts.
  */
 const TOOLS_LIST_CEILING = 43_000

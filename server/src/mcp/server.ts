@@ -1560,7 +1560,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     if (!(await getLiveNote(target, path))) throw await noteNotFound(target, path)
     throw new McpToolError(
       'INVALID_ARGUMENT',
-      `base_rev ${JSON.stringify(baseRev)} is not a revision of ${path}: send the \`rev\` read_note or edit_note returned, or an id from note_history`,
+      `base_rev ${JSON.stringify(baseRev)} is not a revision of ${path}: send the \`rev\` read_note or edit_note returned, or an id from note_history (admin-profile token)`,
       { field: 'base_rev' },
     )
   }
@@ -3180,13 +3180,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   // The SDK registers each list capability with `listChanged: true`, but
   // this server is stateless (a fresh one per POST, no session, no GET
   // stream: routes.ts), so a list_changed notification can never be sent
-  // (#436). Each capability the server has (tools always, the manuals when
-  // one was registered, prompts when they were registered above) is
-  // advertised with `false`; registerCapabilities merges per key.
-  server.server.registerCapabilities({
-    tools: { listChanged: false },
-    ...(manualOf.size > 0 ? { resources: { listChanged: false } } : {}),
-    ...(hasPrompts ? { prompts: { listChanged: false } } : {}),
-  })
+  // (#436). Each list capability the SDK registered above is advertised
+  // with `false`; registerCapabilities merges per key. (`getCapabilities` is
+  // private in the SDK's types, hence the element access.)
+  const registered = server.server['getCapabilities']()
+  server.server.registerCapabilities(
+    Object.fromEntries(
+      (['tools', 'resources', 'prompts'] as const).filter((key) => registered[key]).map((key) => [key, { listChanged: false }]),
+    ),
+  )
   return { server, tools }
 }

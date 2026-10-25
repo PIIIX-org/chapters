@@ -1,5 +1,5 @@
 -- #424: `browse_repository` reads a repository's files a page at a time, in
--- code-unit path order (`ORDER BY path COLLATE "C"`, `path > last`, a folder
+-- UTF-8 byte path order (`ORDER BY path COLLATE "C"`, `path > last`, a folder
 -- as a `COLLATE "C"` range). `repository_files_repo_path` is in the
 -- database's default collation (en_US.utf8 in the shipped image), which can
 -- serve neither, so every page would read and sort the whole repository.
