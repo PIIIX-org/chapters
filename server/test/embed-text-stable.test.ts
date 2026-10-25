@@ -106,8 +106,9 @@ describe('a note embeds no timestamp (#459)', () => {
     })
 
     // The copies differ in their timestamps only: `timestamp`, `created`, `updated`.
-    expect(noteB.frontmatter.timestamp).toEqual(expect.any(String))
-    expect(noteB.frontmatter.timestamp).not.toBe(noteA.frontmatter.timestamp)
+    expect(noteA.frontmatter).toMatchObject({ timestamp: '2026-01-01T00:00:00.000Z' })
+    expect(noteB.frontmatter).toMatchObject({ timestamp: expect.any(String) })
+    expect(noteB.frontmatter).not.toMatchObject({ timestamp: '2026-01-01T00:00:00.000Z' })
     // One text per block: the preamble and two sections.
     expect(textsA).toHaveLength(3)
     expect(textsB).toEqual(textsA)
@@ -127,7 +128,7 @@ describe('a note embeds no timestamp (#459)', () => {
     let edited!: WrittenNote | null
     const texts = await embeddedDuring(async () => {
       edited = await updateNote(vaultId, note.path, {
-        frontmatter: { ...note.frontmatter, timestamp: new Date().toISOString(), created: '2026-03-03', updated: new Date().toISOString() },
+        frontmatter: { ...frontmatter, timestamp: new Date().toISOString(), created: '2026-03-03', updated: new Date().toISOString() },
       })
       await flushEmbeddings()
     })
