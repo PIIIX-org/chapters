@@ -618,9 +618,13 @@ export const noteReads = pgTable(
  * EXTRACTED edges: one row per wikilink of a note body, replaced on every
  * body save. `start_line`/`end_line` are body-relative (ADR-004 §2.2: a
  * frontmatter edit leaves them valid; answers add the body's first file
- * line). A note may link one target on several lines (#472). 0 means "not
- * located yet": rows written before 0031, or by older code after a
- * rollback; the boot backfill (`backfillLinkLines`) locates them.
+ * line). A note may link one target on several lines (#472); of two links
+ * to one target starting on one line, the row is the first. `context` is
+ * the link's paragraph or line, at most 200 code points (#472, `okf.ts`
+ * `extractWikilinkLocations`). Null context means "not filled yet": rows
+ * written before 0039 (and, with `start_line` 0, before 0031), or by older
+ * code after a rollback; the boot catch-up (`notes/link-catch-up.ts`)
+ * rewrites them.
  */
 export const noteLinks = pgTable(
   'note_links',
@@ -631,11 +635,12 @@ export const noteLinks = pgTable(
     targetPath: text('target_path').notNull(),
     startLine: integer('start_line').notNull().default(0),
     endLine: integer('end_line').notNull().default(0),
+    context: text('context'),
   },
   (t) => [
     primaryKey({ name: 'note_links_source_note_id_target_path_start_line_pk', columns: [t.sourceNoteId, t.targetPath, t.startLine] }),
     index('note_links_target_idx').on(t.targetPath),
-    index('note_links_unlocated_idx').on(t.sourceNoteId).where(sql`start_line = 0`),
+    index('note_links_unfilled_idx').on(t.sourceNoteId).where(sql`context IS NULL`),
   ],
 )
 
