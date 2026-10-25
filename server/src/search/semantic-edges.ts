@@ -2,6 +2,7 @@ import { and, eq, inArray, or, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
+import { setHnswScan } from './hnsw.js'
 
 export type SemanticNodeType = 'note' | 'code'
 
@@ -109,13 +110,11 @@ export async function recomputeSemanticEdges(
       : (
           await db.transaction(async (tx) => {
             // ponytail: tuned HNSW ef_search = 100 preserves 99.8% recall while avoiding full-table sequential scans on every note edit (DB-02).
-            await tx.execute(sql`set local hnsw.ef_search = 100`)
-            // The container filter applies inside the HNSW scan (#461): pgvector 0.8+ goes on scanning until the LIMIT
-            // is met (up to `hnsw.max_scan_tuples`, default 20,000). Older versions reserve the `hnsw.` prefix without
-            // the setting, so it is set only where it exists; there a container whose blocks are not among the
+            // The container filter applies inside the HNSW scan (#461): with the iterative scan (pgvector 0.8+;
+            // setHnswScan sets it only where it exists) the scan goes on until the LIMIT is met (up to
+            // `hnsw.max_scan_tuples`, default 20,000); without it a container whose blocks are not among the
             // ef_search nearest gets no neighbours from the HNSW plan.
-            await tx.execute(sql`SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true) FROM pg_extension
-              WHERE extname = 'vector' AND string_to_array(extversion, '.')::int[] >= '{0,8}'`)
+            await setHnswScan(tx, 100)
             return knn(vectors, nodeType, nodeId, tx)
           })
         ).filter((n) => n.similarity >= config.semanticThreshold)

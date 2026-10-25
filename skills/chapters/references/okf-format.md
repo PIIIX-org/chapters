@@ -205,7 +205,10 @@ Elara turns links in the note body into `extracted` edges in the graph.
 ### 5.3 What Is Ignored
 Links inside inline code (`` `...` ``), fenced code blocks, and HTML comments are stripped before extraction. They create no edge, and the audit does not see them.
 
-### 5.4 Structural & Semantic Edges
+### 5.4 Backlinks
+Each link is stored with its body line and a short context: its paragraph (the lines up to the blank lines around it), or its line when the paragraph is longer than 200 characters (cut to 200 around the link when the line is too). A note linked from several lines keeps one entry per line; two links to it on one line count once. The `graph` tool with `neighborsOf: "<note path>"` lists them as `backlinks` (`path#La` of the linking note and the context; see `mcp-tools.md`). Only full-path links count, as for graph edges.
+
+### 5.5 Structural & Semantic Edges
 - **`structural`**: created automatically between notes sharing a `type` or a tag (and between code files sharing a language or top-level directory). Groups larger than 50 are skipped.
 - **`semantic`**: created automatically between nodes with high embedding similarity.
 
