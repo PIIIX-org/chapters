@@ -2621,10 +2621,14 @@ resolves a specifier only against files already known in the same
 repository. A `?query` or `#hash` suffix (Vite `?raw`, `?url`, `?worker`)
 is dropped before resolving; the stored `target_path` keeps the specifier
 as written. Then, in order: relative specifiers (`./x`, `../x`); the
-`paths` of the importing file's tsconfig/jsconfig; `#x` by the nearest
-package.json `imports`; the `@/` alias, mapped by convention to the
-importing file's package `src` directory (the path up to its first `src`
-segment); the tsconfig's `baseUrl`; a workspace package by name. Each
+`paths` of the importing file's tsconfig/jsconfig (a pattern that matches
+but finds no file skips the next three and goes to the packages, as tsc
+does); `#x` by the nearest package.json `imports`; the `@/` alias, mapped
+by convention to the importing file's package `src` directory (the path up
+to its first `src` segment); the tsconfig's `baseUrl`; a workspace package
+by name. Only a JS/TS importer (`.js/.jsx/.ts/.tsx/.mjs/.cjs/.mts/.cts`)
+uses the resolution context below: a Python or Go import resolves as before
+#466 (relative only). Each
 candidate path is tried as written and with extensions: TypeScript ESM
 specifiers name the compiled output, so `.js` tries `.ts` then `.tsx`,
 `.jsx` tries `.tsx`, `.mjs` tries `.mts`, `.cjs` tries `.cts`, before the
@@ -2651,8 +2655,8 @@ resolves to the same path under `src/`, and a `.d.ts` to its source next to
 it. *Path aliases:* `compilerOptions.paths` (exact keys, then one-`*`
 patterns, longest prefix wins; targets relative to `baseUrl`, else to the
 config's directory) and `baseUrl` apply to the files under the config's
-directory, the nearest directory with either winning (its configs merged,
-`tsconfig.json`/`jsconfig.json` first); configs are parsed as JSONC
+directory, the nearest directory with either winning (its configs merged:
+`tsconfig.json`/`jsconfig.json` first, then the others by name); configs are parsed as JSONC
 (comments, trailing commas) and `extends` is not followed. A manifest that
 does not parse is ignored.
 

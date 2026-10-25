@@ -184,4 +184,50 @@ describe('tsconfig/jsconfig `paths` and `baseUrl` (#466)', () => {
     const paths = new Set(['site/src/lib/date.js', 'site/src/app.js'])
     expect(resolveImportPath('site/src/app.js', '@lib/date', paths, ctx)).toBe('site/src/lib/date.js')
   })
+
+  // #987 review: a declared alias that matches but finds no file stays unresolved.
+  it('does not fall back to the @/ convention when a declared @/* alias matches but finds no file', () => {
+    const ctx = buildResolutionContext([
+      { path: 'web/tsconfig.json', content: JSON.stringify({ compilerOptions: { paths: { '@/*': ['./app/*'] } } }) },
+    ])
+    const paths = new Set(['web/src/page.ts', 'web/src/lib/db.ts', 'web/app/lib/api.ts'])
+    expect(resolveImportPath('web/src/page.ts', '@/lib/api', paths, ctx)).toBe('web/app/lib/api.ts')
+    expect(resolveImportPath('web/src/page.ts', '@/lib/db', paths, ctx)).toBeNull()
+  })
+
+  // #987 review: the directory's own tsconfig.json/jsconfig.json is read before its other configs, whatever else the repository has.
+  it('reads tsconfig.json before a same-directory jsconfig.build.json, with configs in other directories', () => {
+    const ctx = buildResolutionContext([
+      { path: 'a/jsconfig.build.json', content: JSON.stringify({ compilerOptions: { paths: { '~/*': ['./build-src/*'] } } }) },
+      { path: 'a/lib/tsconfig.json', content: JSON.stringify({ compilerOptions: { paths: { '#lib': ['./x.ts'] } } }) },
+      { path: 'a/tsconfig.json', content: JSON.stringify({ compilerOptions: { paths: { '~/*': ['./src/*'] } } }) },
+    ])
+    const paths = new Set(['a/main.ts', 'a/src/util.ts', 'a/build-src/util.ts'])
+    expect(resolveImportPath('a/main.ts', '~/util', paths, ctx)).toBe('a/src/util.ts')
+  })
+})
+
+// #987 review: tsconfig paths, baseUrl, package.json `imports` and workspace
+// package names are JavaScript module resolution; a Python or Go import never uses them.
+describe('manifests apply to JS/TS importers only', () => {
+  const ctx = buildResolutionContext([
+    { path: 'tsconfig.json', content: JSON.stringify({ compilerOptions: { baseUrl: '.', paths: { '~/*': ['./src/*'] } } }) },
+    { path: 'packages/utils/package.json', content: JSON.stringify({ name: 'utils' }) },
+  ])
+  const paths = new Set(['config.ts', 'server/index.ts', 'src/a.ts', 'packages/utils/src/index.ts', 'scripts/train.py', 'cmd/main.go', 'app.ts'])
+
+  it('leaves a Python or Go import that names a baseUrl path or a workspace package unresolved', () => {
+    for (const source of ['scripts/train.py', 'cmd/main.go']) {
+      expect(resolveImportPath(source, 'config', paths, ctx), source).toBeNull()
+      expect(resolveImportPath(source, 'server', paths, ctx), source).toBeNull()
+      expect(resolveImportPath(source, 'utils', paths, ctx), source).toBeNull()
+      expect(resolveImportPath(source, '~/a', paths, ctx), source).toBeNull()
+    }
+  })
+
+  it('still resolves the same specifiers from a JS/TS importer', () => {
+    expect(resolveImportPath('app.ts', 'config', paths, ctx)).toBe('config.ts')
+    expect(resolveImportPath('app.ts', 'utils', paths, ctx)).toBe('packages/utils/src/index.ts')
+    expect(resolveImportPath('app.ts', '~/a', paths, ctx)).toBe('src/a.ts')
+  })
 })
