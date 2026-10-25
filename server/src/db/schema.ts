@@ -407,6 +407,8 @@ export const notes = pgTable(
       .on(t.vaultId, sql`(coalesce(substring(${t.path} from '^(.*/)'), '')) collate "C"`, sql`${t.path} collate "C"`)
       .where(sql`deleted_at is null`),
     index('notes_vault_type_idx').on(t.vaultId, t.type),
+    // Trashed notes by path (migration 0047, #682): read_note's `if_rev` checks no other note held the path.
+    index('notes_vault_path_trashed').on(t.vaultId, t.path).where(sql`deleted_at is not null`),
   ],
 )
 
@@ -467,7 +469,12 @@ export const noteRevisions = pgTable(
       .defaultNow(),
     ord: bigserial('ord', { mode: 'number' }).notNull(),
   },
-  (t) => [index('note_revisions_note_idx').on(t.noteId, t.createdAt), index('note_revisions_note_ord').on(t.noteId, t.ord)],
+  (t) => [
+    index('note_revisions_note_idx').on(t.noteId, t.createdAt),
+    index('note_revisions_note_ord').on(t.noteId, t.ord),
+    // Revisions that moved a note away from a path (migration 0047, #682): read_note's `if_rev` checks no other note left it.
+    index('note_revisions_from_path').on(t.fromPath).where(sql`from_path is not null`),
+  ],
 )
 
 const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({

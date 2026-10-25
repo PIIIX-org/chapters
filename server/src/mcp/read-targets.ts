@@ -16,6 +16,9 @@
  *   whole answer would not fit its budget, or when asked (`outline: true`).
  *   It is the reads' `locations` level: the body is withheld, and the
  *   cursor pages it from its first line.
+ * - `if_rev` (#682, ADR-004 §2.9) is the version an earlier answer gave: a
+ *   note's `rev`, a file's `hash`. While it is current, any read (body,
+ *   targets or outline) answers `unchanged` in a few tokens instead.
  *
  * Lines are those of the document as read: a note's projected file (D3,
  * line 1 is `---`), a repository file's content.
@@ -25,7 +28,7 @@ import { noteBlocks } from '../notes/note-blocks.js'
 import { lineStarts } from '../text/lines.js'
 import { headingSections, matchPath, parseLineSpec, segments, wholeLines, type LineRange } from '../text/targets.js'
 import { McpToolError, envelope, type ErrorEnvelope } from './errors.js'
-import { location, ranked, textSection, type CursorAt, type Section } from './response.js'
+import { location, ranked, textSection, type Budgeted, type CursorAt, type Section } from './response.js'
 import { editDistance, strictArgs } from './strict-input.js'
 
 /** Most targets one read takes (checked by `checkReadArgs`, not in the schema: tools/list pays for every keyword). */
@@ -286,3 +289,11 @@ export function checkReadArgs(args: { targets?: readonly unknown[]; outline?: bo
 
 /** The `outline` argument (#417): true answers the outline, false pages the body; by default a body over the budget answers its outline. */
 export const OUTLINE_ARG = z.boolean().optional().describe('true: outline only')
+
+/** The `if_rev` argument (#682) of a read whose answers carry `version` (read_note `rev`, read_file `hash`). */
+export const ifRevArg = (version: 'rev' | 'hash') => z.string().optional().describe(`Your \`${version}\`: if current, answers \`unchanged\``)
+
+/** The answer to a read whose `if_rev` is current (#682): `{unchanged: true, rev | hash}` and, as every budgeted answer, `truncated: false`. */
+export function unchanged(version: { rev: number } | { hash: string }): Budgeted {
+  return { head: { unchanged: true, ...version }, sections: [] }
+}

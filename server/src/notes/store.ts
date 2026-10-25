@@ -820,6 +820,25 @@ async function readStored(vaultId: string, path: string): Promise<StoredNote | n
 }
 
 /**
+ * Whether a note other than `note` held or left its path (#682): a trashed
+ * note there, or a revision that moved another note of the vault away from
+ * it (a rename, a restore elsewhere). A new note's `seq` starts at 1, so the
+ * `rev` an agent has of such a note can equal this one's: read_note's
+ * `if_rev` then answers in full. Two lookups of migration 0047's partial
+ * indexes. A purged note leaves no trace.
+ */
+export async function pathHadOtherNote(note: { id: string; vaultId: string; path: string }): Promise<boolean> {
+  const rows = (await db.execute(sql`
+    SELECT 1 FROM notes o
+      WHERE o.vault_id = ${note.vaultId} AND o.path = ${note.path} AND o.deleted_at IS NOT NULL AND o.id <> ${note.id}
+    UNION ALL
+    SELECT 1 FROM note_revisions r JOIN notes o ON o.id = r.note_id
+      WHERE r.from_path = ${note.path} AND o.vault_id = ${note.vaultId} AND o.id <> ${note.id}
+    LIMIT 1`)) as unknown as unknown[]
+  return rows.length > 0
+}
+
+/**
  * A note's new body, or a function of its current body that the writer
  * applies under the note's lock: a rename's link rewrite (#803), which must
  * keep what other writers stored since the caller last read the note.
