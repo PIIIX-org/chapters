@@ -2385,22 +2385,50 @@ is the history record, not Chapters).
    — the closest analog to how a coding agent itself already works.
 
 **Which files are indexed** — git and local_path share one scan
-(`readRepositoryFiles` in `fs-scan.ts`) over the listed paths (each
-method's ignored directories and the binary extensions are not listed; at
-most 10,000 files). It skips a file over `MAX_FILE_BYTES` (1 MiB on disk) or holding
-a NUL byte: a server-side scan can't tell a stray NUL in a text file from
-a binary format, so it takes the file as binary. A skipped file is left out
-of `currentPaths` as well, so a row indexed from an earlier version is
-deleted with its symbols, imports, embedding and semantic edges: a file
-that grows past the cap or gains a NUL byte leaves the index (`read_file`
-answers `NOT_FOUND`, search and `find_symbols` stop finding it) and comes
-back on the first sync after it is indexable again (#923). The scan
-returns the skipped paths with a reason (`too_large`, `binary`), not
-reported anywhere yet (#465). A file that fails to read (gone since the
+(`scanRepository` in `fs-scan.ts`); they differ only in what is listed
+(#465, owner decision D12 in #930):
+- **git** lists every file of the clone except `.git`. A clone holds only
+  tracked files, so everything in it is source: a committed `build/`,
+  `dist/` or `node_modules/` is indexed.
+- **local_path** follows git's ignore rules, in the scan and in the
+  watcher (`GitignoreRules`): `.git/info/exclude`, the root `.gitignore`
+  and every nested `.gitignore`, the deepest decisive rule winning (a
+  nested `!keep.log` re-includes a root `*.log`), matched case-sensitively
+  like git's default unless the folder's `.git/config` sets
+  `core.ignorecase`. `.git` is always skipped. A folder with no root
+  `.gitignore` still skips `node_modules/` as a safety default. chokidar
+  never watches a directory it pruned, so when a `.gitignore`,
+  `.git/info/exclude` or `.git/config` changes, the watcher drops its
+  cached rules and replaces itself (once per debounced burst) before the
+  sync, so a newly un-ignored directory is watched and a newly ignored one
+  stops syncing.
+- **agent_push** has no filter: the client chose what to send.
+
+Both scans leave out binary assets by extension, then cap the listing at
+10,000 files (`MAX_INDEXED_FILES`; the rest are skipped as
+`over_file_cap`), then read: a file over `MAX_FILE_BYTES` (1 MiB on disk)
+or holding a NUL byte is skipped: a server-side scan can't tell a stray
+NUL in a text file from a binary format, so it takes the file as binary.
+A skipped file is left out of `currentPaths` as well, so a row indexed
+from an earlier version is deleted with its symbols, imports, embedding
+and semantic edges: a file that grows past the cap or gains a NUL byte
+leaves the index (`read_file` answers `NOT_FOUND`, search and
+`find_symbols` stop finding it) and comes back on the first sync after it
+is indexable again (#923). Every skip is reported: each sync stores
+`repositories.skipped_files` (`summarizeSkips`), a count per reason
+(`too_large`, `binary`, `ignored`, `over_file_cap`) plus a sample of up to
+5 paths per reason (an ignored directory is pruned, counted once and
+sampled as `dir/`). MCP `repository_status` and the REST repository row
+(`GET /api/repositories`) serve it as `skipped` (`skippedField`), omitted
+when nothing was skipped; the sync card shows one line. A git row whose
+`skipped_files` is still null (last synced before #465) skips the
+`ls-remote` shortcut once, so its committed `build/` gets indexed without
+waiting for a new commit. A file that fails to read (gone since the
 listing, no permission) stays current and keeps its row. agent_push is
 the exception: the client chose to send the content as text, so
 `syncRepositoryFiles` strips NUL bytes and indexes the rest, with no
-per-file size check (the request body limit bounds it).
+per-file size check (the request body limit bounds it), and reports no
+skips.
 
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
@@ -2871,7 +2899,7 @@ are idempotent rewrites.
 - **Secrets in backups** (SEC-06, revised by #409): the instance backup keeps password hashes, token hashes and TOTP secrets as stored (stripping the TOTP secret locked MFA users out after a restore), so the archive is as sensitive as the database; the setup token is never backed up. The scheduled local backup file is written with mode `0600` (through a temp file of the same mode) in a `0700` directory, whatever the umask (#493). The restore CLI prints counts, and only a driver message and code on errors. The `backup.json` digests (#493) are integrity checks, not a signature: they catch damage and truncation, not someone who can rewrite the whole archive.
 - **OIDC host-header sanitization**: Validated against `APP_URL` and injection characters to protect authorization code callbacks.
 - **Admin role hierarchy**: Strict `ROLE_RANK` enforcement preventing self-promotion or subordinate demotion of superadmins and instance owners.
-- **Ingestion bounds**: git and local-path ingestion capped to 1 MiB per file (`MAX_FILE_BYTES`, `fs-scan.ts`) and 10,000 files, ignoring vendor directories (`node_modules`, `dist`, `.next`); a file over the cap or with a NUL byte is skipped and drops out of the index (§5.10, #923).
+- **Ingestion bounds**: git and local-path ingestion capped to 1 MiB per file (`MAX_FILE_BYTES`, `fs-scan.ts`) and 10,000 files (`MAX_INDEXED_FILES`); git skips only `.git`, local_path follows its `.gitignore` files (`node_modules` by default when there is none); a file over the cap or with a NUL byte is skipped and drops out of the index (§5.10, #923); every skip is counted per reason in `repository_status.skipped` (#465).
 - **Global perspective guards**: Unvaulted graph perspectives are created only by instance admins and listed to and deleted by their creator only (#550; §5.5).
 - Full findings and the design changes they drove:
   `docs/superpowers/specs/2026-07-12-security-audit-findings.md` and

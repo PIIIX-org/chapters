@@ -2,8 +2,8 @@ import { and, eq, ne } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { recordSyncFailure, syncGitRepository, type RepositorySyncStatus } from './git-sync.js'
-import { listFilesRecursive, readRepositoryFiles } from './fs-scan.js'
-import { IGNORED, startWatching } from './local-watch.js'
+import { GitignoreRules, scanRepository, summarizeSkips } from './fs-scan.js'
+import { startWatching } from './local-watch.js'
 import { syncRepositoryFiles } from './store.js'
 import { recordJob } from '../monitoring/metrics.js'
 
@@ -121,13 +121,18 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
 
   await db.update(repositories).set({ syncStatus: 'syncing' }).where(eq(repositories.id, repositoryId))
   try {
-    const allPaths = await listFilesRecursive(root, IGNORED)
-    // Skipped files (too large, binary) leave currentPaths, so a stale row goes (#923).
-    const { files, currentPaths } = await readRepositoryFiles(root, allPaths.slice(0, 10_000), 'scheduler')
+    // A folder follows its .gitignore files (#465, D12). Skipped files leave
+    // currentPaths, so a stale row goes (#923).
+    const { files, currentPaths, skipped } = await scanRepository(root, new GitignoreRules(root), 'scheduler')
     await syncRepositoryFiles(repositoryId, files, currentPaths)
     await db
       .update(repositories)
-      .set({ syncStatus: 'idle', lastSyncedAt: new Date(), lastSyncError: null })
+      .set({
+        syncStatus: 'idle',
+        lastSyncedAt: new Date(),
+        lastSyncError: null,
+        skippedFiles: summarizeSkips(skipped),
+      })
       .where(eq(repositories.id, repositoryId))
     recordJob('sync', 'ok', repositoryId)
   } catch (err) {

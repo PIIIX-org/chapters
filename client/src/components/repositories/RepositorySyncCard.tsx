@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 import { AlertTriangle } from 'lucide-react'
 import { syncHealth } from '../../api/repositories.js'
-import type { AccessibleRepository, SyncHealth } from '../../api/repositories.js'
+import type { AccessibleRepository, SkipReason, SkippedFiles, SyncHealth } from '../../api/repositories.js'
 import { useRepository, useRepositoryFiles, useRepositoryDrift } from '../../hooks/useRepositories.js'
 import { Panel, PanelBody, PanelHeader } from '../ui/panel.js'
 import { StatusDot, type PillTone } from '../ui/pill.js'
@@ -55,6 +55,20 @@ function headline(health: SyncHealth, fileCount: number | undefined): string {
     case 'synced':
       return fileCount === undefined ? 'Synced' : `Synced — ${fileCount} ${fileCount === 1 ? 'file' : 'files'}`
   }
+}
+
+const SKIP_REASON_LABEL: Record<SkipReason, string> = {
+  too_large: 'over 1 MB',
+  binary: 'binary',
+  ignored: 'ignored',
+  over_file_cap: 'over the 10,000-file cap',
+}
+
+/** One line: "5 skipped (3 binary, 2 ignored)". An ignored folder counts once. */
+function skippedLine(skipped: SkippedFiles): string {
+  const reasons = (Object.keys(SKIP_REASON_LABEL) as SkipReason[]).filter((reason) => skipped[reason] > 0)
+  const total = reasons.reduce((sum, reason) => sum + skipped[reason], 0)
+  return `${total} skipped (${reasons.map((reason) => `${skipped[reason]} ${SKIP_REASON_LABEL[reason]}`).join(', ')})`
 }
 
 interface RepositorySyncCardProps {
@@ -167,6 +181,15 @@ export function RepositorySyncCard({ repositoryId, titleAs = 'h3' }: RepositoryS
       {repo.lastSyncedAt && (
         <p className="font-mono text-xs tabular-nums text-muted-foreground">
           Last synced {formatTimestamp(repo.lastSyncedAt)}
+        </p>
+      )}
+
+      {repo.skipped && (
+        <p
+          className="text-xs text-muted-foreground"
+          title={repo.skipped.sample.map((s) => s.path).join('\n')}
+        >
+          {skippedLine(repo.skipped)}
         </p>
       )}
 
