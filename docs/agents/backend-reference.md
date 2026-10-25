@@ -1389,17 +1389,19 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     out when all zero.
   - **HNSW settings** (#462): every vector leg (`blockLeg`: the note,
     code file and symbol legs of `search` and `find_symbols`) runs in a
-    transaction that sets `hnsw.ef_search` 200 and, when the installed
-    pgvector is 0.8.0 or later (`pg_extension.extversion`; an older one
-    refuses the `hnsw.` setting), `hnsw.iterative_scan = relaxed_order`,
-    with `set_config(…, true)` in one statement. HNSW applies the leg's
+    transaction that first calls `setHnswScan(tx, efSearch)`
+    (`search/hnsw.ts`, the one helper for every HNSW query): it sets
+    `hnsw.ef_search` (200 for search) and, when the installed pgvector is
+    0.8.0 or later (`pg_extension.extversion`; an older one refuses the
+    `hnsw.` setting), `hnsw.iterative_scan = relaxed_order`, with
+    `set_config(…, true)` in one statement. HNSW applies the leg's
     WHERE (scope, `kind`) to the candidates it fetched, so without the
     iterative scan a small repository or vault inside a big instance got
     few or no vector rows once the planner chose the index; now the scan
     goes on, up to `hnsw.max_scan_tuples` (20,000 by default), until the
     leg has its rows. Relaxed order can return rows slightly out of
     distance order: every leg re-sorts its cut. Semantic edges
-    (`semantic-edges.ts`) set their own.
+    (`semantic-edges.ts`) take their own `ef_search` (100).
   - **Total order** (#623): every cut ends in a key that is unique and,
     where it can be, the same on two instances with the same content (ids
     are random per instance). Keyword legs `ORDER BY rank DESC, path
@@ -1410,8 +1412,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     still serves it) and again after the gate; the note leg's 200-block cut
     by owner id (a join for the note's path there would cost a lookup per
     block; its 30-note cut goes by path). The final sort: score descending, then
-    path by UTF-16 code unit (`compareCodeUnits`), then a symbol's start
-    line (a note or file first), then id, so equal scores never depend on
+    path by UTF-16 code unit (`compareCodeUnits`), then resource type
+    (`code`, `note`, `symbol`: a note and a code file can share a path,
+    and a file comes before its symbols), then a symbol's start line, then
+    id, so equal scores never depend on
     row or `Map` insertion order. [INFERENCE] HNSW stays approximate and its
     graph depends on insert order: which rows make a vector leg's 30 can
     still differ between instances when distances are close but not equal.

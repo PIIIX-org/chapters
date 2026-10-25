@@ -77,15 +77,40 @@ describe('equal scores keep one order whatever the write order (#623)', () => {
     expect(await mixed(b)).toEqual(fromA)
   }, 120_000)
 
-  it('symbols of one file: by start line, not by their ids (which differ on every instance)', async () => {
-    // Six case variants of one name in one file: every one is an exact name match. The query embedding fails,
-    // so the keyword leg alone ranks them and its cut and order are what the answer shows.
-    const names = VARIANTS.slice(0, 6)
-    const repo = await repositoryWith(['src/one.ts'], () => names.map((name) => `export function ${name}() { return 0 }\n`).join(''))
-    vi.spyOn(embedder, 'embed').mockRejectedValue(new Error('embedder down'))
-    const answer = await findSymbols([repo], 'tiebrk')
-    expect(answer.retrieval_mode).toBe('keyword_only')
-    expect(answer.results.map((r) => r.startLine)).toEqual([1, 2, 3, 4, 5, 6])
+  it('symbols of one file: every cut by start line, not by their ids (which differ on every instance)', async () => {
+    // 36 case variants of one name in one file, one per line: each is an exact name match (one keyword
+    // tier), and their symbol blocks are given one vector, so the vector leg's distances are equal too. Both
+    // legs then cut 30 of 36 by their tie-break alone; only lines 1-30 in both legs give the first 20 hits
+    // the scores 2/(61+i) in line order.
+    const repo = await repositoryWith(['src/one.ts'], () => VARIANTS.map((name) => `export function ${name}() { return 0 }\n`).join(''))
+    await db.execute(sql`
+      UPDATE blocks b SET embedding = (SELECT embedding FROM blocks WHERE container_id = ${repo} AND kind = 'symbol' ORDER BY start_line LIMIT 1)
+      WHERE b.container_id = ${repo} AND b.kind = 'symbol'`)
+    const answer = await findSymbols([repo], 'tiebrk', { limit: 20 })
+    expect(answer.retrieval_mode).toBe('hybrid')
+    expect(answer.results.map((r) => r.startLine)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
+  }, 120_000)
+
+  it('a note and a code file at one path: by resource type, not by their ids', async () => {
+    // Each is alone in its legs (rank 1 in its keyword and its vector leg), so both score 2/61. Pairs are
+    // written until the note's id sorts first, so an id tie-break would put the note first.
+    const owner = await createActiveUser()
+    const path = 'docs/samepath'
+    for (let attempt = 1; ; attempt++) {
+      const [vault] = await db.insert(vaults).values({ name: 'same-path', ownerId: owner.id }).returning()
+      const note = await createNote(vault!.id, { path, body: 'tiebreakerwidget\n' })
+      await flushEmbeddings()
+      const repo = await repositoryWith([path], () => 'tiebreakerwidget\n')
+      const [file] = (await db.execute(sql`SELECT id FROM repository_files WHERE repository_id = ${repo}`)) as unknown as Array<{ id: string }>
+      if (byCodeUnit(note.id, file!.id) > 0 && attempt < 30) continue
+      const answer = await searchNotes({ vaultIds: [vault!.id], repositoryIds: [repo] }, 'tiebreakerwidget', 10)
+      expect(answer.results.map((r) => [r.resourceType, r.path])).toEqual([
+        ['code', path],
+        ['note', path],
+      ])
+      expect(answer.results[0]!.score).toBe(answer.results[1]!.score)
+      break
+    }
   }, 120_000)
 
   it('notes', async () => {

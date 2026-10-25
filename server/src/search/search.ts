@@ -3,6 +3,7 @@ import { db } from '../db/client.js'
 import { config } from '../config.js'
 import { embedder } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
+import { setHnswScan } from './hnsw.js'
 import { extractionState } from '../repositories/extraction-queue.js'
 import { passesFilters, timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
@@ -99,8 +100,9 @@ export interface SearchNotesOptions {
  * - `index`: the scope's notes and files still to be indexed, its
  *   repositories whose first sync is running or has not happened (no file
  *   yet), and the items whose indexing failed; left out when all are 0.
- * - `results`: in one total order, score descending, then path and id by
- *   UTF-16 code unit (`COLLATE "C"` in SQL).
+ * - `results`: in one total order, score descending, then path by UTF-16
+ *   code unit (`COLLATE "C"` in SQL), then resource type (`code`, `note`,
+ *   `symbol`), then a symbol's start line, then id (#623).
  */
 export type SearchStatus = 'ok' | 'no_match' | 'index_building' | 'unavailable'
 export type RetrievalMode = 'hybrid' | 'keyword_only' | 'vector_only' | 'none'
@@ -130,20 +132,12 @@ const BLOCK_CANDIDATES = 200
 
 /**
  * A vector leg over `blocks` (#462): its HNSW search widened to
- * `BLOCK_CANDIDATES` (the default 40 would cap it) and, on pgvector 0.8.0 or
- * later, iterative (`relaxed_order`): when the leg's WHERE (scope, kind) drops
- * most of the instance's nearest rows, the scan goes on, up to
- * `hnsw.max_scan_tuples` (20,000 by default), instead of answering short.
- * Relaxed order can return rows slightly out of distance order; each leg
- * re-sorts its cut (`gated`). An older pgvector refuses the setting (it
- * reserves the `hnsw.` prefix), so it is set only when the installed version has it.
+ * `BLOCK_CANDIDATES` (the default 40 would cap it) and iterative where
+ * pgvector has it (`setHnswScan`); each leg re-sorts its cut (`gated`).
  */
 async function blockLeg(query: SQL): Promise<unknown> {
   return db.transaction(async (tx) => {
-    await tx.execute(sql`
-      SELECT set_config('hnsw.ef_search', ${String(BLOCK_CANDIDATES)}, true),
-             CASE WHEN string_to_array(extversion, '.')::int[] >= '{0,8,0}' THEN set_config('hnsw.iterative_scan', 'relaxed_order', true) END
-      FROM pg_extension WHERE extname = 'vector'`)
+    await setHnswScan(tx, BLOCK_CANDIDATES)
     return tx.execute(query)
   })
 }
@@ -404,18 +398,25 @@ function respond<H>(
 interface Ranked {
   score: number
   path: string
+  resourceType?: ResourceType
   startLine?: number
   id: string
 }
 
 /**
  * The total order of every answer: score descending, then path by code unit,
- * then a symbol's start line (a note or file, which has none, first), then id.
- * Ids are random per instance, so they decide only what path and line leave
- * tied (#623).
+ * then resource type (a note and a code file can share a path; a file sorts
+ * before its symbols), then a symbol's start line, then id. Ids are random per
+ * instance, so they decide only what the rest leaves tied (#623).
  */
 function byScore(a: Ranked, b: Ranked): number {
-  return b.score - a.score || compareCodeUnits(a.path, b.path) || (a.startLine ?? 0) - (b.startLine ?? 0) || compareCodeUnits(a.id, b.id)
+  return (
+    b.score - a.score ||
+    compareCodeUnits(a.path, b.path) ||
+    compareCodeUnits(a.resourceType ?? '', b.resourceType ?? '') ||
+    (a.startLine ?? 0) - (b.startLine ?? 0) ||
+    compareCodeUnits(a.id, b.id)
+  )
 }
 
 /** The answer to an empty query or an empty scope: nothing was searched. */
