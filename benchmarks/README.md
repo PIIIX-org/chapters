@@ -89,7 +89,10 @@ judgment), or at a cap: 15 calls, no new call after 40,000 tokens, at most
 10 files of the ranking, and every response cut at 100,000 characters
 (25,000 tokens, what an agent harness shows of one tool result). Tokens are
 characters / 4 of what the agent was shown (no tokenizer is installed in the
-runner; the same estimate applies to both agents).
+runner; the same estimate applies to both agents). An MCP answer is every
+text block of its `content`, joined by a newline (the lab client's `text`):
+a tool that sends a text after its JSON block (read_note's body, #445) is
+counted whole.
 
 **Metrics** (per suite, means over questions):
 
