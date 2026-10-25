@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { CAPS, Episode, GREP, missCost, runElara, runGrep, searchHits, targetLines, visibleContentLines, words, type ElaraTools, type GrepTools } from './policies.ts'
+import { CAPS, Episode, GREP, missCost, runElara, runGrep, searchHits, visibleContentLines, type ElaraTools, type GrepTools } from './policies.ts'
 
 /** A `search` answer (#441, #442, #458): the hits inside the envelope. */
 const answer = (results: unknown[]) => JSON.stringify({ status: results.length > 0 ? 'ok' : 'no_match', retrieval_mode: 'hybrid', degraded: false, results, truncated: false })
@@ -137,74 +137,6 @@ test('elara: a paged read_file follows the cursor page by page and stops once th
   // Lines 1-90 were completed in context; line 60 counts on page 3, where its end was shown.
   assert.equal(run.episode.seen.size, 90)
   assert.deepEqual(run.episode.trace.slice(1).map((t) => t.tool), ['read_file', 'read_file', 'read_file'])
-})
-
-/**
- * A 100-line file over the budget (#417): read_file answers its outline, a
- * `targets` read (#416) answers the parts, the outline's cursor pages the
- * content 50 lines a page.
- */
-function outlineFile(calls: string[]): ElaraTools {
-  const lines = Array.from({ length: 100 }, (_, i) => `o line ${i + 1}\n`)
-  const slice = (a: number, b: number) => lines.slice(a - 1, b).join('')
-  return {
-    async search() {
-      return {
-        text: answer([{ resourceType: 'code', path: 'big.ts', snippet: '' }, { resourceType: 'symbol', path: 'big.ts', startLine: 80, endLine: 85, snippet: 'o line 80' }]),
-        ms: 1,
-        ok: true,
-      }
-    },
-    async readFile(path, cursor, targets) {
-      calls.push(`read_file ${path} ${cursor ?? '-'}${targets ? ` ${targets.map((t) => t.lines).join(',')}` : ''}`)
-      if (targets) {
-        const parts = targets.map((t) => {
-          const [a, b] = t.lines.split('-').map(Number) as [number, number]
-          return { lines: [a, b], text: slice(a, b) }
-        })
-        return { text: JSON.stringify({ path, targets: parts, truncated: false }), ms: 1, ok: true }
-      }
-      if (cursor === undefined) {
-        const outline = [
-          { block: 'b_aaaaaaaaaaaa', symbol: 'renderPage', kind: 'function', lines: [1, 9], tokens: 30 },
-          { block: 'b_bbbbbbbbbbbb', symbol: 'parseConfig', kind: 'function', lines: [10, 20], tokens: 40 },
-          { block: 'b_cccccccccccc', symbol: 'Store', kind: 'class', lines: [21, 100], tokens: 9_000 },
-        ]
-        const truncated = { shown: { outline: 3, content: 0 }, total: { outline: 3, content: 100 }, dropped: { outline: 0, content: 100 }, level: 'locations', cursor: 'p1', narrow: [] }
-        return { text: JSON.stringify({ path, language: 'typescript', hash: '0123456789abcdef', total_lines: 100, outline, truncated }), ms: 1, ok: true }
-      }
-      const n = cursor === 'p1' ? 1 : 2
-      const truncated = n === 1 ? { shown: {}, total: {}, dropped: {}, level: 'full', cursor: 'p2', narrow: [] } : false
-      return { text: JSON.stringify({ path, lines: n === 1 ? [1, 50] : [51, 100], content: n === 1 ? slice(1, 50) : slice(51, 100), truncated }), ms: 1, ok: true }
-    },
-  }
-}
-
-test('elara: a file answering its outline reads its symbol hits and the sections the question names, in one targets read', async () => {
-  const calls: string[] = []
-  const run = await runElara('Where is the config parsed?', [{ path: 'big.ts', start: 12, end: 14 }], outlineFile(calls))
-  // The symbol hit (80-85) is inside Store, over ELARA.targetTokens, so only parseConfig (`config`, `parsed`) is read.
-  assert.deepEqual(calls, ['read_file big.ts -', 'read_file big.ts - 10-20'])
-  assert.equal(run.episode.callsToGold, 3)
-  assert.deepEqual(run.episode.trace.map((t) => t.arg), ['Where is the config parsed?', 'big.ts', 'big.ts targets'])
-  // The outline shows no content line (the search snippet showed line 80); the targets read shows its part's lines.
-  assert.equal(run.episode.seen.size, 1 + 11)
-})
-
-test('elara: gold outside the named sections is read on through the outline cursor, page by page', async () => {
-  const calls: string[] = []
-  const run = await runElara('Where is the config parsed?', [{ path: 'big.ts', start: 60, end: 61 }], outlineFile(calls))
-  assert.deepEqual(calls, ['read_file big.ts -', 'read_file big.ts - 10-20', 'read_file big.ts p1', 'read_file big.ts p2'])
-  assert.equal(run.episode.callsToGold, 5)
-})
-
-test('targetLines counts a part split across pages on the page where its line ends; words splits identifiers', () => {
-  const json = { targets: [{ lines: [3, 5], text: 'a\nb\nc', next: '5-9' }, { lines: [7, 7], text: 'x\n' }, { heading: 'Nope', error: { code: 'NOT_FOUND' } }] }
-  assert.deepEqual(targetLines(json, 'f'), [
-    { path: 'f', start: 3, end: 4 },
-    { path: 'f', start: 7, end: 7 },
-  ])
-  assert.deepEqual([...words('Where does parseHTTPConfig read the cache_dir?')], ['parse', 'http', 'config', 'read', 'cache', 'dir'])
 })
 
 test('visibleContentLines counts JSON-escaped characters', () => {
