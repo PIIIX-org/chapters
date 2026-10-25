@@ -290,7 +290,7 @@ interface Question {
 
 /** Graph node order, undirected edge ends and community numbers follow the per-database ids. */
 const GRAPH_ORDER = '#1006'
-/** Each node's semantic neighbours are those that existed when it was embedded. */
+/** Each node's semantic neighbours were those that existed when it was embedded (fixed: its pinned case below passes). */
 const SEMANTIC_HISTORY = '#1007'
 /** An import pushed before the file it imports stays unresolved. */
 const IMPORT_HISTORY = '#1008'
@@ -314,13 +314,13 @@ const QUESTIONS: Question[] = [
     name: 'graph every node',
     tool: 'graph',
     args: (w) => ({ vaultId: w.vaultId, repositoryId: w.repoId, aggregate: 'none' }),
-    differs: `${GRAPH_ORDER}, ${SEMANTIC_HISTORY}, ${IMPORT_HISTORY}`,
+    differs: `${GRAPH_ORDER}, ${IMPORT_HISTORY}`,
   },
   {
     name: 'graph neighbours',
     tool: 'graph',
     args: (w) => ({ vaultId: w.vaultId, repositoryId: w.repoId, neighborsOf: 'index', depth: 2 }),
-    differs: `${GRAPH_ORDER}, ${SEMANTIC_HISTORY}, ${IMPORT_HISTORY}`,
+    differs: `${GRAPH_ORDER}, ${IMPORT_HISTORY}`,
   },
   { name: 'browse_vault root', tool: 'browse_vault', args: (w) => ({ vaultId: w.vaultId }) },
   {
@@ -363,7 +363,8 @@ describe('read tools answer deterministically (#473)', () => {
     })
   })
 
-  // The graph cases above mix three causes; each is pinned here on its own, independent of id order.
+  // The graph cases above mixed three causes; each is pinned here on its own, independent of id order. A fixed
+  // one stays as a plain case.
   describe('known differences, one per issue', () => {
     /** The rows of one edge kind, as names, an undirected row's ends sorted, the rows sorted. */
     const rows = async (w: World, args: Args): Promise<string[]> => {
@@ -376,7 +377,7 @@ describe('read tools answer deterministically (#473)', () => {
         .sort()
     }
 
-    it.fails(`semantic edges are the same whatever order the nodes were embedded in (${SEMANTIC_HISTORY})`, async () => {
+    it(`semantic edges are the same whatever order the nodes were embedded in (${SEMANTIC_HISTORY})`, async () => {
       const args = (w: World) => ({ vaultId: w.vaultId, repositoryId: w.repoId, edgeTypes: ['semantic'] })
       expect(await rows(B, args(B))).toEqual(await rows(A, args(A)))
     })
