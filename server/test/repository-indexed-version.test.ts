@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,15 +10,19 @@ import { simpleGit } from 'simple-git'
 import { eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { repositories } from '../src/db/schema.js'
+import { jobs, repositories, repositoryFiles } from '../src/db/schema.js'
 import { syncGitRepository } from '../src/repositories/git-sync.js'
 import { syncLocalRepository } from '../src/repositories/scheduler.js'
-import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { extractionJobKey, flushExtraction, scheduleMissingExtractions } from '../src/repositories/extraction-queue.js'
+import { listRepositoryFiles } from '../src/repositories/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // #471, owner decision D11 (#930, ADR-004 §2.9): every repository records
 // the version it was indexed at, the git commit when one is known and a tree
 // hash of the indexed files otherwise, and repository answers name it once.
+
+/** The tree of no files: sha256 of nothing, cut to 16 hex. */
+const EMPTY_TREE = 'e3b0c44298fc1c14'
 
 let app: FastifyInstance
 let ownerId: string
@@ -174,6 +179,43 @@ describe('local-path sync records the commit of a clean git work tree', () => {
     expect(await status(repo.id)).toEqual(expect.objectContaining({ tree: synced.treeHash }))
     expect((await status(repo.id)).commit).toBeUndefined()
   })
+
+  // git status hides untracked files that git's own ignore rules match, but
+  // the folder's scan reads only the folder's .gitignore files and its own
+  // .git/info/exclude: such a file is indexed although HEAD does not hold it.
+  async function syncIgnoredUntracked(work: { dir: string }, folder: string): Promise<string | null> {
+    await put(work.dir, `${folder}x.gen.ts`, 'export const generated = 1\n')
+    const repo = await makeRepo({ ingestionMethod: 'local_path', localPath: join(work.dir, folder) })
+    await syncLocalRepository(repo.id)
+    expect((await listRepositoryFiles(repo.id)).map((f) => f.path).sort()).toEqual(['a.ts', 'x.gen.ts'])
+    return (await row(repo.id)).lastSyncedCommit
+  }
+
+  it('a subfolder indexes a file its parent .gitignore ignores: null', async () => {
+    const work = await gitWorkTree('indexed-local-parent-ignore-', { '.gitignore': '*.gen.ts\n', 'sub/a.ts': 'export const a = 1\n' })
+    expect(await syncIgnoredUntracked(work, 'sub/')).toBeNull()
+  })
+
+  it("a subfolder indexes a file the repository's .git/info/exclude ignores: null", async () => {
+    const work = await gitWorkTree('indexed-local-info-exclude-', { 'sub/a.ts': 'export const a = 1\n' })
+    await put(work.dir, '.git/info/exclude', '*.gen.ts\n')
+    expect(await syncIgnoredUntracked(work, 'sub/')).toBeNull()
+  })
+
+  it('a folder indexes a file core.excludesFile ignores: null', async () => {
+    const work = await gitWorkTree('indexed-local-excludes-file-', { 'a.ts': 'export const a = 1\n' })
+    const excludes = join(await makeTempDir('indexed-excludes-'), 'ignore')
+    await writeFile(excludes, '*.gen.ts\n')
+    await work.git.addConfig('core.excludesFile', excludes)
+    expect(await syncIgnoredUntracked(work, '')).toBeNull()
+  })
+
+  it('a clean subfolder of a git work tree records HEAD', async () => {
+    const work = await gitWorkTree('indexed-local-sub-', { 'sub/a.ts': 'export const a = 1\n', 'other.ts': 'export const o = 1\n' })
+    const repo = await makeRepo({ ingestionMethod: 'local_path', localPath: join(work.dir, 'sub') })
+    await syncLocalRepository(repo.id)
+    expect((await row(repo.id)).lastSyncedCommit).toBe(await work.head())
+  })
 })
 
 describe('agent push takes an optional commit', () => {
@@ -239,5 +281,62 @@ describe('agent push takes an optional commit', () => {
       expect(text.split(COMMIT).length - 1, `${name}: ${text}`).toBe(1)
       expect(text, name).not.toContain('"tree"')
     }
+  })
+
+  it('read_file says when the outline lags its content: index pending, then failed', async () => {
+    const { repoId, push } = await pushRepo()
+    await push({ files, currentPaths: ['src/thrust.ts'], commit: COMMIT })
+    await flushExtraction()
+    const read = async () =>
+      JSON.parse(await callText('read_file', { repositoryId: repoId, path: 'src/thrust.ts' })) as {
+        commit?: string
+        index?: string
+        content: string
+        symbols: Array<{ name: string }>
+      }
+    const current = await read()
+    expect(current.index).toBeUndefined()
+    expect(current.symbols.map((s) => s.name)).toEqual(['orbitalThrust'])
+
+    // The stored content moved on and its extraction has not run yet.
+    const content = 'export function warpDrive() { return 2 }\n'
+    const contentHash = createHash('sha256').update(content).digest('hex')
+    await db.update(repositoryFiles).set({ content, contentHash }).where(eq(repositoryFiles.repositoryId, repoId))
+    const pending = await read()
+    expect(pending).toMatchObject({ commit: COMMIT, index: 'pending', content })
+    expect(pending.symbols.map((s) => s.name)).toEqual(['orbitalThrust'])
+
+    await scheduleMissingExtractions()
+    await flushExtraction()
+    const caughtUp = await read()
+    expect(caughtUp.index).toBeUndefined()
+    expect(caughtUp.symbols.map((s) => s.name)).toEqual(['warpDrive'])
+
+    const [file] = await db.select({ id: repositoryFiles.id }).from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repoId))
+    await db.update(jobs).set({ lastError: 'boom' }).where(eq(jobs.idempotencyKey, extractionJobKey(file!.id, contentHash)))
+    expect((await read()).index).toBe('failed')
+  })
+
+  it('search and find_symbols over several repositories carry neither commit nor tree', async () => {
+    const first = await pushRepo()
+    const second = await pushRepo()
+    await first.push({ files, currentPaths: ['src/thrust.ts'], commit: COMMIT })
+    await second.push({ files, currentPaths: ['src/thrust.ts'] })
+    await flushExtraction()
+    for (const [name, args] of [
+      ['search', { query: 'orbitalThrust', everywhere: true }],
+      ['find_symbols', { query: 'orbitalThrust' }],
+    ] as const) {
+      const answer = JSON.parse(await callText(name, args)) as Record<string, unknown>
+      expect((answer.results as unknown[]).length, name).toBeGreaterThan(1)
+      expect('commit' in answer || 'tree' in answer, name).toBe(false)
+    }
+  })
+
+  it('an empty repository after a sync names the empty tree', async () => {
+    const { repoId, push } = await pushRepo()
+    expect(await status(repoId)).not.toHaveProperty('tree')
+    await push({ files: [], currentPaths: [] })
+    expect(await status(repoId)).toMatchObject({ tree: EMPTY_TREE })
   })
 })
