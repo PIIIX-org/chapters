@@ -1397,7 +1397,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     stemmed); a minified file gets its path's only, and at most 20,000 are
     kept per file. `repository_files.keyword_fts` holds the row's `fts`
     plus them: the code leg's document, stored whole because concatenating
-    at query time cost 3-4x the leg's time on rea's 3,757 files. Symbol
+    at query time made the leg about 3x slower on rea's 3,757 files (53-65
+    ms against 21 ms for `evidence id`). Symbol
     blocks' `blocks.keywords` hold the lexemes of the symbol's
     `inner_path` and of its file's path. Both are null until the file is
     extracted again (`EXTRACTOR_VERSION` 5 re-extracts every file at the

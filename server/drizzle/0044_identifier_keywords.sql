@@ -3,9 +3,9 @@
 -- positionless lexemes (`array_to_tsvector`) and writes them in the statements it already runs, so no generated
 -- column or trigger recomputes them on other writes:
 -- - `repository_files.keyword_fts`: the code keyword leg's document of the extracted content, the row's `fts`
---   plus those lexemes (stored whole: concatenating them at query time cost 3-4x the leg's time on rea's
---   3,757 files). Current while `extracted_hash = content_hash`; a sync that changes the content makes the leg
---   read `fts` until the file is extracted again.
+--   plus those lexemes (stored whole: concatenating them at query time made the leg about 3x slower on rea's
+--   3,757 files, 53-65 ms against 21 ms for `evidence id`). Current while `extracted_hash = content_hash`; a sync
+--   that changes the content makes the leg read `fts` until the file is extracted again.
 -- - `blocks.keywords`: a symbol's lexemes (its inner_path and its file's path).
 -- Both are null until a file is extracted again: EXTRACTOR_VERSION 5 makes the first boot re-extract every file
 -- (no vector is embedded again), and meanwhile the legs match as before.
