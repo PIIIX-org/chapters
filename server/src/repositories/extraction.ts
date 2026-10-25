@@ -28,8 +28,11 @@ const require = createRequire(import.meta.url)
  * 4: TS/TSX/JS imports also from `export ... from`, `import('x')` and
  * `require('x')` with a literal specifier, and TypeScript `import x =
  * require('x')` (#466). No block text changes, so no vector is embedded again.
+ * 5: identifier lexemes for the keyword channel (#455, search/identifiers.ts):
+ * `repository_files.keywords` and symbol blocks' `keywords` (migration 0044).
+ * No block text changes, so no vector is embedded again.
  */
-export const EXTRACTOR_VERSION = 4
+export const EXTRACTOR_VERSION = 5
 
 /**
  * What a symbol declares (#450; the contract more languages, #464, and the

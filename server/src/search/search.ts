@@ -1,9 +1,11 @@
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { config } from '../config.js'
+import { textArray } from './block-rows.js'
 import { embedder } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
 import { setHnswScan } from './hnsw.js'
+import { isPlainWord, keywordTerms } from './identifiers.js'
 import { extractionState } from '../repositories/extraction-queue.js'
 import { timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
@@ -13,10 +15,55 @@ function uuidArray(ids: string[]): SQL {
   return sql`${`{${ids.join(',')}}`}::uuid[]`
 }
 
-/** `values` as one Postgres `text[]` parameter, each element quoted (a comma, brace or quote in a value stays in it). */
-function textArray(values: string[]): SQL {
-  return sql`${`{${values.map((v) => `"${v.replace(/["\\]/g, '\\$&')}"`).join(',')}}`}::text[]`
+/** The English full-text query of `text`, as every keyword leg ran it before #455 (note legs still do). */
+const english = (text: string): SQL => sql`websearch_to_tsquery('english', ${text})`
+
+/** A query of one exact lexeme: quoted, so no parser or stemming touches it. */
+const lexeme = (l: string): SQL => sql`${`'${l.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`}::tsquery`
+
+/** All of `queries` (empty: the empty query, which `&&` ignores). Every operand is parenthesised: `||` and `&&` bind alike in SQL. */
+function allOf(queries: SQL[]): SQL {
+  return queries.length === 0 ? sql`''::tsquery` : sql.join(
+    queries.map((q) => sql`(${q})`),
+    sql` && `,
+  )
 }
+
+/** A word: its English query or the unstemmed `lexemes`; nothing when it is a stop word (as the English query drops it). */
+function word(text: string, lexemes: SQL): SQL {
+  return sql`CASE WHEN numnode(${english(text)}) = 0 THEN ''::tsquery ELSE (${english(text)}) || (${lexemes}) END`
+}
+
+/**
+ * The code and symbol keyword legs' query (#455): `match` is every query
+ * term, each as its English query (stemmed, as before) or as its
+ * identifiers (search/identifiers.ts: a plain word unstemmed, a compound
+ * as its whole lexeme or all its parts), so `frontmatter parse` and
+ * `parse_frontmatter` find `parseFrontmatter` and `mcp.server.ts` finds
+ * `src/mcp/server.ts`. `whole` is any compound's whole lexeme: a leg ranks
+ * those matches first. A query with `websearch_to_tsquery` syntax keeps
+ * the English query and has no `whole`.
+ */
+function keywordQuery(query: string): { match: SQL; whole: SQL | null } {
+  const terms = keywordTerms(query)
+  if (terms === null) return { match: english(query), whole: null }
+  const wholes = new Set<string>()
+  const match = allOf(
+    terms.map(({ text, identifiers }) => {
+      if (identifiers.every(isPlainWord)) return word(text, allOf(identifiers.map((id) => lexeme(id.whole))))
+      const alternatives = identifiers.map((id) => {
+        if (isPlainWord(id)) return word(id.whole, lexeme(id.whole))
+        wholes.add(id.whole)
+        return sql`(${lexeme(id.whole)}) || (${allOf(id.parts.map((p) => word(p, lexeme(p))))})`
+      })
+      return sql`(${english(text)}) || (${allOf(alternatives)})`
+    }),
+  )
+  return { match, whole: wholes.size === 0 ? null : sql.join([...wholes].map(lexeme), sql` || `) }
+}
+
+/** The code keyword leg's document: the English `fts` and the identifier `keywords` (#455), as `repository_files_keyword_idx` indexes it. */
+const CODE_DOCUMENT = sql.raw(`(fts || coalesce(keywords, ''::tsvector))`)
 
 /**
  * What a search keeps (#454). Every filter applies inside each leg's SQL,
@@ -317,25 +364,30 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
 async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' | 'semantic', vec: string | undefined, filter: LegFilter): Promise<Row[]> {
   if (repositoryIds.length === 0 || filter === null) return []
   const filterSql = clauses(filter)
+  const keyword = keywordQuery(query)
   // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 files (DB-12).
   const rows =
     mode === 'keyword'
       ? await db.execute(sql`
+          -- #455: the whole identifier first, then the English match by its rank (the order before identifiers),
+          -- then what only the identifier keywords match (parts of a name, a path segment), by their rank.
           WITH top_code AS (
             SELECT id, repository_id AS container_id, path, language, content, ${UPDATED_AT(sql`updated_at`)},
-                   ts_rank(fts, websearch_to_tsquery('english', ${query})) AS rank
+                   ${keyword.whole ? sql`${CODE_DOCUMENT} @@ (${keyword.whole})` : sql`false`} AS whole,
+                   CASE WHEN fts @@ ${english(query)} THEN ts_rank(fts, ${english(query)}) ELSE 0 END AS rank,
+                   ts_rank(${CODE_DOCUMENT}, ${keyword.match}) AS keyword_rank
             FROM repository_files f
             WHERE repository_id = ANY(${uuidArray(repositoryIds)})
-              AND fts @@ websearch_to_tsquery('english', ${query})
+              AND ${CODE_DOCUMENT} @@ (${keyword.match})
               ${filterSql}
-            ORDER BY rank DESC, path COLLATE "C", id
+            ORDER BY whole DESC, rank DESC, keyword_rank DESC, path COLLATE "C", id
             LIMIT ${CANDIDATES}
           )
           SELECT id, container_id, path, language, updated_at,
-                 ts_headline('english', content, websearch_to_tsquery('english', ${query}),
+                 ts_headline('english', content, ${english(query)},
                              'MaxWords=30, MinWords=10') AS snippet
           FROM top_code
-          ORDER BY rank DESC, path COLLATE "C", id
+          ORDER BY whole DESC, rank DESC, keyword_rank DESC, path COLLATE "C", id
         `)
       : await blockLeg(
           gated(sql`
@@ -365,19 +417,25 @@ async function symbolRows(
   const repos = uuidArray(repositoryIds)
   const filterSql = clauses(filter)
   const pattern = `%${query}%`
+  const keyword = keywordQuery(query)
+  const contains = sql`(b.inner_path ILIKE ${pattern} OR (b.snippet IS NOT NULL AND b.snippet ILIKE ${pattern}))`
   const rows =
     mode === 'keyword'
       ? await db.execute(sql`
-          -- By name, by Class.name (inner_path), or by snippet, as the symbol table was matched before blocks.
+          -- By name, by Class.name (inner_path), or by snippet, as the symbol table was matched before blocks; or
+          -- by the identifier keywords of its inner_path and file path (#455), ranked after those, the whole
+          -- identifier before its parts.
           SELECT ${SYMBOL_COLUMNS}
           FROM blocks b JOIN repository_files f ON f.id = b.owner_id
           WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${filterSql}
-            AND (b.inner_path ILIKE ${pattern} OR (b.snippet IS NOT NULL AND b.snippet ILIKE ${pattern}))
+            AND (${contains} OR b.keywords @@ (${keyword.match}))
           ORDER BY
             CASE
               WHEN lower(${SYMBOL_NAME}) = lower(${query}) OR lower(b.inner_path) = lower(${query}) THEN 1
               WHEN lower(${SYMBOL_NAME}) LIKE lower(${`${query}%`}) THEN 2
-              ELSE 3
+              WHEN ${contains} THEN 3
+              ${keyword.whole ? sql`WHEN b.keywords @@ (${keyword.whole}) THEN 4` : sql``}
+              ELSE 5
             END,
             f.path COLLATE "C", b.start_line, b.id
           LIMIT ${CANDIDATES}

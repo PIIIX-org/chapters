@@ -3,9 +3,10 @@ import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFiles } from '../db/schema.js'
 import { failpoint } from '../failpoints.js'
-import { chunks, replaceBlockSet, vectorsByEmbedKey } from '../search/block-rows.js'
+import { chunks, keywordVector, replaceBlockSet, vectorsByEmbedKey } from '../search/block-rows.js'
 import { CHUNK_VERSION, embedKey } from '../search/embed-key.js'
 import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
+import { fileKeywords, symbolKeywords } from '../search/identifiers.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
@@ -478,10 +479,11 @@ async function processFile(fileId: string): Promise<void> {
   // label, since a sync skips unchanged content. It is written back below.
   const language = detectLanguage(row.path)
   // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
+  const minified = looksMinified(row.content)
   const { imports, symbols }: ExtractionResult =
-    isSupportedLanguage(language) && !looksMinified(row.content)
-      ? await extractStructure(language, row.content, row.path)
-      : { imports: [], symbols: [] }
+    isSupportedLanguage(language) && !minified ? await extractStructure(language, row.content, row.path) : { imports: [], symbols: [] }
+  // The keyword channel's identifier lexemes (#455): a minified file's mangled names are left out, its path kept.
+  const keywords = keywordVector(fileKeywords(row.path, minified ? null : row.content))
 
   const importRows: Array<typeof repositoryFileImports.$inferInsert> = []
   if (imports.length > 0) {
@@ -543,6 +545,7 @@ async function processFile(fileId: string): Promise<void> {
     symbolKind: b.symbolKind,
     symbolParent: b.symbolParent,
     snippet: b.snippet,
+    keywords: b.kind === 'symbol' ? symbolKeywords(row.path, b.innerPath) : null,
     startLine: b.startLine,
     endLine: b.endLine,
     contentHash: b.contentHash,
@@ -562,10 +565,11 @@ async function processFile(fileId: string): Promise<void> {
     for (const chunk of chunks(importRows)) await tx.insert(repositoryFileImports).values(chunk).onConflictDoNothing()
     // The block set is replaced whole: blocks this content no longer has go, the others are written over in place.
     await replaceBlockSet(tx, 'code', fileId, blockRows)
-    await tx
-      .update(repositoryFiles)
-      .set({ language, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId, chunkVersion })
-      .where(eq(repositoryFiles.id, fileId))
+    // Raw SQL: `keywords`, like `fts`, is kept out of the Drizzle model, so a `select()` of files never reads it.
+    await tx.execute(sql`
+      UPDATE repository_files SET language = ${language}, embedding_note = ${embeddingNote}, extracted_hash = ${row.contentHash},
+        extractor_version = ${extractorVersion}, embedder_id = ${embedderId}, chunk_version = ${chunkVersion}, keywords = ${keywords}
+      WHERE id = ${fileId}`)
     failpoint('extract.before-commit')
     return true
   })

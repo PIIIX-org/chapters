@@ -1,13 +1,28 @@
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { blocks } from '../db/schema.js'
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0]
-type BlockRow = typeof blocks.$inferInsert
+/** A block row; `keywords` its identifier lexemes (#455), stored by `keywordVector`. */
+type BlockRow = Omit<typeof blocks.$inferInsert, 'keywords'> & { keywords?: readonly string[] | null }
+
+/** `values` as one Postgres `text[]` parameter, each element quoted (a comma, brace or quote in a value stays in it). */
+export function textArray(values: readonly string[]): SQL {
+  return sql`${`{${values.map((v) => `"${v.replace(/["\\]/g, '\\$&')}"`).join(',')}}`}::text[]`
+}
+
+/**
+ * Identifier lexemes (search/identifiers.ts) as a `tsvector` of those exact
+ * lexemes: no parser, no stemming, no positions (`array_to_tsvector`).
+ * Null when there are none.
+ */
+export function keywordVector(lexemes: readonly string[] | null | undefined): SQL | null {
+  return lexemes && lexemes.length > 0 ? sql`array_to_tsvector(${textArray(lexemes)})` : null
+}
 
 /**
  * Rows per INSERT: one statement binds at most 65,534 parameters
- * (postgres.js), and a block row has 15, so a generated file with thousands
+ * (postgres.js), and a block row has 16, so a generated file with thousands
  * of constants would fail whole (#450 review). Every chunk is in the same
  * transaction, so the owner still commits all or nothing.
  */
@@ -44,7 +59,7 @@ export async function replaceBlockSet(tx: Tx, ownerType: 'note' | 'code', ownerI
   for (const chunk of chunks(rows)) {
     await tx
       .insert(blocks)
-      .values(chunk)
+      .values(chunk.map((b) => ({ ...b, keywords: keywordVector(b.keywords) })))
       .onConflictDoUpdate({
         target: [blocks.ownerType, blocks.ownerId, blocks.blockId],
         set: {
@@ -54,6 +69,7 @@ export async function replaceBlockSet(tx: Tx, ownerType: 'note' | 'code', ownerI
           symbolKind: sql`excluded.symbol_kind`,
           symbolParent: sql`excluded.symbol_parent`,
           snippet: sql`excluded.snippet`,
+          keywords: sql`excluded.keywords`,
           startLine: sql`excluded.start_line`,
           endLine: sql`excluded.end_line`,
           contentHash: sql`excluded.content_hash`,

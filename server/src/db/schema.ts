@@ -454,6 +454,11 @@ const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   dataType: () => 'bytea',
 })
 
+/** A Postgres `tsvector`: written as SQL (`array_to_tsvector`, search/block-rows.ts `keywordVector`), matched in SQL, never read by the app. */
+const tsvector = customType<{ data: string }>({
+  dataType: () => 'tsvector',
+})
+
 // ADR-003 §4 (migration 0021): the store's CRDT, update-log, projection and
 // job tables. Nothing reads or writes them before S2a/S2b. 0021 is hand-written
 // SQL, so primary, unique and foreign keys carry Postgres's default names
@@ -871,6 +876,14 @@ export const blocks = pgTable(
     symbolParent: text('symbol_parent'),
     /** A symbol block's snippet (code-blocks.ts): the keyword legs match it and hits show it, as `repository_file_symbols.snippet` was. */
     snippet: text('snippet'),
+    /**
+     * A symbol block's identifier lexemes (#455, migration 0044;
+     * search/identifiers.ts `symbolKeywords`: its `inner_path` and its file's
+     * path, split, unstemmed), which the symbol keyword leg matches beside
+     * `inner_path` and `snippet`. Null on other blocks and on a symbol not
+     * extracted since 0044 (`EXTRACTOR_VERSION` 5 extracts it again).
+     */
+    keywords: tsvector('keywords'),
     startLine: integer('start_line').notNull(),
     endLine: integer('end_line').notNull(),
     contentHash: text('content_hash').notNull(),
