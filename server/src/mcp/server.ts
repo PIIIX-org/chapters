@@ -73,7 +73,7 @@ import {
   type WrittenNote,
 } from '../notes/store.js'
 import { serializeNote } from '../notes/okf.js'
-import { renderDirIndex } from '../notes/projector.js'
+import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { getRepositoryFile, listFileBlocks, listFileSymbols, listRepositoryFilesPage } from '../repositories/store.js'
@@ -1386,13 +1386,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       if (!note) throw await noteNotFound(target, args.path)
       showAgentPresence(target, note.row.id, presence, 'reading')
       // Lines count over the note's file (ADR-004 §2.2, D3): line 1 is `---`, the body starts at body_start_line.
-      const file = serializeNote({ frontmatter: note.frontmatter, body: note.body })
-      const bodyStart = totalLines(file.slice(0, file.length - note.body.length)) + 1
+      // `note.frontmatter` is already in its file's key order, so no `frontmatter_src` is needed to render it.
+      const file = renderNoteFile({ frontmatter: note.frontmatter, frontmatterSrc: null, body: note.body })
+      const bodyStart = bodyStartLine({ frontmatter: note.frontmatter, frontmatterSrc: null })
       const lines = { body_start_line: bodyStart, total_lines: totalLines(file) }
       const foldError = note.foldError ? { fold_error: note.foldError } : {}
-      // Every answer (a page, targets, an outline) is of the rev it reports (a changed note refuses the cursor), so
-      // every read records it: the base a later whole-body edit three-way merges from (#864, #961). It replaces an
-      // older read.
+      // Every answer (a page, targets, an outline) is of the rev it reports, so every read records it: the base a
+      // later whole-body edit three-way merges from (#864, #961); it replaces an older read. A body page's cursor
+      // is refused once the body changed; a targets cursor, once the text of the part it resumes changed.
       const rendered = async () => {
         await rememberRead(auth.connection.id, note.row.id, note.row.seq)
       }

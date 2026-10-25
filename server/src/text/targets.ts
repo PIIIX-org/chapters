@@ -41,18 +41,20 @@ export interface HeadingSection {
   lines: LineRange
 }
 
-/** Every heading section of `text` (headings in code fences are content), in document order. */
+/** Every heading section of `text` (headings in code fences are content), in document order; one pass. */
 export function headingSections(text: string): HeadingSection[] {
   const starts = lineStarts(text)
   const lineAt = new Map(starts.map((offset, i) => [offset, i + 1]))
-  const found = headings(text).map((h) => ({ level: h.level, title: h.title, line: lineAt.get(h.start)! }))
-  const trail: Array<{ level: number; title: string }> = []
-  return found.map((h, i) => {
-    while (trail.length > 0 && trail.at(-1)!.level >= h.level) trail.pop()
-    trail.push(h)
-    const next = found.findIndex((o, j) => j > i && o.level <= h.level)
-    return { path: trail.map((t) => t.title).join(' > '), lines: [h.line, next === -1 ? starts.length : found[next]!.line - 1] }
-  })
+  const out: HeadingSection[] = []
+  // The open sections, outermost first: a heading closes every open one of its level or deeper.
+  const trail: Array<{ level: number; title: string; at: number }> = []
+  for (const h of headings(text)) {
+    const line = lineAt.get(h.start)!
+    while (trail.length > 0 && trail.at(-1)!.level >= h.level) out[trail.pop()!.at]!.lines[1] = line - 1
+    trail.push({ level: h.level, title: h.title, at: out.length })
+    out.push({ path: trail.map((t) => t.title).join(' > '), lines: [line, starts.length] })
+  }
+  return out
 }
 
 /** `## Setup > Linux ` → `["Setup", "Linux"]`: segments split at `separator`, trimmed, heading marks dropped. */

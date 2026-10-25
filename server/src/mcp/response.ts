@@ -44,11 +44,12 @@ const MAX_BUDGET = 25_000
 
 /**
  * The arguments every budgeted tool takes, with its kind's default in the
- * description. What a token is, the budget's range and how the cursor is
- * used are said once, in `initialize.instructions` (#435, instructions.ts):
- * the range is checked here but not listed as `minimum`/`maximum`, which
- * every budgeted tool would repeat in tools/list (#416 made room for read
- * targets in the reader budget so).
+ * description. What a token is and how the cursor is used are said once,
+ * in `initialize.instructions` (#435, instructions.ts). The range is
+ * checked here but listed nowhere (no `minimum`/`maximum`, which every
+ * budgeted tool would repeat in tools/list; #416 made room for read
+ * targets in the reader budget so): a call outside it is refused with a
+ * message that states it.
  */
 export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
   return {

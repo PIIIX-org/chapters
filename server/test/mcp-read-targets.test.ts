@@ -412,3 +412,22 @@ describe('a ranged read is a merge base (#864, #961)', () => {
     expect(recorded).toEqual({ rev: a.rev })
   })
 })
+
+describe('suggestions stay bounded', () => {
+  it('20 missing long heading targets on a note of 2,000 headings answer quickly, with suggestions where the work allows', async () => {
+    const path = 'docs/many-headings'
+    const body = Array.from({ length: 2_000 }, (_, i) => `## Heading number ${i} about ${'topic '.repeat(6)}\ntext ${i}\n`).join('')
+    await createNote(vaultId, { path, body })
+    const targets = Array.from({ length: 20 }, (_, i) => ({ heading: `Missing heading ${i} ${'x'.repeat(100)}` }))
+    const started = performance.now()
+    const r = await call('read_note', { vaultId, path, targets, budget_tokens: 25_000 })
+    const ms = performance.now() - started
+    expect(r.isError, r.text.slice(0, 200)).toBe(false)
+    expect(parts(r.json).every((p) => p.error?.code === 'NOT_FOUND')).toBe(true)
+    // Unbounded, this read ran an edit distance per target against every heading: seconds of a blocked event loop.
+    expect(ms).toBeLessThan(2_000)
+    // A short miss still gets its nearest headings.
+    const near = await call('read_note', { vaultId, path, targets: [{ heading: 'Heading numbr 7 about topic topic topic topic topic topic' }] })
+    expect(parts(near.json)[0]!.error!.suggestions?.length).toBeGreaterThan(0)
+  })
+})

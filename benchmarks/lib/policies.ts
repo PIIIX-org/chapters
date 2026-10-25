@@ -269,11 +269,12 @@ export function words(text: string): Set<string> {
 const sameWord = (a: string, b: string) => a === b || (Math.min(a.length, b.length) >= 4 && (a.startsWith(b) || b.startsWith(a)))
 
 /**
- * What the agent reads of `path` once it answered its outline: the file's
- * symbol hits from the search, then the outline entries whose names share
- * the most words with the question (ties in file order), each within one
- * read budget, none inside another or already seen, at most
- * `ELARA.targetsPerFile`.
+ * What the agent reads of `path` once it answered its outline: the outline
+ * entries holding the file's symbol hits from the search, then those whose
+ * names share the most words with the question (ties in file order); none
+ * inside another or already seen, at most `ELARA.targetsPerFile` and
+ * `ELARA.targetTokens` together, so a miss costs little more than the
+ * outline before the agent pages the file as it would have.
  */
 export function sectionTargets(
   question: string,
@@ -283,25 +284,33 @@ export function sectionTargets(
   seen: LineSet,
 ): Array<{ lines: string }> {
   const asked = [...words(question)]
-  const chosen: Array<[number, number]> = []
-  const add = (start: number, end: number) => {
-    if (chosen.length >= ELARA.targetsPerFile || chosen.some(([a, b]) => start >= a && end <= b) || seen.covers({ path, start, end })) return
-    chosen.push([start, end])
+  const chosen: OutlineEntry[] = []
+  let tokens = 0
+  const add = (entry: OutlineEntry) => {
+    const [start, end] = entry.lines
+    if (chosen.length >= ELARA.targetsPerFile || tokens + entry.tokens > ELARA.targetTokens) return
+    if (chosen.some((c) => start >= c.lines[0] && end <= c.lines[1]) || seen.covers({ path, start, end })) return
+    chosen.push(entry)
+    tokens += entry.tokens
   }
-  for (const hit of symbolHits) add(hit.start, hit.end)
+  // The innermost entry holding each symbol hit's first line.
+  for (const hit of symbolHits) {
+    const holding = outline.filter((e) => e.lines[0] <= hit.start && hit.start <= e.lines[1]).sort((a, b) => a.lines[1] - a.lines[0] - (b.lines[1] - b.lines[0]))[0]
+    if (holding) add(holding)
+  }
   const scored = outline
     .map((entry, order) => {
       const named = [...words(entry.name)]
       return { entry, order, score: asked.filter((q) => named.some((n) => sameWord(q, n))).length }
     })
-    .filter((s) => s.score > 0 && s.entry.tokens <= ELARA.readBudget)
+    .filter((s) => s.score > 0)
     .sort((a, b) => b.score - a.score || a.order - b.order)
-  for (const { entry } of scored) add(entry.lines[0], entry.lines[1])
-  return chosen.map(([a, b]) => ({ lines: `${a}-${b}` }))
+  for (const { entry } of scored) add(entry)
+  return chosen.map((e) => ({ lines: `${e.lines[0]}-${e.lines[1]}` }))
 }
 
-/** Elara policy: parts one `targets` read asks for; the default read budget (#420) an outline entry must fit in. */
-export const ELARA = { targetsPerFile: 4, readBudget: 4_000 }
+/** Elara policy: parts, and their tokens together, one `targets` read asks for (one call, its cursor not followed). */
+export const ELARA = { targetsPerFile: 2, targetTokens: 1_500 }
 
 /** Lines a symbol hit spans, whole (search's `startLine`/`endLine`): what a targets read of it shows. */
 function symbolSpan(hit: SearchHit): LineRange | null {
@@ -309,17 +318,12 @@ function symbolSpan(hit: SearchHit): LineRange | null {
   return { path: hit.path, start: hit.startLine, end: hit.endLine }
 }
 
-/** One `targets` read of `path`, following its cursor until the parts are read or the gold is seen. */
+/** One `targets` read of `path`: within ELARA.targetTokens it fits the default budget, so its cursor is not followed. */
 async function readTargets(ep: Episode, tools: ElaraTools, path: string, targets: ReadonlyArray<{ lines: string }>): Promise<void> {
-  let cursor: string | undefined
-  do {
-    if (ep.done) return
-    const res = await tools.readFile(path, cursor, targets)
-    const cut = ep.clip(res.text)
-    const json = res.ok ? parseJson(res.text) : undefined
-    ep.record('read_file', `${path} targets`, cut.visible, cut.truncated, res.ms, res.ok, cut.truncated ? [] : targetLines(json, path))
-    cursor = cut.truncated ? undefined : nextCursor(json)
-  } while (cursor)
+  if (ep.done) return
+  const res = await tools.readFile(path, undefined, targets)
+  const cut = ep.clip(res.text)
+  ep.record('read_file', `${path} targets`, cut.visible, cut.truncated, res.ms, res.ok, cut.truncated || !res.ok ? [] : targetLines(parseJson(res.text), path))
 }
 
 export async function runElara(question: string, gold: readonly LineRange[], tools: ElaraTools, caps: Caps = CAPS): Promise<PolicyRun> {

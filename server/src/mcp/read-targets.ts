@@ -63,15 +63,17 @@ type Resolved = { part: Record<string, unknown>; lines: LineRange } | { error: E
 /** One `part` text section per target, in request order (response.ts `TextSection.part`). */
 export function targetSections(doc: TargetDocument, targets: readonly Target[]): Section[] {
   const starts = lineStarts(doc.text)
+  // Suggestions for every target of this read share one bounded amount of edit-distance work.
+  const work = { cells: SUGGESTION_CELLS }
   return targets.map((target) => {
-    const resolved = resolve(doc, target, starts.length)
+    const resolved = resolve(doc, target, starts.length, work)
     if ('error' in resolved) return textSection({ name: 'targets', text: '', lines: false, part: { ...target, error: resolved.error } })
     const [a, b] = resolved.lines
     return textSection({ name: 'targets', text: wholeLines(doc.text, a, b, starts), lines: true, firstLine: a, part: resolved.part })
   })
 }
 
-function resolve(doc: TargetDocument, target: Target, total: number): Resolved {
+function resolve(doc: TargetDocument, target: Target, total: number, work: { cells: number }): Resolved {
   const kinds = KINDS.filter((kind) => target[kind] !== undefined)
   if (kinds.length !== 1) return { error: envelope('INVALID_ARGUMENT', 'a target names one of lines, block, heading or symbol') }
   const kind = kinds[0]!
@@ -86,15 +88,15 @@ function resolve(doc: TargetDocument, target: Target, total: number): Resolved {
     const found = doc.blocks.find((b) => b.block === value)
     return found ? { part: { block: value }, lines: found.lines } : { error: envelope('NOT_FOUND', 'block not found in this document; `outline: true` lists its blocks') }
   }
-  return kind === 'heading' ? named(value, doc.headings, '>', 'heading') : named(value, doc.symbols, '.', 'symbol')
+  return kind === 'heading' ? named(value, doc.headings, '>', 'heading', work) : named(value, doc.symbols, '.', 'symbol', work)
 }
 
 /** A heading or symbol path resolved among `list` (text/targets.ts `matchPath`). */
-function named(wanted: string, list: TargetDocument['headings'], separator: string, kind: 'heading' | 'symbol'): Resolved {
+function named(wanted: string, list: TargetDocument['headings'], separator: string, kind: 'heading' | 'symbol', work: { cells: number }): Resolved {
   if (typeof list === 'string') return { error: envelope('NOT_FOUND', list) }
   const paths = list.map((entry) => entry.path)
   const hits = matchPath(wanted, paths, separator)
-  if (hits.length === 0) return { error: envelope('NOT_FOUND', `${kind} not found`, { suggestions: nearestPaths(wanted, paths, separator) }) }
+  if (hits.length === 0) return { error: envelope('NOT_FOUND', `${kind} not found`, { suggestions: nearestPaths(wanted, paths, separator, work) }) }
   if (hits.length > 1) {
     const candidates = hits.map((i) => list[i]!)
     // The same path twice (two `## Notes`, overloads): only their lines tell them apart.
@@ -106,23 +108,42 @@ function named(wanted: string, list: TargetDocument['headings'], separator: stri
   return { part: { [kind]: hit.path }, lines: hit.lines }
 }
 
+/** A longer heading or symbol path gets no suggestions, as an overlong unknown argument gets none (#769). */
+const MAX_WANTED = 120
 /** Paths compared for suggestions are cut to this many characters. */
-const MAX_COMPARED = 200
+const MAX_COMPARED = 120
+/** Paths compared by edit distance per target, the first after the cheap tiers (then in document order). */
+const MAX_DISTANCES = 200
+/** Edit-distance cells (`editDistance` fills one per character pair) one read spends on suggestions, all targets together. */
+export const SUGGESTION_CELLS = 1_000_000
 const SUGGESTED = 3
 
 /**
  * The paths nearest `wanted`, nearest first: the same last segment, then
- * one containing the other, then by edit distance (case-insensitive), then
- * in document order. Empty only when there are no paths.
+ * one containing the other (both by a linear check over every path), then
+ * by edit distance (case-insensitive) among the first MAX_DISTANCES of
+ * those tiers while `work` lasts, then in document order. The work is
+ * bounded: a note with thousands of headings and a read of 20 missing
+ * targets stays within SUGGESTION_CELLS. Empty when there are no paths or
+ * `wanted` is over MAX_WANTED.
  */
-export function nearestPaths(wanted: string, paths: readonly string[], separator: string): string[] {
-  const want = wanted.slice(0, MAX_COMPARED).toLowerCase()
+export function nearestPaths(wanted: string, paths: readonly string[], separator: string, work: { cells: number }): string[] {
+  if (wanted.length > MAX_WANTED) return []
+  const want = wanted.toLowerCase()
   const last = segments(want, separator).at(-1) ?? want
   return [...new Set(paths)]
     .map((value, order) => {
       const have = value.slice(0, MAX_COMPARED).toLowerCase()
       const tier = (segments(have, separator).at(-1) ?? have) === last ? 0 : have.includes(want) || want.includes(have) ? 1 : 2
-      return { value, order, tier, distance: editDistance(want, have) }
+      return { value, order, tier, have }
+    })
+    .sort((a, b) => a.tier - b.tier || a.order - b.order)
+    .slice(0, MAX_DISTANCES)
+    .map((c) => {
+      const cells = (want.length + 1) * (c.have.length + 1)
+      if (work.cells < cells) return { ...c, distance: Infinity }
+      work.cells -= cells
+      return { ...c, distance: editDistance(want, c.have) }
     })
     .sort((a, b) => a.tier - b.tier || a.distance - b.distance || a.order - b.order)
     .slice(0, SUGGESTED)
@@ -230,10 +251,8 @@ export function markdownParts(ownerId: string, path: string, body: string, text:
   // NOTE_CHUNK_CHARS is several blocks (note-blocks.ts): its entry has no `block`, `heading` and `lines` read it.
   const preamble = found.filter((b) => b.kind === 'preamble')
   const outline = preamble.length === 0 ? [] : [entry([preamble[0]!.startLine, preamble.at(-1)!.endLine], preamble.length === 1 ? preamble[0]!.blockId : undefined)]
-  for (const h of headings) {
-    const whole = found.find((b) => b.kind === 'section' && b.startLine === h.lines[0] && b.endLine === h.lines[1])
-    outline.push(entry(h.lines, whole?.blockId, h.path))
-  }
+  const sectionBlock = new Map(found.flatMap((b) => (b.kind === 'section' ? [[`${b.startLine}-${b.endLine}`, b.blockId] as const] : [])))
+  for (const h of headings) outline.push(entry(h.lines, sectionBlock.get(`${h.lines[0]}-${h.lines[1]}`), h.path))
   return {
     blocks: found.map((b) => ({ block: b.blockId, lines: shift([b.startLine, b.endLine]) })),
     headings: headings.map((h) => ({ path: h.path, lines: shift(h.lines) })),

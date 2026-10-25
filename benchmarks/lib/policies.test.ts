@@ -183,18 +183,18 @@ function outlineFile(calls: string[]): ElaraTools {
 test('elara: a file answering its outline reads its symbol hits and the sections the question names, in one targets read', async () => {
   const calls: string[] = []
   const run = await runElara('Where is the config parsed?', [{ path: 'big.ts', start: 12, end: 14 }], outlineFile(calls))
-  // The symbol hit (80-85) first, then parseConfig (`config`, `parsed`); Store is over the read budget.
-  assert.deepEqual(calls, ['read_file big.ts -', 'read_file big.ts - 80-85,10-20'])
+  // The symbol hit (80-85) is inside Store, over ELARA.targetTokens, so only parseConfig (`config`, `parsed`) is read.
+  assert.deepEqual(calls, ['read_file big.ts -', 'read_file big.ts - 10-20'])
   assert.equal(run.episode.callsToGold, 3)
   assert.deepEqual(run.episode.trace.map((t) => t.arg), ['Where is the config parsed?', 'big.ts', 'big.ts targets'])
-  // The outline shows no content line; the targets read shows its parts' lines (the snippet's line 80 is among them).
-  assert.equal(run.episode.seen.size, 6 + 11)
+  // The outline shows no content line (the search snippet showed line 80); the targets read shows its part's lines.
+  assert.equal(run.episode.seen.size, 1 + 11)
 })
 
 test('elara: gold outside the named sections is read on through the outline cursor, page by page', async () => {
   const calls: string[] = []
   const run = await runElara('Where is the config parsed?', [{ path: 'big.ts', start: 60, end: 61 }], outlineFile(calls))
-  assert.deepEqual(calls, ['read_file big.ts -', 'read_file big.ts - 80-85,10-20', 'read_file big.ts p1', 'read_file big.ts p2'])
+  assert.deepEqual(calls, ['read_file big.ts -', 'read_file big.ts - 10-20', 'read_file big.ts p1', 'read_file big.ts p2'])
   assert.equal(run.episode.callsToGold, 5)
 })
 
