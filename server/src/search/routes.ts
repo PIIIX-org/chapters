@@ -2,41 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { atLeast, listAccessibleVaults, resolveAccess } from '../vaults/permissions.js'
 import { listAccessibleRepositories, resolveRepositoryAccess } from '../repositories/permissions.js'
 import { findSymbols, searchNotes } from './search.js'
-import type { GraphFilters } from '../graph/assemble.js'
-
-const searchQuerySchema = {
-  type: 'object',
-  required: ['q'],
-  properties: {
-    q: { type: 'string', minLength: 1, maxLength: 500 },
-    limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
-    types: { type: 'string' },
-    tags: { type: 'string' },
-    since: { type: 'string' },
-    until: { type: 'string' },
-    symbols: { type: 'boolean' },
-  },
-} as const
-
-interface SearchQuery {
-  q: string
-  limit?: number
-  types?: string
-  tags?: string
-  since?: string
-  until?: string
-  symbols?: boolean
-}
-
-// Same wire format as parseFilters in graph/routes.ts — comma-separated lists.
-function parseFilters(q: SearchQuery): GraphFilters {
-  return {
-    types: q.types ? q.types.split(',').filter(Boolean) : undefined,
-    tags: q.tags ? q.tags.split(',').filter(Boolean) : undefined,
-    since: q.since,
-    until: q.until,
-  }
-}
+import { parseSearchFilters, searchQuerySchema, type SearchQuery } from './filters.js'
 
 export function searchRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAuth)
@@ -51,7 +17,7 @@ export function searchRoutes(app: FastifyInstance) {
         { vaultIds: [req.params.id], repositoryIds: [] },
         req.query.q,
         req.query.limit,
-        parseFilters(req.query),
+        parseSearchFilters(req.query),
         { includeSymbols: req.query.symbols },
       )
     },
@@ -77,7 +43,7 @@ export function searchRoutes(app: FastifyInstance) {
         },
         req.query.q,
         req.query.limit,
-        parseFilters(req.query),
+        parseSearchFilters(req.query),
         { includeSymbols: req.query.symbols },
       )
     },

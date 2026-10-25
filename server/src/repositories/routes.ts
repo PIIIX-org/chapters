@@ -32,6 +32,7 @@ import { listRepositoryFiles } from './store.js'
 import { buildGraph } from '../graph/assemble.js'
 import { graphQuerySchema, parseGraphFilters, type GraphQuery } from '../graph/filters.js'
 import { searchNotes } from '../search/search.js'
+import { parseSearchFilters, searchQuerySchema, type SearchQuery } from '../search/filters.js'
 import { checkCodeStaleness } from '../notes/staleness.js'
 
 async function requireOwner(userId: string, repositoryId: string): Promise<boolean> {
@@ -332,24 +333,15 @@ export function repositoryRoutes(app: FastifyInstance) {
     )
   })
 
-  app.get<{ Params: { id: string }; Querystring: { q: string; limit?: number } }>(
+  app.get<{ Params: { id: string }; Querystring: SearchQuery }>(
     '/repositories/:id/search',
-    {
-      schema: {
-        querystring: {
-          type: 'object',
-          required: ['q'],
-          properties: {
-            q: { type: 'string', minLength: 1, maxLength: 500 },
-            limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
-          },
-        },
-      },
-    },
+    { schema: { querystring: searchQuerySchema } },
     async (req, reply) => {
       const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
       if (!access) return reply.code(404).send({ error: 'not found' })
-      return searchNotes({ vaultIds: [], repositoryIds: [req.params.id] }, req.query.q, req.query.limit)
+      return searchNotes({ vaultIds: [], repositoryIds: [req.params.id] }, req.query.q, req.query.limit, parseSearchFilters(req.query), {
+        includeSymbols: req.query.symbols,
+      })
     },
   )
 
