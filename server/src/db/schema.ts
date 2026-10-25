@@ -917,11 +917,11 @@ export const blocks = pgTable(
     /** A symbol block's snippet (code-blocks.ts): the keyword legs match it and hits show it, as `repository_file_symbols.snippet` was. */
     snippet: text('snippet'),
     /**
-     * A symbol block's identifier lexemes (#455, migration 0044;
+     * A symbol block's identifier lexemes (#455, migration 0052;
      * search/identifiers.ts `symbolKeywords`: its `inner_path` only, split,
      * unstemmed), which the symbol keyword leg matches beside
      * `inner_path` and `snippet`. Null on other blocks and on a symbol not
-     * extracted since 0044 (`EXTRACTOR_VERSION` 6 extracts it again).
+     * extracted since 0052 (`EXTRACTOR_VERSION` 6 extracts it again).
      */
     keywords: tsvector('keywords'),
     startLine: integer('start_line').notNull(),

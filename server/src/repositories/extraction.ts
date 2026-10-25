@@ -30,7 +30,7 @@ const require = createRequire(import.meta.url)
  * require('x')` (#466). No block text changes, so no vector is embedded again.
  * 5 is #998's (extraction languages).
  * 6: identifier lexemes for the keyword channel (#455, search/identifiers.ts):
- * `repository_files.keyword_fts` and symbol blocks' `keywords` (migration 0044).
+ * `repository_files.keyword_fts` and symbol blocks' `keywords` (migration 0052).
  * No block text changes, so no vector is embedded again.
  */
 export const EXTRACTOR_VERSION = 6

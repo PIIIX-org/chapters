@@ -568,7 +568,7 @@ async function processFile(fileId: string): Promise<void> {
     for (const chunk of chunks(importRows)) await tx.insert(repositoryFileImports).values(chunk).onConflictDoNothing()
     // The block set is replaced whole: blocks this content no longer has go, the others are written over in place.
     await replaceBlockSet(tx, 'code', fileId, blockRows)
-    // The code keyword leg's document (#455, migration 0044): the row's `fts` (of this content, checked above) plus
+    // The code keyword leg's document (#455, migration 0052): the row's `fts` (of this content, checked above) plus
     // the identifier lexemes. Raw SQL: `keyword_fts`, like `fts`, is kept out of the Drizzle model, so a `select()`
     // of files never reads it.
     await tx.execute(sql`

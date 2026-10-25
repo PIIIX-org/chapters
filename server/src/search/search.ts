@@ -92,7 +92,7 @@ function keywordQuery(query: string, leg: 'code' | 'symbol'): { match: SQL; whol
  * The code keyword leg's document (#455), as `repository_files_keyword_idx` indexes it: `keyword_fts` (the
  * English `fts` plus the identifier lexemes, written by extraction) while it is of the current content and was
  * written by an extractor that has keywords (6, the version that added them, as a literal: the index has it;
- * code from before 0044 re-extracting a file after a rollback writes a lower version), else `fts`.
+ * code from before 0052 re-extracting a file after a rollback writes a lower version), else `fts`.
  */
 const CODE_DOCUMENT = sql.raw(
   `(CASE WHEN keyword_fts IS NOT NULL AND extracted_hash = content_hash AND extractor_version >= 6 THEN keyword_fts ELSE fts END)`,

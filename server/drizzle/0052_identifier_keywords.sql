@@ -11,9 +11,10 @@
 -- Both are null until a file is extracted again: EXTRACTOR_VERSION 6 makes the first boot re-extract every file
 -- (no vector is embedded again), and meanwhile the legs match as before.
 -- The GIN index on the code leg's document replaces the one on `fts`, which nothing else queries. Code from
--- before 0044 still works over it (its `fts @@` scans the repository's files). Symbol keywords have no index:
+-- before 0052 still works over it (its `fts @@` scans the repository's files). Symbol keywords have no index:
 -- the symbol leg ORs them with its ILIKE match, which reads every symbol of the repository anyway.
--- Numbered 0044 with a `when` (1792800000000) above 0043's; a migration merged later must take a larger `when`.
+-- Numbered 0052 with a `when` (1793200000000, its #930 reservation) above those merged before it; a migration merged
+-- later must take a larger `when`.
 ALTER TABLE "repository_files" ADD COLUMN "keyword_fts" tsvector;--> statement-breakpoint
 ALTER TABLE "blocks" ADD COLUMN "keywords" tsvector;--> statement-breakpoint
 DROP INDEX IF EXISTS "repository_files_fts_idx";--> statement-breakpoint
