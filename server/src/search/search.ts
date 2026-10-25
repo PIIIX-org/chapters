@@ -5,7 +5,7 @@ import { textArray } from './block-rows.js'
 import { embedder } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
 import { setHnswScan } from './hnsw.js'
-import { MAX_KEYWORD_LENGTH, isPlainWord, keywordTerms } from './identifiers.js'
+import { MAX_KEYWORD_LENGTH, isPlainWord, keywordTerms, type Identifier } from './identifiers.js'
 import { extractionState } from '../repositories/extraction-queue.js'
 import { timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
@@ -39,26 +39,48 @@ function word(text: string, lexemes: SQL): SQL {
 }
 
 /**
+ * The spellings of a compound that match it (#455): its whole lexeme and its
+ * parts joined plain (how a camelCase or PascalCase word is stored), by `_`
+ * (snake_case, SCREAMING_SNAKE_CASE) and by `-` (kebab-case), so
+ * `parseFrontmatter` and `parse_frontmatter` find each other.
+ */
+function spellings(id: Identifier): SQL {
+  return sql.join([...new Set([id.whole, id.parts.join(''), id.parts.join('_'), id.parts.join('-')])].map(lexeme), sql` || `)
+}
+
+/**
  * The code and symbol keyword legs' query (#455): `match` is every query
  * term, each as its English query (stemmed, as before) or as its
- * identifiers (search/identifiers.ts: a plain word unstemmed, a compound
- * as its whole lexeme or all its parts), so `frontmatter parse` and
- * `parse_frontmatter` find `parseFrontmatter` and `mcp.server.ts` finds
- * `src/mcp/server.ts`. `whole` is any compound's whole lexeme: a leg ranks
- * those matches first. A query with `websearch_to_tsquery` syntax keeps
- * the English query and has no `whole`.
+ * identifiers (search/identifiers.ts): a plain word unstemmed, so
+ * `frontmatter parse` finds `parseFrontmatter`; a compound as one of its
+ * `spellings`, so `parse_frontmatter` finds `parseFrontmatter` and
+ * `mcp.server.ts` finds `src/mcp/server.ts`. In the symbol leg, whose
+ * document is one name path, a compound also matches as all its parts
+ * (`reader.load_body` finds `NoteReader.loadBody`). The code leg's document
+ * is a whole file, so there a term matches as written: not a compound by
+ * its parts, nor a term of several plain words (`host/platform`) by its
+ * words; it keeps that term's English query. Their pieces anywhere in a
+ * file matched every long document that uses the words, and the fusion
+ * ranked those above the file that defines the name (the benchmark
+ * regression of #1014: `HopperRequestQueue` in a question matched guides
+ * with hopper, request and queue in them). `whole` is any compound's whole
+ * lexeme: a leg ranks those matches first. A query with
+ * `websearch_to_tsquery` syntax keeps the English query and has no `whole`.
  */
-function keywordQuery(query: string): { match: SQL; whole: SQL | null } {
+function keywordQuery(query: string, leg: 'code' | 'symbol'): { match: SQL; whole: SQL | null } {
   const terms = keywordTerms(query)
   if (terms === null) return { match: english(query), whole: null }
   const wholes = new Set<string>()
   const match = allOf(
     terms.map(({ text, identifiers }) => {
-      if (identifiers.every(isPlainWord)) return word(text, allOf(identifiers.map((id) => lexeme(id.whole))))
+      if (identifiers.every(isPlainWord)) {
+        if (leg === 'code' && identifiers.length > 1) return english(text)
+        return word(text, allOf(identifiers.map((id) => lexeme(id.whole))))
+      }
       const alternatives = identifiers.map((id) => {
         if (isPlainWord(id)) return word(id.whole, lexeme(id.whole))
         if (id.whole.length <= MAX_KEYWORD_LENGTH) wholes.add(id.whole)
-        return sql`(${lexeme(id.whole)}) || (${allOf(id.parts.map((p) => word(p, lexeme(p))))})`
+        return leg === 'code' ? spellings(id) : sql`(${lexeme(id.whole)}) || (${allOf(id.parts.map((p) => word(p, lexeme(p))))})`
       })
       return sql`(${english(text)}) || (${allOf(alternatives)})`
     }),
@@ -375,7 +397,7 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
 async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' | 'semantic', vec: string | undefined, filter: LegFilter): Promise<Row[]> {
   if (repositoryIds.length === 0 || filter === null) return []
   const filterSql = clauses(filter)
-  const keyword = keywordQuery(query)
+  const keyword = keywordQuery(query, 'code')
   // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 files (DB-12).
   const rows =
     mode === 'keyword'
@@ -430,7 +452,7 @@ async function symbolRows(
   const repos = uuidArray(repositoryIds)
   const filterSql = clauses(filter)
   const pattern = `%${query}%`
-  const keyword = keywordQuery(query)
+  const keyword = keywordQuery(query, 'symbol')
   const contains = sql`(b.inner_path ILIKE ${pattern} OR (b.snippet IS NOT NULL AND b.snippet ILIKE ${pattern}))`
   const rows =
     mode === 'keyword'

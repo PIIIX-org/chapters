@@ -14,7 +14,7 @@
  * a file and of a symbol, stored unstemmed (the `simple` way:
  * `array_to_tsvector`) beside the stemmed English `fts`. Query side
  * (search.ts `keywordQuery`): each term matches as the English query did,
- * or as its whole identifier, or as all its parts. Pure; a change to what is
+ * or as its spellings, or (symbol leg only) as all its parts. Pure; a change to what is
  * stored needs an `EXTRACTOR_VERSION` bump (extraction.ts) so every file is
  * extracted again.
  */
@@ -84,9 +84,21 @@ function addAll(into: Set<string>, lexemes: readonly string[]): boolean {
   return true
 }
 
-/** Every lexeme of every compound of each path segment (`server/src/mcp.server.ts`: `server`, `src`, `mcp.server.ts`, `mcp`, `ts`). */
+/**
+ * Every lexeme of every compound of each path segment (`server/src/mcp.server.ts`: `server`, `src`,
+ * `mcp.server.ts`, `mcp`, `ts`), and the path's dotted tails, with and without the extension
+ * (`src/mcp/server.ts`: `mcp.server.ts`, `src.mcp.server.ts`, `mcp.server`, `src.mcp.server`): the code leg
+ * matches a compound in the query by its spellings, not its parts, so these let a dotted path find its file.
+ */
 function pathLexemes(path: string, into: Set<string>): void {
   for (const id of identifiers(path.replaceAll('/', ' '))) addAll(into, id.lexemes)
+  const segments = path.toLowerCase().split('/')
+  const name = segments.at(-1)!
+  const stem = name.replace(/(.)\.[^.]*$/, '$1')
+  for (let i = segments.length - 2; i >= 0; i--) {
+    const dir = segments.slice(i, -1).join('.')
+    addAll(into, [`${dir}.${name}`, `${dir}.${stem}`].filter((t) => t.length <= MAX_KEYWORD_LENGTH))
+  }
 }
 
 /**
