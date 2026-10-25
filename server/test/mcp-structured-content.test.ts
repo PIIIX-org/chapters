@@ -18,7 +18,7 @@ import { createNote } from '../src/notes/store.js'
 import { StoreBusyError } from '../src/notes/store-tx.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
 type Json = Record<string, unknown>
@@ -36,15 +36,16 @@ const clients: Client[] = []
  * One call through the real client (which validates `structuredContent`
  * against a listed outputSchema and throws when it does not match). A
  * successful object answer must carry `structuredContent` equal to its
- * parsed text; any other answer must carry none.
+ * parsed text (read_note's body block put back in its key, #445); any other
+ * answer must carry none.
  */
 async function call(tool: string, args: Args): Promise<{ isError: boolean; text: string; json: unknown; structured: unknown }> {
   resetRateLimits()
   const result = await agent.callTool({ name: tool, arguments: args })
   const content = result.content as Array<{ type: string; text?: string }>
-  expect(content.length, `${tool}: one text block`).toBe(1)
-  const text = content[0]!.text ?? ''
   const isError = result.isError === true
+  expect(content.length, `${tool}: one text block, and read_note's body after it`).toBe(tool === 'read_note' && !isError ? 2 : 1)
+  const text = toolText(content)
   let json: unknown
   if (!isError) {
     json = JSON.parse(text)

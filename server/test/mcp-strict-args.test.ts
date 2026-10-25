@@ -10,7 +10,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { buildApp } from '../src/app.js'
 import { listMcpTools } from '../src/mcp/server.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
 interface JsonSchema {
@@ -59,7 +59,7 @@ async function call(client: Client, name: string, args: Args): Promise<{ isError
   resetRateLimits()
   const result = await client.callTool({ name, arguments: args })
   const content: unknown[] = Array.isArray(result.content) ? result.content : []
-  return { isError: result.isError === true, text: content.map((c) => field(c, 'text')).join('') }
+  return { isError: result.isError === true, text: toolText(content) }
 }
 
 /** A refused call's error envelope (#439), after checking it is an error. */

@@ -33,7 +33,7 @@ import { db } from '../db/client.js'
 import { failpoint } from '../failpoints.js'
 import { atomicWrite } from '../notes/atomic-write.js'
 import { sameContent } from '../notes/frontmatter-order.js'
-import { parseNote } from '../notes/okf.js'
+import { parseNote, withType } from '../notes/okf.js'
 import { foldPendingCollab } from '../notes/store.js'
 import { BACKFILL_MARKER, setCollabNotMigrated, storeTransaction, type Tx } from '../notes/store-tx.js'
 import { crdtFile, loadCrdtState } from './crdt-store.js'
@@ -70,6 +70,8 @@ interface Row {
   id: string
   vault_id: string
   path: string
+  /** The folder (the path's first segment, #444). */
+  type: string
   seq: string
   frontmatter: Record<string, unknown>
   body: string
@@ -127,7 +129,7 @@ function sharesHistory(bin: Y.Doc, stored: Y.Doc): boolean {
 
 async function backfillNote(tx: Tx, id: string, report: CollabBackfillReport, date: string): Promise<void> {
   const [row] = (await tx.execute(sql`
-    SELECT id, vault_id, path, seq, frontmatter, body FROM notes WHERE id = ${id} AND deleted_at IS NULL FOR UPDATE`)) as unknown as Row[]
+    SELECT id, vault_id, path, type, seq, frontmatter, body FROM notes WHERE id = ${id} AND deleted_at IS NULL FOR UPDATE`)) as unknown as Row[]
   if (!row) return
   const [s2a] = (await tx.execute(
     sql`SELECT 1 FROM note_projections WHERE note_id = ${id} AND projection = ${BACKFILL_MARKER}`,
@@ -311,11 +313,12 @@ export async function exportCrdtBins(): Promise<CrdtBinExport> {
       try {
         await storeTransaction([id], async (tx) => {
           const [row] = (await tx.execute(sql`
-            SELECT id, vault_id, path, seq, frontmatter, body FROM notes WHERE id = ${id} AND deleted_at IS NULL FOR UPDATE`)) as unknown as Row[]
+            SELECT id, vault_id, path, type, seq, frontmatter, body FROM notes WHERE id = ${id} AND deleted_at IS NULL FOR UPDATE`)) as unknown as Row[]
           const crdt = row ? await readNoteCrdt(tx, id) : null
           if (!row || !crdt) return
           const state = docState(crdt.doc)
-          if (state.body !== row.body || !sameContent({ ...state.frontmatter, type: row.frontmatter.type }, row.frontmatter)) {
+          // A document without `type` stores the folder (withType, as the store's fold); any other `type` must match (#444).
+          if (state.body !== row.body || !sameContent(withType(state.frontmatter, row.type), row.frontmatter)) {
             const reason = crdt.foldError ?? 'the CRDT state differs from the row'
             report.skipped.push({ noteId: id, vaultId: row.vault_id, path: row.path, reason })
             return

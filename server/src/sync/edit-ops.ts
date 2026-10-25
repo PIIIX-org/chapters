@@ -220,7 +220,6 @@ export function applyFrontmatterOps(frontmatter: Record<string, unknown>, ops: r
     if (!isFrontmatterOp(op)) return
     const where = `ops[${index}] ${op.op}`
     if (op.key === '') throw new NoteEditError(`${where}: \`key\` is empty`)
-    if (op.key === 'type') throw new NoteEditError(`${where}: \`type\` is the note's folder; rename or move the note to change it`)
     const current = next[op.key]
     const list = (): unknown[] => {
       if (Array.isArray(current)) return current

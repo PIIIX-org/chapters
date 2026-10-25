@@ -16,7 +16,7 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
 type Truncated =
@@ -62,11 +62,12 @@ async function mcpClient(token: string): Promise<Client> {
   return client
 }
 
-async function call(tool: string, args: Args): Promise<{ isError: boolean; text: string }> {
+/** `text`: the answer as one JSON (read_note's body block in its key, #445); `chars`: what every block takes, as the budget counts it. */
+async function call(tool: string, args: Args): Promise<{ isError: boolean; text: string; chars: number }> {
   resetRateLimits()
   const result = await agent.callTool({ name: tool, arguments: args })
   const content = result.content as Array<{ type: string; text?: string }>
-  return { isError: result.isError === true, text: content.map((c) => c.text ?? '').join('') }
+  return { isError: result.isError === true, text: toolText(content), chars: content.map((c) => c.text ?? '').join('\n').length }
 }
 
 /** One answer, checked against the envelope's invariants: within budget, `truncated` last and consistent. */
@@ -74,7 +75,7 @@ async function page(tool: string, args: Args): Promise<Answer> {
   const r = await call(tool, args)
   expect(r.isError, `${tool}: ${r.text.slice(0, 300)}`).toBe(false)
   const budget = typeof args.budget_tokens === 'number' ? args.budget_tokens : (DEFAULT_BUDGET[tool] ?? 2_000)
-  expect(Math.ceil(r.text.length / 4), `${tool} answer of ${r.text.length} chars over ${budget} tokens`).toBeLessThanOrEqual(budget)
+  expect(Math.ceil(r.chars / 4), `${tool} answer of ${r.chars} chars over ${budget} tokens`).toBeLessThanOrEqual(budget)
   const json = JSON.parse(r.text) as Answer
   expect(Object.keys(json).at(-1)).toBe('truncated')
   const t = json.truncated
@@ -336,7 +337,7 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
         expect(r.isError, `${tool} ${path}: ${r.text.slice(0, 200)}`).toBe(false)
         const json = JSON.parse(r.text) as Answer
         expect(json).toMatchObject({ body: '', truncated: false })
-        expect(r.text.length).toBeGreaterThan(chars)
+        expect(r.chars).toBeGreaterThan(chars)
       }
     }
   })
