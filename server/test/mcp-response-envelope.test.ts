@@ -357,7 +357,7 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     const edit = await call('edit_note', { vaultId, path, body: `${body}agent line\n` })
     expect(edit.isError, edit.text.slice(0, 300)).toBe(false)
     const result = JSON.parse(edit.text) as { status: string; body: string; baseRev?: number }
-    expect(['applied', 'merged']).toContain(result.status)
+    expect(result.status).toBe('applied')
     expect(result).toMatchObject({ body: `${grown}agent line\n`, baseRev: pages[0]!.rev })
   })
 

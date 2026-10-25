@@ -202,10 +202,10 @@ export async function listRepositoryFiles(
 
 /**
  * One page of a repository's files for `browse_repository` (#424), in path
- * order by code unit (`COLLATE "C"`, the index 0029 adds): the files under
+ * order by UTF-8 byte (`COLLATE "C"`, the index 0029 adds): the files under
  * `folder` (all of them when null) whose path sorts after `after`, at most
  * `limit` of them. The subtree is the range `folder/` ≤ path < `folder0`
- * ('0' is the code unit after '/'), which needs no LIKE escaping. REST's
+ * ('0' is the byte after '/'), which needs no LIKE escaping. REST's
  * `listRepositoryFiles` stays whole and unordered.
  */
 export async function listRepositoryFilesPage(
