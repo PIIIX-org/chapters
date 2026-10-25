@@ -1450,10 +1450,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
     search and graph, saved perspectives) bound the last change,
     `updatedAt`, never frontmatter `timestamp` (the creation time, which
-    edits leave alone). Note legs filter `notes.updated_at` in SQL; code
+    edits leave alone). Note legs filter `notes.updated_at`; code
     hits use `repository_files.updated_at` (the last sync that changed the
     file's content: an unchanged hash leaves it) and symbol hits their
-    file's, filtered after the merge by `passesFilters` like `types`. A
+    file's, each inside its leg's SQL (see **Filters**). A
     bound goes through `timeBound`: `YYYY-MM-DD` or an ISO date-time
     (`THH:MM`, `:SS`, a fraction cut to ms, `Z` or `±HH:MM`); one without
     an offset is UTC, never the server's time zone; anything else (a
@@ -1470,8 +1470,40 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     fold); a write that changes nothing leaves it. A current-format backup
     restore and a vault import with `.elara/history` keep the source's
     `updated_at`; a format-1 backup and a plain import take the restore
-    time. No index: note legs are served by the FTS and HNSW indexes and
-    the graph filters in memory.
+    time. Note legs are served by the FTS and HNSW indexes and the graph
+    filters in memory; no index on `updated_at`.
+  - **Filters** (#454): `SearchFilters` = `types`, `tags`, `since`/`until`,
+    and `languages`, `kinds`, `path` (REST: `/search`, `/vaults/:id/search`
+    and `/repositories/:id/search`, comma-separated lists as the graph
+    routes take them, `search/filters.ts`; `find_symbols`' `kind`). Every
+    filter applies inside each leg's SQL, before the leg's cut
+    (`noteFilter`, `fileFilter`, `symbolFilter`), so a filtered search
+    answers with the best matching rows, not what of the unfiltered best
+    30 per leg matches; nothing is filtered after the fusion. A hit
+    without the filtered attribute is dropped, and a leg none of whose
+    rows can match runs no query: code has no tags, notes no language or
+    kind, files no kind. `types` is what a hit's `type` shows: a note's
+    type, a file's language, a symbol's kind. `languages` is a file's, or a
+    symbol's file's, `language`; `kinds` a symbol's kind. `path` is a
+    prefix (`starts_with`), or a glob when it holds `*` or `?` (`*` and `?`
+    within one segment, `**` across them, `**/` also none; anchored, as a
+    POSIX regex). Tags are string elements of a frontmatter `tags` array
+    (`?|`), served by `notes_tags_idx` (GIN on `frontmatter -> 'tags'`,
+    migration 0043; on 50,000 notes with a tag on 0.5% of them it took the
+    keyword leg from 5-8 ms to 1.5 ms and the vector leg from 9-10 ms to
+    1.5 ms). An empty list filters nothing. The vector legs keep `blockLeg`'s
+    iterative scan: the code and symbol legs add the clauses to their WHERE
+    over `blocks` joined to the file; the note leg joins `notes` into its
+    200-block cut only when a note filter is set (unfiltered, the cut
+    stays a scan of `blocks` alone). The planner may then serve a filtered
+    note leg exactly (the matching notes, then their blocks, then a sort)
+    instead of from the HNSW index: cheap for a selective filter, about
+    50-130 ms for one that keeps every note of a 50,000-note vault (the
+    unfiltered leg: 10-27 ms). MCP `search` takes none of these
+    (`find_symbols` takes `kind`): `path` alone would cost the reader
+    profile 61 characters (~16 tokens) over its 2,000-token budget, already
+    at 1,991. `test/search-filters-in-legs.test.ts` has a fixture per
+    filter whose matching rows are outside every leg's unfiltered cut.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
