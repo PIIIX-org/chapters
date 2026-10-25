@@ -1922,7 +1922,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `budget_tokens` (characters / 4) fit it and end with `truncated`
   (`list_vaults` and `list_repositories` take no budget and
   answer bare arrays), the cursor is the only way on, read_note/read_file
-  outline a body over the budget and read parts with `targets` (#416,
+  answer their outline with `outline: true` (opt-in: by default it cost
+  the premise benchmark more on every suite, #1002) and read parts with `targets` (#416,
   #417: `mcp/read-targets.ts`, `text/targets.ts`; a target is
   `{lines: "a-b"}`, `{block}`, `{heading: "A > B"}` or, on read_file,
   `{symbol}`, each answered as a `part` text section of `response.ts`,

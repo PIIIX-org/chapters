@@ -110,7 +110,6 @@ import {
   OUTLINE_ARG,
   checkReadArgs,
   codeParts,
-  fitsBudget,
   markdownParts,
   outlineFirst,
   outlineNarrow,
@@ -1420,7 +1419,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         ...(outline ? { narrow: outlineNarrow(outline) } : {}),
         rendered,
       })
-      const outline = await outlineFirst(args.outline, page.at, () => fitsBudget('read_note', answer(null), args.budget_tokens), () => parts().outline)
+      const outline = await outlineFirst(args.outline, page.at, () => parts().outline)
       return answer(outline)
     },
   )
@@ -2189,15 +2188,16 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       checkReadArgs(args)
       const file = await getRepositoryFile(target, args.path)
       if (!file) throw new McpToolError('NOT_FOUND', 'file not found')
+      // A body read answers as before #416; targets and outline answers add the content version (ADR-004 §2.9: 16 hex
+      // of its sha256) and the line count their lines are in (#1002 review: extra fields on every read cost tokens).
       const head = {
         path: file.path,
         language: file.language,
-        // The content version (ADR-004 §2.9): 16 hex of its sha256.
-        hash: file.contentHash.slice(0, 16),
-        total_lines: totalLines(file.content),
         // Only when extraction embedded the file partly (#496 per-file budget).
         ...(file.embeddingNote ? { embeddingNote: file.embeddingNote } : {}),
       }
+      const { embeddingNote, ...named } = head
+      const located = { ...named, hash: file.contentHash.slice(0, 16), total_lines: totalLines(file.content), ...(embeddingNote ? { embeddingNote } : {}) }
       /** Its blocks, symbols and outline; a markdown file's headings too. */
       const parts = async (): Promise<DocumentParts> => {
         const { blocks: rows, stale } = await listFileBlocks(file.id, file.contentHash)
@@ -2215,26 +2215,21 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           outline: code.outline.length > 0 || !markdown ? code.outline : markdown.outline,
         }
       }
-      if (args.targets) return { head, sections: targetSections({ text: file.content, ...(await parts()) }, args.targets) }
+      if (args.targets) return { head: located, sections: targetSections({ text: file.content, ...(await parts()) }, args.targets) }
       const content = (withheld: boolean) => textSection({ name: 'content', text: file.content, lines: true, withheld })
+      const outline = await outlineFirst(args.outline, page.at, async () => (await parts()).outline)
+      if (outline) return { head: located, sections: [outlineSection(outline), content(true)], narrow: outlineNarrow(outline) }
       // The body answer as before #417: the content by pages, the symbol list after its last page.
-      let wholeAnswer: Budgeted | undefined
-      const whole = async (): Promise<Budgeted> => {
-        const symbols = (await listFileSymbols(file.id)).sort((a, b) => a.startLine - b.startLine || compareCodeUnits(a.name, b.name))
-        wholeAnswer ??= {
-          head,
-          sections: [
-            outlineSection(null),
-            content(false),
-            // The symbol list is already locations: below full it is counted per kind.
-            ranked({ name: 'symbols', items: symbols, id: (s) => `${s.startLine}:${s.kind}:${s.name}`, ladder: { group: (s) => s.kind } }),
-          ],
-        }
-        return wholeAnswer
+      const symbols = (await listFileSymbols(file.id)).sort((a, b) => a.startLine - b.startLine || compareCodeUnits(a.name, b.name))
+      return {
+        head,
+        sections: [
+          outlineSection(null),
+          content(false),
+          // The symbol list is already locations: below full it is counted per kind.
+          ranked({ name: 'symbols', items: symbols, id: (s) => `${s.startLine}:${s.kind}:${s.name}`, ladder: { group: (s) => s.kind } }),
+        ],
       }
-      const outline = await outlineFirst(args.outline, page.at, async () => fitsBudget('read_file', await whole(), args.budget_tokens), async () => (await parts()).outline)
-      if (!outline) return wholeAnswer ?? whole()
-      return { head, sections: [outlineSection(outline), content(true)], narrow: outlineNarrow(outline) }
     },
   )
 

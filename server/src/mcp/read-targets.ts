@@ -25,7 +25,7 @@ import { noteBlocks } from '../notes/note-blocks.js'
 import { lineStarts } from '../text/lines.js'
 import { headingSections, matchPath, parseLineSpec, segments, wholeLines, type LineRange } from '../text/targets.js'
 import { McpToolError, envelope, type ErrorEnvelope } from './errors.js'
-import { DEFAULT_BUDGET, location, ranked, render, textSection, type Budgeted, type CursorAt, type Section } from './response.js'
+import { location, ranked, textSection, type CursorAt, type Section } from './response.js'
 import { editDistance, strictArgs } from './strict-input.js'
 
 /** Most targets one read takes (checked by `checkReadArgs`, not in the schema: tools/list pays for every keyword). */
@@ -192,27 +192,20 @@ export function outlineSection(entries: readonly OutlineEntry[] | null): Section
   })
 }
 
-/** Least entries an outline needs to be answered in place of a body that does not fit: one entry is no choice. */
-export const MIN_OUTLINE_ENTRIES = 2
-
 /**
- * The outline a read answers, or null when it answers its body (#417):
- * a cursor at section 0 continues the outline and any other one the body;
- * `outline: true` / `false` choose; otherwise the outline when the whole
- * body answer would not fit the budget (`fits`, rendered at the read's
- * budget) and the outline has at least MIN_OUTLINE_ENTRIES entries.
+ * The outline a read answers, or null when it answers its body (#417): only
+ * with `outline: true`, and on its own pages (a cursor at section 0; any
+ * other cursor is a body page). Opt-in: answering a body over the budget
+ * with its outline by default cost the premise benchmark's agent more on
+ * every suite and lost a gold (#1002), so a read without `outline` pages
+ * the body as before.
  */
 export async function outlineFirst(
   outline: boolean | undefined,
   at: CursorAt | null,
-  fits: () => Promise<boolean> | boolean,
   entries: () => Promise<OutlineEntry[]> | OutlineEntry[],
 ): Promise<OutlineEntry[] | null> {
-  if (at !== null) return at.s === 0 ? entries() : null
-  if (outline !== undefined) return outline ? entries() : null
-  if (await fits()) return null
-  const listed = await entries()
-  return listed.length >= MIN_OUTLINE_ENTRIES ? listed : null
+  return (at === null ? outline === true : at.s === 0) ? entries() : null
 }
 
 /** What an outline answer suggests next: its first named entry as a target, or the body by pages. */
@@ -279,11 +272,6 @@ export function codeParts(
       tokens: rangeTokens(text, starts, [r.startLine, r.endLine]),
     })),
   }
-}
-
-/** Whether `answer` comes back whole within the read's budget: what decides outline-first (#417). */
-export function fitsBudget(tool: string, answer: Budgeted, budget: number | undefined): boolean {
-  return render(answer, { tool, fingerprint: '', budget: budget ?? DEFAULT_BUDGET.read, at: null }).truncated === false
 }
 
 /** One to MAX_TARGETS targets; and `targets` reads parts while `outline: true` answers the outline: one call does one of them. */

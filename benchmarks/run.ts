@@ -109,9 +109,7 @@ function elaraTools(repositoryId: string): ElaraTools {
       return { text: r.text, ms: r.ms, ok: r.ok }
     },
     async readFile(path, cursor) {
-      // `outline: false` (#417): the scripted agent pages the file. Outline-first with targets picked by question
-      // words cost more on every suite and lost a gold (#1002: runs 40202306012 vs 40202192653).
-      const r = await mcp.call('read_file', { repositoryId, path, outline: false, ...(cursor ? { cursor } : {}) })
+      const r = await mcp.call('read_file', { repositoryId, path, ...(cursor ? { cursor } : {}) })
       return { text: r.text, ms: r.ms, ok: r.ok }
     },
   }

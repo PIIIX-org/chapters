@@ -290,9 +290,9 @@ describe('read_file targets (#416)', () => {
 })
 
 describe('outline instead of a large body (#417)', () => {
-  it('read_note: a body over the budget answers its outline, the cursor pages the body from its first line', async () => {
+  it('read_note: `outline: true` answers the outline, its cursor pages the body from its first line; a read without it is as before', async () => {
     const { bodyStart, id } = await noteFile('docs/handbook')
-    const a = await read('read_note', { path: 'docs/handbook' })
+    const a = await read('read_note', { path: 'docs/handbook', outline: true })
     expect(a).not.toHaveProperty('body')
     expect(a).toMatchObject({ path: 'docs/handbook', rev: expect.any(Number), body_start_line: bodyStart, frontmatter: expect.any(Object) })
     const entries = a.outline as OutlineEntry[]
@@ -306,13 +306,13 @@ describe('outline instead of a large body (#417)', () => {
     expect(entries[1]!.tokens).toBeLessThan(450)
     expect(a.truncated).toMatchObject({ level: 'locations', shown: { outline: 31, body: 0 }, dropped: { body: 30 * 31 + 2 }, cursor: expect.any(String) })
 
-    const first = await read('read_note', { path: 'docs/handbook', cursor: cursorOf(a) })
+    const first = await read('read_note', { path: 'docs/handbook', outline: true, cursor: cursorOf(a) })
     expect(first).not.toHaveProperty('outline')
     expect(HANDBOOK.startsWith(first.body as string)).toBe(true)
     expect((first.lines as number[])[0]).toBe(bodyStart)
 
-    // `outline: false` pages the body; `outline: true` outlines a note that fits.
-    const paged = await read('read_note', { path: 'docs/handbook', outline: false })
+    // Without `outline` the body is paged, as before (the outline is opt-in); `outline: true` outlines a note that fits.
+    const paged = await read('read_note', { path: 'docs/handbook' })
     expect(paged.body).toBe(first.body)
     expect(paged.lines).toEqual(first.lines)
     const small = await read('read_note', { path: 'docs/guide', outline: true })
@@ -323,8 +323,8 @@ describe('outline instead of a large body (#417)', () => {
     expect(whole).not.toHaveProperty('outline')
   })
 
-  it('read_file: a file over the budget answers its symbol outline, the cursor pages the content from line 1', async () => {
-    const a = await read('read_file', { path: 'src/big.ts' })
+  it('read_file: `outline: true` answers the symbol outline, its cursor pages the content from line 1', async () => {
+    const a = await read('read_file', { path: 'src/big.ts', outline: true })
     expect(a).not.toHaveProperty('content')
     expect(a).not.toHaveProperty('symbols')
     const entries = a.outline as OutlineEntry[]
@@ -332,7 +332,7 @@ describe('outline instead of a large body (#417)', () => {
     expect(entries[10]).toEqual({ block: expect.stringMatching(/^b_/), symbol: 'fn10', kind: 'function', lines: [421, 462], tokens: expect.any(Number) })
     expect(a).toMatchObject({ total_lines: 2_520, hash: expect.stringMatching(/^[0-9a-f]{16}$/) })
     expect(a.truncated).toMatchObject({ level: 'locations', shown: { outline: 60, content: 0 }, dropped: { content: 2_520 }, cursor: expect.any(String) })
-    const first = await read('read_file', { path: 'src/big.ts', cursor: cursorOf(a) })
+    const first = await read('read_file', { path: 'src/big.ts', outline: true, cursor: cursorOf(a) })
     expect(BIG_TS.startsWith(first.content as string)).toBe(true)
     expect((first.lines as number[])[0]).toBe(1)
 
@@ -373,7 +373,7 @@ describe('the budget holds for targets', () => {
 
   it('read_note targets and outline stay within small budgets too', async () => {
     for (const budget of [256, 512, 1_000]) {
-      const outline = await read('read_note', { path: 'docs/handbook', budget_tokens: budget })
+      const outline = await read('read_note', { path: 'docs/handbook', outline: true, budget_tokens: budget })
       expect(outline.truncated).not.toBe(false)
       const ranged = await read('read_note', { path: 'docs/handbook', targets: [{ heading: 'Chapter 7' }, { heading: 'Chapter 9' }], budget_tokens: budget })
       expect(parts(ranged)[0]!.lines![0]).toBeGreaterThan(1)
@@ -402,7 +402,7 @@ describe('a ranged read is a merge base (#864, #961)', () => {
   })
 
   it('an outline read records its rev too', async () => {
-    const a = await read('read_note', { path: 'docs/handbook' })
+    const a = await read('read_note', { path: 'docs/handbook', outline: true })
     expect(a).toHaveProperty('outline')
     const [recorded] = await db
       .select({ rev: noteReads.rev })
