@@ -1,12 +1,21 @@
 // #473 (ADR-004 §1.3): no LLM on the query path, so the same question against
 // the same index gives the same bytes. Two worlds hold one fixture vault and
-// repository, built by two accounts with their rows inserted in opposite
-// orders: world A creates the notes one after another and syncs the files in
-// one push; world B creates the notes in reverse, each embedded before the
-// next, and pushes the files one at a time in reverse. Every read tool is
-// asked each question twice in world A (the raw answers must be byte-identical)
-// and once in world B (byte-identical once the values that are generated per
-// database are masked).
+// repository, built by two accounts:
+//  - physical order and history: world A creates the notes in fixture order
+//    and syncs the files in one push; world B creates the notes in reverse,
+//    each embedded before the next, and pushes the files one at a time in
+//    reverse;
+//  - id order: every note, file and block id is assigned so that the ids
+//    sort in fixture order in A and in reverse fixture order in B (`rankedId`;
+//    asserted after the build). Rows that tie on content (twins/a and
+//    twins/b, the three `parse` symbols, Retrier and Retrier.retry) therefore
+//    have opposite id orders, and any tie-break by id changes B's answer:
+//    random ids would hide it in half the runs or more.
+// Every read tool is asked each question twice in world A: the raw answers
+// must be byte-identical. That half only catches randomness inside one
+// process (one database's ids sort the same way every time); id dependence
+// is caught by asking world B, whose answers must be byte-identical once the
+// values that are generated per database are masked.
 //
 // Masking is an allowlist, never a wholesale scrub:
 //  - ids: the world's own vault, repository, note, file and block ids
@@ -16,17 +25,19 @@
 // Anything else that differs fails the test.
 //
 // A question `dev` answers differently in the other database names its issue
-// in `differs`, and only its cross-database case is skipped. The causes the
-// skipped graph cases mix are pinned one per issue at the end, as `it.fails`:
-// a fix turns its case red, and the fix PR removes the marker.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+// in `differs`: its cross-database case is `it.fails`, so the fix turns it red
+// and the fix PR removes the marker (`fixPending`: the fix is already in an
+// open PR, and the case is skipped instead). The causes the graph cases mix
+// are also pinned one per issue at the end, as `it.fails`.
+import type * as Crypto from 'node:crypto'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
-import { eq, inArray } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { blocks, repositoryFiles } from '../src/db/schema.js'
+import { blocks, notes, repositoryFiles } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { createNote } from '../src/notes/store.js'
@@ -34,6 +45,22 @@ import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+
+// createNote takes its id from `randomUUID()`: the next one is queued here before each call.
+const queuedIds = vi.hoisted(() => [] as string[])
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof Crypto>()
+  return { ...actual, randomUUID: () => queuedIds.shift() ?? actual.randomUUID() }
+})
+const { randomUUID } = await vi.importActual<typeof Crypto>('node:crypto')
+
+/**
+ * A fresh id whose first 8 hex digits are `rank`, the rest random: ids sort
+ * by rank (Postgres compares uuids byte by byte, JS hex strings alike).
+ */
+function rankedId(rank: number): string {
+  return `${rank.toString(16).padStart(8, '0')}${randomUUID().slice(8)}`
+}
 
 type Args = Record<string, unknown>
 
@@ -104,6 +131,8 @@ interface World {
   repoId: string
   /** Generated id → its label, longest first when applied. */
   labels: Array<[string, string]>
+  /** The labels of the world's notes, files and blocks, in id order (as Postgres sorts the ids). */
+  idOrder: () => Promise<string[][]>
 }
 
 let app: FastifyInstance
@@ -125,46 +154,69 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
       requestInit: { headers: { authorization: `Bearer ${minted.json<{ token: string }>().token}` } },
     }),
   )
+  /** The id of the `index`-th row of a fixture list: ascending in A, descending in B. */
+  const idAt = (index: number) => rankedId(reverse ? 0xffffffff - index : index)
 
   const labels: Array<[string, string]> = [
     [vaultId, '<vault>'],
     [repoId, '<repository>'],
   ]
   const ownerLabel = new Map<string, string>()
-  const notes = reverse ? [...NOTES].reverse() : NOTES
-  for (const n of notes) {
-    const { id } = await createNote(vaultId, { path: n.path, body: n.body, ...(n.frontmatter ? { frontmatter: n.frontmatter } : {}) })
+  for (const n of reverse ? [...NOTES].reverse() : NOTES) {
+    const id = idAt(NOTES.indexOf(n))
+    queuedIds.push(id)
+    const created = await createNote(vaultId, { path: n.path, body: n.body, ...(n.frontmatter ? { frontmatter: n.frontmatter } : {}) })
+    if (created.id !== id || queuedIds.length > 0) throw new Error(`${n.path}: createNote did not take the queued id ${id} (got ${created.id})`)
     ownerLabel.set(id, `<note:${n.path}>`)
     // World B: each note is embedded (and finds its neighbours) before the next exists.
     if (reverse) await flushEmbeddings()
+  }
+  // A file's row is inserted empty under its id just before its push, which then fills it: an update keeps the id.
+  const placeFile = async (f: (typeof FILES)[number]) => {
+    const id = idAt(FILES.indexOf(f))
+    await db.insert(repositoryFiles).values({ id, repositoryId: repoId, path: f.path, content: '', contentHash: '', size: 0 })
+    ownerLabel.set(id, `<file:${f.path}>`)
   }
   if (reverse) {
     const pushed: string[] = []
     for (const f of [...FILES].reverse()) {
       pushed.push(f.path)
+      await placeFile(f)
       await syncRepositoryFiles(repoId, [f], [...pushed])
       await flushExtraction()
     }
   } else {
+    for (const f of FILES) await placeFile(f)
     await syncRepositoryFiles(repoId, FILES, FILES.map((f) => f.path))
   }
   await flushExtraction()
   await flushEmbeddings()
   await flushProjections()
 
-  for (const f of await db.select({ id: repositoryFiles.id, path: repositoryFiles.path }).from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repoId))) {
-    ownerLabel.set(f.id, `<file:${f.path}>`)
-  }
+  // Blocks get their ids last, in the order of their labels (no row references a block id).
   const owned = await db
     .select({ id: blocks.id, ownerId: blocks.ownerId, kind: blocks.kind, innerPath: blocks.innerPath, startLine: blocks.startLine })
     .from(blocks)
     .where(inArray(blocks.containerId, [vaultId, repoId]))
-  for (const b of owned) labels.push([b.id, `<block:${ownerLabel.get(b.ownerId) ?? b.ownerId}:${b.kind}:${b.innerPath}:${b.startLine}>`])
+  const blockLabels = owned
+    .map((b) => ({ old: b.id, label: `<block:${ownerLabel.get(b.ownerId) ?? b.ownerId}:${b.kind}:${b.innerPath}:${b.startLine}>` }))
+    .sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
+  if (new Set(blockLabels.map((b) => b.label)).size !== blockLabels.length) throw new Error('two blocks share a label: their id order would be random')
+  const renamed = blockLabels.map((b, i) => ({ ...b, id: idAt(i) }))
+  await db.execute(sql`UPDATE blocks b SET id = u.id FROM jsonb_to_recordset(${JSON.stringify(renamed)}::jsonb) AS u(old uuid, id uuid) WHERE b.id = u.old`)
+  for (const b of renamed) labels.push([b.id, b.label])
   for (const [id, label] of ownerLabel) labels.push([id, label])
   // Names carry the container's first 8 id characters (`name#1a2b3c4d`).
   labels.push([vaultId.slice(0, 8), '<vault8>'], [repoId.slice(0, 8), '<repository8>'])
   labels.sort((a, b) => b[0].length - a[0].length)
-  return { agent, vaultId, repoId, labels }
+
+  const label = (id: string) => labels.find(([known]) => known === id)?.[1] ?? id
+  const idOrder = async () => [
+    (await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId)).orderBy(notes.id)).map((r) => label(r.id)),
+    (await db.select({ id: repositoryFiles.id }).from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repoId)).orderBy(repositoryFiles.id)).map((r) => label(r.id)),
+    (await db.select({ id: blocks.id }).from(blocks).where(inArray(blocks.containerId, [vaultId, repoId])).orderBy(blocks.id)).map((r) => label(r.id)),
+  ]
+  return { agent, vaultId, repoId, labels, idOrder }
 }
 
 /** One answer, serialized as it came over the wire: `content` blocks, `structuredContent` and `isError`. */
@@ -175,27 +227,22 @@ async function ask(world: World, tool: string, args: Args): Promise<string> {
   return JSON.stringify({ isError: result.isError === true, content: result.content, structuredContent: result.structuredContent })
 }
 
-/** The TIME_KEYS that held a value in some masked answer. */
-const maskedKeys = new Set<string>()
-
-/** The time values under TIME_KEYS anywhere in `value`. */
-function times(value: unknown, into: Set<string>): Set<string> {
+/** The values under TIME_KEYS anywhere in `value`, each with its key. */
+function times(value: unknown, into: Map<string, string>): Map<string, string> {
   if (Array.isArray(value)) for (const v of value) times(v, into)
   else if (value !== null && typeof value === 'object') {
     for (const [k, v] of Object.entries(value)) {
-      if (TIME_KEYS.includes(k) && typeof v === 'string') {
-        into.add(v)
-        maskedKeys.add(k)
-      } else times(v, into)
+      if (TIME_KEYS.includes(k) && typeof v === 'string') into.set(v, k)
+      else times(v, into)
     }
   }
   return into
 }
 
-/** The answer with the world's generated ids and the allowlisted times replaced by labels. */
-function mask(world: World, raw: string): string {
+/** The time values of one raw answer (its `structuredContent` and its JSON text blocks), each with its key. */
+function answerTimes(raw: string): Map<string, string> {
   const parsed = JSON.parse(raw) as { content: Array<{ text?: string }>; structuredContent?: unknown }
-  const found = times(parsed.structuredContent, new Set())
+  const found = times(parsed.structuredContent, new Map())
   for (const c of parsed.content) {
     try {
       times(JSON.parse(c.text ?? ''), found)
@@ -203,9 +250,14 @@ function mask(world: World, raw: string): string {
       // A text block that is not JSON (read_note's body) holds no keyed time.
     }
   }
+  return found
+}
+
+/** The answer with the world's generated ids and the allowlisted times replaced by labels. */
+function mask(world: World, raw: string): string {
   let out = raw
   // Longest first: a date (`updated`) is a prefix of a timestamp.
-  for (const t of [...found].sort((a, b) => b.length - a.length)) out = out.split(t).join('<time>')
+  for (const t of [...answerTimes(raw).keys()].sort((a, b) => b.length - a.length)) out = out.split(t).join('<time>')
   for (const [id, label] of world.labels) out = out.split(id).join(label)
   return out
 }
@@ -217,6 +269,9 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   A = await buildWorld('a', false)
   B = await buildWorld('b', true)
+  // The precondition of the cross-database cases: every id order of B is A's reversed.
+  const [a, b] = [await A.idOrder(), await B.idOrder()]
+  expect(b, 'B holds its notes, files and blocks in the reverse id order of A').toEqual(a.map((ids) => [...ids].reverse()))
 }, 120_000)
 
 afterAll(async () => {
@@ -230,8 +285,10 @@ interface Question {
   tool: string
   /** The arguments in a world (its container ids). */
   args: (w: World) => Args
-  /** Why `dev` answers it differently in the other database: its cross-database case is skipped until that issue is fixed. */
+  /** Why `dev` answers it differently in the other database: its cross-database case is `it.fails` until that issue is fixed. */
   differs?: string
+  /** The fix of `differs` is in an open PR: the case is skipped instead, so that PR's merge doesn't turn this file red. */
+  fixPending?: boolean
 }
 
 /** Graph node order, undirected edge ends and community numbers follow the per-database ids. */
@@ -252,6 +309,7 @@ const QUESTIONS: Question[] = [
     args: () => ({ everywhere: true, query: 'upload' }),
     // Retrier and Retrier.retry (src/retry.ts) tie in the symbol keyword leg, which then orders by id.
     differs: '#623 (fixed by #1000)',
+    fixPending: true,
   },
   { name: 'find_symbols one name in three files', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse' }) },
   { name: 'find_symbols by meaning and kind', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'upload a chunk', kind: 'function' }) },
@@ -283,6 +341,7 @@ const QUESTIONS: Question[] = [
 ]
 
 describe('read tools answer deterministically (#473)', () => {
+  // One database's ids sort the same way every time: this half catches randomness inside the process, not id dependence.
   describe('same index, same process: the same bytes', () => {
     for (const q of QUESTIONS) {
       it(q.name, async () => {
@@ -293,20 +352,23 @@ describe('read tools answer deterministically (#473)', () => {
     }
   })
 
-  describe('another database, rows inserted in another order: the same bytes once ids and times are masked', () => {
+  describe('another database, rows in reverse physical and id order: the same bytes once ids and times are masked', () => {
     for (const q of QUESTIONS) {
-      it.skipIf(q.differs !== undefined)(`${q.name}${q.differs ? ` (differs on dev: ${q.differs})` : ''}`, async () => {
+      const test = q.fixPending ? it.skip : q.differs ? it.fails : it
+      test(`${q.name}${q.differs ? ` (differs on dev: ${q.differs})` : ''}`, async () => {
         const other = mask(B, await ask(B, q.tool, q.args(B)))
         expect(other).toBe(mask(A, await ask(A, q.tool, q.args(A))))
       })
     }
 
-    it('every allowlisted time key was masked in some answer (no stale allowlist entry)', () => {
-      expect([...maskedKeys].sort()).toEqual([...TIME_KEYS].sort())
+    it('every allowlisted time key is masked in some answer (no stale allowlist entry)', async () => {
+      const keys = new Set<string>()
+      for (const q of QUESTIONS) for (const key of answerTimes(await ask(A, q.tool, q.args(A))).values()) keys.add(key)
+      expect([...keys].sort()).toEqual([...TIME_KEYS].sort())
     })
   })
 
-  // The skipped cases above mix three causes; each is pinned here on its own, independent of ids and order.
+  // The graph cases above mix three causes; each is pinned here on its own, independent of id order.
   describe('known differences, one per issue', () => {
     /** The rows of one edge kind, as names, an undirected row's ends sorted, the rows sorted. */
     const rows = async (w: World, args: Args): Promise<string[]> => {
