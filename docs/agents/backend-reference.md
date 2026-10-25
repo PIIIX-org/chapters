@@ -2484,7 +2484,7 @@ for two more (#464):
 | `go` | `.go` | `tree-sitter-go` 0.25.0 | 0.22 MB |
 | `rust` | `.rs` | `tree-sitter-rust` 0.24.0 | 1.10 MB |
 | `java` | `.java` | `tree-sitter-java` 0.23.5 | 0.41 MB |
-| `c` | `.c` `.h` | `tree-sitter-c` 0.24.1 | 0.63 MB |
+| `c` | `.c` `.h` | `tree-sitter-c` 0.24.1 (`.h`: the C++ grammar) | 0.63 MB |
 | `cpp` | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` | `tree-sitter-cpp` 0.23.4 | 3.43 MB |
 | `csharp` | `.cs` | `tree-sitter-c-sharp` 0.23.5 | 5.35 MB |
 | `kotlin` | `.kt` `.kts` | `@tree-sitter-grammars/tree-sitter-kotlin` 1.1.0 | 3.44 MB |
@@ -2525,7 +2525,9 @@ specifier is a literal (a string or a template without `${}`; `require`
 with exactly one argument), and TypeScript `import x = require('x')`; a
 computed specifier is not an import row. The #464 languages' imports:
 Rust `use` (the module path: `crate::store` for `use
-crate::store::{A, B}`, the path before `as` or `::*`), Java and Kotlin
+crate::store::{A, B}`, the path before `as` or `::*`; a list straight under
+`crate`, `self` or `super` gives one row per item, `crate::{a, b::C}` →
+`crate::a`, `crate::b::C`) and `mod x;` (the module `x`, a file), Java and Kotlin
 `import` (`a.b.C`, `a.b.*` for a wildcard), C/C++ `#include "x.h"` (never
 `<x.h>`), Ruby `require_relative 'x'`, PHP `require`/`require_once`/
 `include`/`include_once` of a string literal (not `__DIR__ . '/x.php'`); C#
@@ -2575,7 +2577,13 @@ Nested types and their members, local functions and lambdas are not
 symbols. Attributes, annotations and doc comments above a declaration are
 not in its lines unless the grammar makes them part of the node (Java and
 C# modifiers, PHP and Kotlin modifiers on the same node). A `.h` header is
-parsed as C.
+labelled `c` but parsed with the C++ grammar, which reads C declarations
+alike and also the classes and namespaces of a C++ header (most C++
+projects name headers `.h`). Out-of-line C++ definitions take the innermost
+scope as `parent` (`void ns::Store::load()` → `Store.load`), so they
+deduplicate with their in-class declaration. Known gaps: macro annotations
+such as `GUARDED_BY(mu)` on a member read as method declarations (a limit
+of the grammar without a preprocessor).
 
 Top level only: a declaration counts when only `export`, `declare`,
 decorators, its `const`/`let`/`var` statement or a statement wrapper stand
@@ -2645,15 +2653,19 @@ is skipped) and an HTML file's `h1`–`h6` (a small scanner: comments,
 tags dropped, entities decoded and white space collapsed). Each heading is
 a `section` block spanning its line through the line before the next
 heading of the same or a higher level, `inner_path` the heading titles
-joined with ` > ` (as a note's); its embedded text is `section <inner_path>
-in <path>\n<snippet>`, the snippet cut from its own text (up to its first
-subheading) as a symbol's is, with no stored `snippet`; it takes tier 1 of
-the embed budget. A section is **not a symbol** (no `symbol_kind`):
-`find_symbols`, the `search` symbol legs, `read_file`'s outline and the
-staleness check never see it. Today it feeds semantic edges (a file's
-similarity is its best block's) and is there for per-block hits
-(#414/#415); the `search` code vector leg still ranks files by their `file`
-block only (below). *Note blocks*
+joined with ` > ` (as a note's). A section is an **outline block, never
+embedded** (null `embed_key`, outside the embed budget): no search leg
+reads sections yet, and embedding them made indexing 2–3× slower on
+doc-heavy suites (chapters 243 → 689 s in bench run 40193946217);
+#414/#415 (per-block hits) decide whether they get vectors. Its `embedText`
+(`section <inner_path> in <path>\n<snippet>`, the snippet cut from its own
+text up to its first subheading, as a symbol's is) is what would be
+embedded; it stores no `snippet`. A section is **not a symbol** (no
+`symbol_kind`): `find_symbols`, the `search` symbol legs, `read_file`'s
+outline and the staleness check never see it. A Markdown file keeps its
+outline even with a line over the minified limit (that rule is about code);
+an HTML file with one does not. Migration 0038 clears the vectors earlier
+heads of #464's PR gave code sections. *Note blocks*
 (`notes/note-blocks.ts`, #452b): a `preamble` for the body before its first
 heading when it is not blank (a body with no heading that is empty or blank
 is one preamble whose embedded text is the path, so every note keeps a
@@ -2707,7 +2719,7 @@ for #414/#415's per-block hits; `search` symbol legs and `find_symbols` —
 `kind = 'symbol'` blocks (never a repository `section`), keyword by name, `Class.name` or the stored
 `snippet`, vector by the nearest symbol blocks (`blocks_symbol_embedding_idx`); semantic edges (`semantic-edges.ts`) — a note's or file's
 similarity to another node is its best block's (`blocks_note_embedding_idx`,
-`blocks_code_embedding_idx`, which holds repository sections too), the query vectors a note's
+`blocks_code_embedding_idx`), the query vectors a note's
 blocks or a file's file-level block; `read_file`'s outline, the REST file view's
 `symbols` and `listFileSymbols`; the staleness check (a `#anchor` is a
 symbol's bare name or its `Class.method`); the doctor (`blocks-missing`,
@@ -2895,8 +2907,8 @@ top-level rule and the embed-budget order, #450; 4 re-exports, literal
 `import()`/`require()` and `import x = require()` as imports, #466, which
 embeds nothing again; 5 Rust, Java, C, C++, C#, Kotlin, Ruby and PHP
 symbols and imports, Markdown/HTML heading sections and the relabelling of
-files whose label changed, #464, which embeds only the new symbol and
-section texts): bump it with any change to the grammars and queries,
+files whose label changed, #464, which embeds only the new symbol texts;
+sections are never embedded): bump it with any change to the grammars and queries,
 symbol kinds, the outlines (`outline.ts`), the labels, the minified-file
 rule or the embed-budget order (the snippet cut and block texts are
 `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
