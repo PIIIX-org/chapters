@@ -74,7 +74,7 @@
       "test": "multilingual-search",
       "check": "normalization: Arabic kaf ك + Arabic yeh ي (\"كوير لوت\" vs stored \"کویر لوت\")",
       "issue": 528,
-      "intermittent": "the keyword channel misses this variant every time; the hybrid rank drops only when the vector ranks, which shift with timestamp noise (#459), do not carry it (failed in 3 of 5 runs)"
+      "intermittent": "the keyword channel misses this variant every time; the hybrid rank holds only when the vector ranks carry it. It failed in 3 of 5 runs while note vectors embedded the frontmatter timestamp (#459); since #985 no embedded text carries one, and it passed in 3 of 3 full-tier runs with identical ranks (runs 40202230530, 40202551338, 40203278162), so it is a candidate for removal"
     },
     {
       "test": "multilingual-search",

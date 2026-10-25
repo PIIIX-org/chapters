@@ -125,7 +125,7 @@ the three and compares it with [`baseline.json`](baseline.json)
 (`.github/scripts/bench-gate.mjs`), and prints the delta table in the job
 summary. Gated: the Elara agent's `hit5` and `tokensToGold`, per suite.
 
-- **Regression** (red): `hit5` drops by more than 2 questions of the suite,
+- **Regression** (red): `hit5` drops by more than 1 question of the suite,
   or `tokensToGold` rises by more than 10 %. On a pull request the reference
   is the **base commit's** baseline, judged by the base commit's copy of the
   gate.
@@ -154,9 +154,10 @@ reviewers read every change to `benchmarks/`, the gate and the workflow.
 There are no code owners: with one account, a code-owner review could
 never be given.
 
-Thresholds: hit@5 two questions = the measured noise of one instance (one
-question, see [Noise](#noise)) plus one question of margin; tokens-to-gold
-10 % against at most 5.6 % measured.
+Thresholds: hit@5 one question = the measured noise of one instance (none
+since #462/#623, see [Noise](#noise)) plus one question of margin;
+tokens-to-gold 10 % against at most 5.6 % measured (0.9 % before #623, none
+after).
 
 | tier | when | suites |
 |---|---|---|
@@ -251,13 +252,41 @@ How to read it, honestly:
 
 ## Noise
 
-The grep agent is deterministic: identical in every run. Elara's ranks move
-between instances of identical code. When the table below was measured the
-server broke score ties by database row order (#623) and the agent broke
-exact ties by path; since #441 the server orders ties by path, then id, in
-every leg and in the final sort, which leaves the approximate HNSW candidate
-set as the known source. Measured, per suite,
-Elara hit@5 / tokens-to-gold:
+The grep agent is deterministic: identical in every run. Since #462/#623
+Elara is too, between lab instances of identical code: every cut in search
+is total (keyword legs, the vector legs' own HNSW limit, the cut after the
+relevance gate and the final sort all end in path, a symbol's start line,
+then id) and every vector leg runs pgvector's iterative scan. Measured, all
+five suites, three instances each, Elara hit@5 / tokens-to-gold, the same
+`dev` without and with the change:
+
+| suite | before: `dev` ba5690a, run [40195176096](https://github.com/PIIIX-org/chapters/actions/runs/40195176096) | after: run [40195178980](https://github.com/PIIIX-org/chapters/actions/runs/40195178980); chapters also PR run [40195380528](https://github.com/PIIIX-org/chapters/actions/runs/40195380528) |
+|---|---|---|
+| chapters | 1 / 3,623; 1 / 3,596; 1 / 3,623 (A7, S2, S7, S9 tokens move) | 1 / 3,623 in all three, and in all three of the PR run |
+| diagram-design | 0.95 / 11,835; 0.95 / 11,931; 0.95 / 11,823 (Q14 rank 2 or 4; Q03, Q07, Q16 tokens move) | 0.95 / 11,823 in all three |
+| vectorcraft | 0.7 / 31,565 in all three | 0.7 / 31,565 in all three |
+| context-mode | 0.85 / 26,595; 0.85 / 26,609; 0.85 / 26,595 (W4, I4 tokens move) | 0.85 / 26,595 in all three |
+| rea | 0.7 / 25,424; 0.7 / 25,410; 0.7 / 25,424 (Q05 tokens move) | 0.7 / 25,410 in all three |
+
+Before, 11 questions moved between instances (one rank, the rest
+tokens-to-gold, at most 0.9 % of a suite's mean); after, none did: every
+instance gave the same rank and tokens-to-gold on every question, so the
+spread between instances is zero on every suite. The gate's hit@5
+tolerance is therefore one question per suite (it was two: one question of
+measured noise plus one of margin), all margin: zero spread was measured on
+two runs for chapters but on one for the other four suites, which is not
+enough for no tolerance at all. Tokens-to-gold keeps 10 %: one question
+flipping between hit and miss moves a suite with a low mean (chapters) by
+more than that, and the gate treats that as material, because reaching the
+evidence or not is the premise.
+[INFERENCE] What moved before was the order of equal scores (row order, and
+ids that differ on every instance). The HNSW graph is still approximate: the
+lab instances index the same content in the same order, so their graphs
+likely match, but an index built in another order (a production instance)
+can still pick a different vector candidate when two distances are close.
+
+Earlier measurements, when the server broke score ties by database row order
+(#623) and the agent broke exact ties by path:
 
 | suite | 3 instances of run 38856349787 | earlier single instances (harness a941c16): runs 38848135892, 38848138390, PR runs 38852760271, 38853656282 (chapters only) |
 |---|---|---|
@@ -267,14 +296,9 @@ Elara hit@5 / tokens-to-gold:
 | context-mode | 0.75 / 37,927; 0.75 / 37,927; 0.75 / 38,304 | 0.75, 0.75; 40,423 / 39,868 (W4 reached gold in one run only) |
 | rea | 0.6 / 31,282; 0.6 / 31,282; 0.6 / 31,285 | 0.6, 0.6; 30,872 / 30,876 |
 
-So one instance moves hit@5 by at most one question and tokens-to-gold by
-at most 5.6 %. The gate compares medians of three instances and allows two
-questions on hit@5 (noise + one question of margin) and 10 % on
-tokens-to-gold. One question flipping between hit and miss can still move
-a suite with a low mean (chapters) by more than 10 %; the gate treats that
-as material, because reaching the evidence or not is the premise.
-(Indexing took about half as long in run 38856349787 as in the earlier
-runs, on the same code; index time is reported, not gated.)
+Then one instance moved hit@5 by at most one question and tokens-to-gold by
+at most 5.6 %. (Indexing took about half as long in run 38856349787 as in
+the earlier runs, on the same code; index time is reported, not gated.)
 
 ## Agent trial
 

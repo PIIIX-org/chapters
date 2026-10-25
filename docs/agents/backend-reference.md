@@ -1380,7 +1380,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `SearchResponse` = `{status, retrieval_mode, degraded, index?,
     results}`, served as is by REST and inside the budget envelope by MCP.
   - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
-    (`ORDER BY distance LIMIT 30`, which the HNSW index serves) and keeps
+    (`ORDER BY distance, … LIMIT 30`, which the HNSW index serves) and keeps
     those with cosine distance under `config.searchMaxDistance`
     (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
     default; 0.40 for bge-small, measured on the five benchmark corpora
@@ -1405,12 +1405,38 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     were never synced count in `pending_repositories`, those whose sync
     failed count as failed items), read beside the query embedding; left
     out when all zero.
-  - **Total order**: keyword legs `ORDER BY rank DESC, path COLLATE "C",
-    id`, vector legs re-sorted by `distance, path COLLATE "C", id` outside
-    the HNSW limit, final sort score descending then path and id by UTF-16
-    code unit (`compareCodeUnits`), so equal scores never depend on row
-    order. [INFERENCE] HNSW stays approximate: which rows make a vector
-    leg's 30 can still differ between instances.
+  - **HNSW settings** (#462): every vector leg (`blockLeg`: the note,
+    code file and symbol legs of `search` and `find_symbols`) runs in a
+    transaction that first calls `setHnswScan(tx, efSearch)`
+    (`search/hnsw.ts`, the one helper for every HNSW query): it sets
+    `hnsw.ef_search` (200 for search) and, when the installed pgvector is
+    0.8.0 or later (`pg_extension.extversion`; an older one refuses the
+    `hnsw.` setting), `hnsw.iterative_scan = relaxed_order`, with
+    `set_config(…, true)` in one statement. HNSW applies the leg's
+    WHERE (scope, `kind`) to the candidates it fetched, so without the
+    iterative scan a small repository or vault inside a big instance got
+    few or no vector rows once the planner chose the index; now the scan
+    goes on, up to `hnsw.max_scan_tuples` (20,000 by default), until the
+    leg has its rows. Relaxed order can return rows slightly out of
+    distance order: every leg re-sorts its cut. Semantic edges
+    (`semantic-edges.ts`) call the same helper with `ef_search` 100.
+  - **Total order** (#623): every cut ends in a key that is unique and,
+    where it can be, the same on two instances with the same content (ids
+    are random per instance). Keyword legs `ORDER BY rank DESC, path
+    COLLATE "C", id`; the symbol keyword leg its exact/prefix/contains
+    `CASE`, then `path COLLATE "C", start_line, id`; vector legs `ORDER BY
+    distance, path COLLATE "C", id` (symbols: `path, start_line, id`) at
+    the HNSW limit itself (an Incremental Sort over the index scan, which
+    still serves it) and again after the gate; the note leg's 200-block cut
+    by owner id (a join for the note's path there would cost a lookup per
+    block; its 30-note cut goes by path). The final sort: score descending, then
+    path by UTF-16 code unit (`compareCodeUnits`), then resource type
+    (`code`, `note`, `symbol`: a note and a code file can share a path,
+    and a file comes before its symbols), then a symbol's start line, then
+    id, so equal scores never depend on
+    row or `Map` insertion order. [INFERENCE] HNSW stays approximate and its
+    graph depends on insert order: which rows make a vector leg's 30 can
+    still differ between instances when distances are close but not equal.
   - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
     search and graph, saved perspectives) bound the last change,
     `updatedAt`, never frontmatter `timestamp` (the creation time, which
@@ -1516,8 +1542,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   one, even of the same owner; of the other type, the owner's repositories
   (a note) or live vaults (a file), never another account's. Each HNSW leg
   filters `container_id = ANY(<scope>)` during its scan, with
-  `hnsw.iterative_scan = relaxed_order` (set only where pgvector is 0.8 or
-  newer: older versions reserve the `hnsw.` prefix without that setting),
+  `hnsw.iterative_scan = relaxed_order` (`setHnswScan`, set only where
+  pgvector is 0.8 or newer: older versions reserve the `hnsw.` prefix without that setting),
   so the scan goes on past the `ef_search` (100) candidates until it has
   100 blocks of the scope, up to `hnsw.max_scan_tuples` (default 20,000).
   For a small container the planner reads its blocks by
@@ -2717,9 +2743,15 @@ cut on line boundaries into pieces with the same kind and `inner_path`,
 numbered by `sibling_index`; each piece spans its own lines and the last
 ends where the section ends. The embedded text is
 `<path>\n<inner_path>\n<piece>` (a preamble: `<path>\n<piece>`): no frontmatter, so a
-frontmatter-only edit changes no block (the same spirit as #459), and no
+frontmatter-only edit changes no block, and no
 `title`/`type`/`tags` (`type` is the path's first segment, a title is
-usually the H1 already). Note block lines are **body-relative** (ADR-004
+usually the H1 already). No embedded text, note or code, carries a
+timestamp or another row field (#459): no frontmatter `timestamp`,
+`created` or `updated`, no `updated_at`, no file `source_modified_at`;
+only the path, heading path, body or content, and a symbol's kind, name
+and start line. So the same content embeds the same texts whenever it was
+written, and a timestamp-only change embeds nothing
+(`server/test/embed-text-stable.test.ts`). Note block lines are **body-relative** (ADR-004
 §2.2 storage rule); answers that render them add `body_start_line − 1`.
 *Rows*: `content_hash` is the
 sha256 of the block's lines, `owner_version` the file `content_hash` or
@@ -2735,7 +2767,7 @@ that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same owner already has keeps that vector instead of being embedded again, so
 an edit to another symbol or section, a frontmatter edit, or a version bump that leaves a block's text
 alone, embeds nothing new for it. *Readers*: `search` note vector leg — the nearest 200 note blocks of the
-scoped vaults (`hnsw.ef_search` 200, #967's distance gate on the best distance), then each live note's best block
+scoped vaults (`hnsw.ef_search` 200 and the iterative scan, #462; #967's distance gate on the best distance), then each live note's best block
 distance (filters applied to the note), one hit per note with the same
 `{…, snippet: left(body, 200)}` as before. A vault has about 12 times as
 many note blocks as notes; the partial `blocks_note_embedding_idx` keeps the
@@ -2745,7 +2777,7 @@ query after a restart is slower, 190–700 ms against 30–70 ms, while the
 larger index pages in); `search` code
 vector leg — the nearest `file` blocks of the scoped repositories
 (their own partial HNSW index `blocks_file_embedding_idx`, as the old
-file index held only files; `hnsw.ef_search` 200; #967's distance gate), one hit per file with the
+file index held only files; `hnsw.ef_search` 200 and the iterative scan; #967's distance gate), one hit per file with the
 same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
 the ADR-004 best-block roll-up let symbol blocks of large files crowd the
 leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
@@ -3045,11 +3077,16 @@ is the known cause, #496), so re-running it at every boot would turn one
 bad file into a crash loop of the instance. It is retried, bounded, when
 the code that crashed changes: a new `EXTRACTOR_VERSION` or `EMBEDDER_ID`
 changes the key, which gives the item one new job with 3 attempts; an
-operator re-runs a note's with `pnpm reindex`; a file's runs again when its content changes.
+operator re-runs a note's with `pnpm reindex` or `doctor --repair`
+(`vector-failed`); a file's runs again when its content changes.
 A job running at a graceful
 shutdown also keeps its claim (leases are not released). Crash recovery: a job a dead process held becomes claimable
 when its lease runs out; every drainer is woken every 5 s
-(`startJobPolling`, started at boot) for such jobs and for backoffs.
+(`startJobPolling`, started at boot) for such jobs and for backoffs. So a
+note edited just before the process died is embedded at its current text
+after the restart (#463): its job was inserted with the edit, and until it
+runs the note keeps its previous blocks and counts as pending
+(`server/test/embed-restart.test.ts`).
 Boot deletes successful jobs finished more than 7 days ago
 (`pruneFinishedJobs`); failed ones stay as the per-file and per-note
 status. A job that outlives its lease while still running can run twice
