@@ -585,12 +585,12 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
       { innerPath: 'Guide > Install', startLine: 5, endLine: 7 },
     ])
     expect(await Promise.all(rows.map((r) => fileEmbedding(r.id)))).toEqual(fileVectorsBefore)
-    const firstLines = texts.map((t) => t.split('\n')[0]!).filter((line) => files.some((f) => line.endsWith(` in ${f.path}`)))
+    const firstLines = texts.map((t) => t.split('\n')[0]!).filter((line) => files.some((f) => line.includes(` in ${f.path}`)))
     expect(firstLines.sort()).toEqual([
-      'class Registry in src/Registry.kt',
-      'class Store in src/store.rs',
-      'method Registry.register in src/Registry.kt',
-      'method Store.open in src/store.rs',
+      'class Registry in src/Registry.kt:1',
+      'class Store in src/store.rs:1',
+      'method Registry.register in src/Registry.kt:2',
+      'method Store.open in src/store.rs:4',
       'section Guide > Install in docs/guide.md',
       'section Guide in docs/guide.md',
     ])

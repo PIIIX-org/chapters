@@ -58,14 +58,16 @@ describe('section blocks (#464)', () => {
     expect(new Set(blocks.map((b) => b.blockId)).size).toBe(blocks.length)
   })
 
-  it('a large Markdown file gets a skeleton of its heading lines as its file-level block', () => {
+  it('a large Markdown file keeps its file block and gains a skeleton of its heading lines', () => {
     const filler = Array.from({ length: SMALL_FILE_MAX_LINES }, (_, i) => `line ${i}`)
     const content = ['# Big', ...filler, '## Tail', 'end', ''].join('\n')
     const blocks = codeBlocks(FILE, 'docs/big.md', content, [], outlineSections('markdown', content))
-    expect(blocks[0]).toMatchObject({ kind: 'skeleton', innerPath: '', embedText: 'docs/big.md\n# Big\n## Tail' })
-    expect(blocks.slice(1).map((b) => [b.kind, b.innerPath])).toEqual([
-      ['section', 'Big'],
-      ['section', 'Big > Tail'],
+    expect(blocks.map((b) => [b.kind, b.innerPath, b.snippet])).toEqual([
+      ['file', '', null],
+      ['skeleton', '', null],
+      ['section', 'Big', null],
+      ['section', 'Big > Tail', null],
     ])
+    expect(blocks[1]!.embedText).toBe('docs/big.md\n# Big\n## Tail')
   })
 })
