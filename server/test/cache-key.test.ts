@@ -138,9 +138,11 @@ describe('readEpochs + cacheKey on a real instance: writes in scope move the key
   })
 
   it('moves with a share change (the permission epoch), and differs per account', async () => {
-    const k0 = await keyOver([a])
     const other = await createActiveUser()
+    // Read after the setup: creating the user is itself an account change that moves the permission epoch.
+    const k0 = await keyOver([a])
     expect(await keyOver([a], { ...ownerCaller(), userId: other.id })).not.toBe(k0)
+    expect(await keyOver([a])).toBe(k0)
     await pg`INSERT INTO vault_shares (vault_id, grantee_type, grantee_id, permission) VALUES (${a}, 'user', ${other.id}, 'read')`
     expect(await keyOver([a])).not.toBe(k0)
   })

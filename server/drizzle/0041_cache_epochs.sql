@@ -9,8 +9,11 @@
 -- call in each. They are deferred constraint triggers: the bump runs at commit, inside the
 -- writing transaction (a reader sees the change and the new epoch together, or neither), and
 -- an epoch row is locked only while a transaction commits. One bump per scope per transaction:
--- a transaction-local setting lists the scopes already bumped. About 1.4 µs per changed row
--- (a 200,000-row insert: 495 ms with the trigger, 223 ms without).
+-- the row records the transaction that last bumped it (`bumped_xid`), so a later event of the
+-- same transaction stops after one primary-key probe, whatever the number of rows or scopes it
+-- changed. A 200,000-row insert (Postgres 17): over 3 scopes 803 ms with the trigger, 237 ms
+-- without; over 2,000 scopes 1,363 ms, 590 ms without (a per-transaction list of bumped scopes
+-- took 470 ms and 10,017 ms: its scan grows with the scopes).
 --
 -- The index epochs live in their own table, not in `vaults` / `repositories` columns as ADR-004
 -- §2.9 first said: code locks those rows for its own reasons (the projector holds its vault's row
@@ -24,26 +27,28 @@ CREATE TABLE "index_epochs" (
 	"scope" text NOT NULL,
 	"scope_id" uuid NOT NULL,
 	"epoch" bigint NOT NULL,
+	"bumped_xid" xid8,
 	CONSTRAINT "index_epochs_pkey" PRIMARY KEY ("scope", "scope_id")
 );--> statement-breakpoint
 ALTER TABLE "instance_state" ADD COLUMN "permission_epoch" bigint DEFAULT 0 NOT NULL;--> statement-breakpoint
 CREATE FUNCTION index_epoch_bump(bump_scope text, bump_id uuid) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-  bumped text := coalesce(current_setting('elara.index_epochs_bumped', true), '');
-  mark text := bump_scope || ':' || bump_id || ',';
+  this_xact xid8 := pg_current_xact_id();
   live boolean;
 BEGIN
-  IF bump_id IS NULL OR position(mark IN bumped) > 0 THEN RETURN; END IF;
+  IF bump_id IS NULL THEN RETURN; END IF;
+  IF EXISTS (SELECT 1 FROM index_epochs e WHERE e.scope = bump_scope AND e.scope_id = bump_id AND e.bumped_xid = this_xact) THEN
+    RETURN;
+  END IF;
   live := CASE bump_scope
     WHEN 'vault' THEN EXISTS (SELECT 1 FROM vaults v WHERE v.id = bump_id)
     ELSE EXISTS (SELECT 1 FROM repositories r WHERE r.id = bump_id) END;
   IF live THEN
-    INSERT INTO index_epochs AS e (scope, scope_id, epoch) VALUES (bump_scope, bump_id, 1)
-      ON CONFLICT (scope, scope_id) DO UPDATE SET epoch = e.epoch + 1;
+    INSERT INTO index_epochs AS e (scope, scope_id, epoch, bumped_xid) VALUES (bump_scope, bump_id, 1, this_xact)
+      ON CONFLICT (scope, scope_id) DO UPDATE SET epoch = e.epoch + 1, bumped_xid = EXCLUDED.bumped_xid;
   ELSE
     DELETE FROM index_epochs e WHERE e.scope = bump_scope AND e.scope_id = bump_id;
   END IF;
-  PERFORM set_config('elara.index_epochs_bumped', bumped || mark, true);
 END $$;--> statement-breakpoint
 -- A note's vault, before and after (a move bumps both). Updates count when `seq` moves (body,
 -- frontmatter, path or deleted_at: notes_bump_seq), or the vault, `updated_at` (recency ranks

@@ -2946,8 +2946,10 @@ are idempotent rewrites.
 ### 5.11 Caching contract (`server/src/cache/`, ADR-004 §2.9, #680)
 
 The rules every cache of an answer follows. No answer is cached yet: the
-search and graph result cache (#685) and per-session de-duplication
-(#683) build on this contract, and none may cache without it. D7 on #930
+search and graph result cache (#685, which also adds per-cache hit/miss
+metrics and the test that a cached answer is never served stale) and
+per-session de-duplication (#683) build on this contract, and none may
+cache without it. D7 on #930
 replaced the old promise of no cross-connection caching (§5.8) with this
 contract. Permission checks themselves stay live (§1): a cache never
 authorizes anything.
@@ -2988,9 +2990,11 @@ in each:
 - **Mechanism.** The triggers are deferred constraint triggers. Each bump
   runs at commit, inside the writing transaction, so a reader sees the
   change and the new epoch together or neither. A scope is bumped once per
-  transaction (a transaction-local setting remembers it). The cost is about
-  1.4 µs per changed row: a 200,000-row insert took 495 ms with the trigger
-  and 223 ms without.
+  transaction: its row records the bumping transaction (`bumped_xid`), so
+  each later event of that transaction costs one primary-key probe,
+  however many rows and scopes it changed. A 200,000-row insert took
+  803 ms with the trigger and 237 ms without over 3 scopes, and 1,363 ms
+  vs 590 ms over 2,000 scopes.
   - The index epochs have their own table rather than `vaults` /
     `repositories` columns. Code locks those rows for its own reasons (the
     projector holds its vault FOR SHARE while it writes). A commit-time bump
