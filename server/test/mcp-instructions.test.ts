@@ -76,7 +76,8 @@ describe('initialize.instructions (#435)', () => {
     for (const text of [writer, admin]) {
       for (const rule of ['budget_tokens', 'truncated', 'cursor', 'elara://manual/', 'base_rev', 'idempotency_key']) expect(text).toContain(rule)
       // Every read_note, paged or not, records its rev as the merge base (#961): no "unpaged" caveat.
-      expect(text).toContain('merges from `base_rev`, else from your last read_note.')
+      // `base_rev` is edit_note's (upsert_note has none, #956 review), so the rule names edit_note.
+      expect(text).toContain('A whole edit_note `body` merges from `base_rev`, else from your last read_note.')
       expect(text).not.toContain('unpaged')
       // Only the note writes take idempotency_key; admin's other writes refuse it as an unknown argument.
       expect(text).toContain('Retry a note write with the same `idempotency_key`')

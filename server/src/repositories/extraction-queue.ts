@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql, type SQL } from 'drizzle-orm'
+import { eq, sql, type SQL } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFiles } from '../db/schema.js'
@@ -9,7 +9,12 @@ import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
-import { resolveImportPath } from './import-resolution.js'
+import {
+  RESOLUTION_MANIFEST_PATTERN,
+  buildResolutionContext,
+  resolveImportPath,
+  type ResolutionContext,
+} from './import-resolution.js'
 import { detectLanguage } from './language.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
@@ -91,23 +96,119 @@ function looksMinified(content: string): boolean {
   return false
 }
 
-// ponytail: repo path cache to eliminate N*N sibling queries during batch extraction (DB-09).
-const repoSiblingsCache = new Map<string, { pathToId: Map<string, string>; knownPaths: Set<string> }>()
+interface RepoSiblings {
+  pathToId: Map<string, string>
+  knownPaths: Set<string>
+  /** What the repository's manifests say about module names (#466). */
+  context: ResolutionContext
+}
 
-async function getRepoSiblings(repositoryId: string) {
+/** A repository's file paths and ids, and the content of its manifests for the resolution context, in one query. */
+async function loadRepoSiblings(repositoryId: string): Promise<RepoSiblings> {
+  const files = await db
+    .select({
+      id: repositoryFiles.id,
+      path: repositoryFiles.path,
+      manifest: sql<string | null>`CASE WHEN ${repositoryFiles.path} ~ ${RESOLUTION_MANIFEST_PATTERN} THEN ${repositoryFiles.content} END`,
+    })
+    .from(repositoryFiles)
+    .where(eq(repositoryFiles.repositoryId, repositoryId))
+  return {
+    pathToId: new Map(files.map((f) => [f.path, f.id])),
+    knownPaths: new Set(files.map((f) => f.path)),
+    context: buildResolutionContext(files.flatMap((f) => (f.manifest === null ? [] : [{ path: f.path, content: f.manifest }]))),
+  }
+}
+
+// ponytail: repo path cache to eliminate N*N sibling queries during batch extraction (DB-09).
+const repoSiblingsCache = new Map<string, RepoSiblings>()
+
+async function getRepoSiblings(repositoryId: string): Promise<RepoSiblings> {
   let cached = repoSiblingsCache.get(repositoryId)
   if (!cached) {
-    const siblings = await db
-      .select({ id: repositoryFiles.id, path: repositoryFiles.path })
-      .from(repositoryFiles)
-      .where(eq(repositoryFiles.repositoryId, repositoryId))
-    cached = {
-      pathToId: new Map(siblings.map((s) => [s.path, s.id])),
-      knownPaths: new Set(siblings.map((s) => s.path)),
-    }
+    cached = await loadRepoSiblings(repositoryId)
     repoSiblingsCache.set(repositoryId, cached)
   }
   return cached
+}
+
+/** Import rows `reresolveRepositoryImports` reads and updates per statement. */
+const RERESOLVE_BATCH = 1000
+
+/**
+ * Resolves a repository's stored import rows again from their raw
+ * `target_path` (no re-parse), with its current files and manifests, in
+ * keyset pages of `RERESOLVE_BATCH` rows and one UPDATE per page for the
+ * rows whose target changed. `unresolved`: the rows without a target.
+ * `nonRelative`: every row whose specifier does not start with `.`, the
+ * ones manifests decide (#466): a renamed package loses its old name's
+ * edges as the new name gains them. Returns the rows that gained a target.
+ */
+async function reresolveRepositoryImports(repositoryId: string, rows: 'unresolved' | 'nonRelative'): Promise<number> {
+  const { pathToId, knownPaths, context } = await loadRepoSiblings(repositoryId)
+  const scope = rows === 'unresolved' ? sql`i.resolved_target_file_id IS NULL` : sql`i.target_path NOT LIKE '.%'`
+  let after: { sourceFileId: string; targetPath: string } | null = null
+  let gained = 0
+  for (;;) {
+    const page = (await db.execute(sql`
+      SELECT i.source_file_id AS "sourceFileId", i.target_path AS "targetPath",
+        i.resolved_target_file_id AS "resolvedId", f.path AS "sourcePath"
+      FROM repository_file_imports i JOIN repository_files f ON f.id = i.source_file_id
+      WHERE f.repository_id = ${repositoryId} AND ${scope}
+        ${after ? sql`AND (i.source_file_id, i.target_path) > (${after.sourceFileId}::uuid, ${after.targetPath})` : sql``}
+      ORDER BY i.source_file_id, i.target_path
+      LIMIT ${RERESOLVE_BATCH}`)) as unknown as Array<{
+      sourceFileId: string
+      targetPath: string
+      resolvedId: string | null
+      sourcePath: string
+    }>
+    const changed = page.flatMap((r) => {
+      const resolved = resolveImportPath(r.sourcePath, r.targetPath, knownPaths, context)
+      const target = (resolved && pathToId.get(resolved)) ?? null
+      return target === r.resolvedId ? [] : [{ source: r.sourceFileId, path: r.targetPath, target }]
+    })
+    if (changed.length > 0) {
+      await db.execute(sql`
+        UPDATE repository_file_imports i SET resolved_target_file_id = u.target
+        FROM jsonb_to_recordset(${JSON.stringify(changed)}::jsonb) AS u(source uuid, path text, target uuid)
+        WHERE i.source_file_id = u.source AND i.target_path = u.path`)
+      gained += changed.filter((c) => c.target !== null).length
+    }
+    if (page.length < RERESOLVE_BATCH) break
+    after = page.at(-1)!
+  }
+  return gained
+}
+
+/** Repositories whose manifests a sync changed; the extraction worker re-resolves their imports (#466). */
+const manifestsChanged = new Set<string>()
+
+/**
+ * A sync created, changed or deleted a package.json, pnpm-workspace.yaml or
+ * tsconfig/jsconfig of this repository: before its next turn the extraction
+ * worker re-resolves the repository's non-relative imports with the new
+ * manifests and drops its cached ones, so no file it extracts afterwards
+ * resolves with the old ones. In memory: after a crash the boot backfill
+ * resolves what gained a target; a row that lost one keeps it until its
+ * file is extracted again.
+ */
+export function scheduleImportReresolution(repositoryId: string): void {
+  manifestsChanged.add(repositoryId)
+  extraction.kick()
+}
+
+async function reresolveChangedManifests(): Promise<void> {
+  for (const repositoryId of manifestsChanged) {
+    manifestsChanged.delete(repositoryId)
+    repoSiblingsCache.delete(repositoryId)
+    try {
+      await reresolveRepositoryImports(repositoryId, 'nonRelative')
+    } catch (err) {
+      manifestsChanged.add(repositoryId)
+      throw err
+    }
+  }
 }
 
 /**
@@ -148,48 +249,18 @@ export async function flushExtraction(): Promise<void> {
 
 /**
  * Re-resolve stored imports that have no target yet, from their raw
- * `target_path` (no re-parse). Extraction only re-runs when content
+ * `target_path` (no re-parse), per repository with its manifests
+ * (`reresolveRepositoryImports`). Extraction only re-runs when content
  * changes, so rows written by an older resolver stay unresolved until
  * this runs. Idempotent; called once at startup. Returns rows resolved.
  */
 export async function backfillUnresolvedImports(): Promise<number> {
-  const pending = await db
-    .select({
-      sourceFileId: repositoryFileImports.sourceFileId,
-      targetPath: repositoryFileImports.targetPath,
-      sourcePath: repositoryFiles.path,
-      repositoryId: repositoryFiles.repositoryId,
-    })
-    .from(repositoryFileImports)
-    .innerJoin(repositoryFiles, eq(repositoryFiles.id, repositoryFileImports.sourceFileId))
-    .where(isNull(repositoryFileImports.resolvedTargetFileId))
-
-  const siblingsByRepo = new Map<string, { pathToId: Map<string, string>; knownPaths: Set<string> }>()
+  const repos = (await db.execute(sql`
+    SELECT DISTINCT f.repository_id AS "repositoryId"
+    FROM repository_file_imports i JOIN repository_files f ON f.id = i.source_file_id
+    WHERE i.resolved_target_file_id IS NULL`)) as unknown as Array<{ repositoryId: string }>
   let resolvedCount = 0
-  for (const imp of pending) {
-    let siblings = siblingsByRepo.get(imp.repositoryId)
-    if (!siblings) {
-      const files = await db
-        .select({ id: repositoryFiles.id, path: repositoryFiles.path })
-        .from(repositoryFiles)
-        .where(eq(repositoryFiles.repositoryId, imp.repositoryId))
-      siblings = { pathToId: new Map(files.map((f) => [f.path, f.id])), knownPaths: new Set(files.map((f) => f.path)) }
-      siblingsByRepo.set(imp.repositoryId, siblings)
-    }
-    const resolved = resolveImportPath(imp.sourcePath, imp.targetPath, siblings.knownPaths)
-    const targetId = resolved ? siblings.pathToId.get(resolved) : undefined
-    if (!targetId) continue
-    await db
-      .update(repositoryFileImports)
-      .set({ resolvedTargetFileId: targetId })
-      .where(
-        and(
-          eq(repositoryFileImports.sourceFileId, imp.sourceFileId),
-          eq(repositoryFileImports.targetPath, imp.targetPath),
-        ),
-      )
-    resolvedCount++
-  }
+  for (const { repositoryId } of repos) resolvedCount += await reresolveRepositoryImports(repositoryId, 'unresolved')
   return resolvedCount
 }
 
@@ -346,6 +417,8 @@ async function drainOnce(): Promise<void> {
   try {
     await failCrashedJobs(EXTRACTION_JOB, 'extraction', 'fileId')
     for (;;) {
+      // Between turns, so no file is mid-extraction with the manifests a sync replaced.
+      await reresolveChangedManifests()
       const next = await nextRepository()
       if (!next) return
       lastTurn.set(next.repositoryId, ++turn)
@@ -412,9 +485,9 @@ async function processFile(fileId: string): Promise<void> {
 
   const importRows: Array<typeof repositoryFileImports.$inferInsert> = []
   if (imports.length > 0) {
-    const { pathToId, knownPaths } = await getRepoSiblings(row.repositoryId)
+    const { pathToId, knownPaths, context } = await getRepoSiblings(row.repositoryId)
     for (const { target: targetPath, line } of imports) {
-      const resolved = resolveImportPath(row.path, targetPath, knownPaths)
+      const resolved = resolveImportPath(row.path, targetPath, knownPaths, context)
       importRows.push({ sourceFileId: fileId, targetPath, resolvedTargetFileId: resolved ? pathToId.get(resolved) : undefined, line })
     }
   }

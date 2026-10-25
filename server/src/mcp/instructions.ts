@@ -21,7 +21,7 @@ const READ_RULES =
   'Manuals: elara://manual/conventions and one per tool family.'
 
 const WRITE_RULES =
-  ' A whole `body` merges from `base_rev`, else from your last read_note. ' +
+  ' A whole edit_note `body` merges from `base_rev`, else from your last read_note. ' +
   '`ops` edit the live text. Retry a note write with the same `idempotency_key`.'
 
 export function instructionsFor(profile: ToolProfile): string {
