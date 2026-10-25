@@ -12,7 +12,9 @@
 // Uses only entry points that exist on the base (the fails-before job runs
 // this file against it); filters the base lacks are ignored there.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import type { FastifyInstance } from 'fastify'
 import { sql } from 'drizzle-orm'
+import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
 import { repositories, vaults } from '../src/db/schema.js'
 import { createNote } from '../src/notes/store.js'
@@ -20,7 +22,7 @@ import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { searchNotes } from '../src/search/search.js'
-import { createActiveUser } from './helpers.js'
+import { createActiveUser, loginCookie } from './helpers.js'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -104,6 +106,7 @@ describe('note filters apply inside each leg (#454)', () => {
 
 describe('code and symbol filters apply inside each leg (#454)', () => {
   let repo: string
+  let ownerEmail: string
   const code = (filters: Filters, includeSymbols = false) => search({ vaultIds: [], repositoryIds: [repo] }, filters, includeSymbols)
   const targetPaths = TARGETS.map((i) => `small/a${i}.ts`)
 
@@ -111,6 +114,7 @@ describe('code and symbol filters apply inside each leg (#454)', () => {
     const owner = await createActiveUser()
     const [row] = await db.insert(repositories).values({ name: 'filters', ownerId: owner.id, ingestionMethod: 'agent_push' }).returning()
     repo = row!.id
+    ownerEmail = owner.email
     const files = [
       ...Array.from({ length: NOISE }, (_, i) => ({ path: `big/f${i}.py`, content: 'starve query\n' })),
       ...TARGETS.map((i) => ({ path: `small/a${i}.ts`, content: 'starve\n' })),
@@ -140,6 +144,24 @@ describe('code and symbol filters apply inside each leg (#454)', () => {
   it('path prefix and glob', async () => {
     await inBothPlans(() => paths(code({ path: 'small/' })), targetPaths)
     await inBothPlans(() => paths(code({ path: '**/*.ts' })), targetPaths)
+  })
+
+  it('the REST search takes them: languages, kinds, path', async () => {
+    const app: FastifyInstance = await buildApp()
+    await app.ready()
+    try {
+      const cookie = await loginCookie(app, ownerEmail)
+      const get = async (filters: string) => {
+        const res = await app.inject({ method: 'GET', url: `/api/repositories/${repo}/search?q=starve%20query&limit=5&${filters}`, headers: { cookie } })
+        expect(res.statusCode).toBe(200)
+        return (res.json() as { results: Array<{ path: string }> }).results.map((r) => r.path)
+      }
+      expect(await get('languages=typescript')).toEqual(targetPaths)
+      expect(await get('path=small/')).toEqual(targetPaths)
+      expect(await get('kinds=class')).toEqual([])
+    } finally {
+      await app.close()
+    }
   })
 
   it('symbol kinds, and types (a symbol\'s type is its kind)', async () => {
