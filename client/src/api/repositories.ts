@@ -18,6 +18,13 @@ export type IngestionMethod = 'git' | 'local_path' | 'agent_push'
 export type SyncStatus = 'idle' | 'syncing' | 'error'
 export type RepositoryAccess = 'owner' | 'viewer'
 
+export type SkipReason = 'too_large' | 'binary' | 'ignored' | 'over_file_cap'
+
+/** Counts per reason plus a few sample paths (an ignored directory ends in `/`). */
+export interface SkippedFiles extends Record<SkipReason, number> {
+  sample: Array<{ path: string; reason: SkipReason }>
+}
+
 export interface Repository {
   id: string
   name: string
@@ -39,6 +46,8 @@ export interface Repository {
   /** Whether a webhook secret exists. The secret itself is never served after creation. */
   webhookConfigured: boolean
   createdAt: string
+  /** What the last git or local-path sync left out and why. Absent when nothing was skipped. */
+  skipped?: SkippedFiles
 }
 
 export interface AccessibleRepository extends Repository {
