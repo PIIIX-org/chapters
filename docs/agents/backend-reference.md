@@ -175,8 +175,8 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 
 | Table | Purpose |
 |---|---|
-| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages, and on trashed rows (migration 0047, #682) `notes_vault_path_trashed (vault_id, path)` for `pathHadOtherNote` |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order. Migration 0047 (#682) indexes `from_path` where set (`note_revisions_from_path`), for `pathHadOtherNote` |
+| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages, and on trashed rows (migration 0051, #682) `notes_vault_path_trashed (vault_id, path)` for `pathHadOtherNote` |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order. Migration 0051 (#682) indexes `from_path` where set (`note_revisions_from_path`), for `pathHadOtherNote` |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558) and `context` (migration 0039, #472: the link's paragraph, the non-blank lines around it, when at most 200 code points; else its own lines; else 200 code points of them around the link with `…` at each cut end; never half a surrogate pair; `okf.ts` `extractWikilinkLocations`). PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows, and of two links to one target on one line the row is the first (no count kept). Null `context` = not filled yet (rows from before 0039; rows from before 0031 also have line 0; or written by older code after a rollback; the column defaults keep that working): the boot `note_links` catch-up jobs (**Link catch-up**, §5) rewrite them from the body under the note lock at catch-up priority (5,000 notes with 30,000 rows: queued in 79 ms, rewritten in 62 s, 12 ms a note, locally; until then a backlink has `context: null` and an unlocated edge `evidence: null`), and the doctor's `links-differ` lists any whose targets or lines differ from the body |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -1255,16 +1255,21 @@ give the same edges in any insertion order. REST graph routes return these
 fields as they are (additive: the canvas reads `source`/`target`/`kind`),
 and a link both ways is now two REST edges.
 
-Community detection runs `graphology-communities-louvain` over the
-undirected projection of the assembled graph (`EdgeList.pairs`: the first
-edge per unordered pair and kind, ends as first added: the edge list
-before #558, so keeping directions moves no community) on every call,
-seeded from the node ids. The community view's `weight` counts the same
-pairs. Its result
-also depends on node and edge insertion order, so every query feeding it
-(notes, repository files, note links, code imports, semantic edges) has
-an `ORDER BY` on ids (#816): unordered, the row order followed the index
-the planner picked, and two calls over the same data could differ. The merged cross-resource view
+Graph answers follow the content, never the per-database ids (#1006): the
+same notes and files give the same nodes, edges and communities in any
+database. Nodes are in `nodeOrder` (path in code-unit order, then `code`
+before `note`, then the vault or repository name, read by `containerNames`
+only when the call holds several of a kind: one path and kind in two
+containers of a merged graph); the container and node ids decide only two
+containers of one name, the one tie left. An undirected edge names its earlier
+end as `source`, and edges sort by their ends' places, then kind, relation
+and source (`contentOrder`). Community detection runs
+`graphology-communities-louvain` over the undirected projection of the
+assembled graph (one pair per unordered pair and kind) on every call, nodes
+and pairs in that order, seeded from the nodes' `resourceType:path` keys;
+communities are numbered 0, 1, … by their first member in node order.
+The community view's `weight` counts the same pairs. No query's row order
+reaches Louvain. The merged cross-resource view
 additionally requires the resource owner's `mergeable` flag and the
 viewing user's own per-resource opt-in — three independent gates, all
 re-resolved live.
@@ -1303,7 +1308,7 @@ for a ref without an extension also against the extension-less file path,
 so `store.ts` never matches `store.ts.orig`);
 a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
 tier. One match is `{node}`; several are `{candidates, next, total}`
-(`{path, kind, id}`, shorter path first, then path and id; 10 shown,
+(`{path, kind, id}`, shorter path first, then `nodeOrder`; 10 shown,
 `next` the 11th as a `limit` + 1 read); none is `{suggestions}` (empty for
 a node id, so an id out of reach answers as a missing one): up to 5
 paths from a pool of at most 200 per table (same basename without
@@ -1445,10 +1450,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
     search and graph, saved perspectives) bound the last change,
     `updatedAt`, never frontmatter `timestamp` (the creation time, which
-    edits leave alone). Note legs filter `notes.updated_at` in SQL; code
+    edits leave alone). Note legs filter `notes.updated_at`; code
     hits use `repository_files.updated_at` (the last sync that changed the
     file's content: an unchanged hash leaves it) and symbol hits their
-    file's, filtered after the merge by `passesFilters` like `types`. A
+    file's, each inside its leg's SQL (see **Filters**). A
     bound goes through `timeBound`: `YYYY-MM-DD` or an ISO date-time
     (`THH:MM`, `:SS`, a fraction cut to ms, `Z` or `±HH:MM`); one without
     an offset is UTC, never the server's time zone; anything else (a
@@ -1465,8 +1470,40 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     fold); a write that changes nothing leaves it. A current-format backup
     restore and a vault import with `.elara/history` keep the source's
     `updated_at`; a format-1 backup and a plain import take the restore
-    time. No index: note legs are served by the FTS and HNSW indexes and
-    the graph filters in memory.
+    time. Note legs are served by the FTS and HNSW indexes and the graph
+    filters in memory; no index on `updated_at`.
+  - **Filters** (#454): `SearchFilters` = `types`, `tags`, `since`/`until`,
+    and `languages`, `kinds`, `path` (REST: `/search`, `/vaults/:id/search`
+    and `/repositories/:id/search`, comma-separated lists as the graph
+    routes take them, `search/filters.ts`; `find_symbols`' `kind`). Every
+    filter applies inside each leg's SQL, before the leg's cut
+    (`noteFilter`, `fileFilter`, `symbolFilter`), so a filtered search
+    answers with the best matching rows, not what of the unfiltered best
+    30 per leg matches; nothing is filtered after the fusion. A hit
+    without the filtered attribute is dropped, and a leg none of whose
+    rows can match runs no query: code has no tags, notes no language or
+    kind, files no kind. `types` is what a hit's `type` shows: a note's
+    type, a file's language, a symbol's kind. `languages` is a file's, or a
+    symbol's file's, `language`; `kinds` a symbol's kind. `path` is a
+    prefix (`starts_with`), or a glob when it holds `*` or `?` (`*` and `?`
+    within one segment, `**` across them, `**/` also none; anchored, as a
+    POSIX regex). Tags are string elements of a frontmatter `tags` array
+    (`?|`), served by `notes_tags_idx` (GIN on `frontmatter -> 'tags'`,
+    migration 0043; on 50,000 notes with a tag on 0.5% of them it took the
+    keyword leg from 5-8 ms to 1.5 ms and the vector leg from 9-10 ms to
+    1.5 ms). An empty list filters nothing. The vector legs keep `blockLeg`'s
+    iterative scan: the code and symbol legs add the clauses to their WHERE
+    over `blocks` joined to the file; the note leg joins `notes` into its
+    200-block cut only when a note filter is set (unfiltered, the cut
+    stays a scan of `blocks` alone). The planner may then serve a filtered
+    note leg exactly (the matching notes, then their blocks, then a sort)
+    instead of from the HNSW index: cheap for a selective filter, about
+    50-130 ms for one that keeps every note of a 50,000-note vault (the
+    unfiltered leg: 10-27 ms). MCP `search` takes none of these
+    (`find_symbols` takes `kind`): `path` alone would cost the reader
+    profile 61 characters (~16 tokens) over its 2,000-token budget, already
+    at 1,991. `test/search-filters-in-legs.test.ts` has a fixture per
+    filter whose matching rows are outside every leg's unfiltered cut.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
@@ -2018,7 +2055,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     1, so `pathHadOtherNote` (`notes/store.ts`) refuses `unchanged` when a
     trashed note has the path or another note of the vault has a revision
     with `from_path` = the path (a rename, a restore elsewhere): two
-    lookups of migration 0047's partial indexes, run only when the `rev`
+    lookups of migration 0051's partial indexes, run only when the `rev`
     matches. A purged predecessor (owner-only `purge_note` after trash)
     leaves no trace, the one case left.
   - Files compare the per-file `hash`, never the repository `commit` /
@@ -2043,6 +2080,27 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - `if_rev` is in the cursor fingerprint like any argument. Search and
     graph have no not-modified answer: that is the result cache's (#685).
   `test/mcp-read-if-rev.test.ts`.
+- **Cacheable prompt** (#681): what a token is sent before its first
+  call opens every agent prompt, and providers bill a repeated prefix at
+  a fraction of the price only if its bytes repeat. `initialize`,
+  `tools/list` and `prompts/list` are the same bytes for every token of
+  one profile, scope and access, whoever minted it, whichever vault it
+  pins and on any date: tools and prompts list in registration order,
+  and no list or instruction text carries an id, name, date, count or
+  build sha. `initialize` answers `serverInfo.version` as `0.2.0+` and
+  `definitionsVersion(profile)` in `server.ts`: the first 16 hex of the
+  sha256 of the `tools/list`, `prompts/list` and instructions of an
+  account token of that profile with admin access, computed once per
+  process from the registrations, so it changes only when a definition
+  does. It is outside the counted lists and instructions, so the reader
+  budget is unchanged by it (7,970 characters, ~1,993 tokens with #682's
+  `if_rev`).
+  `test/mcp-cacheable-prompt.test.ts` compares the raw bytes of two
+  accounts' tokens on two faked dates per profile and scope (account,
+  vault pin) and the version against the served bytes;
+  `test/mcp-definitions-version.test.ts` checks it stays the same across
+  builds and changes when a tool description, a prompt description
+  (writer and admin only) or the instructions change.
 - **Tool annotations** (#434, ADR-004 §2.6): `toolAnnotations()` in
   `server.ts` derives each tool's MCP `annotations` from its `tool()`
   record; `registerTool` lists them and `McpToolInfo` carries the same

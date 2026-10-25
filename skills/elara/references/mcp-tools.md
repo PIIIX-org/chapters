@@ -549,7 +549,7 @@ The write is committed when the call returns; a connection lost before the answe
   - `types` (array<string>, optional): keep nodes whose `type` (a note's folder, i.e. first path segment, not its frontmatter `type`; or code language) is in the list.
   - `tags` (array<string>, optional): keep notes having any of these tags.
   - `aggregate` (enum `"community"` | `"none"`, optional, **default `"community"`**, #426): `"community"` collapses the graph to one node per Louvain community; `"none"` lists every node.
-  - `community` (integer, optional): list only the members of one community (the 2,500 most recently updated at most, with `memberTotal`). Implies the node list. Community numbers come from a Louvain pass over the graph as filtered: take them from a community view with the same `types`, `tags` and `edgeTypes`; under other filters the same number names another community.
+  - `community` (integer, optional): list only the members of one community (the 2,500 most recently updated at most, with `memberTotal`). Implies the node list. Community numbers come from a Louvain pass over the graph as filtered, numbered from 0 by their first node in path order (the same content gives the same numbers on any instance): take them from a community view with the same `types`, `tags` and `edgeTypes`; under other filters the same number names another community.
   - `neighborsOf` (string, optional): the local graph around one node, given by a node reference (see Node references below): its id, its path or part of it, or its name.
   - `depth` (integer 1-3, optional, default 1): with `neighborsOf`, how many edges from it.
   - `edgeTypes` (array of `"extracted"` | `"structural"` | `"semantic"`, optional, default all): build only these edge kinds. Applied before assembly, so the communities and the `neighborsOf` walk use these edges only.
@@ -581,7 +581,7 @@ The write is committed when the call returns; a connection lost before the answe
   4. the end of a path on a `/` boundary, in any case: `store.ts`, `notes/store.ts` and `store` match `server/src/notes/store.ts`, `tes/store.ts` does not. A reference with an extension matches that extension only: `store.ts` does not match `store.tsx` or `store.ts.orig`, `index.js` not `index.js.map`;
   5. a note's frontmatter `title`, in any case.
   - Graph nodes are notes and files, so a symbol name is not a reference (use `find_symbols`). Only the call's vaults and repositories are searched.
-  - One match is the node. Several are a successful answer: `candidates` `{ path, kind, id }`, shorter path first, then path and id; at most 10, with `matches` (how many matched) and `truncated.total.candidates` `">10"` when there are more. Pass a candidate's `id` (or a longer path) to choose one.
+  - One match is the node. Several are a successful answer: `candidates` `{ path, kind, id }`, shorter path first, then path, kind and id; at most 10, with `matches` (how many matched) and `truncated.total.candidates` `">10"` when there are more. Pass a candidate's `id` (or a longer path) to choose one.
   - None is `NOT_FOUND` with up to 5 nearby paths in `suggestions` (the same file name in other folders, paths a few edits away), only from the call's vaults and repositories; the key is left out when there are none, and for a node id (one you cannot reach answers as one that does not exist).
 
 ### `find_graph_path`

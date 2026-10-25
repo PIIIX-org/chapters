@@ -824,7 +824,7 @@ async function readStored(vaultId: string, path: string): Promise<StoredNote | n
  * note there, or a revision that moved another note of the vault away from
  * it (a rename, a restore elsewhere). A new note's `seq` starts at 1, so the
  * `rev` an agent has of such a note can equal this one's: read_note's
- * `if_rev` then answers in full. Two lookups of migration 0047's partial
+ * `if_rev` then answers in full. Two lookups of migration 0051's partial
  * indexes. A purged note leaves no trace.
  */
 export async function pathHadOtherNote(note: { id: string; vaultId: string; path: string }): Promise<boolean> {

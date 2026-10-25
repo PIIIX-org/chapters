@@ -5,7 +5,7 @@ import { embedder } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
 import { setHnswScan } from './hnsw.js'
 import { extractionState } from '../repositories/extraction-queue.js'
-import { passesFilters, timeBound, type GraphFilters } from '../graph/assemble.js'
+import { timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
 
 function uuidArray(ids: string[]): SQL {
@@ -13,26 +13,105 @@ function uuidArray(ids: string[]): SQL {
   return sql`${`{${ids.join(',')}}`}::uuid[]`
 }
 
+/** `values` as one Postgres `text[]` parameter, each element quoted (a comma, brace or quote in a value stays in it). */
+function textArray(values: string[]): SQL {
+  return sql`${`{${values.map((v) => `"${v.replace(/["\\]/g, '\\$&')}"`).join(',')}}`}::text[]`
+}
+
 /**
- * A `since`/`until` bound on `notes.updated_at` (#446): a bound that is no
- * date matches nothing, as in `passesFilters`. Both sides are compared at
+ * What a search keeps (#454). Every filter applies inside each leg's SQL,
+ * before the leg's cut, so a filtered search answers with the best matching
+ * rows, not the matching remains of the unfiltered best. A hit without the
+ * filtered attribute is dropped: code has no tags, notes no language, files no
+ * kind. `types` matches what a hit's `type` shows: a note's type, a file's
+ * language, a symbol's kind. An empty list filters nothing.
+ */
+export interface SearchFilters extends Pick<GraphFilters, 'types' | 'tags' | 'since' | 'until'> {
+  /** A code file's language, or a symbol's file's (repositories/language.ts). */
+  languages?: string[]
+  /** A symbol's kind (extraction.ts `SYMBOL_KINDS`). */
+  kinds?: string[]
+  /** A path prefix, or a glob when it holds `*` or `?`: `*` and `?` within one segment, `**` across segments. */
+  path?: string
+}
+
+const given = (list: string[] | undefined): list is string[] => list !== undefined && list.length > 0
+
+/**
+ * A `since`/`until` bound on `column`, an `updated_at` (#446): a bound that is
+ * no date matches nothing, as in `passesFilters`. Both sides are compared at
  * millisecond precision (`timeBound` and graph nodes' `updatedAt` hold no
  * more), so search and graph agree on a change within a bound's millisecond.
  */
-function updatedBound(op: SQL, value: string): SQL {
+function updatedBound(column: SQL, op: SQL, value: string): SQL {
   const bound = timeBound(value)
-  return bound === null ? sql`AND false` : sql`AND date_trunc('milliseconds', updated_at) ${op} ${bound}::timestamptz`
+  return bound === null ? sql`AND false` : sql`AND date_trunc('milliseconds', ${column}) ${op} ${bound}::timestamptz`
 }
 
-function noteFilterClauses(filters?: GraphFilters): SQL {
-  const clauses: SQL[] = []
-  if (filters?.types && filters.types.length > 0) {
-    clauses.push(sql`AND type = ANY(${`{${filters.types.join(',')}}`}::text[])`)
+/** Glob `glob` as an anchored POSIX regular expression (see `SearchFilters.path`). */
+function globRegex(glob: string): string {
+  let re = '^'
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!
+    if (c === '*' && glob[i + 1] === '*') {
+      // `**/` is any number of whole segments, none included; a trailing `**` is anything.
+      const segments = glob[i + 2] === '/'
+      re += segments ? '(.*/)?' : '.*'
+      i += segments ? 2 : 1
+    } else if (c === '*') re += '[^/]*'
+    else if (c === '?') re += '[^/]'
+    else re += c.replace(/[.^$+(){}[\]|\\]/g, '\\$&')
   }
-  if (filters?.since) clauses.push(updatedBound(sql`>=`, filters.since))
-  if (filters?.until) clauses.push(updatedBound(sql`<=`, filters.until))
-  return clauses.length > 0 ? sql.join(clauses, sql` `) : sql``
+  return `${re}$`
 }
+
+/** The filters every resource has: `updated` (`since`/`until`) and `path`. */
+function commonClauses(filters: SearchFilters, updatedAt: SQL, path: SQL): SQL[] {
+  const clauses: SQL[] = []
+  if (filters.since) clauses.push(updatedBound(updatedAt, sql`>=`, filters.since))
+  if (filters.until) clauses.push(updatedBound(updatedAt, sql`<=`, filters.until))
+  if (filters.path) clauses.push(/[*?]/.test(filters.path) ? sql`AND ${path} ~ ${globRegex(filters.path)}` : sql`AND starts_with(${path}, ${filters.path})`)
+  return clauses
+}
+
+/**
+ * A leg's filter clauses, appended to its WHERE: `null` when no row of its
+ * kind can match (the leg then runs no query), `[]` when nothing is filtered.
+ */
+type LegFilter = SQL[] | null
+
+/** Over `notes`. */
+function noteFilter(filters: SearchFilters): LegFilter {
+  if (given(filters.languages) || given(filters.kinds)) return null
+  const clauses: SQL[] = []
+  if (given(filters.types)) clauses.push(sql`AND notes.type = ANY(${textArray(filters.types)})`)
+  // A tag is a string element of a frontmatter `tags` array, as `passesFilters` reads it.
+  if (given(filters.tags)) {
+    clauses.push(sql`AND jsonb_typeof(notes.frontmatter -> 'tags') = 'array' AND notes.frontmatter -> 'tags' ?| ${textArray(filters.tags)}`)
+  }
+  return [...clauses, ...commonClauses(filters, sql`notes.updated_at`, sql`notes.path`)]
+}
+
+/** Over repository file `f`. */
+function fileFilter(filters: SearchFilters): LegFilter {
+  if (given(filters.tags) || given(filters.kinds)) return null
+  const clauses: SQL[] = []
+  if (given(filters.types)) clauses.push(sql`AND f.language = ANY(${textArray(filters.types)})`)
+  if (given(filters.languages)) clauses.push(sql`AND f.language = ANY(${textArray(filters.languages)})`)
+  return [...clauses, ...commonClauses(filters, sql`f.updated_at`, sql`f.path`)]
+}
+
+/** Over symbol block `b` of repository file `f`. */
+function symbolFilter(filters: SearchFilters): LegFilter {
+  if (given(filters.tags)) return null
+  const clauses: SQL[] = []
+  if (given(filters.types)) clauses.push(sql`AND b.symbol_kind = ANY(${textArray(filters.types)})`)
+  if (given(filters.kinds)) clauses.push(sql`AND b.symbol_kind = ANY(${textArray(filters.kinds)})`)
+  if (given(filters.languages)) clauses.push(sql`AND f.language = ANY(${textArray(filters.languages)})`)
+  return [...clauses, ...commonClauses(filters, sql`f.updated_at`, sql`f.path`)]
+}
+
+const clauses = (filter: SQL[]): SQL => (filter.length > 0 ? sql.join(filter, sql` `) : sql``)
 
 /** `updated_at` as `toISOString` text (what graph nodes and `passesFilters` compare). */
 const UPDATED_AT = (column: SQL) => sql`to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS updated_at`
@@ -186,15 +265,9 @@ function gated(nearest: SQL, ties: SQL = sql`path COLLATE "C", id`): SQL {
     ORDER BY distance, ${ties}`
 }
 
-async function noteRows(
-  vaultIds: string[],
-  query: string,
-  mode: 'keyword' | 'semantic',
-  vec?: string,
-  filters?: GraphFilters,
-): Promise<Row[]> {
-  if (vaultIds.length === 0) return []
-  const filterSql = noteFilterClauses(filters)
+async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'semantic', vec: string | undefined, filter: LegFilter): Promise<Row[]> {
+  if (vaultIds.length === 0 || filter === null) return []
+  const filterSql = clauses(filter)
   // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 rows instead of whole table (DB-12, DB-14).
   const rows =
     mode === 'keyword'
@@ -220,11 +293,12 @@ async function noteRows(
           gated(sql`
             -- A note's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per note, as before
             -- blocks; #967's relevance gate applies to that best distance. Equal distances at the 200-block cut go by
-            -- owner (#623; an Incremental Sort over the index scan, which the HNSW index still serves; no join to
-            -- notes there, which would add a lookup per block), the 30-note cut below by path.
+            -- owner (#623; an Incremental Sort over the index scan, which the HNSW index still serves), the 30-note
+            -- cut below by path. Unfiltered, the cut has no join to notes, which would add a lookup per block; a
+            -- filter (#454) joins them there, so it runs inside the (iterative, #462) scan, before the cut.
             WITH nearest AS (
               SELECT owner_id, embedding <=> ${vec}::vector AS distance
-              FROM blocks
+              FROM blocks ${filter.length > 0 ? sql`JOIN notes ON notes.id = blocks.owner_id AND notes.deleted_at IS NULL ${filterSql}` : sql``}
               WHERE owner_type = 'note' AND container_id = ANY(${uuidArray(vaultIds)}) AND embedding IS NOT NULL
               ORDER BY embedding <=> ${vec}::vector, owner_id
               LIMIT ${BLOCK_CANDIDATES}
@@ -235,14 +309,14 @@ async function noteRows(
                    ${UPDATED_AT(sql`notes.updated_at`)}, best.distance
             FROM best JOIN notes ON notes.id = best.owner_id
             WHERE notes.deleted_at IS NULL
-              ${filterSql}
             ORDER BY best.distance, notes.path COLLATE "C", notes.id`),
         )
   return rows as unknown as Row[]
 }
 
-async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' | 'semantic', vec?: string): Promise<Row[]> {
-  if (repositoryIds.length === 0) return []
+async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' | 'semantic', vec: string | undefined, filter: LegFilter): Promise<Row[]> {
+  if (repositoryIds.length === 0 || filter === null) return []
+  const filterSql = clauses(filter)
   // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 files (DB-12).
   const rows =
     mode === 'keyword'
@@ -250,9 +324,10 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
           WITH top_code AS (
             SELECT id, repository_id AS container_id, path, language, content, ${UPDATED_AT(sql`updated_at`)},
                    ts_rank(fts, websearch_to_tsquery('english', ${query})) AS rank
-            FROM repository_files
+            FROM repository_files f
             WHERE repository_id = ANY(${uuidArray(repositoryIds)})
               AND fts @@ websearch_to_tsquery('english', ${query})
+              ${filterSql}
             ORDER BY rank DESC, path COLLATE "C", id
             LIMIT ${CANDIDATES}
           )
@@ -273,7 +348,7 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
             -- kind = 'file' alone (only code has file blocks): naming owner_type too would let the planner take the
             -- owner_type = 'code' index (migration 0036), whose post-filter is what the files-only index avoids.
-            WHERE b.kind = 'file' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL
+            WHERE b.kind = 'file' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL ${filterSql}
             ORDER BY b.embedding <=> ${vec}::vector, f.path COLLATE "C", f.id`),
         )
   return rows as unknown as Row[]
@@ -283,12 +358,12 @@ async function symbolRows(
   repositoryIds: string[],
   query: string,
   mode: 'keyword' | 'semantic',
-  vec?: string,
-  kindFilter?: string,
+  vec: string | undefined,
+  filter: LegFilter,
 ): Promise<SymbolRow[]> {
-  if (repositoryIds.length === 0) return []
+  if (repositoryIds.length === 0 || filter === null) return []
   const repos = uuidArray(repositoryIds)
-  const kind = kindFilter ? sql`AND b.symbol_kind = ${kindFilter}` : sql``
+  const filterSql = clauses(filter)
   const pattern = `%${query}%`
   const rows =
     mode === 'keyword'
@@ -296,7 +371,7 @@ async function symbolRows(
           -- By name, by Class.name (inner_path), or by snippet, as the symbol table was matched before blocks.
           SELECT ${SYMBOL_COLUMNS}
           FROM blocks b JOIN repository_files f ON f.id = b.owner_id
-          WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
+          WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${filterSql}
             AND (b.inner_path ILIKE ${pattern} OR (b.snippet IS NOT NULL AND b.snippet ILIKE ${pattern}))
           ORDER BY
             CASE
@@ -312,7 +387,7 @@ async function symbolRows(
             SELECT ${SYMBOL_COLUMNS}, b.embedding <=> ${vec}::vector AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
             -- kind = 'symbol' alone, so the planner takes the symbols-only index (see codeRows).
-            WHERE b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
+            WHERE b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${filterSql}
               AND b.embedding IS NOT NULL
             ORDER BY b.embedding <=> ${vec}::vector, f.path COLLATE "C", b.start_line, b.id`,
             sql`path COLLATE "C", start_line, id`,
@@ -437,13 +512,13 @@ export async function findSymbols(
 ): Promise<SearchResponse<SymbolSearchResult>> {
   if (repositoryIds.length === 0 || query.trim() === '') return { ...NOTHING, results: [] }
   const limit = options?.limit ?? 20
-  const kind = options?.kind
+  const filter = symbolFilter({ kinds: options?.kind ? [options.kind] : undefined })
 
   const state = indexState([], repositoryIds)
   const vec = await queryVector(query)
   const [keyword, vector] = await Promise.all([
-    channel<[SymbolRow[]]>('keyword', [symbolRows(repositoryIds, query, 'keyword', undefined, kind)]),
-    vec === null ? null : channel<[SymbolRow[]]>('vector', [symbolRows(repositoryIds, query, 'semantic', vec, kind)]),
+    channel<[SymbolRow[]]>('keyword', [symbolRows(repositoryIds, query, 'keyword', undefined, filter)]),
+    vec === null ? null : channel<[SymbolRow[]]>('vector', [symbolRows(repositoryIds, query, 'semantic', vec, filter)]),
   ])
 
   const map = new Map<string, SymbolSearchResult>()
@@ -489,7 +564,7 @@ export async function searchNotes(
   resources: SearchResourceSet,
   query: string,
   limit = 20,
-  filters: GraphFilters = {},
+  filters: SearchFilters = {},
   options: SearchNotesOptions = {},
 ): Promise<SearchResponse<SearchResult>> {
   const { vaultIds, repositoryIds } = resources
@@ -498,26 +573,25 @@ export async function searchNotes(
   const includeSymbols = options.includeSymbols ?? false
   const symbolRepos = includeSymbols ? repositoryIds : []
   const state = indexState(vaultIds, repositoryIds)
+  const [notes, files, symbols] = [noteFilter(filters), fileFilter(filters), symbolFilter(filters)]
   const vec = await queryVector(query)
   const [keyword, vector] = await Promise.all([
     channel<[Row[], Row[], SymbolRow[]]>('keyword', [
-      noteRows(vaultIds, query, 'keyword', undefined, filters),
-      codeRows(repositoryIds, query, 'keyword'),
-      symbolRows(symbolRepos, query, 'keyword'),
+      noteRows(vaultIds, query, 'keyword', undefined, notes),
+      codeRows(repositoryIds, query, 'keyword', undefined, files),
+      symbolRows(symbolRepos, query, 'keyword', undefined, symbols),
     ]),
     vec === null
       ? null
       : channel<[Row[], Row[], SymbolRow[]]>('vector', [
-          noteRows(vaultIds, query, 'semantic', vec, filters),
-          codeRows(repositoryIds, query, 'semantic', vec),
-          symbolRows(symbolRepos, query, 'semantic', vec),
+          noteRows(vaultIds, query, 'semantic', vec, notes),
+          codeRows(repositoryIds, query, 'semantic', vec, files),
+          symbolRows(symbolRepos, query, 'semantic', vec, symbols),
         ]),
   ])
 
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
   const merged = new Map<string, SearchResult>()
-  // Each hit's full `updated_at`, for `since`/`until`; the hit itself shows the day only.
-  const lastChange = new Map<string, string>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
       const key = `${resourceType}:${row.id}`
@@ -527,7 +601,6 @@ export async function searchNotes(
         existing.score += contribution
         if (preferSnippet) existing.snippet = row.snippet
       } else {
-        lastChange.set(key, row.updated_at)
         merged.set(key, {
           resourceType,
           id: row.id,
@@ -553,7 +626,6 @@ export async function searchNotes(
         existing.score += contribution
         if (preferSnippet && row.snippet) existing.snippet = row.snippet
       } else {
-        lastChange.set(key, row.updated_at)
         merged.set(key, {
           resourceType: 'symbol',
           id: row.id,
@@ -584,10 +656,6 @@ export async function searchNotes(
   if (vector) contributeSymbols(vector[2], false)
   if (keyword) contributeSymbols(keyword[2], true)
 
-  const filtered = [...merged].filter(([key, r]) => {
-    const fm = (r.frontmatter ?? {}) as { tags?: unknown }
-    return passesFilters({ type: r.type ?? null, tags: Array.isArray(fm.tags) ? (fm.tags as string[]) : [], updatedAt: lastChange.get(key)! }, filters)
-  }).map(([, r]) => r)
-
-  return respond(filtered.sort(byScore).slice(0, limit), vec !== null, keyword, vector, await state)
+  // Every filter already applied inside the legs (#454).
+  return respond([...merged.values()].sort(byScore).slice(0, limit), vec !== null, keyword, vector, await state)
 }

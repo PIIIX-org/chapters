@@ -10,10 +10,12 @@ import {
   FILE_NODE_COLUMNS,
   NOTE_NODE_COLUMNS,
   STRUCTURAL_GROUP_CAP,
+  containerNames,
   fileNode,
   groupKeys,
   importEdge,
   linkEdge,
+  nodeOrder,
   noteNode,
   passesFilters,
   repoLinkTarget,
@@ -41,7 +43,7 @@ export interface LocalNode extends InternalNode {
 }
 
 export interface LocalGraph {
-  /** Nearest first: by distance, then path and id in code-unit order; the centre first. */
+  /** Nearest first: by distance, then node order (`nodeOrder`: path, kind, container name); the centre first. */
   nodes: LocalNode[]
   edges: GraphEdge[]
   /** Structural groups over the cap that a listed node belongs to, skipped as in `buildGraph`. */
@@ -337,9 +339,6 @@ async function groupMembers(walk: Walk, frontier: InternalNode[]): Promise<Map<s
   return byKey
 }
 
-const byNearest = (a: LocalNode, b: LocalNode) =>
-  a.distance - b.distance || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-
 /** The local graph around `center` (see the module comment). */
 export async function neighborhood(resources: GraphResourceSet, center: InternalNode, options: NeighborhoodOptions): Promise<LocalGraph> {
   const walk: Walk = {
@@ -371,7 +370,10 @@ export async function neighborhood(resources: GraphResourceSet, center: Internal
     frontier = next
   }
 
-  const ranked = [...distance].map(([id, d]) => ({ ...walk.reach.byId.get(id)!, distance: d })).sort(byNearest)
+  const order = nodeOrder(await containerNames(resources))
+  const ranked = [...distance]
+    .map(([id, d]): LocalNode => ({ ...walk.reach.byId.get(id)!, distance: d }))
+    .sort((a, b) => a.distance - b.distance || order(a, b))
   const nodes = options.limit === undefined ? ranked : ranked.slice(0, options.limit)
   const kept = new Set(nodes.map((n) => n.id))
   // The edges among kept nodes the walk did not expand (the outer ring).
