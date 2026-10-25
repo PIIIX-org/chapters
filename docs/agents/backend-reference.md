@@ -1466,7 +1466,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     within one segment, `**` across them, `**/` also none; anchored, as a
     POSIX regex). Tags are string elements of a frontmatter `tags` array
     (`?|`), served by `notes_tags_idx` (GIN on `frontmatter -> 'tags'`,
-    migration 0041; on 50,000 notes with a tag on 0.5% of them it took the
+    migration 0043; on 50,000 notes with a tag on 0.5% of them it took the
     keyword leg from 5-8 ms to 1.5 ms and the vector leg from 9-10 ms to
     1.5 ms). An empty list filters nothing. The vector legs keep `blockLeg`'s
     iterative scan: the code and symbol legs add the clauses to their WHERE
