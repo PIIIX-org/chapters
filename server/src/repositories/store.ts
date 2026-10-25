@@ -4,7 +4,8 @@ import { db } from '../db/client.js'
 import { blocks, repositoryFiles } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
-import { enqueueExtractions } from './extraction-queue.js'
+import { enqueueExtractions, scheduleImportReresolution } from './extraction-queue.js'
+import { isResolutionManifest } from './import-resolution.js'
 import { checkCodeStaleness } from '../notes/staleness.js'
 
 export type RepositoryFileRow = typeof repositoryFiles.$inferSelect
@@ -46,6 +47,8 @@ export async function syncRepositoryFiles(
   // — starting it per-file would race cross-file import resolution against
   // sibling files in the same batch still being inserted.
   const toExtract: string[] = []
+  // A package.json, workspace or tsconfig change can change what any import of the repository resolves to (#466).
+  let manifestChanged = false
 
   for (const file of changedOrNewFiles) {
     // Pushed content is text the client chose to send, so a stray NUL is
@@ -85,6 +88,7 @@ export async function syncRepositoryFiles(
       if (inserted) toExtract.push(inserted.id)
       result.created += 1
     }
+    if (isResolutionManifest(file.path)) manifestChanged = true
   }
 
   const currentPathSet = new Set(currentPaths)
@@ -102,7 +106,10 @@ export async function syncRepositoryFiles(
     // Same as notes: semanticEdges has no FK and does not cascade (#92).
     await deleteSemanticEdgesFor('code', toDelete.map((r) => r.id))
     result.deleted = toDelete.length
+    if (toDelete.some((r) => isResolutionManifest(r.path))) manifestChanged = true
   }
+
+  if (manifestChanged) scheduleImportReresolution(repositoryId)
 
   await enqueueExtractions(toExtract)
   checkCodeStaleness(repositoryId).catch(console.error)
@@ -138,10 +145,10 @@ export async function listRepositoryFiles(
 
 /**
  * One page of a repository's files for `browse_repository` (#424), in path
- * order by code unit (`COLLATE "C"`, the index 0029 adds): the files under
+ * order by UTF-8 byte (`COLLATE "C"`, the index 0029 adds): the files under
  * `folder` (all of them when null) whose path sorts after `after`, at most
  * `limit` of them. The subtree is the range `folder/` ≤ path < `folder0`
- * ('0' is the code unit after '/'), which needs no LIKE escaping. REST's
+ * ('0' is the byte after '/'), which needs no LIKE escaping. REST's
  * `listRepositoryFiles` stays whole and unordered.
  */
 export async function listRepositoryFilesPage(
