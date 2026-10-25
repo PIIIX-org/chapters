@@ -13,7 +13,8 @@ export function atLeast(access: Access | null, needed: Access): boolean {
 /**
  * The access resolution rule (sub-project 1 spec): own it, direct share,
  * or team share — highest permission wins. Always resolved live; callers
- * must never cache the result across requests. Only active users have
+ * must never cache the result across requests (an answer cache, cache/key.ts,
+ * is looked up only after this check passed). Only active users have
  * any access at all.
  */
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i

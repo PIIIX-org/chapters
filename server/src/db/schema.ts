@@ -326,7 +326,9 @@ export const notifications = pgTable(
  * Single-row table tracking one-time instance setup. Migration 0021 also adds
  * the ADR-003 backfill markers `store_migrated_at` (S2a) and
  * `collab_migrated_at` (S2b); they stay out of this model until S2a reads them
- * (see `notes` below).
+ * (see `notes` below). Migration 0041 (#680) adds `permission_epoch bigint`,
+ * bumped by triggers on every share, team, token or account change and read
+ * by cache/key.ts with SQL; out of this model, so a backup does not carry it.
  */
 export const instanceState = pgTable('instance_state', {
   id: text('id').primaryKey().default('singleton'),
@@ -335,6 +337,26 @@ export const instanceState = pgTable('instance_state', {
   /** Admin-mandated MFA: users without TOTP must set it up to continue. */
   requireMfa: boolean('require_mfa').notNull().default(false),
 })
+
+/**
+ * The index epoch of a vault or a repository (ADR-004 §2.9, #680, migration
+ * 0041): bumped at commit by triggers on every change an answer about it
+ * could show; no row is epoch 0. Cache keys carry it (cache/key.ts). Derived
+ * state, so a backup leaves it out. Statement triggers queue the scopes a
+ * transaction touched in the unlogged `index_epoch_pending` (out of this
+ * model: only the triggers use it), and a deferred trigger bumps each once
+ * at commit.
+ */
+export const indexEpochs = pgTable(
+  'index_epochs',
+  {
+    /** 'vault' | 'repository' */
+    scope: text('scope').notNull(),
+    scopeId: uuid('scope_id').notNull(),
+    epoch: bigint('epoch', { mode: 'number' }).notNull(),
+  },
+  (t) => [primaryKey({ name: 'index_epochs_pkey', columns: [t.scope, t.scopeId] })],
+)
 
 /**
  * The authoritative note store (ADR-003, S2a): every server write is one
@@ -723,7 +745,20 @@ export const repositories = pgTable(
      * (no branch exists) and for a git repo whose first sync has not landed.
      */
     defaultBranch: text('default_branch'),
+    /**
+     * The commit the index was built from (#471, ADR-004 §2.9): HEAD of the
+     * clone (git), HEAD of a clean git work tree (local_path), the commit a
+     * push names (agent_push). Null when no commit describes the indexed
+     * files: a folder outside git or with uncommitted changes, a push
+     * without one.
+     */
     lastSyncedCommit: text('last_synced_commit'),
+    /**
+     * The indexed files, whatever their source (#471): 16 hex characters of
+     * sha256 over the sorted `path NUL content_hash LF` lines
+     * (`computeTreeHash`). Written by every sync; null until one runs.
+     */
+    treeHash: text('tree_hash'),
     /** Staleness signal for the polling fallback scheduler. */
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
     /**

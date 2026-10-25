@@ -8,6 +8,8 @@ import { syncRepositoryFiles } from './store.js'
 interface PushBody {
   files: Array<{ path: string; content: string }>
   currentPaths: string[]
+  /** The commit the pushed files are, if they are one (#471); absent clears it. */
+  commit?: string
 }
 
 /**
@@ -40,6 +42,8 @@ export function repositoryPushRoutes(app: FastifyInstance) {
               },
             },
             currentPaths: { type: 'array', items: { type: 'string' } },
+            // A git object name: SHA-1 (40) or SHA-256 (64) hex.
+            commit: { type: 'string', pattern: '^([0-9a-f]{40}|[0-9a-f]{64})$' },
           },
         },
       },
@@ -50,7 +54,9 @@ export function repositoryPushRoutes(app: FastifyInstance) {
       const auth = token ? await resolveSyncToken(token) : null
       if (!auth) return reply.code(401).send({ error: 'invalid or revoked sync token' })
 
-      const result = await syncRepositoryFiles(auth.repositoryId, req.body.files, req.body.currentPaths)
+      const result = await syncRepositoryFiles(auth.repositoryId, req.body.files, req.body.currentPaths, {
+        commit: req.body.commit ?? null,
+      })
       await db
         .update(repositories)
         .set({ syncStatus: 'idle', lastSyncedAt: new Date(), lastSyncError: null })
