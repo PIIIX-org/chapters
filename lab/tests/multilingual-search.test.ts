@@ -373,8 +373,8 @@ const test: LabTest = {
        from e a join e b on a.id < b.id
        group by 1 order by 1`,
     )
-    // semantic-edges.ts:16-56 kNN is not scoped to a vault, so with identical
-    // corpora in several vaults edges also land on the twin notes: count both.
+    // Identical corpora in several vaults: semantic-edges.ts keeps a note's neighbours in its vault (#461),
+    // so the cross-vault counts should be 0; both are counted.
     const inTrials = vaultIds.map(lit).join(',')
     const edgeCount = (lang: string, crossVault: boolean) =>
       ctx.docker.psql(
