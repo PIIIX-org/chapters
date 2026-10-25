@@ -313,7 +313,8 @@ async function waitIndexed(ctx: LabContext, repoIds: string[]) {
     const rows = await ctx.docker.psqlRows<{ id: string; status: string; files: number; embedded: number }>(`
       select r.id, r.sync_status as status,
         (select count(*) from repository_files f where f.repository_id = r.id)::int as files,
-        (select count(*) from repository_files f where f.repository_id = r.id and f.embedding is not null)::int as embedded
+        (select count(*) from repository_files f where f.repository_id = r.id
+          and exists (select 1 from blocks b where b.owner_type = 'code' and b.owner_id = f.id and b.owner_version = f.content_hash and b.embedding is not null))::int as embedded
       from repositories r where r.id in (${repoIds.map((id) => `'${id}'`).join(',')})`)
     if (rows.length === repoIds.length && rows.every((r) => r.status === 'idle' && r.files > 0 && r.embedded === r.files)) return rows
     if (Date.now() - t0 > 15 * 60_000) return rows

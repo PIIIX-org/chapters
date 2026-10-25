@@ -382,9 +382,9 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable` |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — same `fts`/`embedding` pattern as `notes`; **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s code-unit-order pages (#424) |
+| `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s code-unit-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
-| `repositoryFileSymbols` | per-file module-level declarations and the methods of module-level classes (`kind` per the **Symbol contract** below; `parent`, migration 0034, a method's class or a namespace member's namespace, null at module level), surfaced as a file "outline" — **not** emitted as a graph edge despite the schema comment calling them "contains" edges |
+| `blocks` | (migration 0035, ADR-004 §2.2/§2.5, #413/#452a) the addressable spans of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035). `owner_id` has no FK: a statement trigger on `repository_files` deletes a file's blocks with it. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges. Note blocks are #452b |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
 
 ### Cross-cutting
@@ -401,7 +401,7 @@ fold of that transaction keeps; the next fold clears it.
 - Partial unique indexes (`WHERE deleted_at IS NULL`) implement
   "live-only uniqueness" so soft-deleted rows don't block reuse of a
   path/name.
-- `notes.embedding` and `repositoryFiles.embedding` are the same
+- `notes.embedding` and the code `blocks.embedding` are the same
   384-dim vector space on purpose, not by coincidence — that's what
   makes note↔code semantic edges possible with no new mechanism beyond
   a shared table.
@@ -1003,8 +1003,14 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   job), `vector-failed` (the `embed_note` job of the current `seq`
   failed); `links-differ` (`note_links` targets and body lines against
   `linkRows(body)`, the rows `replaceLinks` stores; a row without lines, from before
-  migration 0031, shows as `<target> (no line)`).
-  Pending projections, embedding jobs and unfolded CRDT tails are listed
+  migration 0031, shows as `<target> (no line)`); for repository files
+  (#413; on a run without `--vault`, or that repository's with
+  `--repository <id>`) `blocks-missing` (no block of the file's current
+  content: no extraction job for it, or one that finished without them) and
+  `blocks-failed` (the extraction job of the current key failed), both
+  repaired by queueing that job. These carry `repositoryId`,
+  `repositoryName` and `fileId`, with `vaultId`/`vaultName` empty.
+  Pending projections, embedding and extraction jobs and unfolded CRDT tails are listed
   in `pending`, not as problems. `info` (#908) lists `migration-copy`: a
   `.conflicts/<path minus .md>.<stamp>.md` copy whose bytes equal a
   `.migration/<date>/unparseable/<path>` file, i.e. the projector's copy of
@@ -2471,11 +2477,76 @@ query against `parent.name`; `search` symbol hits carry it as
 
 Extraction is deferred until the *entire* sync batch has been
 persisted (see §11 for why — this fixed a real ordering bug found via
-live e2e testing, not unit tests). Symbol
-rows (`repositoryFileSymbols`) are a per-file outline surfaced through
-the MCP `read_file` tool — despite the schema comment calling them
-"contains edges," they are **not** emitted as actual graph edges by
-`buildGraph()`.
+live e2e testing, not unit tests). A file's symbol blocks are its outline
+surfaced through the MCP `read_file` tool; they are **not** emitted as
+graph edges by `buildGraph()`.
+
+**Blocks and the line contract** (#413, #452a, #418, #460; ADR-004 §2.2,
+§2.5). *Lines* (`text/lines.ts`): 1-based and inclusive, split on `\n`
+only, so a `\r` stays on its line and a CRLF text keeps its bytes;
+`total_lines` is 0 for an empty text, else the `\n` count plus one unless
+the text ends with `\n` (what editors and GitHub show; MCP's line paging,
+`mcp/response.ts`, counts the same way). `sliceLines(text, a, b)` is the
+substring from the start of line a to the end of line b, its final `\n`
+excluded: snippets, block texts and embedded texts are always such
+substrings, never collapsed or trimmed. A location is `path#La-Lb`, or
+`path#La` for one line. *Stored text = hashed text*:
+`repository_files.content_hash` is the sha256 of the stored `content`,
+NUL bytes removed first (before #418 it hashed the text before the strip).
+*Block id* (`text/blocks.ts`): `'b_' + base32(sha256(owner_id ␟ kind ␟
+inner_path ␟ sibling_index))[0..12]` (RFC 4648 alphabet, lower case; ␟ =
+U+001F; 60 bits). `owner_id` is the `repository_files.id` (stable per
+repository and path); `sibling_index` counts blocks of the same kind and
+inner path in document order (overloads, duplicate headings). The id
+survives line shifts and edits elsewhere; renaming the symbol changes it.
+The fence-aware heading parser (`headings()`) lives there too, used by
+`replace_section` (`sync/edit-ops.ts`) and, with #452b, note blocks.
+*Code blocks* (`repositories/code-blocks.ts`): a `symbol` block per
+symbol; a `file` block for every file (lines 1..total, text
+`<path>\n<content>`, the old file vector's; the model reads its first 512
+tokens); and, when the file is not small — more than 300 lines
+(`SMALL_FILE_MAX_LINES`) or 16,000 characters (the embedder's cut) — and has
+symbols, a `skeleton` block for the file (`<path>` then every symbol's first
+line) and one per class with methods (`<kind> <Class> in <path>`, the
+class's first line, then its methods' first lines). The file-level blocks
+are always embedded. A symbol's embedded text is `<kind> <inner_path> in
+<path>:<start line>\n<snippet>`, the snippet its first 30 lines cut to
+1,500 code points (`SNIPPET_LINES`, `SNIPPET_CHARS`), stored on the block
+as `snippet` (the keyword legs match it and hits show it). The line stays
+in the text: without it chapters A13 fell out of the top 5 (bench run
+40076821407 vs 40076707623), so a symbol whose lines moved is embedded
+again while its id stays. *Rows*: `content_hash` is the
+sha256 of the block's lines, `owner_version` the file `content_hash` the
+set was derived from, `embed_key` (`search/embed-key.ts` `embedKey`) the
+first 16 hex characters of sha256(`EMBEDDER_ID` + `\n` + embedded text),
+null when the block is not embedded (over the per-file budget).
+*Replacement is atomic* (#460): the file's whole block set is written in
+`processFile`'s one transaction (below), upserted by `(owner_type,
+owner_id, block_id)` with the blocks the content no longer has deleted, so
+a surviving block keeps its row (`find_symbols` `id`); a result for content
+that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
+same file already has keeps that vector instead of being embedded again, so
+an edit to another symbol, or a version bump that leaves a block's text
+alone, embeds nothing new for it. *Readers*: `search` code
+vector leg — the nearest `file` blocks of the scoped repositories
+(their own partial HNSW index `blocks_file_embedding_idx`, as the old
+file index held only files; `hnsw.ef_search` 200; #967's distance gate), one hit per file with the
+same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
+the ADR-004 best-block roll-up let symbol blocks of large files crowd the
+leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
+outline put a 304-line hook above the answer to A13 (0.931), so both wait
+for #414/#415's per-block hits; `search` symbol legs and `find_symbols` —
+`kind = 'symbol'` blocks, keyword by name, `Class.name` or the stored
+`snippet`, vector by the nearest symbol blocks (`blocks_symbol_embedding_idx`); semantic edges (`semantic-edges.ts`) — a file's
+similarity to another node is its best block's, the file's own query
+vector its file-level block; `read_file`'s outline, the REST file view's
+`symbols` and `listFileSymbols`; the staleness check (a `#anchor` is a
+symbol's bare name or its `Class.method`); the doctor (`blocks-missing`,
+`blocks-failed`). Migration 0035 carries the existing vectors and symbols
+over as `legacy:` blocks so search keeps answering until the first boot
+re-extracts each file (a carried file vector made from the file's current
+content gets the `embed_key` of its text, so the `file` block is not
+embedded again).
 
 **Import resolution** (`import-resolution.ts`, #398): `resolveImportPath`
 resolves a specifier only against files already known in the same
@@ -2492,14 +2563,14 @@ stored with no resolved target and produces no graph edge.
 `backfillUnresolvedImports()` runs at boot and re-resolves every stored
 import row whose target is still null with the current rules, so
 repositories indexed before #398 gain their import edges without a
-re-sync (an unchanged file is re-extracted only when `EXTRACTOR_VERSION`
-or `EMBEDDER_ID` changes, #453). After `listen`, in the
+re-sync (an unchanged file is re-extracted only when `EXTRACTOR_VERSION`,
+`EMBEDDER_ID` or `CHUNK_VERSION` changes, #453). After `listen`, in the
 background, `backfillLinkLines()` (#558) writes wikilink rows without
 lines again from their note's body.
 
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,
-repositoryId}`, key `extract:<fileId>:<contentHash>:<EXTRACTOR_VERSION>:<EMBEDDER_ID>`
+repositoryId}`, key `extract:<fileId>:<contentHash>:<EXTRACTOR_VERSION>:<EMBEDDER_ID>+chunk<CHUNK_VERSION>`
 (#453, see **Derived-artifact versions** below); `syncRepositoryFiles`
 enqueues the changed files in one statement after the batch is persisted.
 Enqueueing a key whose job already succeeded runs it again (content went
@@ -2515,39 +2586,39 @@ the whole backlog; a repository's own files keep their order. Turns go to
 the lowest job priority present (#453): while a push's jobs (`write`) are
 claimable only those get turns, fair among their repositories as above,
 and a catch-up turn ends as soon as a push's job is waiting, so a push
-during a boot catch-up waits for at most the one file being extracted. A
+during a boot catch-up waits for at most the one file being extracted
+(catch-up, including the block backfill after 0035 or a `CHUNK_VERSION`
+bump, enqueues at `catchUp` priority 1). A
 file whose extraction throws is logged and retried with backoff; the drain goes on.
-**Atomic per file** (#453): `processFile` parses, resolves imports and
-embeds the file and its symbols (the slow part) outside any transaction,
+**Atomic per file** (#453, #460): `processFile` parses, resolves imports,
+cuts the file into blocks and embeds the blocks whose `embed_key` it does
+not already have (the slow part) outside any transaction,
 then one short transaction locks the file row, drops the result if
 `content_hash` changed meanwhile (the push that changed it enqueued the
-new content's job), and replaces imports and symbols and writes the file
-vector, `embedding_note`, `extracted_hash`, `extractor_version` and
-`embedder_id` together; semantic edges are recomputed after the commit
-(skipped when the file vector is reused). Import and symbol rows go in
-1,000 a statement (`INSERT_CHUNK_ROWS`; one statement binds at most 65,534
-parameters, 8 a symbol row), all in that transaction, so a generated file
-with thousands of exported consts still commits whole. A failure or a
-crash anywhere before the commit leaves the previous imports, symbols and
-vectors whole and searchable. **Vector reuse:** when the row's
-`embedder_id` is the running one, the file vector is kept if
-`extracted_hash = content_hash` (or, for a file not extracted since 0033,
-see *Upgrade to 0033* below), and a symbol's vector is kept if its embed
-text (kind, parent, name, path, start line, snippet) equals one of the
-previous rows'; only the rest is embedded. A re-extraction of unchanged
-content (an `EXTRACTOR_VERSION` bump) therefore calls the embedder only
-for symbols the new extractor finds or words differently (for #450's
-version 3: the methods, arrow-function consts and exported consts version
-2 did not find; a symbol without a parent keeps its text). A file
+new content's job), and replaces imports and the whole block set and writes
+`embedding_note`, `extracted_hash`, `extractor_version`, `embedder_id` and
+`chunk_version` together; semantic edges are recomputed after the commit
+(skipped when the file-level block kept its vector).
+Import and block rows go in 1,000 a statement (`INSERT_CHUNK_ROWS`; one
+statement binds at most 65,534 parameters, 15 a block row), all in that
+transaction, so a generated file with thousands of exported consts still
+commits whole (tested with 12,002 blocks). A
+failure or a crash anywhere before the commit leaves the previous imports,
+blocks and vectors whole and searchable. **Vector reuse:** a block whose
+`embed_key` (the running `EMBEDDER_ID` and its embedded text) one of the
+file's blocks already has keeps that vector; only the rest is embedded. A
+re-extraction of unchanged content (an `EXTRACTOR_VERSION` or
+`CHUNK_VERSION` bump) therefore calls the embedder only for blocks whose
+text the bump changed or added. A file
 with a line longer than 1,000
-characters (minified, bundled or generated code) gets its file embedding
+characters (minified, bundled or generated code) gets its file block
 but no symbols or imports. **Per-file budget** (#496): a file's symbols
 are all stored, but only `ELARA_EMBED_MAX_SYMBOLS_PER_FILE`
 (`config.embedMaxSymbolsPerFile`, default 256; `0` embeds none) of them get an
 embedding: exported symbols first, then other module-level ones, then
 methods, each in file order (#450), so a large class early in a file does
-not take the budget from the functions after it. The symbol embed text is
-`<kind> <parent.>name in <path>:<line>` and the snippet. The others have a null `embedding`, so `find_symbols` and
+not take the budget from the functions after it (a class skeleton is embedded
+when its class is). The others have a null `embedding` and `embed_key`, so `find_symbols` and
 `search` find them by name and snippet only. Such a file records why in
 `repository_files.embedding_note` (migration 0022; null when nothing was
 capped, cleared by the next extraction under the budget), logs a
@@ -2555,16 +2626,18 @@ warning, and MCP `read_file` returns the text as `embeddingNote`. Changing
 `ELARA_EMBED_MAX_SYMBOLS_PER_FILE` does not re-extract anything: a file
 keeps the embeddings and note of its last extraction until its content
 changes. With
-each text cut to 16,000 characters, one file costs at most 1 + budget
-texts (the 700 KB lab bundle with 900 declarations: 33 batches instead of
+each text cut to 16,000 characters, one file costs at most 1 + 2 × budget
+texts (the file-level block, the budgeted symbols and their classes'
+skeletons), fewer when blocks keep their vectors (the 700 KB lab bundle with 900 declarations: 33 batches instead of
 113). The boot-time scan
 (`scheduleMissingExtractions`) adds a job, idempotently, for every file
 whose derived rows are not those of its current content by the running
-code, unless a job for its current key exists: a null embedding (rows from
-before the jobs table), an `extracted_hash` other than `content_hash` (a
+code, unless a job for its current key exists: no block of its current
+content (rows from before the jobs table, or the `legacy:` blocks of
+migration 0035), an `extracted_hash` other than `content_hash` (a
 push the process died in before it enqueued; a re-sync only enqueues
 files whose content changed, #404), or another `extractor_version` /
-`embedder_id`. It re-runs the job of a file's current key if it failed
+`embedder_id` / `chunk_version`. It re-runs the job of a file's current key if it failed
 with an error (an outage that outlasted the retries; a restart repaired
 that before #494 too), also for an updated file that kept the rows
 of its previous content, and wakes the worker. It reads and enqueues in
@@ -2577,26 +2650,34 @@ at boot, so a file whose extraction kills the process cannot crash every
 boot; a version bump changes its key, so it gets one new job (3 attempts)
 per new extractor or embedder. `repository_status` reports `filesPendingExtraction` (files whose
 extraction for the current key is still to come: a pending job, or
-no job and no embedding; 0 means extraction is finished) and
+no job and no block of its current content; 0 means extraction is finished) and
 `extractionFailures: {total, files: [{path, attempts, lastError}]}` (all
 files whose job for the current key gave up, counted in `total`, the
 first 5 by path listed).
 
-**Derived-artifact versions** (#453, migration 0033). Two constants name
-what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
+**Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
+#452a, migration 0035). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
 an integer, now 3; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
 top-level rule and the embed-budget order, #450): bump it with any change to the grammars and queries,
-symbol kinds, the minified-file rule, the snippet cut, the symbol embed
-text or the embed-budget order. `EMBEDDER_ID` (`search/embeddings.ts`): the model
+symbol kinds, the minified-file rule or the embed-budget order (the
+snippet cut and block texts are `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
 (`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus
-`+text<EMBED_TEXT_VERSION>`, the version of the note, file and symbol embed
-texts and the 16,000-character cut; bump `EMBED_TEXT_VERSION` with any
-change to those. Both are in the job keys and stored as plain columns
+`+text<EMBED_TEXT_VERSION>`, the version of the note embed text and the
+16,000-character cut; bump `EMBED_TEXT_VERSION` with any change to those.
+`CHUNK_VERSION` (`search/embed-key.ts`, now 1): how a file is cut into
+blocks and each block's embedded text (`repositories/code-blocks.ts`);
+bump it with any change there. ADR-004 §2.4 names these
+`DERIVED_VERSIONS.{extract, chunk, embed_text}`: `extract` is
+`EXTRACTOR_VERSION`, `chunk` is `CHUNK_VERSION`, `embed_text` is
+`EMBED_TEXT_VERSION` inside `EMBEDDER_ID`; its per-row `embed_key` is
+`blocks.embed_key`, a hash of `EMBEDDER_ID` and the block's own text, so a
+bump re-embeds only the blocks whose text it changed. All three are in the
+extraction job key (the note job key carries `EMBEDDER_ID`) and stored as plain columns
 (chosen over one jsonb so the catch-up compares them directly):
-`repository_files.extracted_hash`, `extractor_version`, `embedder_id`
-(they also stand for the file's imports and symbols, written in the same
-transaction) and `notes.embedder_id` (out of the Drizzle `notes` model, like
+`repository_files.extracted_hash`, `extractor_version`, `embedder_id`,
+`chunk_version` (they also stand for the file's imports and blocks,
+written in the same transaction) and `notes.embedder_id` (out of the Drizzle `notes` model, like
 `seq`).
 
 *Upgrade to 0033.* The migration rewrites no row, so it holds the boot for

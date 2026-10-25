@@ -17,7 +17,7 @@ import {
 import { embeddingJobKey, flushEmbeddings, scheduleMissingEmbeddings } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
 import { metricsSnapshot } from '../src/monitoring/metrics.js'
-import { createActiveUser } from './helpers.js'
+import { createActiveUser, fileEmbedding } from './helpers.js'
 
 const savedBackoff = jobTiming.backoffBaseMs
 beforeEach(() => {
@@ -166,8 +166,7 @@ describe('durable job limits (#494 review)', () => {
     const repaired = await jobByKey(key)
     expect(repaired?.doneAt).not.toBeNull()
     expect(repaired?.lastError).toBeNull()
-    const [row] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
-    expect(row?.embedding).not.toBeNull()
+    expect(await fileEmbedding(file.id)).not.toBeNull()
     expect((await extractionFailures(repo.id)).total).toBe(0)
   })
 
@@ -232,8 +231,7 @@ describe('boot re-runs failed jobs of the current version (#494 review round 2)'
       lastError: 'Error: model download failed',
       doneAt: new Date(),
     })
-    const [before] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
-    expect(before?.embedding).not.toBeNull()
+    expect(await fileEmbedding(file.id)).not.toBeNull()
     let calls = 0
     const embed = embedder.embed.bind(embedder)
     vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => {

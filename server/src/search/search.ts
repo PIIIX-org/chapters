@@ -121,6 +121,27 @@ export interface SearchResponse<H> {
 
 const CANDIDATES = 30
 const RRF_K = 60
+/**
+ * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
+ * that many rows, and each leg keeps only some kinds: file-level blocks, or
+ * symbol blocks, so the default 40 would leave it short of `CANDIDATES`).
+ */
+const BLOCK_CANDIDATES = 200
+
+/** A vector leg over `blocks`, its HNSW search widened to `BLOCK_CANDIDATES` (the default 40 would cap it). */
+async function blockLeg(query: SQL): Promise<unknown> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql.raw(`SET LOCAL hnsw.ef_search = ${BLOCK_CANDIDATES}`))
+    return tx.execute(query)
+  })
+}
+
+/** A symbol block `b`'s bare name: `inner_path` without its `symbol_parent.` prefix. */
+const SYMBOL_NAME = sql.raw(`CASE WHEN b.symbol_parent IS NULL THEN b.inner_path ELSE substr(b.inner_path, length(b.symbol_parent) + 2) END`)
+
+/** The columns of a symbol hit from block `b` of file `f`; the snippet is the one code-blocks.ts stored and embedded. */
+const SYMBOL_COLUMNS = sql`b.id, b.owner_id AS file_id, b.container_id, f.path, ${SYMBOL_NAME} AS name,
+  b.symbol_kind AS kind, b.symbol_parent AS parent, b.start_line, b.end_line, coalesce(b.snippet, ${SYMBOL_NAME}) AS snippet, ${UPDATED_AT(sql`f.updated_at`)}`
 
 interface Row {
   id: string
@@ -224,14 +245,18 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
           FROM top_code
           ORDER BY rank DESC, path COLLATE "C", id
         `)
-      : await db.execute(
+      : await blockLeg(
           gated(sql`
-            SELECT id, repository_id AS container_id, path, language, left(content, 200) AS snippet, ${UPDATED_AT(sql`updated_at`)},
-                   embedding <=> ${vec}::vector AS distance
-            FROM repository_files
-            WHERE repository_id = ANY(${uuidArray(repositoryIds)})
-              AND embedding IS NOT NULL
-            ORDER BY embedding <=> ${vec}::vector`),
+            -- A file's vector rank is its file block's (path and content, the old file vector): one row per file,
+            -- as before blocks. The ADR-004 §2.5 best-block roll-up ranked chapters A6 and A13 out of the top 5 (bench
+            -- run 40063746649, hit@5 0.9655 -> 0.8966), and the outline of a large file did A13 (run 40068837408,
+            -- 0.931). #967's relevance gate applies to that block's distance.
+            SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet,
+                   ${UPDATED_AT(sql`f.updated_at`)}, b.embedding <=> ${vec}::vector AS distance
+            FROM blocks b JOIN repository_files f ON f.id = b.owner_id
+            WHERE b.owner_type = 'code' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL
+              AND b.kind = 'file'
+            ORDER BY b.embedding <=> ${vec}::vector`),
         )
   return rows as unknown as Row[]
 }
@@ -244,42 +269,33 @@ async function symbolRows(
   kindFilter?: string,
 ): Promise<SymbolRow[]> {
   if (repositoryIds.length === 0) return []
+  const repos = uuidArray(repositoryIds)
+  const kind = kindFilter ? sql`AND b.symbol_kind = ${kindFilter}` : sql``
+  const pattern = `%${query}%`
   const rows =
     mode === 'keyword'
       ? await db.execute(sql`
-          SELECT s.id, s.file_id, f.repository_id AS container_id, f.path,
-                 s.name, s.kind, s.parent, s.start_line, s.end_line,
-                 coalesce(s.snippet, s.name) AS snippet, ${UPDATED_AT(sql`f.updated_at`)}
-          FROM repository_file_symbols s
-          JOIN repository_files f ON f.id = s.file_id
-          WHERE f.repository_id = ANY(${uuidArray(repositoryIds)})
-            ${kindFilter ? sql`AND s.kind = ${kindFilter}` : sql``}
-            AND (
-              s.name ILIKE ${`%${query}%`}
-              OR (s.snippet IS NOT NULL AND s.snippet ILIKE ${`%${query}%`})
-              OR s.parent || '.' || s.name ILIKE ${`%${query}%`}
-            )
+          -- By name, by Class.name (inner_path), or by snippet, as the symbol table was matched before blocks.
+          SELECT ${SYMBOL_COLUMNS}
+          FROM blocks b JOIN repository_files f ON f.id = b.owner_id
+          WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
+            AND (b.inner_path ILIKE ${pattern} OR (b.snippet IS NOT NULL AND b.snippet ILIKE ${pattern}))
           ORDER BY
             CASE
-              WHEN lower(s.name) = lower(${query}) OR lower(s.parent || '.' || s.name) = lower(${query}) THEN 1
-              WHEN lower(s.name) LIKE lower(${`${query}%`}) THEN 2
+              WHEN lower(${SYMBOL_NAME}) = lower(${query}) OR lower(b.inner_path) = lower(${query}) THEN 1
+              WHEN lower(${SYMBOL_NAME}) LIKE lower(${`${query}%`}) THEN 2
               ELSE 3
             END,
-            f.path COLLATE "C", s.id
+            f.path COLLATE "C", b.id
           LIMIT ${CANDIDATES}
         `)
-      : await db.execute(
+      : await blockLeg(
           gated(sql`
-            SELECT s.id, s.file_id, f.repository_id AS container_id, f.path,
-                   s.name, s.kind, s.parent, s.start_line, s.end_line,
-                   coalesce(s.snippet, s.name) AS snippet, ${UPDATED_AT(sql`f.updated_at`)},
-                   s.embedding <=> ${vec}::vector AS distance
-            FROM repository_file_symbols s
-            JOIN repository_files f ON f.id = s.file_id
-            WHERE f.repository_id = ANY(${uuidArray(repositoryIds)})
-              ${kindFilter ? sql`AND s.kind = ${kindFilter}` : sql``}
-              AND s.embedding IS NOT NULL
-            ORDER BY s.embedding <=> ${vec}::vector`),
+            SELECT ${SYMBOL_COLUMNS}, b.embedding <=> ${vec}::vector AS distance
+            FROM blocks b JOIN repository_files f ON f.id = b.owner_id
+            WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${kind}
+              AND b.embedding IS NOT NULL
+            ORDER BY b.embedding <=> ${vec}::vector`),
         )
   return rows as unknown as SymbolRow[]
 }
