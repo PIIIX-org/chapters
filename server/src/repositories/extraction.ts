@@ -25,8 +25,11 @@ const require = createRequire(import.meta.url)
  * top-level only, so nested functions are no longer symbols; symbol embed
  * text names a method's parent, and the per-file embed budget goes to
  * exported, then other top-level symbols before methods.
+ * 4: TS/TSX/JS imports also from `export ... from`, `import('x')` and
+ * `require('x')` with a literal specifier, and TypeScript `import x =
+ * require('x')` (#466). No block text changes, so no vector is embedded again.
  */
-export const EXTRACTOR_VERSION = 3
+export const EXTRACTOR_VERSION = 4
 
 /**
  * What a symbol declares (#450; the contract more languages, #464, and the
@@ -94,7 +97,25 @@ interface GrammarConfig {
 /** A grammar: the language's own, or TSX for a `.tsx` file (#449). */
 type Grammar = SupportedLanguage | 'tsx'
 
-const TYPESCRIPT_IMPORT_QUERY = `(import_statement source: (string (string_fragment) @src))`
+/**
+ * The module specifiers of a TS/TSX/JS file (#466): `import ... from`,
+ * `export ... from`, and `import()` / `require()` whose specifier is a
+ * literal (a string, or a template without `${}`); `require` with exactly one.
+ */
+const JAVASCRIPT_IMPORT_PATTERNS = `
+        (import_statement source: (string (string_fragment) @src))
+        (export_statement source: (string (string_fragment) @src))
+        (call_expression
+          function: (import)
+          arguments: (arguments . [(string (string_fragment) @src) (template_string . (string_fragment) @src .)]))
+        (call_expression
+          function: (identifier) @require
+          arguments: (arguments . [(string (string_fragment) @src) (template_string . (string_fragment) @src .)] .)
+          (#eq? @require "require"))`
+/** JavaScript's, plus TypeScript's `import fs = require('fs')`. */
+const TYPESCRIPT_IMPORT_QUERY = `[${JAVASCRIPT_IMPORT_PATTERNS}
+        (import_require_clause source: (string (string_fragment) @src))
+      ]`
 const TYPESCRIPT_SYMBOL_QUERY = `
       [
         (function_declaration name: (identifier) @name) @decl.function
@@ -128,7 +149,7 @@ const GRAMMARS: Record<Grammar, GrammarConfig> = {
   },
   javascript: {
     wasm: wasmPath('tree-sitter-javascript', 'tree-sitter-javascript.wasm'),
-    importQuery: `(import_statement source: (string (string_fragment) @src))`,
+    importQuery: `[${JAVASCRIPT_IMPORT_PATTERNS}\n      ]`,
     // CommonJS: `exports.f = () => {}` and `module.exports.f = function () {}`
     // define `f`; `module.exports = { f }` only re-lists names defined above.
     symbolQuery: `
@@ -356,7 +377,9 @@ export async function extractStructure(language: string, content: string, path: 
     const importQuery = getCompiledQuery(lang, grammar, 'import', config.importQuery)
     const imports: ExtractedImport[] = []
     for (const match of importQuery.matches(tree.rootNode)) {
-      for (const capture of match.captures) imports.push({ target: capture.node.text, line: capture.node.startPosition.row + 1 })
+      for (const capture of match.captures) {
+        if (capture.name === 'src') imports.push({ target: capture.node.text, line: capture.node.startPosition.row + 1 })
+      }
     }
 
     const symbolQuery = getCompiledQuery(lang, grammar, 'symbol', config.symbolQuery)

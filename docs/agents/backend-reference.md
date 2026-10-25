@@ -2491,8 +2491,13 @@ refuses. Each grammar is loaded from its npm package's `.wasm` file
 (`tree-sitter-typescript` ships both TypeScript ones) the first time a file
 needs it, and cached; the TSX and TypeScript queries are the same. Per
 grammar, a tree-sitter
-query finds import statements and candidate symbol declarations, and
-`symbolOf` keeps those of the **Symbol contract** (#450):
+query finds import specifiers and candidate symbol declarations, and
+`symbolOf` keeps those of the **Symbol contract** (#450). TS/TSX/JS
+imports (#466): `import ... from`, `export ... from` (`export *`,
+`export { x }`, `export type`), `import('x')` and `require('x')` whose
+specifier is a literal (a string or a template without `${}`; `require`
+with exactly one argument), and TypeScript `import x = require('x')`; a
+computed specifier is not an import row.
 
 **Symbol contract** (`SymbolKind`/`SYMBOL_KINDS` in `extraction.ts`; more
 languages, #464, and the symbol/edge table, #469, use the same kinds and
@@ -2639,23 +2644,66 @@ becomes one `legacy:note` preamble block spanning the body (`embed_key`
 `legacy`: its text, with the frontmatter, is no block's), searchable until
 the first boot's catch-up re-embeds the note (`chunk_version` 0).
 
-**Import resolution** (`import-resolution.ts`, #398): `resolveImportPath`
+**Import resolution** (`import-resolution.ts`, #398, #466): `resolveImportPath`
 resolves a specifier only against files already known in the same
-repository. Relative specifiers (`./x`, `../x`) and the `@/` alias
-resolve; `@/` maps by convention to the importing file's package `src`
-directory (the path up to its first `src` segment; no `src`, no
-resolution — `tsconfig` paths are not read). TypeScript ESM specifiers
-name the compiled output, so `.js` tries `.ts` then `.tsx`, `.jsx` tries
-`.tsx`, `.mjs` tries `.mts`, `.cjs` tries `.cts`, before the literal
-path, then the path plus `.ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs/.py/.go`
-(TypeScript sources first, #451), then
-`<path>/index.<ext>`. Every other specifier (npm packages, stdlib) is
+repository. A `?query` or `#hash` suffix (Vite `?raw`, `?url`, `?worker`)
+is dropped before resolving; the stored `target_path` keeps the specifier
+as written. Then, in order: relative specifiers (`./x`, `../x`); the
+`paths` of the importing file's tsconfig/jsconfig (a pattern that matches
+but finds no file skips the next three and goes to the packages, as tsc
+does); `#x` by the nearest package.json `imports`; the `@/` alias, mapped
+by convention to the importing file's package `src` directory (the path up
+to its first `src` segment); the tsconfig's `baseUrl`; a workspace package
+by name. Only a JS/TS importer (`.js/.jsx/.ts/.tsx/.mjs/.cjs/.mts/.cts`)
+uses the resolution context below: a Python or Go import resolves as before
+#466 (relative only). Each
+candidate path is tried as written and with extensions: TypeScript ESM
+specifiers name the compiled output, so `.js` tries `.ts` then `.tsx`,
+`.jsx` tries `.tsx`, `.mjs` tries `.mts`, `.cjs` tries `.cts`, before the
+literal path, then the path plus `.ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs/.py/.go`
+(TypeScript sources first, #451), then `<path>/index.<ext>`.
+
+The **resolution context** (`buildResolutionContext`, #466) comes from the
+repository's indexed manifests (`isResolutionManifest`: package.json,
+pnpm-workspace.yaml, tsconfig*.json, jsconfig*.json at any depth), read with
+the file list in one query per repository and cached for an extraction
+drain. *Packages:* every package.json with a `name`, unless the repository
+declares workspaces (pnpm-workspace.yaml `packages`, package.json
+`workspaces` as an array or `{ packages }`, `!` globs excluding): then the
+declaring roots and the directories their globs select. Dependencies are
+not checked, and a name two packages share goes to the first by path.
+`@scope/pkg` resolves to `exports['.']` (a string, fallbacks, or
+conditions tried `source`, `development`, `import`, `module`, `node`,
+`default`, `require`, `browser`, any other, `types` last), then `source`,
+`module`, `main`, `types`, `typings`, then `index` and `src/index`;
+`@scope/pkg/a/b` to `exports['./a/b']` (one-`*` patterns, longest prefix
+wins), then `a/b`, then `src/a/b` in the package. A target in a build
+directory (`dist/`, `build/`, `lib/`, `out/`) that is not in the repository
+resolves to the same path under `src/`, and a `.d.ts` to its source next to
+it. *Path aliases:* `compilerOptions.paths` (exact keys, then one-`*`
+patterns, longest prefix wins; targets relative to `baseUrl`, else to the
+config's directory) and `baseUrl` apply to the files under the config's
+directory, the nearest directory with either winning (its configs merged:
+`tsconfig.json`/`jsconfig.json` first, then the others by name); configs are parsed as JSONC
+(comments, trailing commas) and `extends` is not followed. A manifest that
+does not parse is ignored.
+
+Every other specifier (npm packages not in the repository, stdlib) is
 stored with no resolved target and produces no graph edge.
-`backfillUnresolvedImports()` runs at boot and re-resolves every stored
-import row whose target is still null with the current rules, so
-repositories indexed before #398 gain their import edges without a
-re-sync (an unchanged file is re-extracted only when `EXTRACTOR_VERSION`,
-`EMBEDDER_ID` or `CHUNK_VERSION` changes, #453). After `listen`, in the
+`backfillUnresolvedImports()` runs at boot and re-resolves, per repository
+with its context, every stored import row whose target is still null, in
+keyset pages of 1,000 rows with one UPDATE each, so repositories indexed
+before #398 or #466 gain their import edges without a re-sync (an
+unchanged file is re-extracted only when `EXTRACTOR_VERSION`,
+`EMBEDDER_ID` or `CHUNK_VERSION` changes, #453). When a sync creates,
+changes or deletes a manifest, `syncRepositoryFiles` calls
+`scheduleImportReresolution`: before its next turn the extraction worker
+drops the repository's cached context and re-resolves every non-relative
+import row the same way, so a renamed package loses its old name's edges
+and the new name gains them without the importers changing. That request
+is in memory: after a crash the boot backfill restores the targets gained,
+and a row whose target the change removed keeps that stale target until its file is
+extracted again. After `listen`, in the
 background, `backfillLinkLines()` (#558) writes wikilink rows without
 lines again from their note's body.
 
@@ -2748,9 +2796,11 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
 #452, migrations 0035 and 0036). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 3; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+an integer, now 4; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
-top-level rule and the embed-budget order, #450): bump it with any change to the grammars and queries,
+top-level rule and the embed-budget order, #450; 4 re-exports, literal
+`import()`/`require()` and `import x = require()` as imports, #466, which
+embeds nothing again): bump it with any change to the grammars and queries,
 symbol kinds, the minified-file rule or the embed-budget order (the
 snippet cut and block texts are `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
 (`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus

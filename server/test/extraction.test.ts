@@ -196,6 +196,52 @@ describe('extractStructure', () => {
     }
   })
 
+  // #466: a module's edges are also its re-exports, its lazy `import()`s and
+  // CommonJS `require`s, as long as the specifier is a literal.
+  it('captures re-exports, dynamic import() and require() with a literal specifier, in TS, TSX and JS (#466)', async () => {
+    const lines = [
+      "import { a } from './a'",
+      "export { b } from './b'",
+      "export * from './c'",
+      "export * as d from './d'",
+      "const e = await import('./e')",
+      'const f = await import(`./f`)',
+      "const g = require('./g')",
+      "const lazy = () => import('./h?raw')",
+      'const dynamic = await import(name)',
+      'const computed = await import(`./locale/${lang}`)',
+      'const req = require(name)',
+      "const notRequire = load('./not-an-import')",
+      "const two = require('./i', 'extra')",
+      '',
+    ]
+    const expected = [
+      { target: './a', line: 1 },
+      { target: './b', line: 2 },
+      { target: './c', line: 3 },
+      { target: './d', line: 4 },
+      { target: './e', line: 5 },
+      { target: './f', line: 6 },
+      { target: './g', line: 7 },
+      { target: './h?raw', line: 8 },
+    ]
+    for (const [language, path] of [
+      ['typescript', 'src/mod.ts'],
+      ['typescript', 'src/mod.tsx'],
+      ['javascript', 'src/mod.js'],
+    ] as const) {
+      const result = await extractStructure(language, lines.join('\n'), path)
+      expect(result.imports, path).toEqual(expected)
+    }
+
+    // TypeScript only: `export type ... from` and `import x = require()`.
+    const ts = ["export type { T } from './types'", "import fs = require('./fs-shim')", ''].join('\n')
+    expect((await extractStructure('typescript', ts, 'src/types.ts')).imports).toEqual([
+      { target: './types', line: 1 },
+      { target: './fs-shim', line: 2 },
+    ])
+  })
+
   it('throws for an unsupported language', async () => {
     await expect(extractStructure('rust', 'fn main() {}', 'src/main.rs')).rejects.toThrow()
   })
