@@ -72,15 +72,33 @@ describe('sync writes the tree hash incrementally', () => {
     expect(await storedTree(repo)).toBe(await treeOfRows(repo))
   })
 
+  /** Migration 0040's two UPDATEs, narrowed to one repository. */
+  async function backfill(repositoryId: string): Promise<void> {
+    await db.update(repositories).set({ treeHash: null }).where(eq(repositories.id, repositoryId))
+    const migration = await readFile(new URL('../drizzle/0040_repository_tree_hash.sql', import.meta.url), 'utf8')
+    for (const statement of migration.split('--> statement-breakpoint').slice(1)) {
+      await db.execute(sql.raw(statement.trim().replace(/;$/, ` AND r."id" = '${repositoryId}'`)))
+    }
+  }
+
   it("migration 0040's backfill computes the same value", async () => {
     const repo = await makeRepo()
     await syncRepositoryFiles(repo, PATHS.map((path) => ({ path, content: `// ${path}` })), PATHS)
     const synced = await storedTree(repo)
-    await db.update(repositories).set({ treeHash: null }).where(eq(repositories.id, repo))
-    const migration = await readFile(new URL('../drizzle/0040_repository_tree_hash.sql', import.meta.url), 'utf8')
-    // The migration's UPDATE, narrowed to this repository.
-    const backfill = migration.split('--> statement-breakpoint')[1]!.trim().replace(/;$/, ` AND r."id" = '${repo}'`)
-    await db.execute(sql.raw(backfill))
+    await backfill(repo)
+    expect(await storedTree(repo)).toBe(synced)
+  })
+
+  it('an empty repository: a sync and the backfill both give the tree of no files; never synced stays null', async () => {
+    const repo = await makeRepo()
+    await backfill(repo)
+    expect(await storedTree(repo)).toBeNull()
+    await syncRepositoryFiles(repo, [], [])
+    const synced = await storedTree(repo)
+    expect(synced).toBe(computeTreeHash(new Map()))
+    expect(synced).toBe('e3b0c44298fc1c14')
+    await db.update(repositories).set({ lastSyncedAt: new Date() }).where(eq(repositories.id, repo))
+    await backfill(repo)
     expect(await storedTree(repo)).toBe(synced)
   })
 })

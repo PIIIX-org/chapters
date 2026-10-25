@@ -76,7 +76,7 @@ import { serializeNote } from '../notes/okf.js'
 import { renderDirIndex } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
-import { getRepositoryFile, indexedVersion, listFileSymbols, listRepositoryFilesPage, repositoryIndexedVersion } from '../repositories/store.js'
+import { indexedVersion, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { skippedField } from '../repositories/fs-scan.js'
 import { SYMBOL_KINDS, type SymbolKind } from '../repositories/extraction.js'
@@ -2143,14 +2143,17 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async ({ path }: { path: string }, { repositoryId: target }) => {
       await requireRepositoryAccess(target)
-      const file = await getRepositoryFile(target, path)
-      if (!file) throw new McpToolError('NOT_FOUND', 'file not found')
+      const read = await readRepositoryFile(target, path)
+      if (!read) throw new McpToolError('NOT_FOUND', 'file not found')
+      const { file } = read
       const symbols = (await listFileSymbols(file.id)).sort((a, b) => a.startLine - b.startLine || compareCodeUnits(a.name, b.name))
       return {
         head: {
           path: file.path,
           language: file.language,
-          ...(await repositoryIndexedVersion(target)),
+          // The stored content's version, and whether its outline lags it (#471).
+          ...read.version,
+          ...(read.index ? { index: read.index } : {}),
           // Only when extraction embedded the file partly (#496 per-file budget).
           ...(file.embeddingNote ? { embeddingNote: file.embeddingNote } : {}),
         },

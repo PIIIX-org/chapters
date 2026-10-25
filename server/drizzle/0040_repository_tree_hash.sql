@@ -5,7 +5,9 @@
 -- whatever their source: the first 16 hex characters of sha256 over the
 -- lines `path NUL content_hash LF`, in path byte order. Each sync writes it
 -- from the rows it already holds (repositories/store.ts, computeTreeHash);
--- this backfill computes the same value for repositories that have files.
+-- this backfill computes the same value for repositories that have files,
+-- and gives a synced repository with none the tree of no files (sha256 of
+-- nothing), as a sync does. A repository never synced keeps null.
 -- Numbered 0040 because open PRs hold 0038 and 0039; its `when`
 -- (1792600000000) is above theirs, so it applies whatever order they merge
 -- in. It may need renumbering.
@@ -32,4 +34,9 @@ FROM (
   FROM "repository_files"
   GROUP BY "repository_id"
 ) t
-WHERE r."id" = t."repository_id";
+WHERE r."id" = t."repository_id";--> statement-breakpoint
+UPDATE "repositories" r
+SET "tree_hash" = 'e3b0c44298fc1c14'
+WHERE r."tree_hash" IS NULL
+  AND r."last_synced_at" IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM "repository_files" f WHERE f."repository_id" = r."id");

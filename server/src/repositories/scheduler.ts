@@ -109,20 +109,27 @@ async function tick(thresholdMs: number): Promise<void> {
 const watchers = new Map<string, () => void>()
 
 /**
- * The commit a folder's files are (#471): HEAD when the folder is in a git
- * work tree with nothing uncommitted under it, else null (no git, no commit
- * yet, or changes: the indexed files are then not any commit, and answers
- * name the tree hash instead). Untracked files the folder's ignore rules let
- * through are indexed, so they count as changes, as in `git status`. Git's
- * own checks stand: a folder owned by another user (`safe.directory`) gives
- * null. `--no-optional-locks` keeps status from rewriting the user's index.
+ * The commit a folder's indexed files are (#471): HEAD when the folder is in
+ * a git work tree with nothing uncommitted under it and every indexed path
+ * tracked, else null (no git, no commit yet, or the index differs: answers
+ * then name the tree hash). `git status` alone is not enough: it hides
+ * untracked files that rules the scan never reads ignore (a parent folder's
+ * `.gitignore`, the repository's `info/exclude` when the folder is a
+ * subfolder, `core.excludesFile`), and the scan indexes them. Listing the
+ * tracked paths reads git's index, unlike listing every untracked file,
+ * which walks ignored trees such as `node_modules`. Git's own checks stand:
+ * a folder owned by another user (`safe.directory`) gives null.
+ * `--no-optional-locks` keeps status from rewriting the user's index.
  */
-async function cleanWorkTreeCommit(root: string): Promise<string | null> {
+async function cleanWorkTreeCommit(root: string, indexedPaths: string[]): Promise<string | null> {
   try {
     const git = simpleGit(root)
     if ((await git.revparse(['--is-inside-work-tree'])).trim() !== 'true') return null
     const changes = await git.raw(['--no-optional-locks', 'status', '--porcelain', '--ignore-submodules=all', '--', '.'])
     if (changes.trim() !== '') return null
+    // Relative to the folder, as the scan's paths are.
+    const tracked = new Set((await git.raw(['ls-files', '-z', '--', '.'])).split('\0'))
+    if (!indexedPaths.every((path) => tracked.has(path))) return null
     return (await git.revparse(['HEAD'])).trim()
   } catch {
     return null
@@ -143,12 +150,12 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
 
   await db.update(repositories).set({ syncStatus: 'syncing' }).where(eq(repositories.id, repositoryId))
   try {
-    // Before the scan: an edit during it changes the folder, so the watcher
-    // syncs again and records the version afresh.
-    const commit = await cleanWorkTreeCommit(root)
     // A folder follows its .gitignore files (#465, D12). Skipped files leave
     // currentPaths, so a stale row goes (#923).
     const { files, currentPaths, skipped } = await scanRepository(root, new GitignoreRules(root), 'scheduler')
+    // After the scan, against what it indexed; an edit since then changes
+    // the folder, so the watcher syncs again and records the version afresh.
+    const commit = await cleanWorkTreeCommit(root, currentPaths)
     await syncRepositoryFiles(repositoryId, files, currentPaths, { commit })
     await db
       .update(repositories)

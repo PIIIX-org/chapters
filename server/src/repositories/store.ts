@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 import { and, asc, eq, notInArray, sql, type SQL } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import { db } from '../db/client.js'
-import { blocks, repositories, repositoryFiles } from '../db/schema.js'
+import { blocks, jobs, repositories, repositoryFiles } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
-import { enqueueExtractions, scheduleImportReresolution } from './extraction-queue.js'
+import { enqueueExtractions, extractionJobKeySql, hasCurrentBlocksSql, scheduleImportReresolution } from './extraction-queue.js'
 import { isResolutionManifest } from './import-resolution.js'
 import { checkCodeStaleness } from '../notes/staleness.js'
 
@@ -183,6 +184,41 @@ export async function getRepositoryFile(
     .from(repositoryFiles)
     .where(and(eq(repositoryFiles.repositoryId, repositoryId), eq(repositoryFiles.path, path)))
   return rows[0] ?? null
+}
+
+/**
+ * How a file's derived index (symbols, outline, vectors) stands against its
+ * stored content (#471): `pending` while its extraction is queued, running or
+ * not yet scheduled, `failed` when it gave up (the previous rows stay), null
+ * when current. The same rule as `extractionState`, for one file.
+ */
+export type FileIndexState = 'pending' | 'failed' | null
+
+export interface RepositoryFileRead {
+  file: RepositoryFileRow
+  version: IndexedVersion
+  index: FileIndexState
+}
+
+/** A file for `read_file`, with its repository's indexed version and its index state, in one query. */
+export async function readRepositoryFile(repositoryId: string, path: string): Promise<RepositoryFileRead | null> {
+  const f = alias(repositoryFiles, 'f')
+  const j = alias(jobs, 'j')
+  const [row] = await db
+    .select({
+      file: f,
+      lastSyncedCommit: repositories.lastSyncedCommit,
+      treeHash: repositories.treeHash,
+      index: sql<FileIndexState>`CASE
+        WHEN ${j.id} IS NOT NULL AND ${j.doneAt} IS NULL OR ${j.id} IS NULL AND NOT ${hasCurrentBlocksSql()} THEN 'pending'
+        WHEN ${j.doneAt} IS NOT NULL AND ${j.lastError} IS NOT NULL THEN 'failed'
+      END`,
+    })
+    .from(f)
+    .innerJoin(repositories, eq(repositories.id, f.repositoryId))
+    .leftJoin(j, sql`${j.idempotencyKey} = ${extractionJobKeySql(sql`f.id`, sql`f.content_hash`)}`)
+    .where(and(eq(f.repositoryId, repositoryId), eq(f.path, path)))
+  return row ? { file: row.file, version: indexedVersion(row), index: row.index } : null
 }
 
 export async function listRepositoryFiles(
