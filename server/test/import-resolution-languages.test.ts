@@ -41,8 +41,10 @@ describe('Rust `use` (#464)', () => {
     expect(resolve('crates/core/src/store/disk.rs', 'crate::index::Entry')).toBe('crates/core/src/index.rs')
   })
 
-  it('resolves a path relative to the current module (2018 uniform paths)', () => {
+  it('resolves a path relative to the current module (2018 uniform paths), and a `mod x;` name to its file', () => {
     expect(resolve('crates/core/src/lib.rs', 'store::codec')).toBe('crates/core/src/store/codec.rs')
+    expect(resolve('crates/core/src/lib.rs', 'store')).toBe('crates/core/src/store/mod.rs')
+    expect(resolve('crates/core/src/store/mod.rs', 'disk')).toBe('crates/core/src/store/disk.rs')
   })
 
   it('leaves std and external crates unresolved', () => {

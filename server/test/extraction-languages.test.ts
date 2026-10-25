@@ -71,6 +71,19 @@ describe('Rust (#464)', () => {
     const result = await extractStructure('rust', src, 'src/iter.rs')
     expect(brief(result.symbols)).toEqual(['2-2 method Store.into_iter', '5-5 method Store.default'])
   })
+
+  it('a use list straight under crate/self/super imports one module per item; `mod x;` loads the module file x', async () => {
+    const src = ['mod codec;', 'pub mod disk;', 'mod inline { fn f() {} }', 'use crate::{index, store::Store, self as root};', 'use super::{self, codec::Codec};', 'use crate::store::{A, B};'].join('\n')
+    const result = await extractStructure('rust', src, 'src/store/mod.rs')
+    expect(result.imports.map((i) => `${i.line} ${i.target}`)).toEqual([
+      '1 codec',
+      '2 disk',
+      '4 crate::index',
+      '4 crate::store::Store',
+      '5 super::codec::Codec',
+      '6 crate::store',
+    ])
+  })
 })
 
 describe('Java (#464)', () => {
@@ -129,6 +142,32 @@ describe('C and C++ (#464)', () => {
       '44-47 function main (exported)',
     ])
     expect(imports).toEqual(['3 store.hpp'])
+  })
+
+  it('names an out-of-line method by its innermost scope: `void ns::Store::load()` is `Store.load`, one symbol with its in-class prototype', async () => {
+    const src = [
+      'namespace ns {',
+      'class Store {',
+      ' public:',
+      '  void load();',
+      '};',
+      '}',
+      'void ns::Store::load() {}',
+      'void ns::outer::Inner::run() {}',
+    ].join('\n')
+    const { symbols } = await extractStructure('cpp', src, 'src/store.cc')
+    expect(brief(symbols)).toEqual(['1-6 namespace ns (exported)', '2-5 class ns.Store (exported)', '7-7 method Store.load', '8-8 method Inner.run'])
+  })
+
+  it('captures a C function returning a pointer to a pointer', async () => {
+    const { symbols } = await extractStructure('c', 'char **split(const char *s) { return 0; }\nstatic int **table(void) { return 0; }\n', 'src/split.c')
+    expect(brief(symbols)).toEqual(['1-1 function split (exported)', '2-2 function table'])
+  })
+
+  it('parses a `.h` header with the C++ grammar: a C++ class header keeps its class, namespace and methods', async () => {
+    const src = ['#pragma once', 'namespace db {', 'class DBImpl : public DB {', ' public:', '  Status Get(const Slice& key);', '};', '}'].join('\n')
+    const { symbols } = await extractStructure('c', src, 'db/db_impl.h')
+    expect(brief(symbols)).toEqual(['2-7 namespace db (exported)', '3-6 class db.DBImpl (exported)', '5-5 method DBImpl.Get'])
   })
 })
 

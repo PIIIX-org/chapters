@@ -132,10 +132,13 @@ export function scopedSymbol(match: QueryMatch, rules: ScopeRules): ScopedSymbol
   if (!place) return null
   const symbol = (s: Omit<ExtractedSymbol, 'startLine' | 'endLine'>): ScopedSymbol => ({ symbol: { ...s, ...lines(node) }, prototype })
 
-  // C++ `T Store<T>::load() {}`: a method of `Store` defined outside its class.
+  // C++ `T Store<T>::load() {}`: a method of `Store` defined outside its class. In
+  // `void ns::Store::load() {}` the scope nests (`ns` :: (`Store` :: `load`)): the class is the innermost scope.
   if (nameNode.type === 'qualified_identifier') {
-    const scope = typeName(nameNode.childForFieldName('scope'))
-    const name = typeName(nameNode)
+    let qualified = nameNode
+    for (let inner = qualified.childForFieldName('name'); inner?.type === 'qualified_identifier'; inner = qualified.childForFieldName('name')) qualified = inner
+    const scope = typeName(qualified.childForFieldName('scope'))
+    const name = typeName(qualified)
     return scope && name && place.at !== 'class' ? symbol({ name, kind: 'method', parent: scope, exported: false }) : null
   }
   const name = nameNode.text
@@ -167,34 +170,50 @@ export function withoutDefinedPrototypes(found: ScopedSymbol[]): ExtractedSymbol
 
 // ---------------------------------------------------------------- grammars
 
-/** A `use` tree as the module path it imports from: `crate::store` for `crate::store::{A, B}`, the path before ` as X` or `::*`. */
-function rustUseTarget(node: Node): string | null {
+/** A path that names no module of its own: `crate`, `self`, `super`, `super::super`. */
+const RUST_ROOT_PATH = /^(?:crate|self|super(?:::super)*)$/
+
+/**
+ * A `use` tree as the module paths it imports from: `crate::store` for
+ * `crate::store::{A, B}`, the path before ` as X` or `::*`. A list straight
+ * under `crate`, `self` or `super` imports one module per item
+ * (`crate::{a, b::C}` gives `crate::a`, `crate::b::C`). A `mod x;`
+ * declaration's name: the module file it loads.
+ */
+function rustUseTargets(node: Node): string[] {
+  const text = (n: Node | null | undefined) => n?.text.replace(/\s+/g, '') ?? ''
   switch (node.type) {
-    case 'scoped_use_list':
+    case 'scoped_use_list': {
+      const path = text(node.childForFieldName('path'))
+      if (!RUST_ROOT_PATH.test(path)) return path ? [path] : []
+      const items = node.childForFieldName('list')?.namedChildren ?? []
+      // `self` (or `self as x`) in the list names the root itself, no module of its own.
+      return items.flatMap((item) => (item ? rustUseTargets(item).filter((t) => t !== 'self').map((t) => `${path}::${t}`) : []))
+    }
     case 'use_as_clause':
-      return node.childForFieldName('path')?.text.replace(/\s+/g, '') ?? null
+      return [text(node.childForFieldName('path'))].filter(Boolean)
     case 'use_wildcard':
-      return node.namedChildren[0]?.text.replace(/\s+/g, '') ?? null
+      return [text(node.namedChildren[0])].filter(Boolean)
     case 'use_list':
-      return null
+      return []
     default:
-      return node.text.replace(/\s+/g, '')
+      return [text(node)].filter(Boolean)
   }
 }
 
 /** A Java or Kotlin import as the name it imports, `a.b.*` for a wildcard. */
-function jvmImportTarget(node: Node): string | null {
+function jvmImportTarget(node: Node): string[] {
   const name = node.namedChildren.find((c) => c?.type === 'scoped_identifier' || c?.type === 'qualified_identifier' || c?.type === 'identifier')
-  if (!name) return null
-  return node.children.some((c) => c?.type === 'asterisk' || c?.type === '*') ? `${name.text}.*` : name.text
+  if (!name) return []
+  return [node.children.some((c) => c?.type === 'asterisk' || c?.type === '*') ? `${name.text}.*` : name.text]
 }
 
 export interface LanguageGrammar {
   /** The `.wasm` file in its npm package. */
   wasm: [pkg: string, file: string]
-  /** `@src`: the import's node; `importTarget` turns it into the specifier when it is not the specifier's text. None: C#, whose `using` names namespaces, not files. */
+  /** `@src`: the import's node; `importTarget` turns it into the specifiers when it is not the specifier's text. None: C#, whose `using` names namespaces, not files. */
   importQuery?: string
-  importTarget?: (node: Node) => string | null
+  importTarget?: (node: Node) => string[]
   symbolQuery: string
   scopes: ScopeRules
 }
@@ -207,7 +226,12 @@ export interface LanguageGrammar {
  */
 function cFunctions(cpp: boolean): string {
   const name = cpp ? '[(identifier) (field_identifier) (qualified_identifier) (destructor_name) (operator_name)] @name' : '(identifier) @name'
-  const declarators = [`(function_declarator declarator: ${name})`, `(pointer_declarator declarator: (function_declarator declarator: ${name}))`]
+  // `T f()`, `T *f()`, `T **f()`.
+  const declarators = [
+    `(function_declarator declarator: ${name})`,
+    `(pointer_declarator declarator: (function_declarator declarator: ${name}))`,
+    `(pointer_declarator declarator: (pointer_declarator declarator: (function_declarator declarator: ${name})))`,
+  ]
   if (cpp) declarators.push(`(reference_declarator (function_declarator declarator: ${name}))`)
   return declarators
     .flatMap((d) => [
@@ -235,8 +259,9 @@ export type NewLanguage = 'rust' | 'java' | 'c' | 'cpp' | 'csharp' | 'kotlin' | 
 export const LANGUAGE_GRAMMARS: Record<NewLanguage, LanguageGrammar> = {
   rust: {
     wasm: ['tree-sitter-rust', 'tree-sitter-rust.wasm'],
-    importQuery: '(use_declaration argument: (_) @src)',
-    importTarget: rustUseTarget,
+    // `use` trees, and `mod x;` (a module whose body is another file).
+    importQuery: '[(use_declaration argument: (_) @src) (mod_item !body name: (identifier) @src)]',
+    importTarget: rustUseTargets,
     symbolQuery: `
       [
         (function_item name: (identifier) @name) @decl.function

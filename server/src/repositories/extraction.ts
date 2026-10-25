@@ -33,7 +33,8 @@ const require = createRequire(import.meta.url)
  * (extraction-languages.ts), and Markdown/HTML heading sections (outline.ts)
  * (#464); a file whose language label changed (`.kt`, `.md`, ...) is
  * relabelled. Unchanged texts keep their vectors: the file blocks of these
- * files are not embedded again, only their new symbol and section blocks.
+ * files are not embedded again, only their new symbol blocks (sections are
+ * outline blocks, never embedded).
  */
 export const EXTRACTOR_VERSION = 5
 
@@ -92,8 +93,8 @@ interface GrammarConfig {
   wasm: string
   /** `@src` captures; none: the language's imports name no file (C# `using`). */
   importQuery?: string
-  /** The specifier of an `@src` node whose text is not just that (a Rust `use` tree, a Java `import`); null: not an import of a file. */
-  importTarget?: (node: Node) => string | null
+  /** The specifiers of an `@src` node whose text is not just one (a Rust `use` tree, a Java `import`); none: not an import of a file. */
+  importTarget?: (node: Node) => string[]
   /**
    * Candidate declarations, `@decl.<kind>` with their `@name`, wherever they
    * are: `symbolOf` keeps those at module level (or in a module-level
@@ -380,8 +381,11 @@ export async function extractStructure(language: string, content: string, path: 
   }
   // The grammar comes from the extension, not the label: a `.tsx` file is
   // labelled `typescript` (language.ts) but JSX only parses with TSX, and TSX
-  // cannot parse the `<T>value` casts `.ts/.mts/.cts` allow.
-  const grammar: Grammar = language === 'typescript' && /\.tsx$/i.test(path) ? 'tsx' : language
+  // cannot parse the `<T>value` casts `.ts/.mts/.cts` allow. A `.h` header is
+  // labelled `c` but may be C++ (most C++ projects name headers `.h`): the C++
+  // grammar reads C declarations alike and also C++ classes and namespaces.
+  const grammar: Grammar =
+    language === 'typescript' && /\.tsx$/i.test(path) ? 'tsx' : language === 'c' && /\.h$/i.test(path) ? 'cpp' : language
   const config = GRAMMARS[grammar]
   const lang = await loadLanguage(grammar)
   const parser = new Parser()
@@ -397,8 +401,8 @@ export async function extractStructure(language: string, content: string, path: 
       for (const match of getCompiledQuery(lang, grammar, 'import', config.importQuery).matches(tree.rootNode)) {
         for (const capture of match.captures) {
           if (capture.name !== 'src') continue
-          const target = config.importTarget ? config.importTarget(capture.node) : capture.node.text
-          if (target) imports.push({ target, line: capture.node.startPosition.row + 1 })
+          const line = capture.node.startPosition.row + 1
+          for (const target of config.importTarget ? config.importTarget(capture.node) : [capture.node.text]) imports.push({ target, line })
         }
       }
     }
