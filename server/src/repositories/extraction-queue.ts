@@ -361,6 +361,18 @@ const extraction = jobDrainer('extraction', drainOnce)
 export const extractionWork = { processFile }
 
 /**
+ * Rows per INSERT: one statement binds at most 65,534 parameters
+ * (postgres.js), and a symbol row has 8, so a generated file with thousands
+ * of constants would fail whole (#450 review). Every chunk is in the same
+ * transaction, so the file still commits all or nothing.
+ */
+const INSERT_CHUNK_ROWS = 1_000
+
+function* chunks<T>(rows: readonly T[]): Generator<T[]> {
+  for (let i = 0; i < rows.length; i += INSERT_CHUNK_ROWS) yield rows.slice(i, i + INSERT_CHUNK_ROWS)
+}
+
+/**
  * Derives one file (#453): everything is computed first, the slow embed
  * included, outside any transaction; then one short transaction locks the
  * row, checks its content is still the one extracted, and replaces the
@@ -406,18 +418,26 @@ async function processFile(fileId: string): Promise<void> {
       fileId,
       name: s.name,
       kind: s.kind,
+      parent: s.parent ?? null,
       startLine: s.startLine,
       endLine: s.endLine,
       snippet,
-      embedText: symbolEmbedText(s.kind, s.name, row.path, s.startLine, snippet),
+      embedText: symbolEmbedText(s.kind, s.name, s.parent ?? null, row.path, s.startLine, snippet),
     }
   })
 
-  // Per-file budget (#496): the file and its first N symbols get a vector,
-  // the rest are stored without one, so one file with thousands of
-  // declarations neither holds the queue for minutes nor loses its structure.
+  // Per-file budget (#496): the file and N of its symbols get a vector, the
+  // rest are stored without one, so one file with thousands of declarations
+  // neither holds the queue for minutes nor loses its structure. The budget
+  // goes to exported symbols, then other module-level ones, then methods,
+  // each in file order (#450): a large class early in a file does not take
+  // it from the functions after it.
   const budget = config.embedMaxSymbolsPerFile
-  const embedded = symbolPayloads.slice(0, budget)
+  const embedOrder = symbols
+    .map((s, i) => ({ i, tier: s.kind === 'method' ? 2 : s.exported ? 0 : 1 }))
+    .sort((a, b) => a.tier - b.tier)
+    .slice(0, budget)
+    .map(({ i }) => i)
   let embeddingNote: string | null = null
   if (symbolPayloads.length > budget) {
     embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolPayloads.length} symbols embedded, the rest are keyword-searchable only`
@@ -431,11 +451,12 @@ async function processFile(fileId: string): Promise<void> {
     (row.extractedHash === row.contentHash || (row.extractedHash === null && (await legacyVectorCurrent(row))))
   const reusedFileVector = fileVectorCurrent ? row.embedding : null
   const previousSymbolVectors = new Map<string, number[]>()
-  if (sameEmbedder && embedded.length > 0) {
+  if (sameEmbedder && embedOrder.length > 0) {
     const previous = await db
       .select({
         name: repositoryFileSymbols.name,
         kind: repositoryFileSymbols.kind,
+        parent: repositoryFileSymbols.parent,
         startLine: repositoryFileSymbols.startLine,
         snippet: repositoryFileSymbols.snippet,
         embedding: repositoryFileSymbols.embedding,
@@ -444,18 +465,23 @@ async function processFile(fileId: string): Promise<void> {
       .where(and(eq(repositoryFileSymbols.fileId, fileId), isNotNull(repositoryFileSymbols.embedding)))
     for (const p of previous) {
       if (p.snippet !== null && p.embedding !== null) {
-        previousSymbolVectors.set(symbolEmbedText(p.kind, p.name, row.path, p.startLine, p.snippet), p.embedding)
+        previousSymbolVectors.set(symbolEmbedText(p.kind, p.name, p.parent, row.path, p.startLine, p.snippet), p.embedding)
       }
     }
   }
   const toEmbed = [
     ...(reusedFileVector ? [] : [`${row.path}\n${row.content}`]),
-    ...embedded.map((s) => s.embedText).filter((text) => !previousSymbolVectors.has(text)),
+    ...embedOrder.map((i) => symbolPayloads[i]!.embedText).filter((text) => !previousSymbolVectors.has(text)),
   ]
   const vectors = toEmbed.length > 0 ? await embedder.embed(toEmbed) : []
   const vectorByText = new Map(toEmbed.map((text, i) => [text, vectors[i]!]))
   const fileEmbedding = reusedFileVector ?? vectorByText.get(`${row.path}\n${row.content}`)!
-  const symbolEmbeddings = embedded.map((s) => previousSymbolVectors.get(s.embedText) ?? vectorByText.get(s.embedText) ?? null)
+  const symbolEmbeddings = new Map(
+    embedOrder.map((i) => {
+      const text = symbolPayloads[i]!.embedText
+      return [i, previousSymbolVectors.get(text) ?? vectorByText.get(text) ?? null] as const
+    }),
+  )
   failpoint('extract.after-embed-before-write')
 
   const written = await db.transaction(async (tx) => {
@@ -466,22 +492,20 @@ async function processFile(fileId: string): Promise<void> {
       .for('update')
     if (current?.contentHash !== row.contentHash) return false
     await tx.delete(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, fileId))
-    // One row per specifier: a file importing one path twice keeps the first line.
-    if (importRows.length > 0) await tx.insert(repositoryFileImports).values(importRows).onConflictDoNothing()
+    // One row per specifier: a file importing one path twice keeps the first line (chunks insert in order).
+    for (const chunk of chunks(importRows)) await tx.insert(repositoryFileImports).values(chunk).onConflictDoNothing()
     await tx.delete(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, fileId))
-    if (symbolPayloads.length > 0) {
-      await tx.insert(repositoryFileSymbols).values(
-        symbolPayloads.map((s, i) => ({
-          fileId: s.fileId,
-          name: s.name,
-          kind: s.kind,
-          startLine: s.startLine,
-          endLine: s.endLine,
-          snippet: s.snippet,
-          embedding: symbolEmbeddings[i] ?? null,
-        })),
-      )
-    }
+    const symbolRows = symbolPayloads.map((s, i) => ({
+      fileId: s.fileId,
+      name: s.name,
+      kind: s.kind,
+      parent: s.parent,
+      startLine: s.startLine,
+      endLine: s.endLine,
+      snippet: s.snippet,
+      embedding: symbolEmbeddings.get(i) ?? null,
+    }))
+    for (const chunk of chunks(symbolRows)) await tx.insert(repositoryFileSymbols).values(chunk)
     await tx
       .update(repositoryFiles)
       .set({ language, embedding: fileEmbedding, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId })
@@ -493,9 +517,13 @@ async function processFile(fileId: string): Promise<void> {
   if (written && !reusedFileVector) await recomputeSemanticEdges('code', fileId, fileEmbedding)
 }
 
-/** The text a symbol is embedded from (`EMBED_TEXT_VERSION` in search/embeddings.ts versions it). */
-function symbolEmbedText(kind: string, name: string, path: string, startLine: number, snippet: string): string {
-  return `${kind} ${name} in ${path}:${startLine}\n${snippet}`
+/**
+ * The text a symbol is embedded from (`EMBED_TEXT_VERSION` in search/embeddings.ts versions it).
+ * A method names its class (`method Store.save`, #450); a symbol without a parent has the text
+ * it had before, so its vector is reused across the `EXTRACTOR_VERSION` 3 re-extraction.
+ */
+function symbolEmbedText(kind: string, name: string, parent: string | null, path: string, startLine: number, snippet: string): string {
+  return `${kind} ${parent ? `${parent}.` : ''}${name} in ${path}:${startLine}\n${snippet}`
 }
 
 /**

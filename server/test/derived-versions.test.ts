@@ -353,6 +353,59 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
     expect(byLine.every((s) => s.embedding !== null)).toBe(true)
   })
 
+  // #450 bumped EXTRACTOR_VERSION to 3: methods, arrow-function consts and
+  // exported consts become symbols. The bump costs a parse: the file vector
+  // and the vectors of the symbols version 2 already had are kept; only the
+  // new symbols are embedded.
+  it('a row extractor version 2 produced keeps its vectors; only the symbols version 3 adds are embedded', async () => {
+    const owner = await createActiveUser()
+    const [repo] = await db
+      .insert(repositories)
+      .values({ name: 'versions-symbols-v2', ownerId: owner.id, ingestionMethod: 'agent_push' })
+      .returning()
+    const content = [
+      'export function keep() { return 1 }',
+      'export class Store {',
+      '  save() { return keep() }',
+      '}',
+      'export const load = () => new Store()',
+      'export const LIMIT = 3',
+    ].join('\n')
+    versions.extractor = 2
+    await syncRepositoryFiles(repo!.id, [{ path: 'src/store.ts', content }], ['src/store.ts'])
+    await flushExtraction()
+    const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id))
+    expect((await fileVersions(file!.id)).extractor_version).toBe(2)
+    // Stand-in for version 2's outline: only the function and class declarations.
+    await db
+      .delete(repositoryFileSymbols)
+      .where(and(eq(repositoryFileSymbols.fileId, file!.id), inArray(repositoryFileSymbols.name, ['save', 'load', 'LIMIT'])))
+    const before = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    const fileVectorBefore = file!.embedding
+    versions.extractor = shipped.extractor
+    await othersCurrent(repo!.id, null)
+    const texts = embeddedTexts()
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(1)
+    await flushExtraction()
+
+    expect(await fileVersions(file!.id)).toEqual({ extractor_version: EXTRACTOR_VERSION, embedder_id: EMBEDDER_ID })
+    // No file text; exported symbols before methods (the embed budget's order).
+    expect(texts.filter((t) => t.includes(file!.path)).map((t) => t.split('\n')[0])).toEqual([
+      `function load in ${file!.path}:5`,
+      `variable LIMIT in ${file!.path}:6`,
+      `method Store.save in ${file!.path}:3`,
+    ])
+    const [after] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file!.id))
+    expect(after!.embedding).toEqual(fileVectorBefore)
+    const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+    const vectorOf = (rows: typeof symbols, name: string) => rows.find((s) => s.name === name)?.embedding
+    expect(vectorOf(symbols, 'keep')).toEqual(vectorOf(before, 'keep'))
+    expect(vectorOf(symbols, 'Store')).toEqual(vectorOf(before, 'Store'))
+    expect(symbols.map((s) => s.name).sort()).toEqual(['LIMIT', 'Store', 'keep', 'load', 'save'])
+    expect(symbols.every((s) => s.embedding !== null)).toBe(true)
+  })
+
   // #451: before it, `.mts`/`.cts` had no language, so their rows carry
   // `language` NULL. A sync skips unchanged content and never relabels them;
   // the catch-up derives the language from the path and writes it back.

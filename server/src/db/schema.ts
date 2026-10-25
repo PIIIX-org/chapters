@@ -816,7 +816,12 @@ export const repositoryFileImports = pgTable(
   ],
 )
 
-/** "Contains" edges (spec 9): a file's own top-level declarations — cheap, no cross-file resolution. */
+/**
+ * "Contains" edges (spec 9): a file's module-level declarations and the
+ * methods of its module-level classes (#450). `kind` is extraction.ts
+ * `SymbolKind`; `parent` (migration 0034) the class of a method or the
+ * namespace of a namespace member, null at module level.
+ */
 export const repositoryFileSymbols = pgTable(
   'repository_file_symbols',
   {
@@ -826,6 +831,7 @@ export const repositoryFileSymbols = pgTable(
       .references(() => repositoryFiles.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
     kind: text('kind').notNull(),
+    parent: text('parent'),
     startLine: integer('start_line').notNull(),
     endLine: integer('end_line').notNull(),
     snippet: text('snippet'),
