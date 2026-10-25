@@ -173,7 +173,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 |---|---|
 | `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages |
 | `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order |
-| `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558), PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows. 0 = not located yet (rows from before 0031, or written by older code after a rollback; the column default keeps that working): `backfillLinkLines()` (`notes/store-tx.ts`) rewrites them from the body under the note lock, in the background after `listen` at every boot (about 8 ms a note: 5,000 notes took 40 s locally; until then those edges have `evidence: null`), and the doctor's `links-differ` lists any left |
+| `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558) and `context` (migration 0039, #472: the link's paragraph, the non-blank lines around it, when at most 200 code points; else its own lines; else 200 code points of them around the link with `…` at each cut end; never half a surrogate pair; `okf.ts` `extractWikilinkLocations`). PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows, and of two links to one target on one line the row is the first (no count kept). Null `context` = not filled yet (rows from before 0039; rows from before 0031 also have line 0; or written by older code after a rollback; the column defaults keep that working): the boot `note_links` catch-up jobs (**Link catch-up**, §5) rewrite them from the body under the note lock at catch-up priority (5,000 notes with 30,000 rows: queued in 79 ms, rewritten in 62 s, 12 ms a note, locally; until then a backlink has `context: null` and an unlocated edge `evidence: null`), and the doctor's `links-differ` lists any whose targets or lines differ from the body |
 | `exportLinks` | expiring/revocable vault export download links |
 
 **ADR-003 store schema (migration 0021; S2a: Postgres is the only authority
@@ -1324,8 +1324,21 @@ for the nodes reached, applies `types`/`tags` as `passesFilters` does (the
 centre is always kept), stops at the ring that reaches `limit` + 1 nodes,
 and reads the edges among the kept outer-ring nodes in a last round, so
 the result is `buildGraph`'s graph restricted to the neighbourhood (the
-test compares the two). No Louvain: nodes carry `distance`. #472's
-`neighbors(depth)` (REST local graph, backlinks) is meant to reuse it.
+test compares the two). No Louvain: nodes carry `distance`. The REST
+local graph (`getLocalGraph`, `notes/store.ts`) does not use it yet (#472).
+
+`backlinksOf(center, {types, tags})` (#472, same module) lists the links to
+a note centre for MCP `graph {neighborsOf}`'s `backlinks` section: one row
+of `note_links` per item, `{path, location, context}`, from live notes of
+the centre's vault other than itself, matched by the exact path as link
+edges are (`note_links_target_idx`), by path (`COLLATE "C"`) then line, at
+most `BACKLINK_CAP` (1,000) + 1. Each linking note's `bodyStartLine` turns
+its body-relative lines into `path#La` of its file; a row with line 0 gives
+the bare path. The section is listed after `nodes` and `edges` when the
+centre is a note and `edgeTypes` includes `extracted`, with the ladder
+`{path, location}` → `location` → counts per linking note. The REST route
+`/vaults/:id/backlinks/*` (`getIncomingLinks`) is unchanged: one item per
+linking note, no lines.
 
 **Saved perspectives** (`graph_perspectives`; REST `GET/POST
 /graph/perspectives`, `DELETE /graph/perspectives/:id`, and the three MCP
@@ -1367,7 +1380,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `SearchResponse` = `{status, retrieval_mode, degraded, index?,
     results}`, served as is by REST and inside the budget envelope by MCP.
   - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
-    (`ORDER BY distance LIMIT 30`, which the HNSW index serves) and keeps
+    (`ORDER BY distance, … LIMIT 30`, which the HNSW index serves) and keeps
     those with cosine distance under `config.searchMaxDistance`
     (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
     default; 0.40 for bge-small, measured on the five benchmark corpora
@@ -1392,12 +1405,38 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     were never synced count in `pending_repositories`, those whose sync
     failed count as failed items), read beside the query embedding; left
     out when all zero.
-  - **Total order**: keyword legs `ORDER BY rank DESC, path COLLATE "C",
-    id`, vector legs re-sorted by `distance, path COLLATE "C", id` outside
-    the HNSW limit, final sort score descending then path and id by UTF-16
-    code unit (`compareCodeUnits`), so equal scores never depend on row
-    order. [INFERENCE] HNSW stays approximate: which rows make a vector
-    leg's 30 can still differ between instances.
+  - **HNSW settings** (#462): every vector leg (`blockLeg`: the note,
+    code file and symbol legs of `search` and `find_symbols`) runs in a
+    transaction that first calls `setHnswScan(tx, efSearch)`
+    (`search/hnsw.ts`, the one helper for every HNSW query): it sets
+    `hnsw.ef_search` (200 for search) and, when the installed pgvector is
+    0.8.0 or later (`pg_extension.extversion`; an older one refuses the
+    `hnsw.` setting), `hnsw.iterative_scan = relaxed_order`, with
+    `set_config(…, true)` in one statement. HNSW applies the leg's
+    WHERE (scope, `kind`) to the candidates it fetched, so without the
+    iterative scan a small repository or vault inside a big instance got
+    few or no vector rows once the planner chose the index; now the scan
+    goes on, up to `hnsw.max_scan_tuples` (20,000 by default), until the
+    leg has its rows. Relaxed order can return rows slightly out of
+    distance order: every leg re-sorts its cut. Semantic edges
+    (`semantic-edges.ts`) call the same helper with `ef_search` 100.
+  - **Total order** (#623): every cut ends in a key that is unique and,
+    where it can be, the same on two instances with the same content (ids
+    are random per instance). Keyword legs `ORDER BY rank DESC, path
+    COLLATE "C", id`; the symbol keyword leg its exact/prefix/contains
+    `CASE`, then `path COLLATE "C", start_line, id`; vector legs `ORDER BY
+    distance, path COLLATE "C", id` (symbols: `path, start_line, id`) at
+    the HNSW limit itself (an Incremental Sort over the index scan, which
+    still serves it) and again after the gate; the note leg's 200-block cut
+    by owner id (a join for the note's path there would cost a lookup per
+    block; its 30-note cut goes by path). The final sort: score descending, then
+    path by UTF-16 code unit (`compareCodeUnits`), then resource type
+    (`code`, `note`, `symbol`: a note and a code file can share a path,
+    and a file comes before its symbols), then a symbol's start line, then
+    id, so equal scores never depend on
+    row or `Map` insertion order. [INFERENCE] HNSW stays approximate and its
+    graph depends on insert order: which rows make a vector leg's 30 can
+    still differ between instances when distances are close but not equal.
   - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
     search and graph, saved perspectives) bound the last change,
     `updatedAt`, never frontmatter `timestamp` (the creation time, which
@@ -1503,8 +1542,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   one, even of the same owner; of the other type, the owner's repositories
   (a note) or live vaults (a file), never another account's. Each HNSW leg
   filters `container_id = ANY(<scope>)` during its scan, with
-  `hnsw.iterative_scan = relaxed_order` (set only where pgvector is 0.8 or
-  newer: older versions reserve the `hnsw.` prefix without that setting),
+  `hnsw.iterative_scan = relaxed_order` (`setHnswScan`, set only where
+  pgvector is 0.8 or newer: older versions reserve the `hnsw.` prefix without that setting),
   so the scan goes on past the `ef_search` (100) candidates until it has
   100 blocks of the scope, up to `hnsw.max_scan_tuples` (default 20,000).
   For a small container the planner reads its blocks by
@@ -2640,7 +2679,7 @@ that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same owner already has keeps that vector instead of being embedded again, so
 an edit to another symbol or section, a frontmatter edit, or a version bump that leaves a block's text
 alone, embeds nothing new for it. *Readers*: `search` note vector leg — the nearest 200 note blocks of the
-scoped vaults (`hnsw.ef_search` 200, #967's distance gate on the best distance), then each live note's best block
+scoped vaults (`hnsw.ef_search` 200 and the iterative scan, #462; #967's distance gate on the best distance), then each live note's best block
 distance (filters applied to the note), one hit per note with the same
 `{…, snippet: left(body, 200)}` as before. A vault has about 12 times as
 many note blocks as notes; the partial `blocks_note_embedding_idx` keeps the
@@ -2650,7 +2689,7 @@ query after a restart is slower, 190–700 ms against 30–70 ms, while the
 larger index pages in); `search` code
 vector leg — the nearest `file` blocks of the scoped repositories
 (their own partial HNSW index `blocks_file_embedding_idx`, as the old
-file index held only files; `hnsw.ef_search` 200; #967's distance gate), one hit per file with the
+file index held only files; `hnsw.ef_search` 200 and the iterative scan; #967's distance gate), one hit per file with the
 same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
 the ADR-004 best-block roll-up let symbol blocks of large files crowd the
 leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
@@ -2731,9 +2770,9 @@ import row the same way, so a renamed package loses its old name's edges
 and the new name gains them without the importers changing. That request
 is in memory: after a crash the boot backfill restores the targets gained,
 and a row whose target the change removed keeps that stale target until its file is
-extracted again. After `listen`, in the
-background, `backfillLinkLines()` (#558) writes wikilink rows without
-lines again from their note's body.
+extracted again. Wikilink rows without lines or a context are rewritten
+from their note's body by the `note_links` catch-up jobs (#472, see **Link
+catch-up** below), queued before `listen`.
 
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,
@@ -2944,6 +2983,18 @@ Boot deletes successful jobs finished more than 7 days ago
 status. A job that outlives its lease while still running can run twice
 only if a second process shares the database; extraction and embedding
 are idempotent rewrites.
+
+**Link catch-up** (`notes/link-catch-up.ts`, #472): durable kind
+`note_links`, payload `{noteId}`, key `note_links:<noteId>:<seq>`,
+monitoring job kind `links`. `scheduleLinkCatchUp()` runs at boot after the
+embedding and extraction catch-ups: keyset pages of 1,000 notes that have a
+`note_links` row with a null `context` (partial index
+`note_links_unfilled_idx`), one statement each, queued at
+`JOB_PRIORITY.catchUp` with the `errored` rerun rule (a pending job is left
+alone). Each job rewrites the note's rows from its body with `replaceLinks`
+in a store transaction (the note lock), as the doctor's `links-differ`
+repair does. No write queues this kind: a body save rewrites its rows
+itself.
 
 `docs/superpowers/specs/2026-07-18-repository-ingestion-design.md` and
 `2026-07-18-code-graph-integration-design.md` are the full specs.

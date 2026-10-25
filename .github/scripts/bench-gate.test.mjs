@@ -60,9 +60,9 @@ describe('movement', () => {
     assert.equal(movement('hit5', 0.6, 0.6 - tol, 20), 'same')
     assert.equal(movement('hit5', 0.6, 0.6 - tol - 0.05, 20), 'worse')
     assert.equal(movement('hit5', 0.6, 0.6 + tol + 0.05, 20), 'better')
-    // 28/29 -> 26/29 as written by round4 is two questions: within tolerance; three is not.
-    assert.equal(movement('hit5', 0.9655, 0.8966, 29), 'same')
-    assert.equal(movement('hit5', 0.9655, 0.8621, 29), 'worse')
+    // 28/29 -> 27/29 as written by round4 is one question: within tolerance; two are not.
+    assert.equal(movement('hit5', 0.9655, 0.931, 29), 'same')
+    assert.equal(movement('hit5', 0.9655, 0.8966, 29), 'worse')
   })
 
   it('tokens-to-gold is relative, and lower is better', () => {
@@ -166,11 +166,11 @@ describe('evaluate', () => {
   it('the baseline cannot ratchet down: a worse recorded baseline needs bench-baseline-lowered', () => {
     // Each step is within tolerance of the previous one, as in the review's simulation.
     let base = baselineOf(run())
-    const one = TOLERANCE.hit5Questions / 20
-    const step = run({ hit5: 0.6 - one, tokensToGold: 21_000 })
+    const lower = Math.round((0.6 - TOLERANCE.hit5Questions / 20) * 1e4) / 1e4
+    const step = run({ hit5: lower, tokensToGold: 21_000 })
     const lowered = evaluate({ results: step, baseline: baselineOf(step), baseBaseline: base, pr: pr() })
     assert.equal(lowered.ok, false)
-    assert.match(failures(lowered), /lowers hit5 0.6 -> 0.5, tokensToGold 20000 -> 21000 against the base/)
+    assert.match(failures(lowered), new RegExp(`lowers hit5 0.6 -> ${lower}, tokensToGold 20000 -> 21000 against the base`))
     const ok = evaluate({
       results: step,
       baseline: baselineOf(step),

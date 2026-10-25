@@ -1,7 +1,9 @@
-import { and, eq, inArray, isNotNull, isNull, like, or, sql, type AnyColumn, type SQL } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull, like, ne, or, sql, type AnyColumn, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '../db/client.js'
 import { noteLinks, notes, repositoryFileImports, repositoryFiles, semanticEdges } from '../db/schema.js'
+import { location } from '../mcp/response.js'
+import { bodyStartLine } from '../notes/projector.js'
 import {
   EDGE_KINDS,
   EdgeList,
@@ -30,8 +32,8 @@ import {
  * same resources and filters, restricted to that neighbourhood. It is read
  * ring by ring in SQL over the frontier's ids only; the rest of the graph is
  * never assembled, and there is no Louvain pass (communities need the whole
- * graph), so nodes carry their `distance` instead. #472's `neighbors(depth)`
- * (the REST local graph, backlinks) is meant to build on this.
+ * graph), so nodes carry their `distance` instead. `backlinksOf` lists the
+ * links to a note centre one per line, with their context (#472).
  */
 
 export interface LocalNode extends InternalNode {
@@ -383,4 +385,49 @@ export async function neighborhood(resources: GraphResourceSet, center: Internal
     cappedGroups: [...walk.cappedGroups].sort(),
     next: ranked[nodes.length] ?? null,
   }
+}
+
+/** A link to a note (#472): the linking note, where the link is (`path#La`, lines of its `.md` file) and its paragraph or line. */
+export interface Backlink {
+  path: string
+  /** The linking note's path alone for a row not located yet (written before migration 0031). */
+  location: string
+  /** Null for a row the boot catch-up has not filled yet (written before migration 0039). */
+  context: string | null
+}
+
+/** The most backlinks an answer lists: one more is read, so the answer can say that more exist. */
+export const BACKLINK_CAP = 1_000
+
+/**
+ * Every stored link to note `center` from another live note of its vault,
+ * resolved as graph link edges are (the exact path), one per row (a target
+ * linked on several lines has several), by path in code-unit order, then
+ * line; at most `BACKLINK_CAP` + 1. Stored lines are body-relative
+ * (ADR-004 §2.2): each linking note's frontmatter turns them into lines of
+ * its file. `filters` keep the linking notes, as they keep the nodes around
+ * the centre.
+ */
+export async function backlinksOf(center: InternalNode, filters: Walk['filters']): Promise<Backlink[]> {
+  const rows = await db
+    .select({
+      path: notes.path,
+      frontmatter: notes.frontmatter,
+      frontmatterSrc: sql<unknown>`frontmatter_src`,
+      startLine: noteLinks.startLine,
+      endLine: noteLinks.endLine,
+      context: noteLinks.context,
+    })
+    .from(noteLinks)
+    .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
+    .where(and(eq(noteLinks.targetPath, center.path), eq(notes.vaultId, center.resourceId), isNull(notes.deletedAt), ne(notes.id, center.id), ...noteFilterSql(filters)))
+    .orderBy(sql`${notes.path} COLLATE "C"`, noteLinks.startLine)
+    .limit(BACKLINK_CAP + 1)
+  const bodyStart = new Map<string, number>()
+  return rows.map((r) => {
+    if (r.startLine === 0) return { path: r.path, location: r.path, context: r.context }
+    let start = bodyStart.get(r.path)
+    if (start === undefined) bodyStart.set(r.path, (start = bodyStartLine(r)))
+    return { path: r.path, location: location(r.path, r.startLine + start - 1, r.endLine + start - 1), context: r.context }
+  })
 }

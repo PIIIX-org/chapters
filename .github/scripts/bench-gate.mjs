@@ -47,7 +47,7 @@ import { pathToFileURL } from 'node:url'
  * (hit@5 tolerance = hit5Questions / questions of the suite).
  * tokensRelative: relative change of mean tokens-to-gold that counts.
  */
-export const TOLERANCE = { hit5Questions: 2, tokensRelative: 0.1 }
+export const TOLERANCE = { hit5Questions: 1, tokensRelative: 0.1 }
 
 /** Metrics the gate acts on (Elara policy); the rest are reported only. */
 export const GATED = ['hit5', 'tokensToGold']
