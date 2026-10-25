@@ -6,11 +6,6 @@
       "issue": 556
     },
     {
-      "test": "access-behaviour",
-      "check": "semantic edges are stored only between notes of the same account",
-      "issue": 461
-    },
-    {
       "test": "attachments",
       "check": "an attachment can be deleted at all (REST)",
       "issue": 561

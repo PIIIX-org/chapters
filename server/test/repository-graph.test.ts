@@ -9,8 +9,8 @@ import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 import { buildApp } from '../src/app.js'
 
-async function makeRepo() {
-  const owner = await createActiveUser()
+async function makeRepo(ownerId?: string) {
+  const owner = ownerId ? { id: ownerId } : await createActiveUser()
   const [repo] = await db
     .insert(repositories)
     .values({ name: 'graph-test', ownerId: owner.id, ingestionMethod: 'agent_push' })
@@ -108,7 +108,8 @@ describe('buildGraph over repositories', () => {
     // The note's embedding job is committed with the note (ADR-003 S2a) and runs
     // in the background: embed it before the file, whose extraction then finds it.
     await flushEmbeddings()
-    const repo = await makeRepo()
+    // Note↔code semantic edges join only one owner's resources (D10, #461).
+    const repo = await makeRepo(owner.id)
     await syncRepositoryFiles(
       repo.id,
       [{ path: 'guidance.py', content: '# Rocket engine guidance software\ndef fly():\n    pass\n' }],
