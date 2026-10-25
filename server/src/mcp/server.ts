@@ -76,7 +76,7 @@ import { serializeNote } from '../notes/okf.js'
 import { renderDirIndex } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
-import { getRepositoryFile, listFileSymbols, listRepositoryFilesPage } from '../repositories/store.js'
+import { getRepositoryFile, indexedVersion, listFileSymbols, listRepositoryFilesPage, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { skippedField } from '../repositories/fs-scan.js'
 import { SYMBOL_KINDS, type SymbolKind } from '../repositories/extraction.js'
@@ -2113,7 +2113,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         if (slash !== -1) children.set(path.slice(0, slash), (children.get(path.slice(0, slash)) ?? 0) + 1)
       }
       return {
-        head: {},
+        // The indexed version, once per answer (#471): `commit`, else `tree`.
+        head: await repositoryIndexedVersion(target),
         sections: [
           keyset({
             name: 'files',
@@ -2149,6 +2150,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         head: {
           path: file.path,
           language: file.language,
+          ...(await repositoryIndexedVersion(target)),
           // Only when extraction embedded the file partly (#496 per-file budget).
           ...(file.embeddingNote ? { embeddingNote: file.embeddingNote } : {}),
         },
@@ -2179,6 +2181,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           lastSyncError: repositories.lastSyncError,
           gitUrl: repositories.gitUrl,
           skippedFiles: repositories.skippedFiles,
+          lastSyncedCommit: repositories.lastSyncedCommit,
+          treeHash: repositories.treeHash,
         })
         .from(repositories)
         .where(eq(repositories.id, target))
@@ -2187,6 +2191,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       return {
         syncStatus: row.syncStatus,
         lastSyncedAt: row.lastSyncedAt,
+        // What the index was built from (#471): `commit`, else `tree`.
+        ...indexedVersion(row),
         lastSyncError: publicSyncError(row),
         filesPendingExtraction: await countPendingExtractions(target),
         extractionFailures: await extractionFailures(target),
@@ -2734,7 +2740,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       // The first `limit` hits of the ranking, plus one to know whether more match.
       const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true })
       return {
-        head,
+        // One repository: its indexed version, once in the head (#471).
+        head: { ...head, ...(resources.repositoryIds.length === 1 ? await repositoryIndexedVersion(resources.repositoryIds[0]!) : {}) },
         sections: [
           ranked({
             name: 'results',
@@ -2785,7 +2792,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       // The first `limit` symbols of the ranking, plus one to know whether more match.
       const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
       return {
-        head,
+        head: { ...head, ...(repoIds.length === 1 ? await repositoryIndexedVersion(repoIds[0]!) : {}) },
         sections: [
           ranked({
             name: 'results',

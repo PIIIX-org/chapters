@@ -1,4 +1,5 @@
 import { and, eq, ne } from 'drizzle-orm'
+import { simpleGit } from 'simple-git'
 import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { recordSyncFailure, syncGitRepository, type RepositorySyncStatus } from './git-sync.js'
@@ -108,6 +109,27 @@ async function tick(thresholdMs: number): Promise<void> {
 const watchers = new Map<string, () => void>()
 
 /**
+ * The commit a folder's files are (#471): HEAD when the folder is in a git
+ * work tree with nothing uncommitted under it, else null (no git, no commit
+ * yet, or changes: the indexed files are then not any commit, and answers
+ * name the tree hash instead). Untracked files the folder's ignore rules let
+ * through are indexed, so they count as changes, as in `git status`. Git's
+ * own checks stand: a folder owned by another user (`safe.directory`) gives
+ * null. `--no-optional-locks` keeps status from rewriting the user's index.
+ */
+async function cleanWorkTreeCommit(root: string): Promise<string | null> {
+  try {
+    const git = simpleGit(root)
+    if ((await git.revparse(['--is-inside-work-tree'])).trim() !== 'true') return null
+    const changes = await git.raw(['--no-optional-locks', 'status', '--porcelain', '--ignore-submodules=all', '--', '.'])
+    if (changes.trim() !== '') return null
+    return (await git.revparse(['HEAD'])).trim()
+  } catch {
+    return null
+  }
+}
+
+/**
  * One status-tracked pass over a folder — the local twin of
  * `syncGitRepository`. The watcher keeps content current but reports nothing;
  * this is what writes `syncStatus`/`lastSyncedAt`/`lastSyncError`, so a
@@ -121,10 +143,13 @@ export async function syncLocalRepository(repositoryId: string): Promise<void> {
 
   await db.update(repositories).set({ syncStatus: 'syncing' }).where(eq(repositories.id, repositoryId))
   try {
+    // Before the scan: an edit during it changes the folder, so the watcher
+    // syncs again and records the version afresh.
+    const commit = await cleanWorkTreeCommit(root)
     // A folder follows its .gitignore files (#465, D12). Skipped files leave
     // currentPaths, so a stale row goes (#923).
     const { files, currentPaths, skipped } = await scanRepository(root, new GitignoreRules(root), 'scheduler')
-    await syncRepositoryFiles(repositoryId, files, currentPaths)
+    await syncRepositoryFiles(repositoryId, files, currentPaths, { commit })
     await db
       .update(repositories)
       .set({

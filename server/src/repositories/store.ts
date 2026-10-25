@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { and, asc, eq, notInArray, sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { blocks, repositoryFiles } from '../db/schema.js'
+import { blocks, repositories, repositoryFiles } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
 import { enqueueExtractions, scheduleImportReresolution } from './extraction-queue.js'
@@ -24,23 +24,65 @@ export interface SyncResult {
 }
 
 /**
+ * The version an index was built from (#471, ADR-004 §2.9), as answers name
+ * it once: the commit when one is known, else the tree hash, else nothing
+ * (never synced).
+ */
+export type IndexedVersion = { commit: string } | { tree: string } | Record<string, never>
+
+export function indexedVersion(r: { lastSyncedCommit: string | null; treeHash: string | null }): IndexedVersion {
+  if (r.lastSyncedCommit) return { commit: r.lastSyncedCommit }
+  return r.treeHash ? { tree: r.treeHash } : {}
+}
+
+/** `indexedVersion` of a repository by id ({} when there is no such row). */
+export async function repositoryIndexedVersion(repositoryId: string): Promise<IndexedVersion> {
+  const [row] = await db
+    .select({ lastSyncedCommit: repositories.lastSyncedCommit, treeHash: repositories.treeHash })
+    .from(repositories)
+    .where(eq(repositories.id, repositoryId))
+  return row ? indexedVersion(row) : {}
+}
+
+/**
+ * The tree hash of a set of indexed files (#471): the first 16 hex characters
+ * of sha256 over one `path NUL content_hash LF` line per file, in path byte
+ * (UTF-8) order, which is Postgres `COLLATE "C"` order (migration 0040
+ * backfills with the same lines).
+ */
+export function computeTreeHash(hashByPath: ReadonlyMap<string, string>): string {
+  const lines = [...hashByPath].map(([path, hash]) => ({ path: Buffer.from(path, 'utf8'), hash }))
+  lines.sort((a, b) => Buffer.compare(a.path, b.path))
+  const digest = createHash('sha256')
+  for (const { path, hash } of lines) digest.update(path).update(`\0${hash}\n`)
+  return digest.digest('hex').slice(0, 16)
+}
+
+/**
  * The one write path for repository file content (spec 8): every
  * ingestion method funnels through here. `contentHash` is always
  * computed server-side from the stored `content` (NUL bytes removed first:
  * stored text = hashed text, #418) — never trusted from a caller,
  * since the server is the single source of truth regardless of how the
  * content arrived.
+ *
+ * It also records the indexed version (#471): the tree hash, from the rows
+ * it already loaded plus this batch's hashes (no rescan), and `commit` when
+ * the caller passes one (null clears it; undefined leaves it).
  */
 export async function syncRepositoryFiles(
   repositoryId: string,
   changedOrNewFiles: FileUpdate[],
   currentPaths: string[],
+  indexed: { commit?: string | null } = {},
 ): Promise<SyncResult> {
   const existing = await db
     .select({ id: repositoryFiles.id, path: repositoryFiles.path, contentHash: repositoryFiles.contentHash })
     .from(repositoryFiles)
     .where(eq(repositoryFiles.repositoryId, repositoryId))
   const existingByPath = new Map(existing.map((r) => [r.path, r]))
+  // The files as this sync leaves them, for the tree hash (#471).
+  const hashByPath = new Map(existing.map((r) => [r.path, r.contentHash]))
 
   const result: SyncResult = { created: 0, updated: 0, deleted: 0, unchanged: 0 }
   // Extraction is scheduled only after the whole batch is persisted (below)
@@ -58,6 +100,7 @@ export async function syncRepositoryFiles(
     const cleanContent = file.content.replace(/\0/g, '')
     const contentHash = createHash('sha256').update(cleanContent).digest('hex')
     const current = existingByPath.get(file.path)
+    hashByPath.set(file.path, contentHash)
     if (current && current.contentHash === contentHash) {
       result.unchanged += 1
       continue
@@ -107,7 +150,17 @@ export async function syncRepositoryFiles(
     await deleteSemanticEdgesFor('code', toDelete.map((r) => r.id))
     result.deleted = toDelete.length
     if (toDelete.some((r) => isResolutionManifest(r.path))) manifestChanged = true
+    // The delete also takes a batch file outside currentPaths.
+    for (const path of hashByPath.keys()) if (!currentPathSet.has(path)) hashByPath.delete(path)
   }
+
+  await db
+    .update(repositories)
+    .set({
+      treeHash: computeTreeHash(hashByPath),
+      ...(indexed.commit !== undefined ? { lastSyncedCommit: indexed.commit } : {}),
+    })
+    .where(eq(repositories.id, repositoryId))
 
   if (manifestChanged) scheduleImportReresolution(repositoryId)
 

@@ -706,7 +706,20 @@ export const repositories = pgTable(
      * (no branch exists) and for a git repo whose first sync has not landed.
      */
     defaultBranch: text('default_branch'),
+    /**
+     * The commit the index was built from (#471, ADR-004 §2.9): HEAD of the
+     * clone (git), HEAD of a clean git work tree (local_path), the commit a
+     * push names (agent_push). Null when no commit describes the indexed
+     * files: a folder outside git or with uncommitted changes, a push
+     * without one.
+     */
     lastSyncedCommit: text('last_synced_commit'),
+    /**
+     * The indexed files, whatever their source (#471): 16 hex characters of
+     * sha256 over the sorted `path NUL content_hash LF` lines
+     * (`computeTreeHash`). Written by every sync; null until one runs.
+     */
+    treeHash: text('tree_hash'),
     /** Staleness signal for the polling fallback scheduler. */
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
     /**
