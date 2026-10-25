@@ -44,7 +44,7 @@ When exploring a project or answering questions about architecture, concepts, or
   - Use `list_graph_perspectives` to see curated domain or subsystem perspectives (an `admin`-profile token; reader and writer tokens do not list it).
 - **Step 3 — Read Context**:
   - Use `read_note` for the specific notes identified by the search/graph.
-  - For code, `read_file` reads from line 1 in pages (`budget_tokens`, default 4,000; `truncated.cursor` continues). When the repo is checked out locally, read only the line range that `find_symbols` or `search` returned; use `read_file` only for repos you do not have locally.
+  - For code, `read_file` reads from line 1 in pages (`budget_tokens`, default 4,000; `truncated.cursor` continues). Read just what you need with `targets` (`{symbol: "Class.method"}`, `{lines: "a-b"}`, `{block}`, `{heading}` on markdown), several in one call; `outline: true` lists a file's symbols (a note's headings) with `lines` and `tokens` instead of its body. `read_note` takes the same, without `symbol`. When the repo is checked out locally, read only the line range that `find_symbols` or `search` returned.
 
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:
@@ -248,7 +248,7 @@ Elara exposes 60 tools across 7 functional domains. **Capability** is the token 
 | `list_repositories` | Account | `read` | List all connected codebase repositories. |
 | `connect_repository` | Account | `admin` | Connect a repo (git URL or local filesystem path). |
 | `browse_repository` | Repo/Account | `read` | List a repository's indexed files by path, in pages; `path` lists one folder's subtree. |
-| `read_file` | Repo/Account | `read` | Read a code file from line 1, in pages of `budget_tokens`, with its symbol outline. |
+| `read_file` | Repo/Account | `read` | Read a code file from line 1, in pages of `budget_tokens`; `targets` reads symbols, line ranges, blocks or headings in one call, `outline: true` lists its symbols. |
 | `repository_status` | Repo/Account | `read` | Check sync state, last sync time, last sync error, `filesPendingExtraction`, `extractionFailures` and `skipped` (files left out, by reason). |
 | `sync_repository` | Repo/Account | `write` | Trigger immediate synchronization of a repository. |
 | `update_repository` | Repo/Account | `admin` | Update repository name or mergeable setting (owner only). |
