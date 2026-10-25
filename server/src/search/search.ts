@@ -225,13 +225,14 @@ async function noteRows(
       : await blockLeg(
           gated(sql`
             -- A note's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per note, as before
-            -- blocks; #967's relevance gate applies to that best distance. Equal distances are cut by the note's path
-            -- (#623): an Incremental Sort over the index scan, which the HNSW index still serves.
+            -- blocks; #967's relevance gate applies to that best distance. Equal distances at the 200-block cut go by
+            -- owner (#623; an Incremental Sort over the index scan, which the HNSW index still serves; no join to
+            -- notes there, which would add a lookup per block), the 30-note cut below by path.
             WITH nearest AS (
-              SELECT b.owner_id, b.embedding <=> ${vec}::vector AS distance
-              FROM blocks b JOIN notes n ON n.id = b.owner_id
-              WHERE b.owner_type = 'note' AND b.container_id = ANY(${uuidArray(vaultIds)}) AND b.embedding IS NOT NULL
-              ORDER BY b.embedding <=> ${vec}::vector, n.path COLLATE "C", b.owner_id
+              SELECT owner_id, embedding <=> ${vec}::vector AS distance
+              FROM blocks
+              WHERE owner_type = 'note' AND container_id = ANY(${uuidArray(vaultIds)}) AND embedding IS NOT NULL
+              ORDER BY embedding <=> ${vec}::vector, owner_id
               LIMIT ${BLOCK_CANDIDATES}
             ), best AS (
               SELECT owner_id, min(distance) AS distance FROM nearest GROUP BY owner_id
