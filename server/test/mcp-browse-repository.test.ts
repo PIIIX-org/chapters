@@ -1,5 +1,5 @@
 // #424: `browse_repository` takes a `path` folder and lists only the files
-// under it, a page at a time in path order (`COLLATE "C"`, code units), read
+// under it, a page at a time in path order (`COLLATE "C"`, UTF-8 byte order), read
 // from the database with a keyset (`path > last`, limit + 1) rather than
 // loading the whole repository. The cursor is bound to `path`, and
 // `truncated.total` says ">n" when the fetch of limit + 1 found more.
@@ -132,7 +132,7 @@ afterAll(async () => {
 })
 
 describe('browse_repository path filter', () => {
-  it('`path` lists only the files under that folder, in code-unit order', async () => {
+  it('`path` lists only the files under that folder, in UTF-8 byte order', async () => {
     const expected = [...LIB].sort(byCodeUnits)
     const json = await page({ repositoryId: repoId, path: 'src/lib', budget_tokens: 25_000 })
     expect(json.truncated).toBe(false)
