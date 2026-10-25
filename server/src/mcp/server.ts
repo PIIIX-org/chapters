@@ -885,7 +885,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           ladder: BROWSED_NOTE_LADDER,
         })
       const narrowTo = (counts: Iterable<[string, number]>) =>
-        [...counts].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([child]) => `path: ${JSON.stringify(dir ? `${dir}/${child}` : child)}`)
+        [...counts].sort((a, b) => b[1] - a[1] || compareCodeUnits(a[0], b[0])).slice(0, 3).map(([child]) => `path: ${JSON.stringify(dir ? `${dir}/${child}` : child)}`)
 
       if (args.recursive === true) {
         // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
@@ -2124,7 +2124,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
             ladder: { no_context: ({ path, language }) => ({ path, language }), locations: (f) => f.path, group: (f) => folderOf(f.path) },
           }),
         ],
-        narrow: [...children].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([child]) => `path: ${JSON.stringify(child)}`),
+        narrow: [...children].sort((a, b) => b[1] - a[1] || compareCodeUnits(a[0], b[0])).slice(0, 3).map(([child]) => `path: ${JSON.stringify(child)}`),
       }
     },
   )
