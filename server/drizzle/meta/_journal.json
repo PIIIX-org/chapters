@@ -269,6 +269,13 @@
       "breakpoints": true
     },
     {
+      "idx": 38,
+      "version": "7",
+      "when": 1792400000000,
+      "tag": "0038_semantic_edge_scope",
+      "breakpoints": true
+    },
+    {
       "idx": 40,
       "version": "7",
       "when": 1792600000000,

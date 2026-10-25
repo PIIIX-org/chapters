@@ -644,6 +644,11 @@ export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
  * Treating these as undirected in storage is the bug fixed in #91: deleting by
  * either side wipes edges another node owns, and nothing restores them.
  *
+ * Both ends are in one scope (D10, #461): two notes of one vault, two files of
+ * one repository, or a note and a file whose vault and repository have one
+ * owner. Migration 0038 deleted the rows from before; a vault transfer deletes
+ * its notes' note↔code rows (`deleteVaultCodeEdges`).
+ *
  * The SQL columns are still named `node_a_*` / `node_b_*` from when the table
  * was modelled as an undirected pair — renaming them would buy nothing but a
  * migration. `node_a` is the source, `node_b` is the target.
