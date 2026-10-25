@@ -105,7 +105,7 @@ import { manualText, manualVisible, toolManuals, type ToolManual } from './manua
 import { strictArgs } from './strict-input.js'
 import { McpToolError, argumentRefusal, closest, envelope, errorResult, toErrorEnvelope, type ErrorEnvelope } from './errors.js'
 import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
-import { advanceRead, lastRead, rememberRead } from './last-read.js'
+import { advanceRead, confirmRead, lastRead, rememberRead } from './last-read.js'
 import {
   MARKDOWN_PATH,
   OUTLINE_ARG,
@@ -1395,8 +1395,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       if (!note) throw await noteNotFound(target, args.path)
       showAgentPresence(target, note.row.id, presence, 'reading')
       // Not modified (#682): the revision is compared, not the text, and only for a note no other note was at the path
-      // before. No read is recorded: the connection's base can be a body it sent (last-read.ts), and this answer sends none.
-      if (args.if_rev === String(note.row.seq) && !(await pathHadOtherNote(note.row))) return unchanged({ rev: note.row.seq })
+      // before, and only on a first page (a cursor continues an answer already sent). The agent has shown it holds this
+      // rev, so the base a whole-body edit merges from moves to it, as after a read; no body is recorded, since this
+      // answer sent none (confirmRead keeps one sent with that rev, last-read.ts).
+      if (page.at === null && args.if_rev === String(note.row.seq) && !(await pathHadOtherNote(note.row))) {
+        return { ...unchanged({ rev: note.row.seq }), rendered: () => confirmRead(auth.connection.id, note.row.id, note.row.seq) }
+      }
       // Lines count over the note's file (ADR-004 §2.2, D3): line 1 is `---`, the body starts at body_start_line.
       // `note.frontmatter` is already in its file's key order, so no `frontmatter_src` is needed to render it.
       const file = renderNoteFile({ frontmatter: note.frontmatter, frontmatterSrc: null, body: note.body })
@@ -2205,9 +2209,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const { file } = read
       // The content version (ADR-004 §2.9: 16 hex of its sha256), on every answer: what `if_rev` takes (#682). Not the
       // repository's commit or tree: a sync stores files one by one and records those at its end, so a file can change
-      // under them.
-      const hash = file.contentHash.slice(0, 16)
-      if (args.if_rev === hash) return unchanged({ hash })
+      // under them. While the file's outline and symbols lag its content (`index`), the token says so (`<hash>~pending`,
+      // `~failed`) and never matches: only an answer served from the current index can be held, so a read that missed
+      // symbols before extraction finished gets them once it has. Only a first page answers `unchanged`.
+      const ready = file.contentHash.slice(0, 16)
+      const hash = read.index ? `${ready}~${read.index}` : ready
+      if (page.at === null && !read.index && args.if_rev === ready) return unchanged({ hash })
       // Targets and outline answers add the line count their lines are in (#1002 review: extra fields on every read cost tokens).
       const head = {
         path: file.path,

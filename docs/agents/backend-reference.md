@@ -1997,7 +1997,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   that every manual named is in the token's `resources/list`, and the
   same bytes across two initializes and two vault pins per profile.
 - **Unchanged reads** (#682, ADR-004 §2.9): `read_note` and `read_file`
-  take `if_rev` (`read-targets.ts` `ifRevArg`), the version an earlier
+  take `if_rev` (`read-targets.ts` `ifRevArg`, `z.coerce.string()`, so
+  the integer `rev` answers give works as sent and tools/list still says
+  `string`), the version an earlier
   answer gave: a note's `rev` (`notes.seq`, which writes answer too), a
   file's `hash` (16 hex of `content_hash`, now on every `read_file`
   answer). When it equals the current one the read answers
@@ -2022,10 +2024,22 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - Files compare the per-file `hash`, never the repository `commit` /
     `tree`: `syncRepositoryFiles` updates rows one by one and writes the
     commit and tree at its end, so mid-sync (or after a failed sync) a
-    file can change under an unchanged commit or tree.
-  - An `unchanged` answer records no read (`rememberRead`): after a merged
-    whole-body write the connection's base is the body it sent, which a
-    not-modified answer does not replace.
+    file can change under an unchanged commit or tree. The token encodes
+    the index state (owner decision on #1019): while `readRepositoryFile`
+    reports `index` (`pending` / `failed`) the answer's `hash` is
+    `<16 hex>~pending` / `~failed` and no `if_rev` matches, so an answer
+    that missed symbols or the outline is never held past extraction.
+  - Only a first page (`page.at === null`) answers `unchanged`: a cursor
+    continues the answer it came from, so a file that went back to the
+    held hash while the agent paged another version answers
+    `CURSOR_STALE` through the text guard, not `unchanged`.
+  - An `unchanged` note read moves the connection's base to the confirmed
+    rev (`last-read.ts` `confirmRead`, in `rendered`): the agent proved it
+    holds that rev, so a later whole-body edit merges from it (a base left
+    at an older rev would merge the agent's own `ops` changes in again).
+    No body is recorded, since the answer sent none: a base already at
+    that rev keeps the body the connection sent with a merged write, and
+    an older base takes the revision's text.
   - `if_rev` is in the cursor fingerprint like any argument. Search and
     graph have no not-modified answer: that is the result cache's (#685).
   `test/mcp-read-if-rev.test.ts`.
@@ -2590,7 +2604,8 @@ extraction state in one query (`readRepositoryFile`) and adds
 block of its content does) or `'failed'` (the job gave up; the outline is
 from earlier content), the rule of `extractionState` for one file. Files
 carry no version of their own beyond `content_hash`, whose first 16 hex
-every `read_file` answer carries as `hash` (what `if_rev` takes, #682).
+every `read_file` answer carries as `hash` (what `if_rev` takes, #682;
+`~pending` / `~failed` appended while it carries `index`).
 `list_repositories` and the REST rows do not carry the indexed version.
 Git history (`changed_since`, `diff`, reads at a `ref`) is deferred (D11).
 

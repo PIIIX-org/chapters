@@ -12,9 +12,15 @@
 // - A note's `rev` restarts at 1 for a new note, so a note created where
 //   another was deleted or renamed from answers in full.
 // - A file's `hash` is the token, not the repository `commit`/`tree`: a sync
-//   writes files one by one and the commit/tree at its end.
-// - edit_note and upsert_note answer the `rev` a later `if_rev` takes; a
-//   not-modified answer leaves the connection's last-read record alone.
+//   writes files one by one and the commit/tree at its end. While the file's
+//   outline lags its content (`index`), the token is `<hash>~pending` (or
+//   `~failed`), which never answers `unchanged`.
+// - edit_note and upsert_note answer the `rev` a later `if_rev` takes, as
+//   the integer they give. A not-modified answer moves the connection's
+//   last-read base to that rev (it holds it), keeping a body it sent there.
+// - Only a first page answers `unchanged`: a cursor continues the answer it
+//   came from, and is stale once the content changed.
+import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { and, eq } from 'drizzle-orm'
@@ -22,11 +28,11 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { mcpConnections, noteReads, repositoryShares, vaultShares } from '../src/db/schema.js'
+import { mcpConnections, noteReads, repositoryFiles, repositoryShares, vaultShares } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote, renameNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
-import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { flushExtraction, scheduleMissingExtractions } from '../src/repositories/extraction-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 type Json = Record<string, unknown>
@@ -119,7 +125,7 @@ afterAll(async () => {
 })
 
 describe('read_note if_rev (#682)', () => {
-  it('answers unchanged under 50 tokens for the current rev, and leaves the last-read record alone', async () => {
+  it('answers unchanged under 50 tokens for the current rev, and keeps the last-read base at that rev', async () => {
     const full = await readNote({ path: 'docs/guide' })
     const rev = full.json.rev as number
     expect(rev).toEqual(expect.any(Number))
@@ -127,7 +133,28 @@ describe('read_note if_rev (#682)', () => {
     const r = await readNote({ path: 'docs/guide', if_rev: String(rev) })
     expectUnchanged(r, 'rev', rev)
     const [after] = await db.select().from(noteReads).where(eq(noteReads.connectionId, ownerConnectionId))
-    expect(after).toEqual(before)
+    expect({ rev: after!.rev, body: after!.body }).toEqual({ rev: before!.rev, body: before!.body })
+  })
+
+  it('moves the base a whole-body edit merges from to the rev it confirmed, so the edit does not conflict', async () => {
+    await createNote(vaultId, { path: 'docs/probe', body: 'one\n' })
+    const read = await readNote({ path: 'docs/probe' })
+    const appended = await ok(owner, 'edit_note', { vaultId, path: 'docs/probe', ops: [{ op: 'append', text: 'two' }] })
+    const rev = appended.json.rev as number
+    expect(rev).toBe((read.json.rev as number) + 1)
+    expectUnchanged(await readNote({ path: 'docs/probe', if_rev: String(rev) }), 'rev', rev)
+    const edited = await ok(owner, 'edit_note', { vaultId, path: 'docs/probe', body: 'one\ntwo\nthree\n' })
+    expect(edited.json).toMatchObject({ status: 'applied', body: 'one\ntwo\nthree\n', rev: rev + 1 })
+  })
+
+  it('keeps a body the connection sent at the confirmed rev (a merged whole-body write)', async () => {
+    await createNote(vaultId, { path: 'docs/sent', body: 'a\n' })
+    const read = await readNote({ path: 'docs/sent' })
+    const [row] = await db.select({ noteId: noteReads.noteId }).from(noteReads).where(and(eq(noteReads.connectionId, ownerConnectionId), eq(noteReads.rev, read.json.rev as number)))
+    await db.update(noteReads).set({ body: 'what it sent\n' }).where(and(eq(noteReads.connectionId, ownerConnectionId), eq(noteReads.noteId, row!.noteId)))
+    expectUnchanged(await readNote({ path: 'docs/sent', if_rev: String(read.json.rev) }), 'rev', read.json.rev)
+    const [kept] = await db.select().from(noteReads).where(and(eq(noteReads.connectionId, ownerConnectionId), eq(noteReads.noteId, row!.noteId)))
+    expect({ rev: kept!.rev, body: kept!.body }).toEqual({ rev: read.json.rev, body: 'what it sent\n' })
   })
 
   it('answers in full for a stale rev, and for a note changed and changed back', async () => {
@@ -163,16 +190,18 @@ describe('read_note if_rev (#682)', () => {
     expect(outlined.json).toHaveProperty('outline')
   })
 
-  it('takes the rev edit_note and upsert_note answer', async () => {
+  it('takes the rev edit_note and upsert_note answer, as the integer they give', async () => {
     await createNote(vaultId, { path: 'docs/written', body: 'start\n' })
     const edited = await ok(owner, 'edit_note', { vaultId, path: 'docs/written', body: 'edited\n' })
     const editRev = edited.json.rev as number
-    expectUnchanged(await readNote({ path: 'docs/written', if_rev: String(editRev) }), 'rev', editRev)
+    expect(editRev).toEqual(expect.any(Number))
+    expectUnchanged(await readNote({ path: 'docs/written', if_rev: editRev }), 'rev', editRev)
     const upserted = await ok(owner, 'upsert_note', { vaultId, path: 'docs/written', body: 'upserted\n' })
     const upsertRev = upserted.json.rev as number
     expect(upsertRev).toBe(editRev + 1)
+    expectUnchanged(await readNote({ path: 'docs/written', if_rev: upsertRev }), 'rev', upsertRev)
     expectUnchanged(await readNote({ path: 'docs/written', if_rev: String(upsertRev) }), 'rev', upsertRev)
-    expect((await readNote({ path: 'docs/written', if_rev: String(editRev) })).json.rev).toBe(upsertRev)
+    expect((await readNote({ path: 'docs/written', if_rev: editRev })).json.rev).toBe(upsertRev)
   })
 
   it('answers in full for a note created where another note was deleted or renamed from', async () => {
@@ -227,11 +256,58 @@ describe('read_file if_rev (#682)', () => {
     const after = await readFile({ path: 'src/store.ts', if_rev: hash })
     expect(after.json).not.toHaveProperty('unchanged')
     expect(after.json.hash).not.toBe(hash)
-    expect(after.json.hash).toMatch(/^[0-9a-f]{16}$/)
+    expect(after.json.hash).toMatch(/^[0-9a-f]{16}(~pending)?$/)
+  })
+
+  it('serves `<hash>~pending` while the outline lags, which never answers unchanged, then the symbols once indexed', async () => {
+    const v1 = 'export function first() {\n  return 1\n}\n'
+    await syncRepositoryFiles(repoId, [{ path: 'src/late.ts', content: v1 }], ['src/store.ts', 'src/other.ts', 'src/late.ts'])
+    await flushExtraction()
+    // The stored content moved on and its extraction has not run yet (as repository-indexed-version.test.ts does).
+    const v2 = 'export function second() {\n  return 2\n}\n'
+    const contentHash = createHash('sha256').update(v2).digest('hex')
+    await db.update(repositoryFiles).set({ content: v2, contentHash }).where(and(eq(repositoryFiles.repositoryId, repoId), eq(repositoryFiles.path, 'src/late.ts')))
+    const targets = [{ symbol: 'second' }]
+    const pending = await readFile({ path: 'src/late.ts', targets })
+    const token = `${contentHash.slice(0, 16)}~pending`
+    expect(pending.json).toMatchObject({ index: 'pending', hash: token })
+    expect(pending.json.targets).toEqual([expect.objectContaining({ symbol: 'second', error: expect.objectContaining({ code: 'NOT_FOUND' }) })])
+    expect((await readFile({ path: 'src/late.ts', targets, if_rev: token })).json).toMatchObject({ hash: token })
+    expect((await readFile({ path: 'src/late.ts', targets, if_rev: contentHash.slice(0, 16) })).json).toMatchObject({ hash: token })
+
+    await scheduleMissingExtractions()
+    await flushExtraction()
+    const ready = await readFile({ path: 'src/late.ts', targets, if_rev: token })
+    expect(ready.json).not.toHaveProperty('unchanged')
+    expect(ready.json).not.toHaveProperty('index')
+    expect(ready.json.hash).toBe(contentHash.slice(0, 16))
+    expect(ready.json.targets).toEqual([expect.objectContaining({ symbol: 'second', text: v2 })])
+    expectUnchanged(await readFile({ path: 'src/late.ts', targets, if_rev: ready.json.hash }), 'hash', ready.json.hash)
+  })
+
+  it('pages on with a cursor rather than answering unchanged: a cursor from changed content is stale', async () => {
+    const paths = ['src/store.ts', 'src/other.ts', 'src/late.ts', 'src/long.ts']
+    const long = (tag: string) => Array.from({ length: 120 }, (_, i) => `export const ${tag}${i} = ${i} // a line of filler text`).join('\n') + '\n'
+    await syncRepositoryFiles(repoId, [{ path: 'src/long.ts', content: long('a') }], paths)
+    await flushExtraction()
+    const held = (await readFile({ path: 'src/long.ts', budget_tokens: 256 })).json.hash as string
+    await syncRepositoryFiles(repoId, [{ path: 'src/long.ts', content: long('b') }], paths)
+    await flushExtraction()
+    const first = await readFile({ path: 'src/long.ts', budget_tokens: 256, if_rev: held })
+    const truncated = first.json.truncated as { cursor: string | null }
+    expect(truncated.cursor).toEqual(expect.any(String))
+    // The file goes back to the version the agent holds while it pages the other one.
+    await syncRepositoryFiles(repoId, [{ path: 'src/long.ts', content: long('a') }], paths)
+    await flushExtraction()
+    const next = await call(owner, 'read_file', { repositoryId: repoId, path: 'src/long.ts', budget_tokens: 256, if_rev: held, cursor: truncated.cursor })
+    expect(next.isError).toBe(true)
+    expect(next.json).toMatchObject({ error: { code: 'CURSOR_STALE' } })
+    expectUnchanged(await readFile({ path: 'src/long.ts', budget_tokens: 256, if_rev: held }), 'hash', held)
   })
 
   it('answers the access error, not unchanged, once the repository share is revoked', async () => {
     await db.insert(repositoryShares).values({ repositoryId: repoId, granteeType: 'user', granteeId: guestId })
+    await flushExtraction()
     const seen = await readFile({ path: 'src/other.ts' }, guest)
     const hash = seen.json.hash as string
     expectUnchanged(await readFile({ path: 'src/other.ts', if_rev: hash }, guest), 'hash', hash)
