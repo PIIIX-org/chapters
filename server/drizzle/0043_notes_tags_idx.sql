@@ -1,7 +1,12 @@
 -- #454: search filters a note leg by tag inside its SQL (`frontmatter -> 'tags' ?| …`, search/search.ts
 -- `noteFilter`), before the leg's cut, instead of after the fusion. Without an index the keyword leg reads
--- every full-text match and the vector leg every note of the vault; on 50,000 notes with a tag on 0.5% of them
--- this index took the keyword leg from 5-8 ms to 1.5 ms and the vector leg from 9-10 ms to 1.5 ms (2% of them:
--- 12-15 ms to 7 ms; measured in the #454 PR). jsonb_ops, the operator class that serves `?|`.
+-- every full-text match and the vector leg every note of the vault. jsonb_ops, the operator class that
+-- serves `?|`. Measured in the #454 PR (local pgvector 0.8.5, 50,000 notes with one block each, the leg SQL
+-- warm under EXPLAIN ANALYZE, ef_search 200 and iterative scan; keyword query matching 25% of the notes),
+-- leg: without this index -> with it:
+--   tag on 0.5% of notes: keyword 5.4-8.2 ms -> 1.4-1.5 ms; vector 9.1-10.3 ms -> 1.5 ms
+--   tag on 2%:            keyword 4.2-5.6 ms -> 0.6 ms;     vector 12.4-15.0 ms -> 7.3 ms
+--   tag on every note:    keyword 6.1-8.3 ms -> 8.7-9.1 ms (index unused); vector 87-134 ms -> 52-54 ms
+--   (the unfiltered vector leg, served by HNSW: 9.5-27 ms)
 -- Numbered 0043 with a `when` (1792750000000) above 0042's; a migration merged later must take a larger `when`.
 CREATE INDEX IF NOT EXISTS "notes_tags_idx" ON "notes" USING gin (("frontmatter" -> 'tags'));
