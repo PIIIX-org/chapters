@@ -4,7 +4,7 @@ import { noteBlocks } from '../notes/note-blocks.js'
 import { replaceBlockSet, vectorsByEmbedKey } from './block-rows.js'
 import { CHUNK_VERSION, embedKey } from './embed-key.js'
 import { EMBEDDER_ID, embedder } from './embeddings.js'
-import { refreshSemanticEdges } from './semantic-edges.js'
+import { queueSemanticEdgeRefresh, runSemanticEdgeRefresh } from './semantic-edges.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
   JOB_PRIORITY,
@@ -236,18 +236,20 @@ async function processNote(noteId: string, jobSeq: number | undefined): Promise<
     embedKey: keys[i]!,
     embedding: vectors[i]!,
   }))
-  const written = await db.transaction(async (tx) => {
+  // The note's neighbours follow its block vectors: a set that only kept vectors it had (a frontmatter edit) has the
+  // edges it had. Otherwise its own and those of the nodes it can move (#1007: the vectors new to it), queued with
+  // the block set so a refresh that fails after the commit runs again.
+  const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !keys.includes(k))
+  const newKeys = toEmbed.map((i) => keys[i]!)
+  const refreshJob = await db.transaction(async (tx) => {
     const [current] = (await tx.execute(sql`
       SELECT seq FROM notes WHERE id = ${noteId} AND deleted_at IS NULL FOR UPDATE`)) as unknown as Array<{ seq: string }>
-    if (!current || String(current.seq) !== String(row.seq)) return false
+    if (!current || String(current.seq) !== String(row.seq)) return null
     await replaceBlockSet(tx, 'note', noteId, rows)
     // Only when they differ: an UPDATE of the row recomputes its generated `fts`.
     await tx.execute(sql`UPDATE notes SET embedder_id = ${embedderId}, chunk_version = ${chunkVersion}
       WHERE id = ${noteId} AND (embedder_id IS DISTINCT FROM ${embedderId} OR chunk_version <> ${chunkVersion})`)
-    return true
+    return changed ? await queueSemanticEdgeRefresh(tx, 'note', noteId, newKeys) : null
   })
-  // The note's neighbours follow its block vectors: a set that only kept vectors it had (a frontmatter edit) has the
-  // edges it had. Otherwise its own and those of the nodes it can move (#1007: the vectors new to it).
-  const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !keys.includes(k))
-  if (written && changed) await refreshSemanticEdges('note', noteId, toEmbed.map((i) => keys[i]!))
+  if (refreshJob !== null) await runSemanticEdgeRefresh(refreshJob, 'note', noteId, newKeys)
 }
