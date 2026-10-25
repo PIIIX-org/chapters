@@ -20,7 +20,7 @@ import {
   parseNote,
   serializeNote,
   validateNote,
-  type Frontmatter,
+  withType,
 } from '../notes/okf.js'
 import {
   BACKUP_FORMAT,
@@ -337,11 +337,8 @@ function readLegacyFormat(entries: Map<string, Buffer>, archive: string): Backup
     try {
       const resolved = resolveNotePath(path)
       const parsed = parseNote(data.toString('utf8'))
-      const frontmatter: Frontmatter = {
-        timestamp: now.toISOString(),
-        ...parsed.frontmatter,
-        type: parsed.frontmatter.type ? String(parsed.frontmatter.type) : resolved.type,
-      }
+      // A missing type is the folder; any other value is validated as on every write (#444).
+      const frontmatter = withType({ timestamp: now.toISOString(), ...parsed.frontmatter }, resolved.type)
       validateNote(resolved.type, resolved.name, frontmatter, parsed.body)
       const id = derivedUuid(`note:${vaultId}/${resolved.fullPath}`)
       const row = {
