@@ -9,13 +9,13 @@ import { simpleGit } from 'simple-git'
 import { eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { repositories, repositoryFileImports, repositoryFileSymbols } from '../src/db/schema.js'
+import { repositories, repositoryFileImports } from '../src/db/schema.js'
 import { syncGitRepository } from '../src/repositories/git-sync.js'
 import { syncLocalRepository } from '../src/repositories/scheduler.js'
 import { getRepositoryFile } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { findSymbols, searchNotes } from '../src/search/search.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, symbolBlocks } from './helpers.js'
 
 // #923: a file that grows past the 1 MB cap or gains a NUL byte used to keep
 // its old row, because the git and local-path scans skipped it but still
@@ -96,10 +96,7 @@ async function importsOf(fileId: string) {
 }
 
 async function symbolsOf(fileId: string) {
-  return db
-    .select({ name: repositoryFileSymbols.name })
-    .from(repositoryFileSymbols)
-    .where(eq(repositoryFileSymbols.fileId, fileId))
+  return (await symbolBlocks(fileId)).map(({ name }) => ({ name }))
 }
 
 /** Indexed: read_file, a search hit, the symbol and the import are all there. */

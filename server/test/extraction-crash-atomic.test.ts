@@ -11,14 +11,14 @@ import { createHash } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
-import { jobs, notes, repositories, repositoryFileImports, repositoryFiles, repositoryFileSymbols, vaults } from '../src/db/schema.js'
+import { jobs, notes, repositories, repositoryFileImports, repositoryFiles, vaults } from '../src/db/schema.js'
 import { FailpointError, setFailpointHandler, type Failpoint } from '../src/failpoints.js'
 import { jobTiming } from '../src/jobs/durable.js'
 import { flushExtraction, scheduleExtraction } from '../src/repositories/extraction-queue.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushEmbeddings, scheduleEmbedding } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
-import { createActiveUser } from './helpers.js'
+import { createActiveUser, fileEmbedding, noteVectors, symbolBlocks } from './helpers.js'
 
 const savedBackoff = jobTiming.backoffBaseMs
 beforeEach(() => {
@@ -40,10 +40,10 @@ async function derived(repositoryId: string) {
     .select()
     .from(repositoryFiles)
     .where(and(eq(repositoryFiles.repositoryId, repositoryId), eq(repositoryFiles.path, PATH)))
-  const symbols = await db.select().from(repositoryFileSymbols).where(eq(repositoryFileSymbols.fileId, file!.id))
+  const symbols = await symbolBlocks(file!.id)
   const imports = await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file!.id))
   return {
-    embedding: file!.embedding,
+    embedding: await fileEmbedding(file!.id),
     symbols: symbols.map((s) => s.name),
     imports: imports.map((i) => i.targetPath),
   }
@@ -157,20 +157,19 @@ describe('a result for content that changed meanwhile is dropped (#453)', () => 
       vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => {
         const vectors = await embed(texts)
         // The trigger moves `seq`; the store would queue that seq's job in the same write (enqueued below).
-        if (texts[0] === `${path}\n{}\nversion one`) await db.update(notes).set({ body: 'version two' }).where(eq(notes.id, note!.id))
+        if (texts[0] === `${path}\nversion one`) await db.update(notes).set({ body: 'version two' }).where(eq(notes.id, note!.id))
         return vectors
       })
       scheduleEmbedding(note!.id)
       await flushEmbeddings()
-      const [stale] = await db.select().from(notes).where(eq(notes.id, note!.id))
-      expect(stale!.embedding).toBeNull()
+      expect(await noteVectors(note!.id)).toEqual([])
 
       scheduleEmbedding(note!.id)
       await flushEmbeddings()
-      const [after] = await db.select().from(notes).where(eq(notes.id, note!.id))
-      const [expected] = await embed([`${path}\n{}\nversion two`])
-      expect(after!.embedding).not.toBeNull()
-      expect(Math.max(...after!.embedding!.map((v, i) => Math.abs(v - expected![i]!)))).toBeLessThan(1e-6)
+      const after = await noteVectors(note!.id)
+      const [expected] = await embed([`${path}\nversion two`])
+      expect(after).toHaveLength(1)
+      expect(Math.max(...after[0]!.map((v, i) => Math.abs(v - expected![i]!)))).toBeLessThan(1e-6)
     } finally {
       await db.delete(vaults).where(eq(vaults.id, vault!.id))
     }

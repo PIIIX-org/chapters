@@ -77,7 +77,9 @@ export interface BackupTable {
  * (short-lived credentials: people sign in again), `export_links` (expiring
  * download links), `note_links` (rebuilt from note bodies), `semantic_edges`
  * and every embedding (rebuilt on boot), `repository_files`, `_imports` and
- * `_symbols` (an index of the repository's source: the next sync rebuilds it),
+ * `blocks` (an index of the repository's source: the next sync rebuilds it;
+ * a note's blocks are its embeddings: boot catch-up re-embeds every restored
+ * note, #452),
  * `write_idempotency` (MCP write answers kept 24 h for retries, #477),
  * `note_reads` (each MCP connection's last read of a note, kept 24 h, #408).
  */
@@ -121,12 +123,7 @@ export const BACKUP_TABLES: BackupTable[] = [
   { name: 'mcp_connections', table: mcpConnections, unique: [{ columns: ['tokenHash'] }], legacyKey: 'mcpConnections' },
   { name: 'security_events', table: securityEvents, legacyKey: 'securityEvents', sequence: 'seq' },
   { name: 'notifications', table: notifications, legacyKey: 'notifications' },
-  {
-    name: 'notes',
-    table: notes,
-    omit: ['embedding'],
-    unique: [{ columns: ['vaultId', 'path'], liveOnly: true }],
-  },
+  { name: 'notes', table: notes, unique: [{ columns: ['vaultId', 'path'], liveOnly: true }] },
   // Every body whole (#501): a compacted revision's delta is not in the archive, which any release restores.
   { name: 'note_revisions', table: noteRevisions, sequence: 'ord', dumped: { body: revisionBody } },
 ]

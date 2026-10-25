@@ -4,10 +4,10 @@
 // catch-up jobs still queued. Uses only entry points that existed before
 // (the fails-before job runs this file against the base source).
 import { createHash } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { and, eq, inArray, isNotNull } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
-import { notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
+import { blocks, notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
 import { createNote } from '../src/notes/store.js'
 import { extractionWork, flushExtraction, scheduleMissingExtractions } from '../src/repositories/extraction-queue.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
@@ -20,6 +20,16 @@ const BACKLOG = 5
 afterEach(() => {
   vi.restoreAllMocks()
 })
+
+// The shared test database holds other files' rows the catch-up would also queue (since #452 a note whose
+// seq moved without a job lacks current blocks too): drain that backlog first, so each test's flush only
+// waits for its own BACKLOG.
+beforeAll(async () => {
+  await scheduleMissingEmbeddings()
+  await flushEmbeddings()
+  await scheduleMissingExtractions()
+  await flushExtraction()
+}, 600_000)
 
 describe('writes are served before the boot catch-up backlog (#453)', () => {
   it('a push during the extraction catch-up is extracted before the backlog of its repository', async () => {
@@ -69,7 +79,7 @@ describe('writes are served before the boot catch-up backlog (#453)', () => {
     const [vault] = await db.insert(vaults).values({ name: 'catch-up-priority-vault', ownerId: user.id }).returning()
     try {
       const stamp = Date.now()
-      // Notes without an embedding: the catch-up queues them.
+      // Notes without blocks: the catch-up queues them.
       const backlog = await db
         .insert(notes)
         .values(
@@ -106,9 +116,9 @@ describe('writes are served before the boot catch-up backlog (#453)', () => {
       expect(order.indexOf(written.path)).toBeLessThanOrEqual(1)
       // The backlog is still served after it.
       const embedded = await db
-        .select({ id: notes.id })
-        .from(notes)
-        .where(and(inArray(notes.id, backlog.map((n) => n.id)), isNotNull(notes.embedding)))
+        .selectDistinct({ id: blocks.ownerId })
+        .from(blocks)
+        .where(and(eq(blocks.ownerType, 'note'), inArray(blocks.ownerId, backlog.map((n) => n.id)), isNotNull(blocks.embedding)))
       expect(embedded).toHaveLength(BACKLOG)
     } finally {
       await db.delete(vaults).where(eq(vaults.id, vault!.id))

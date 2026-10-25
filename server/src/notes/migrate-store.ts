@@ -264,6 +264,10 @@ export async function planStoreMigration(options: { vaultId?: string } = {}): Pr
              pg_total_relation_size('note_revisions') as bytes`
     report.sizes.noteRevisionsRows = Number(revSize!.rows)
     report.sizes.noteRevisionsBytes = Number(revSize!.bytes)
+    // Before migration 0036 a note's vector is `notes.embedding`; from it on, its `blocks` (#452).
+    const [vectorColumn] = await tx<Array<{ present: boolean }>>`
+      select exists (select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'notes' and column_name = 'embedding') as present`
     timings.database += performance.now() - t0
 
     let after = '00000000-0000-0000-0000-000000000000'
@@ -271,7 +275,7 @@ export async function planStoreMigration(options: { vaultId?: string } = {}): Pr
       const t1 = performance.now()
       const rows = await tx<NoteRowLite[]>`
         select id, vault_id, path, frontmatter, body, deleted_at, updated_at,
-               embedding is not null as has_embedding,
+               ${vectorColumn!.present ? tx`embedding is not null` : tx`exists (select 1 from blocks b where b.owner_type = 'note' and b.owner_id = notes.id and b.embedding is not null)`} as has_embedding,
                ${report.database.schema0021Applied ? tx`exists (select 1 from note_crdt c where c.note_id = notes.id)` : tx`false`} as has_crdt
         from notes
         where id > ${after} ${vaultFilter === null ? tx`` : tx`and vault_id = ${vaultFilter}`}

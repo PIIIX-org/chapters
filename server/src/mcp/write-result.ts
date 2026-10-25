@@ -82,9 +82,10 @@ export interface WriteHow {
   dryRun?: boolean
 }
 
-/** Note columns a write never answers; a stored answer recorded before #427 may hold them. */
+/** Note columns a write never answers; a stored answer recorded before #427 may hold them (`embedding`: a column until #452). */
 const INTERNAL_NOTE_FIELDS = [
   ...Object.keys(getTableColumns(notes)).filter((key) => !(NOTE_REPLY_FIELDS as readonly string[]).includes(key)),
+  'embedding',
   'frontmatterSrc',
   'seq',
 ]

@@ -241,6 +241,27 @@
       "breakpoints": true
     },
     {
+      "idx": 34,
+      "version": "7",
+      "when": 1792100000000,
+      "tag": "0034_symbol_parent",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792150000000,
+      "tag": "0035_blocks",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792200000000,
+      "tag": "0036_note_blocks",
+      "breakpoints": true
+    },
+    {
       "idx": 37,
       "version": "7",
       "when": 1792350000000,

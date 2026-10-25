@@ -2,7 +2,7 @@
 // of the `jobs` table, not from in-process arrays. These tests use the queue
 // entry points, their job keys (#453) and SQL on `jobs`.
 import { createHash } from 'node:crypto'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { eq, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { jobs, notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
@@ -14,9 +14,15 @@ import {
 } from '../src/repositories/extraction-queue.js'
 import { embeddingJobKey, flushEmbeddings, scheduleEmbedding } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
-import { createActiveUser } from './helpers.js'
+import { createActiveUser, fileEmbedding } from './helpers.js'
 
 const createdVaultIds: string[] = []
+// The boot catch-up these tests call queues every stale file of the shared test database, other files' included:
+// drain that backlog first, so a test's flush waits only for its own file (CI run 40098011837 timed out here).
+beforeAll(async () => {
+  await scheduleMissingExtractions()
+  await flushExtraction()
+}, 600_000)
 afterEach(async () => {
   vi.restoreAllMocks()
   for (const id of createdVaultIds.splice(0)) await db.delete(vaults).where(eq(vaults.id, id))
@@ -95,8 +101,7 @@ describe('durable extraction jobs (#494)', () => {
     expect(job?.doneAt).not.toBeNull()
     expect(job?.attempts).toBe(2)
     expect(job?.lastError).toBeNull()
-    const [row] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, file.id))
-    expect(row?.embedding).not.toBeNull()
+    expect(await fileEmbedding(file.id)).not.toBeNull()
   })
 
   it('a live lease is not reclaimed; once it expires the job runs', async () => {
