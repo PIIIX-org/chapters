@@ -16,7 +16,7 @@ import {
 import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
-import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
+import { deleteSemanticEdgesFor, deleteVaultCodeEdges } from '../search/semantic-edges.js'
 import { listAccessibleVaults, resolveAccess } from './permissions.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 
@@ -280,11 +280,12 @@ export function vaultRoutes(app: FastifyInstance) {
       if (!newOwner || newOwner.status !== 'active') {
         return reply.code(400).send({ error: 'new owner must be an active user' })
       }
-      const [vault] = await db
-        .update(vaults)
-        .set({ ownerId: newOwner.id })
-        .where(eq(vaults.id, req.params.id))
-        .returning()
+      // Its notes' note↔code semantic edges joined the previous owner's repositories (D10, #461).
+      const vault = await db.transaction(async (tx) => {
+        const [row] = await tx.update(vaults).set({ ownerId: newOwner.id }).where(eq(vaults.id, req.params.id)).returning()
+        if (row) await deleteVaultCodeEdges(row.id, tx)
+        return row
+      })
       await logSecurityEvent({
         type: 'vault_ownership_transferred',
         actorUserId: req.user!.id,
