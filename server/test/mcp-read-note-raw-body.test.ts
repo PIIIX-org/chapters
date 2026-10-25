@@ -145,10 +145,10 @@ describe('read_note: the body as a plain text block', () => {
         expect(Object.keys(r.json).at(-1)).toBe('truncated')
         cursor = truncated === false ? null : truncated.cursor
         if (cursor) {
-          // Whole lines, and `lines` names them.
+          // Whole lines, and `lines` names them, in the file's numbering (D3): the body starts at body_start_line.
           expect(r.blocks[1]!.endsWith('\n')).toBe(true)
           const first = (r.json.lines as [number, number])[0]
-          expect(first).toBe(text.split('\n').length)
+          expect(first).toBe((r.json.body_start_line as number) - 1 + text.split('\n').length)
         }
         text += r.blocks[1]
       } while (cursor && pages < 200)

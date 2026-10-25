@@ -293,3 +293,30 @@ export async function listFileSymbols(
     endLine,
   }))
 }
+
+/**
+ * The blocks of a file's current content (#416, #417): those extraction
+ * wrote for `contentHash` (`owner_version`), in line order, so a read never
+ * serves the lines of a symbol from content a push has since replaced.
+ * `stale`: the file has blocks, but of older content (extraction is behind).
+ */
+export async function listFileBlocks(
+  fileId: string,
+  contentHash: string,
+): Promise<{ blocks: Array<{ blockId: string; kind: string; innerPath: string; symbolKind: string | null; startLine: number; endLine: number }>; stale: boolean }> {
+  const rows = await db
+    .select({
+      blockId: blocks.blockId,
+      kind: blocks.kind,
+      innerPath: blocks.innerPath,
+      symbolKind: blocks.symbolKind,
+      startLine: blocks.startLine,
+      endLine: blocks.endLine,
+      ownerVersion: blocks.ownerVersion,
+    })
+    .from(blocks)
+    .where(and(eq(blocks.ownerType, 'code'), eq(blocks.ownerId, fileId)))
+    .orderBy(asc(blocks.startLine), asc(blocks.blockId))
+  const current = rows.filter((row) => row.ownerVersion === contentHash)
+  return { blocks: current, stale: current.length < rows.length }
+}
