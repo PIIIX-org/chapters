@@ -5,16 +5,20 @@ import type { ToolProfile } from './server.js'
  * call, one fixed text per profile. It names no id, date or pin, so every
  * token of a profile gets the same bytes and a client can cache them (#681);
  * it counts in the reader budget (mcp-tool-budget.test.ts), so the reader
- * text holds only the budget, cursor and manual rules. Only tools with
+ * text holds only the budget, cursor, read and manual rules: what
+ * read_note's and read_file's `targets` and `outline` do is said here once
+ * (#416, #417), not in both tools' schemas. Only tools with
  * `budget_tokens` answer with `truncated` (`list_vaults` and
  * `list_repositories` answer bare arrays). Profiles that list the note
- * writes add how a whole body merges (every `read_note`, paged or not,
- * records its `rev` as the base, last-read.ts) and how a note write is retried (only
- * the note writes take `idempotency_key`; admin's other writes refuse it).
+ * writes add how a whole body merges (every `read_note`, paged, ranged or
+ * an outline, records its `rev` as the base, last-read.ts) and how a note
+ * write is retried (only the note writes take `idempotency_key`; admin's
+ * other writes refuse it).
  */
 const READ_RULES =
   'Tools with `budget_tokens` (characters / 4) fit it and end with `truncated`; for more, repeat the call with its `cursor`. ' +
-  'read_note and read_file page long bodies only this way. Manuals: elara://manual/conventions and one per tool family.'
+  'read_note/read_file: `outline: true` maps a body; `targets` reads: {lines:"a-b"}, {heading:"A > B"}, {block}, {symbol} (files). ' +
+  'Manuals: elara://manual/conventions and one per tool family.'
 
 const WRITE_RULES =
   ' A whole edit_note `body` merges from `base_rev`, else from your last read_note. ' +
