@@ -24,11 +24,11 @@ import { LabContext, loadEnv } from '../../lab/lib/context.ts'
 import { exec } from '../../lab/lib/docker.ts'
 import { connectLocalRepo, copyIntoLocalRepo, repoProgress, settleRepo } from '../../lab/lib/fixlab.ts'
 import { assertLabBaseUrl } from '../lib/guard.ts'
-import { aggregate, linePrecisionRecall, type Aggregate, type Judgments, type LineRange, type QuestionOutcome } from '../lib/metrics.ts'
+import { aggregate, linePrecisionRecall, LineSet, type Aggregate, type Judgments, type LineRange, type QuestionOutcome } from '../lib/metrics.ts'
 import { CAPS, missCost } from '../lib/policies.ts'
 import { fingerprint, judgments, parseGold, validateSuite, type Suite } from '../lib/questions.ts'
 import { fileReader } from '../lib/ripgrep.ts'
-import { comparable, expandAnswer, FILES, FOCUS, runReread, sessionTools, type Answer, type RereadRun } from './policy.ts'
+import { comparable, expandAnswer, FILES, FOCUS, runReread, sessionTools, shownRanges, type Answer, type RereadRun } from './policy.ts'
 
 const SEARCH_LIMIT = 10
 const SESSION = process.argv.includes('--session')
@@ -148,12 +148,14 @@ function outcome(gold: LineRange[], j: Judgments, run: RereadRun): { outcome: Qu
 
 /**
  * The session answers against the plain ones, call by call: `equal` when
- * the expanded session answer is the plain answer (search answers as sent),
- * `differ` otherwise, `unaligned` when the two passes made other calls.
+ * the expanded session answer is the plain answer (search answers as sent);
+ * `more` when it is not but shows every line the plain one shows and more
+ * (a reference frees page room, so a cut answer goes further); `differ`
+ * otherwise; `unaligned` when the two passes made other calls.
  */
-function compareModes(plain: Answer[][], session: Answer[][]): { calls: number; equal: number; references: number; differ: string[]; unaligned: number } {
+function compareModes(plain: Answer[][], session: Answer[][]) {
   const sent = new Map<number, unknown>()
-  const result = { calls: 0, equal: 0, references: 0, differ: [] as string[], unaligned: 0 }
+  const result = { calls: 0, equal: 0, references: 0, more: [] as string[], differ: [] as string[], unaligned: 0 }
   for (const [qi, answers] of session.entries()) {
     for (const [ci, answer] of answers.entries()) {
       result.calls++
@@ -166,9 +168,22 @@ function compareModes(plain: Answer[][], session: Answer[][]): { calls: number; 
         result.unaligned++
         continue
       }
-      const same = answer.tool === 'search' ? answer.text === other.text : json !== undefined && comparable(expandAnswer(json, sent)) === comparable(parseJson(other.text))
-      if (same) result.equal++
-      else result.differ.push(`question ${qi + 1} call ${ci + 1} ${answer.tool} ${answer.args}`)
+      const otherJson = parseJson(other.text)
+      const where = `question ${qi + 1} call ${ci + 1} ${answer.tool} ${answer.args}`
+      if (answer.tool === 'search' ? answer.text === other.text : json !== undefined && comparable(expandAnswer(json, sent)) === comparable(otherJson)) {
+        result.equal++
+        continue
+      }
+      const path = answer.path ?? ''
+      const lines = (j: unknown) => {
+        const set = new LineSet()
+        for (const r of shownRanges(path, j)) set.add(r.path, r.start, r.end)
+        return set
+      }
+      const mine = lines(json)
+      const theirs = lines(otherJson)
+      if (answer.tool === 'read_file' && mine.size > theirs.size && mine.intersectionSize(theirs) === theirs.size) result.more.push(where)
+      else result.differ.push(where)
     }
   }
   return result
@@ -190,6 +205,7 @@ for (const s of suites) {
 }
 
 const miss = missCost(CAPS)
+const compared: string[] = []
 const results: Record<string, unknown> = {}
 const md: string[] = [
   `# Session benchmark (${SESSION ? 'plain, then session' : 'plain'})`,
@@ -205,12 +221,14 @@ for (const p of prepared) {
   for (const mode of MODES) {
     const sessionId = mode === 'session' ? ctx.uniq(`bench-${s.suite}`) : null
     const tools = sessionTools(call, p.repoId, SEARCH_LIMIT, sessionId)
+    // What the session holds, shared by the suite's questions (empty without a session).
+    const context = new Map<number, unknown>()
     const outcomes: QuestionOutcome[] = []
     const perQuestion: unknown[] = []
     const answers: Answer[][] = []
     for (const q of s.questions) {
       const gold = q.gold.map(parseGold)
-      const run = await runReread(q.question, gold, tools)
+      const run = await runReread(q.question, gold, tools, CAPS, context)
       const { outcome: o, row } = outcome(gold, judgments(q), run)
       outcomes.push(o)
       perQuestion.push({ id: q.id, ...row })
@@ -230,11 +248,13 @@ for (const p of prepared) {
     ...Object.fromEntries(MODES.map((m) => [m, { aggregate: byMode[m].aggregate, tokensTotal: byMode[m].tokensTotal, perQuestion: byMode[m].perQuestion }])),
     ...(answers ? { answers } : {}),
   }
-  if (answers) ctx.log(`${s.suite}: ${answers.equal} of ${answers.calls} session answers equal the plain ones (${answers.references} with references, ${answers.unaligned} unaligned)`)
+  if (answers) {
+    const line = `${s.suite}: ${answers.equal} of ${answers.calls} session answers equal the plain ones once expanded, ${answers.more.length} show more (a reference freed page room), ${answers.differ.length} differ, ${answers.unaligned} unaligned; ${answers.references} carry references.`
+    ctx.log(line)
+    compared.push(line)
+  }
 }
-for (const [name, r] of Object.entries(results) as Array<[string, { answers?: { calls: number; equal: number; references: number } }]>) {
-  if (r.answers) md.push('', `${name}: ${r.answers.equal} of ${r.answers.calls} session answers equal the plain ones once expanded; ${r.answers.references} carry references.`)
-}
+if (compared.length > 0) md.push('', ...compared)
 
 const out = {
   version: 1,

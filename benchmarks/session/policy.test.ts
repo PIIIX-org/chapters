@@ -142,6 +142,35 @@ test('runReread: search, outline, focus, focus with neighbours per file; a file 
   )
 })
 
+test('runReread in a session: a referenced outline reads as the outline its call sent, so the next question makes the same calls', async () => {
+  const outline = ENTRIES.map((e) => ({ symbol: e.name, lines: [e.start, e.end], tokens: 1 }))
+  let call = 0
+  const calls: string[] = []
+  const tools = {
+    search: async () => ({ text: JSON.stringify({ status: 'ok', results: [{ path: 'a.ts', resourceType: 'symbol', startLine: 12, endLine: 20, snippet: 'x' }] }), ms: 1, ok: true }),
+    async readFile(args: ReadArgs) {
+      call++
+      calls.push(JSON.stringify(args))
+      // The session sent the outline at call 1: later outline reads refer to it.
+      if (args.outline) return { text: JSON.stringify(call === 1 ? { call, outline } : { call, outline: { same_as: { call: 1, loc: 'a.ts', hash: 'h' } } }), ms: 1, ok: true }
+      const targets = (args.targets ?? []).map((t) => {
+        const [a, b] = t.lines.split('-').map(Number) as [number, number]
+        return { lines: [a, b], text: lines(a, b) }
+      })
+      return { text: JSON.stringify({ call, targets }), ms: 1, ok: true }
+    },
+  }
+  const context = new Map<number, unknown>()
+  await runReread('q', [{ path: 'a.ts', start: 1, end: 1 }], tools, CAPS, context)
+  const first = calls.splice(0)
+  const again = await runReread('q', [{ path: 'a.ts', start: 1, end: 1 }], tools, CAPS, context)
+  assert.deepEqual(calls, first)
+  assert.equal(first.length, 3)
+  assert.equal(context.size, 6)
+  // The referenced outline costs less than the outline itself.
+  assert.ok(again.episode.trace[1]!.tokens < 20)
+})
+
 test('runReread stops at the call cap', async () => {
   const tools = {
     search: async () => ({ text: JSON.stringify({ status: 'ok', results: ['a.ts', 'b.ts', 'c.ts'] }), ms: 1, ok: true }),

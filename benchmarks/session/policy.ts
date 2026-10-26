@@ -15,10 +15,11 @@
 // books tokens-to-gold on the way. The questions of one suite run in one
 // session: they share files, as the questions of a real session do.
 //
-// The policy never sees whether it runs in a session. `sessionTools` adds
-// the session's `session_id` to every read_file (search takes none); an
-// answer by reference covers the lines it names, so both modes decide on
-// the same lines. `expandAnswer` puts the referenced text back, which is
+// The policy decides the same way in both modes. `sessionTools` adds the
+// session's `session_id` to every read_file (search takes none); an answer
+// by reference covers the lines it names (the agent has them from the call
+// it names), and a referenced outline reads as the outline that call sent
+// (`context`). `expandAnswer` puts the referenced text back, which is also
 // how the runner checks that a session answer equals the plain one.
 import { dedupe, type LineRange } from '../lib/metrics.ts'
 import { CAPS, Episode, readFilePage, searchHits, visibleContentLines, type Caps, type ToolResponse } from '../lib/policies.ts'
@@ -58,6 +59,8 @@ export interface Answer {
   tool: 'search' | 'read_file'
   /** The call's arguments without the repository and the session (the same in both modes). */
   args: string
+  /** The file a read_file read; null for search. */
+  path: string | null
   text: string
 }
 
@@ -212,7 +215,19 @@ function symbolHitLines(hit: { path?: unknown; resourceType?: unknown; startLine
   return { path: hit.path, start: hit.startLine, end: Math.min(hit.endLine, hit.startLine + hit.snippet.split('\n').length - 1) }
 }
 
-export async function runReread(question: string, gold: readonly LineRange[], tools: SessionTools, caps: Caps = CAPS): Promise<RereadRun> {
+/**
+ * One question. `context` is what the agent's session holds: each session
+ * answer by its `call`, filled here and shared by the questions of a suite,
+ * so a reference (an outline the session already got) reads as what it
+ * names. Without a session no answer has a `call` and it stays empty.
+ */
+export async function runReread(
+  question: string,
+  gold: readonly LineRange[],
+  tools: SessionTools,
+  caps: Caps = CAPS,
+  context: Map<number, unknown> = new Map(),
+): Promise<RereadRun> {
   const ep = new Episode(gold, caps)
   const answers: Answer[] = []
   const spent = () => ep.trace.length >= caps.maxCalls || ep.tokens >= caps.tokenBudget
@@ -223,10 +238,10 @@ export async function runReread(question: string, gold: readonly LineRange[], to
   const shown = hits.map(symbolHitLines).filter((r): r is LineRange => r !== null)
   const cut = ep.clip(res.text)
   ep.record('search', question, cut.visible, cut.truncated, res.ms, res.ok, shown)
-  answers.push({ tool: 'search', args: JSON.stringify({ query: question }), text: res.text })
+  answers.push({ tool: 'search', args: JSON.stringify({ query: question }), path: null, text: res.text })
   const ranking = dedupe(hits.map((h) => h.path).filter((p): p is string => typeof p === 'string'))
 
-  /** One read_file, booked; its parsed answer (undefined when it failed or the agent saw it cut). */
+  /** One read_file, booked; its answer with references expanded (undefined when it failed or the agent saw it cut). */
   const read = async (args: ReadArgs, label: string): Promise<unknown> => {
     const r = await tools.readFile(args)
     const view = ep.clip(r.text)
@@ -240,8 +255,11 @@ export async function runReread(question: string, gold: readonly LineRange[], to
       if (page && lines > 0) ranges = [{ path: args.path, start: page.first, end: page.first + lines - 1 }]
     }
     ep.record('read_file', label, view.visible, view.truncated, r.ms, r.ok, ranges)
-    answers.push({ tool: 'read_file', args: JSON.stringify(args), text: r.text })
-    return view.truncated ? undefined : json
+    answers.push({ tool: 'read_file', args: JSON.stringify(args), path: args.path, text: r.text })
+    if (view.truncated || json === undefined) return undefined
+    const call = field(json, 'call')
+    if (typeof call === 'number') context.set(call, json)
+    return expandAnswer(json, context) ?? json
   }
 
   const terms = questionTerms(question)
