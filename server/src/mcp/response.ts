@@ -322,8 +322,9 @@ interface Slot {
 }
 
 function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
+  // A cursor names a section; an answer of its head alone (read's `unchanged`, #682) has none to name.
+  if (at !== null && at.s >= answer.sections.length) throw invalid('not a position of this answer')
   const s0 = at?.s ?? 0
-  if (s0 >= answer.sections.length) throw invalid('not a position of this answer')
   return answer.sections.map((section, i): Slot => {
     if (i < s0) return { section, start: -1, avail: [], more: false, limit: 0 }
     const here = at !== null && i === s0
