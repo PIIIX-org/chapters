@@ -16,19 +16,21 @@ const louvain = ((louvainModule as { default?: unknown }).default ??
  * fetch, then a `?community=<n>` drill-down that rebuilds the graph from
  * scratch) can and do land on different community numbers whenever the
  * graph's structure is genuinely ambiguous, which is the normal case, not
- * an edge case. Seeding from the graph's own node ids makes two runs over
- * the same node set produce the same rng stream and therefore the same
- * partition, while two runs over different filtered node sets still get
- * different seeds. mulberry32: small, fast, good enough distribution for
- * tie-breaking — not a cryptographic requirement.
+ * an edge case. Seeding from the nodes' content keys (`resourceType:path`,
+ * in node order) makes two runs over the same content produce the same rng
+ * stream in any database (#1006), while two runs over different filtered
+ * node sets still get different seeds. mulberry32: small, fast, good
+ * enough distribution for tie-breaking — not a cryptographic requirement.
  */
-function seedFromNodeIds(ids: Iterable<string>): number {
+function seedFromKeys(keys: Iterable<string>): number {
   let h = 2166136261
-  for (const id of [...ids].sort()) {
-    for (let i = 0; i < id.length; i++) {
-      h ^= id.charCodeAt(i)
+  for (const key of keys) {
+    for (let i = 0; i < key.length; i++) {
+      h ^= key.charCodeAt(i)
       h = Math.imul(h, 16777619)
     }
+    h ^= 0x0a
+    h = Math.imul(h, 16777619)
   }
   return h >>> 0
 }
@@ -50,7 +52,9 @@ import {
   repositoryFileImports,
   repositoryFiles,
   semanticEdges,
+  vaults,
 } from '../db/schema.js'
+import { compareCodeUnits } from '../mcp/response.js'
 
 export type ResourceType = 'note' | 'code'
 
@@ -201,6 +205,40 @@ export function fileNode(r: { id: string; repositoryId: string; path: string; la
   }
 }
 
+type NodeKey = Pick<InternalNode, 'id' | 'resourceType' | 'resourceId' | 'path'>
+
+/**
+ * The order of graph nodes (#1006): path in code-unit order, then resource
+ * type (`code` before `note`), then the name of the node's vault or
+ * repository (`names`, from `containerNames`: one path and type in two
+ * containers of a merged graph). The container and node ids decide only
+ * what the content leaves tied: two containers of one name.
+ */
+export const nodeOrder =
+  (names: ReadonlyMap<string, string>) =>
+  (a: NodeKey, b: NodeKey): number =>
+    compareCodeUnits(a.path, b.path) ||
+    compareCodeUnits(a.resourceType, b.resourceType) ||
+    compareCodeUnits(names.get(a.resourceId) ?? '', names.get(b.resourceId) ?? '') ||
+    compareCodeUnits(a.resourceId, b.resourceId) ||
+    compareCodeUnits(a.id, b.id)
+
+/**
+ * The names of the call's vaults and repositories by id, read only for a
+ * kind it holds several of (only then can two nodes share a path and type):
+ * what `nodeOrder` compares before ids.
+ */
+export async function containerNames(resources: GraphResourceSet): Promise<Map<string, string>> {
+  const names = new Map<string, string>()
+  if (resources.vaultIds.length > 1) {
+    for (const v of await db.select({ id: vaults.id, name: vaults.name }).from(vaults).where(inArray(vaults.id, resources.vaultIds))) names.set(v.id, v.name)
+  }
+  if (resources.repositoryIds.length > 1) {
+    for (const r of await db.select({ id: repositories.id, name: repositories.name }).from(repositories).where(inArray(repositories.id, resources.repositoryIds))) names.set(r.id, r.name)
+  }
+  return names
+}
+
 /**
  * The file a `repo:<name>/<path>` (or `code:`, or `<name>:<path>`) wikilink
  * names: `{repositoryId, path}` within `repositoryIds` (by name or id),
@@ -306,27 +344,17 @@ const betterGroup = (a: GraphEdge, b: GraphEdge): boolean =>
  * undirected one is kept per unordered pair and kind: a structural pair
  * sharing several groups names the best-ranked group, a semantic pair keeps
  * the higher similarity. So the whole graph and a neighbourhood give the
- * same rows whatever order they add them in.
- *
- * `pairs` is the undirected projection Louvain and the community weights
- * read: the first edge per unordered pair and kind, with its ends as first
- * added. That is exactly this list before directions were kept, so keeping
- * them moves no community.
+ * same rows whatever order they add them in; `buildGraph` then puts them in
+ * content order (`contentOrder`).
  */
 export class EdgeList {
   readonly edges: GraphEdge[] = []
-  readonly pairs: Array<readonly [string, string]> = []
   private readonly byKey = new Map<string, GraphEdge>()
-  private readonly paired = new Set<string>()
 
   add(edge: GraphEdge): void {
     const { source: a, target: b } = edge
     if (a === b) return
     const pair = a < b ? `${a}|${b}|${edge.kind}` : `${b}|${a}|${edge.kind}`
-    if (!this.paired.has(pair)) {
-      this.paired.add(pair)
-      this.pairs.push([a, b])
-    }
     const key = edge.directed ? `${a}>${b}|${edge.relation}` : pair
     const seen = this.byKey.get(key)
     if (!seen) {
@@ -392,10 +420,37 @@ export function passesFilters(
 }
 
 /**
+ * Puts `edges` in content order (#1006), given each node's place in node
+ * order (`nodeOrder`): an undirected edge names its earlier end as
+ * `source`; edges sort by their earlier end, then their later end, kind,
+ * relation and (a link or import both ways) source. Returns the undirected
+ * projection Louvain and the community weights read, in that order: one
+ * pair per unordered pair and kind (a link both ways counts once).
+ */
+function contentOrder(edges: GraphEdge[], rank: ReadonlyMap<string, number>): Array<readonly [string, string]> {
+  const at = (id: string) => rank.get(id)!
+  for (const e of edges) if (!e.directed && at(e.source) > at(e.target)) [e.source, e.target] = [e.target, e.source]
+  const ends = (e: GraphEdge) => (at(e.source) < at(e.target) ? [e.source, e.target] : [e.target, e.source]) as [string, string]
+  edges.sort((x, y) => {
+    const [x0, x1] = ends(x)
+    const [y0, y1] = ends(y)
+    return at(x0) - at(y0) || at(x1) - at(y1) || compareCodeUnits(x.kind, y.kind) || compareCodeUnits(x.relation, y.relation) || at(x.source) - at(y.source)
+  })
+  const pairs: Array<readonly [string, string]> = []
+  let last: GraphEdge | undefined
+  for (const e of edges) {
+    const [a, b] = ends(e)
+    if (!last || a !== ends(last)[0] || b !== ends(last)[1] || e.kind !== last.kind) pairs.push([a, b])
+    last = e
+  }
+  return pairs
+}
+
+/**
  * Collapses an assembled graph into one node per Louvain community. This
  * shrinks the payload and what the client has to draw; it does NOT make
  * buildGraph cheaper — the full assembly still runs (see issue #93). The
- * weights count `pairs` (`EdgeList.pairs`): a link both ways counts once.
+ * weights count `pairs` (`contentOrder`): a link both ways counts once.
  */
 function collapseToCommunities(graph: VaultGraph, pairs: ReadonlyArray<readonly [string, string]>): CommunityGraph {
   const byCommunity = new Map<number, CommunityNode>()
@@ -480,10 +535,6 @@ export async function buildGraph(
       .select(NOTE_NODE_COLUMNS)
       .from(notes)
       .where(and(inArray(notes.vaultId, vaultIds), isNull(notes.deletedAt)))
-      // Every query feeding Louvain is ordered (#816): node and edge
-      // insertion order changes its partition, and an unordered query's row
-      // order follows whichever index the planner picks.
-      .orderBy(notes.id)
     for (const r of noteRows) internalNodes.push(noteNode(r))
   }
 
@@ -492,11 +543,14 @@ export async function buildGraph(
       .select(FILE_NODE_COLUMNS)
       .from(repositoryFiles)
       .where(inArray(repositoryFiles.repositoryId, repositoryIds))
-      .orderBy(repositoryFiles.id)
     for (const r of fileRows) internalNodes.push(fileNode(r))
   }
 
-  internalNodes = internalNodes.filter((n) => passesFilters(n, filters))
+  // Node order is content order (#1006): Louvain's partition depends on the
+  // order it reads nodes and edges in, so no row order a query happens to
+  // give (or an id order, which differs per database) may reach it.
+  const order = nodeOrder(await containerNames(resources))
+  internalNodes = internalNodes.filter((n) => passesFilters(n, filters)).sort(order)
   const kinds = new Set(filters.edgeTypes ?? EDGE_KINDS)
 
   const byId = new Map(internalNodes.map((n) => [n.id, n]))
@@ -521,8 +575,6 @@ export async function buildGraph(
       .select()
       .from(noteLinks)
       .where(inArray(noteLinks.sourceNoteId, noteIds))
-      // A target linked on several lines: the first line is the edge's evidence.
-      .orderBy(noteLinks.sourceNoteId, noteLinks.targetPath, noteLinks.startLine)
     for (const link of links) {
       const source = byId.get(link.sourceNoteId)
       if (!source) continue
@@ -541,7 +593,6 @@ export async function buildGraph(
       .select()
       .from(repositoryFileImports)
       .where(inArray(repositoryFileImports.sourceFileId, codeIds))
-      .orderBy(repositoryFileImports.sourceFileId, repositoryFileImports.targetPath)
     for (const imp of imports) {
       if (imp.resolvedTargetFileId && byId.has(imp.resolvedTargetFileId)) {
         list.add(importEdge(imp.sourceFileId, imp.resolvedTargetFileId, imp.line))
@@ -559,7 +610,6 @@ export async function buildGraph(
       .select()
       .from(semanticEdges)
       .where(sql`${semanticEdges.sourceId} = ANY(${pgIds}::uuid[]) OR ${semanticEdges.targetId} = ANY(${pgIds}::uuid[])`)
-      .orderBy(semanticEdges.sourceId, semanticEdges.targetId)
     for (const edge of sem) {
       if (byId.has(edge.sourceId) && byId.has(edge.targetId)) {
         list.add(semanticEdge(edge.sourceId, edge.targetId, edge.similarity))
@@ -591,30 +641,31 @@ export async function buildGraph(
     }
   }
 
-  // Louvain communities over the undirected projection of the assembled edges (`EdgeList.pairs`).
+  // Louvain communities over the undirected projection of the assembled
+  // edges, nodes and pairs in content order, seeded from the content.
+  const pairs = contentOrder(edges, new Map(internalNodes.map((n, i) => [n.id, i])))
   const g = new UndirectedGraph()
-  for (const id of byId.keys()) g.addNode(id)
-  for (const [a, b] of list.pairs) {
+  for (const n of internalNodes) g.addNode(n.id)
+  for (const [a, b] of pairs) {
     if (!g.hasEdge(a, b)) g.addEdge(a, b)
   }
-  const communities: Record<string, number> =
-    g.order > 0 && g.size > 0 ? louvain(g, { rng: mulberry32(seedFromNodeIds(byId.keys())) }) : {}
-
-  const nodes: GraphNode[] = internalNodes.map((n) => ({
-    ...n,
-    community: communities[n.id] ?? 0,
-  }))
+  const found: Record<string, number> =
+    g.order > 0 && g.size > 0 ? louvain(g, { rng: mulberry32(seedFromKeys(internalNodes.map((n) => `${n.resourceType}:${n.path}`))) }) : {}
+  // Communities numbered 0, 1, … in the node order of their first member (#1006), not by Louvain's own numbers.
+  const numbers = new Map<number, number>()
+  const nodes: GraphNode[] = internalNodes.map((n) => {
+    const c = found[n.id]
+    if (c !== undefined && !numbers.has(c)) numbers.set(c, numbers.size)
+    return { ...n, community: c === undefined ? 0 : numbers.get(c)! }
+  })
 
   const assembled: VaultGraph = { nodes, edges, cappedGroups }
-  if (filters.aggregate === 'community') return collapseToCommunities(assembled, list.pairs)
+  if (filters.aggregate === 'community') return collapseToCommunities(assembled, pairs)
   if (filters.community !== undefined) {
     const members = assembled.nodes.filter((n) => n.community === filters.community)
     const sliced = members
       .slice()
-      .sort((a, b) => {
-        const byUpdatedAt = (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')
-        return byUpdatedAt !== 0 ? byUpdatedAt : a.id.localeCompare(b.id)
-      })
+      .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '') || order(a, b))
       .slice(0, COMMUNITY_MEMBER_CAP)
     const ids = new Set(sliced.map((n) => n.id))
     return {

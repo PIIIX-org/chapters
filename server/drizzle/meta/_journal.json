@@ -304,10 +304,17 @@
       "breakpoints": true
     },
     {
-      "idx": 46,
+      "idx": 48,
       "version": "7",
-      "when": 1792900000000,
-      "tag": "0046_semantic_edge_rebuild",
+      "when": 1793000000000,
+      "tag": "0048_unembed_code_sections",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1793100000000,
+      "tag": "0050_semantic_edge_rebuild",
       "breakpoints": true
     }
   ]

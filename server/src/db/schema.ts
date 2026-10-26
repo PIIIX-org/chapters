@@ -407,6 +407,8 @@ export const notes = pgTable(
       .on(t.vaultId, sql`(coalesce(substring(${t.path} from '^(.*/)'), '')) collate "C"`, sql`${t.path} collate "C"`)
       .where(sql`deleted_at is null`),
     index('notes_vault_type_idx').on(t.vaultId, t.type),
+    // Search's tag filter inside the note legs (#454, migration 0043): `frontmatter -> 'tags' ?| …`.
+    index('notes_tags_idx').using('gin', sql`(${t.frontmatter} -> 'tags')`),
   ],
 )
 
@@ -682,7 +684,7 @@ export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
  *
  * The rows are the true top-k of the content whatever the order it was
  * embedded in (#1007, search/semantic-edges.ts). `similarity` holds the double
- * the search computed (migration 0046; `real` before), so an embed compares
+ * the search computed (migration 0050; `real` before), so an embed compares
  * its own similarity with a list's last row exactly.
  */
 export const semanticEdges = pgTable(

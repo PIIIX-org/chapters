@@ -288,8 +288,6 @@ interface Question {
   differs?: string
 }
 
-/** Graph node order, undirected edge ends and community numbers follow the per-database ids. */
-const GRAPH_ORDER = '#1006'
 /** Each node's semantic neighbours were those that existed when it was embedded (fixed: its pinned case below passes). */
 const SEMANTIC_HISTORY = '#1007'
 /** An import pushed before the file it imports stays unresolved. */
@@ -308,19 +306,19 @@ const QUESTIONS: Question[] = [
   },
   { name: 'find_symbols one name in three files', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse' }) },
   { name: 'find_symbols by meaning and kind', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'upload a chunk', kind: 'function' }) },
-  { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }), differs: GRAPH_ORDER },
+  { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }) },
   { name: 'graph repository communities', tool: 'graph', args: (w) => ({ repositoryId: w.repoId }) },
   {
     name: 'graph every node',
     tool: 'graph',
     args: (w) => ({ vaultId: w.vaultId, repositoryId: w.repoId, aggregate: 'none' }),
-    differs: `${GRAPH_ORDER}, ${IMPORT_HISTORY}`,
+    differs: IMPORT_HISTORY,
   },
   {
     name: 'graph neighbours',
     tool: 'graph',
     args: (w) => ({ vaultId: w.vaultId, repositoryId: w.repoId, neighborsOf: 'index', depth: 2 }),
-    differs: `${GRAPH_ORDER}, ${IMPORT_HISTORY}`,
+    differs: IMPORT_HISTORY,
   },
   { name: 'browse_vault root', tool: 'browse_vault', args: (w) => ({ vaultId: w.vaultId }) },
   {

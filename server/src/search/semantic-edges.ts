@@ -514,7 +514,7 @@ export async function deleteVaultCodeEdges(vaultId: string, client: DbOrTx = db)
  * - the rebuild (#1007): payload `{nodeType, nodeId}`, key `semantic_edges:<type>:<id>`, each recomputing
  *   one node's top-k from its stored blocks (`recomputeSemanticEdges`). Once every node has run, the stored
  *   edges are those of the content whatever order it was embedded in. Queued for every node by
- *   `pnpm reindex` and, once, by migration 0046;
+ *   `pnpm reindex` and, once, by migration 0050;
  * - a refresh (`queueSemanticEdgeRefresh`): payload `{nodeType, nodeId, newKeys}`, no key, runs
  *   `refreshSemanticEdges`.
  */

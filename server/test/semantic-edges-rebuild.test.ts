@@ -1,6 +1,6 @@
 // #1007: an instance whose semantic edges were stored before the fix holds each node's top-k among the nodes
 // that existed when it was embedded. Re-embedding keeps every vector (same embed keys), so it recomputes
-// nothing; the rebuild that `pnpm reindex` runs (and migration 0046 queues once) recomputes every node from
+// nothing; the rebuild that `pnpm reindex` runs (and migration 0050 queues once) recomputes every node from
 // its stored vectors and gives the edges of the content.
 import { afterAll, describe, expect, it } from 'vitest'
 import { and, eq, inArray, sql } from 'drizzle-orm'

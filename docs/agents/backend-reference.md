@@ -89,7 +89,7 @@ change moves.
 | Full-text search | native Postgres `tsvector`/GIN (generated columns) | no separate search engine (Elasticsearch etc.) for a single-instance app |
 | ORM / migrations | Drizzle ORM + `drizzle-kit generate`, hand-edited SQL for vector/FTS/HNSW extras Drizzle can't express | typed queries, SQL-level control when needed |
 | Embeddings | Transformers.js (`@huggingface/transformers`) running `Xenova/bge-small-en-v1.5` fully local via ONNX | notes/code never leave the instance; no external API dependency |
-| Code parsing | `web-tree-sitter` (WASM) + per-language grammar packages (TS, JS, Python, Go) | native `tree-sitter` bindings fail to compile against current Node's V8 headers (see §11); WASM sidesteps native compilation entirely |
+| Code parsing | `web-tree-sitter` (WASM) + per-language grammar packages (TS, JS, Python, Go, Rust, Java, C, C++, C#, Kotlin, Ruby, PHP) | native `tree-sitter` bindings fail to compile against current Node's V8 headers (see §11); WASM sidesteps native compilation entirely |
 | Graph analysis | `graphology` + `graphology-communities-louvain` | community detection (Louvain now, Leiden tracked as a future upgrade) |
 | AI access | `@modelcontextprotocol/sdk`, Streamable HTTP transport | official SDK, stateless-per-request transport (no server-side session state to leak across connections) |
 | Auth | `@node-rs/argon2` (passwords), `otpauth` (TOTP/MFA), Node `crypto` (session/reset tokens, SHA-256 hashed at rest) | |
@@ -1255,16 +1255,21 @@ give the same edges in any insertion order. REST graph routes return these
 fields as they are (additive: the canvas reads `source`/`target`/`kind`),
 and a link both ways is now two REST edges.
 
-Community detection runs `graphology-communities-louvain` over the
-undirected projection of the assembled graph (`EdgeList.pairs`: the first
-edge per unordered pair and kind, ends as first added: the edge list
-before #558, so keeping directions moves no community) on every call,
-seeded from the node ids. The community view's `weight` counts the same
-pairs. Its result
-also depends on node and edge insertion order, so every query feeding it
-(notes, repository files, note links, code imports, semantic edges) has
-an `ORDER BY` on ids (#816): unordered, the row order followed the index
-the planner picked, and two calls over the same data could differ. The merged cross-resource view
+Graph answers follow the content, never the per-database ids (#1006): the
+same notes and files give the same nodes, edges and communities in any
+database. Nodes are in `nodeOrder` (path in code-unit order, then `code`
+before `note`, then the vault or repository name, read by `containerNames`
+only when the call holds several of a kind: one path and kind in two
+containers of a merged graph); the container and node ids decide only two
+containers of one name, the one tie left. An undirected edge names its earlier
+end as `source`, and edges sort by their ends' places, then kind, relation
+and source (`contentOrder`). Community detection runs
+`graphology-communities-louvain` over the undirected projection of the
+assembled graph (one pair per unordered pair and kind) on every call, nodes
+and pairs in that order, seeded from the nodes' `resourceType:path` keys;
+communities are numbered 0, 1, … by their first member in node order.
+The community view's `weight` counts the same pairs. No query's row order
+reaches Louvain. The merged cross-resource view
 additionally requires the resource owner's `mergeable` flag and the
 viewing user's own per-resource opt-in — three independent gates, all
 re-resolved live.
@@ -1303,7 +1308,7 @@ for a ref without an extension also against the extension-less file path,
 so `store.ts` never matches `store.ts.orig`);
 a note's frontmatter `title`. Graph nodes have no symbols, so no symbol
 tier. One match is `{node}`; several are `{candidates, next, total}`
-(`{path, kind, id}`, shorter path first, then path and id; 10 shown,
+(`{path, kind, id}`, shorter path first, then `nodeOrder`; 10 shown,
 `next` the 11th as a `limit` + 1 read); none is `{suggestions}` (empty for
 a node id, so an id out of reach answers as a missing one): up to 5
 paths from a pool of at most 200 per table (same basename without
@@ -1445,10 +1450,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
     search and graph, saved perspectives) bound the last change,
     `updatedAt`, never frontmatter `timestamp` (the creation time, which
-    edits leave alone). Note legs filter `notes.updated_at` in SQL; code
+    edits leave alone). Note legs filter `notes.updated_at`; code
     hits use `repository_files.updated_at` (the last sync that changed the
     file's content: an unchanged hash leaves it) and symbol hits their
-    file's, filtered after the merge by `passesFilters` like `types`. A
+    file's, each inside its leg's SQL (see **Filters**). A
     bound goes through `timeBound`: `YYYY-MM-DD` or an ISO date-time
     (`THH:MM`, `:SS`, a fraction cut to ms, `Z` or `±HH:MM`); one without
     an offset is UTC, never the server's time zone; anything else (a
@@ -1465,8 +1470,40 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     fold); a write that changes nothing leaves it. A current-format backup
     restore and a vault import with `.elara/history` keep the source's
     `updated_at`; a format-1 backup and a plain import take the restore
-    time. No index: note legs are served by the FTS and HNSW indexes and
-    the graph filters in memory.
+    time. Note legs are served by the FTS and HNSW indexes and the graph
+    filters in memory; no index on `updated_at`.
+  - **Filters** (#454): `SearchFilters` = `types`, `tags`, `since`/`until`,
+    and `languages`, `kinds`, `path` (REST: `/search`, `/vaults/:id/search`
+    and `/repositories/:id/search`, comma-separated lists as the graph
+    routes take them, `search/filters.ts`; `find_symbols`' `kind`). Every
+    filter applies inside each leg's SQL, before the leg's cut
+    (`noteFilter`, `fileFilter`, `symbolFilter`), so a filtered search
+    answers with the best matching rows, not what of the unfiltered best
+    30 per leg matches; nothing is filtered after the fusion. A hit
+    without the filtered attribute is dropped, and a leg none of whose
+    rows can match runs no query: code has no tags, notes no language or
+    kind, files no kind. `types` is what a hit's `type` shows: a note's
+    type, a file's language, a symbol's kind. `languages` is a file's, or a
+    symbol's file's, `language`; `kinds` a symbol's kind. `path` is a
+    prefix (`starts_with`), or a glob when it holds `*` or `?` (`*` and `?`
+    within one segment, `**` across them, `**/` also none; anchored, as a
+    POSIX regex). Tags are string elements of a frontmatter `tags` array
+    (`?|`), served by `notes_tags_idx` (GIN on `frontmatter -> 'tags'`,
+    migration 0043; on 50,000 notes with a tag on 0.5% of them it took the
+    keyword leg from 5-8 ms to 1.5 ms and the vector leg from 9-10 ms to
+    1.5 ms). An empty list filters nothing. The vector legs keep `blockLeg`'s
+    iterative scan: the code and symbol legs add the clauses to their WHERE
+    over `blocks` joined to the file; the note leg joins `notes` into its
+    200-block cut only when a note filter is set (unfiltered, the cut
+    stays a scan of `blocks` alone). The planner may then serve a filtered
+    note leg exactly (the matching notes, then their blocks, then a sort)
+    instead of from the HNSW index: cheap for a selective filter, about
+    50-130 ms for one that keeps every note of a 50,000-note vault (the
+    unfiltered leg: 10-27 ms). MCP `search` takes none of these
+    (`find_symbols` takes `kind`): `path` alone would cost the reader
+    profile 61 characters (~16 tokens) over its 2,000-token budget, already
+    at 1,991. `test/search-filters-in-legs.test.ts` has a fixture per
+    filter whose matching rows are outside every leg's unfiltered cut.
 - **`embeddings.ts`**: an `Embedder` interface with two
   implementations — `LocalEmbedder` (real: Transformers.js/ONNX,
   `bge-small-en-v1.5`, 384 dimensions, mean-pooled, normalized) and
@@ -1542,7 +1579,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   a note's first 16 blocks in body order (`EDGE_QUERY_BLOCKS`; each is one
   HNSW search per owner type), the file-level block of a file — one row
   per neighbour, `similarity` stored as the double computed (`double
-  precision` since migration 0046). Equal similarities go by path, type,
+  precision` since migration 0050). Equal similarities go by path, type,
   the name of the vault or repository, then id, strings in byte order
   (`COLLATE "C"`, `byRank`; #1007): only two nodes of one path and type in
   two containers of one name fall to the id. One transaction holds an
@@ -1625,14 +1662,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   every repository file (keyset pages of 1,000, catch-up priority, no
   drain started: the server's job polling or `runSemanticEdgeRebuild`
   runs them). `pnpm reindex` queues them with `'finished'` after its
-  re-embed and drains them. Migration 0046 (`when` 1792900000000) makes
+  re-embed and drains them. Migration 0050 (`when` 1793100000000) makes
   `similarity` a `double precision` (values kept) and queues them once for
   the instances from before #1007, whose edges were each node's top-k
   among the nodes embedded before it; the server drains them in the
   background after boot. Measured: 1,987 nodes (the fixture above) in
   14.8 s (7.4 ms a node); an instance the code before #1007 filled with
   10,512 nodes (the chapters tree pushed to 8 repositories, 1,016 notes,
-  45,754 vectors, 83,232 edges): migration 0046 248 ms, its jobs 80 s
+  45,754 vectors, 83,232 edges): migration 0050 248 ms, its jobs 80 s
   (7.7 ms a node); a vault of 10,000 notes (45,000 blocks) 86 s.
 
 ### 5.7 Real-time collaboration (`server/src/sync/`)
@@ -2067,6 +2104,26 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   rather than per tool. `test/mcp-instructions.test.ts` checks the rules per profile,
   that every manual named is in the token's `resources/list`, and the
   same bytes across two initializes and two vault pins per profile.
+- **Cacheable prompt** (#681): what a token is sent before its first
+  call opens every agent prompt, and providers bill a repeated prefix at
+  a fraction of the price only if its bytes repeat. `initialize`,
+  `tools/list` and `prompts/list` are the same bytes for every token of
+  one profile, scope and access, whoever minted it, whichever vault it
+  pins and on any date: tools and prompts list in registration order,
+  and no list or instruction text carries an id, name, date, count or
+  build sha. `initialize` answers `serverInfo.version` as `0.2.0+` and
+  `definitionsVersion(profile)` in `server.ts`: the first 16 hex of the
+  sha256 of the `tools/list`, `prompts/list` and instructions of an
+  account token of that profile with admin access, computed once per
+  process from the registrations, so it changes only when a definition
+  does. It is outside the counted lists and instructions, so the reader
+  budget is unchanged (7,980 characters, ~1,995 tokens).
+  `test/mcp-cacheable-prompt.test.ts` compares the raw bytes of two
+  accounts' tokens on two faked dates per profile and scope (account,
+  vault pin) and the version against the served bytes;
+  `test/mcp-definitions-version.test.ts` checks it stays the same across
+  builds and changes when a tool description, a prompt description
+  (writer and admin only) or the instructions change.
 - **Tool annotations** (#434, ADR-004 §2.6): `toolAnnotations()` in
   `server.ts` derives each tool's MCP `annotations` from its `tool()`
   record; `registerTool` lists them and `McpToolInfo` carries the same
@@ -2673,17 +2730,43 @@ the scrub left alone does not serve its token through the error text
 either (#577). A query-string token stays at rest in `gitUrl`: it is
 not userinfo, so nothing moves it.
 
-**Code extraction** (`extraction.ts`): `web-tree-sitter` (WASM), four
-supported languages — TypeScript, JavaScript, Python, Go. `language.ts`
-labels files by extension: `.ts`, `.tsx`, `.mts` and `.cts` are all
+**Code extraction** (`extraction.ts`, `extraction-languages.ts`):
+`web-tree-sitter` (WASM), twelve parsed languages, and heading outlines
+for two more (#464):
+
+| label (`language.ts`) | extensions | parsed with (npm package, pinned in the lockfile) | `.wasm` |
+| :--- | :--- | :--- | ---: |
+| `typescript` | `.ts` `.tsx` `.mts` `.cts` | `tree-sitter-typescript` 0.23.2 (`.tsx`: its TSX grammar) | 1.41 MB (TSX 1.45 MB) |
+| `javascript` | `.js` `.jsx` `.mjs` `.cjs` | `tree-sitter-javascript` 0.25.0 | 0.41 MB |
+| `python` | `.py` | `tree-sitter-python` 0.25.0 | 0.46 MB |
+| `go` | `.go` | `tree-sitter-go` 0.25.0 | 0.22 MB |
+| `rust` | `.rs` | `tree-sitter-rust` 0.24.0 | 1.10 MB |
+| `java` | `.java` | `tree-sitter-java` 0.23.5 | 0.41 MB |
+| `c` | `.c` `.h` | `tree-sitter-c` 0.24.1 (`.h`: the C++ grammar) | 0.63 MB |
+| `cpp` | `.cpp` `.cc` `.cxx` `.hpp` `.hh` `.hxx` | `tree-sitter-cpp` 0.23.4 | 3.43 MB |
+| `csharp` | `.cs` | `tree-sitter-c-sharp` 0.23.5 | 5.35 MB |
+| `kotlin` | `.kt` `.kts` | `@tree-sitter-grammars/tree-sitter-kotlin` 1.1.0 | 3.44 MB |
+| `ruby` | `.rb` | `tree-sitter-ruby` 0.23.1 | 2.11 MB |
+| `php` | `.php` | `tree-sitter-php` 0.24.2 (`tree-sitter-php.wasm`: PHP in HTML) | 1.06 MB |
+| `markdown` | `.md` `.markdown` | heading outline (`outline.ts`), no grammar | — |
+| `html` | `.html` `.htm` | heading outline (`outline.ts`), no grammar | — |
+| `swift` | `.swift` | labelled only: the npm `tree-sitter-swift` ships no `.wasm` (#988) | — |
+
+All grammar packages are MIT and load in `web-tree-sitter` 0.27 (ABI 14
+and 15). Their native build never runs (`allowBuilds: false` in
+`pnpm-workspace.yaml`), two dependencies only a native or grammar build
+reads are overridden away (`npm-check-updates` under Kotlin, a second
+`tree-sitter-c` under C++), and the image deletes their C sources and
+native prebuilds in its install layer (Dockerfile), so a grammar costs the
+image about its `.wasm`. `language.ts` labels files by extension: `.ts`, `.tsx`, `.mts` and `.cts` are all
 `typescript` (#449, #451; the label is what `read_file`, `search` and the
 graph's language groups show, so one `typescript` filter finds them all),
 `.js`, `.jsx`, `.mjs` and `.cjs` are `javascript`. The path is the source
 of truth: `processFile` derives the language from it and writes it in the
 same update as `extractor_version`, so a row labelled under older rules
-(`.mts`/`.cts` rows had `language` null before #451, and a sync skips
-unchanged content) is relabelled and extracted at the version bump's
-catch-up. The grammar comes from
+(`.mts`/`.cts` rows had `language` null before #451, `.kt` and `.md` rows
+before #464, and a sync skips unchanged content) is relabelled and
+extracted at the version bump's catch-up. The grammar comes from
 the extension, not the label: `.tsx` parses with TSX
 (`tree-sitter-tsx.wasm`, #449), since JSX is not TypeScript syntax and the
 TypeScript grammar reads `<div>` as a type assertion; the other TypeScript
@@ -2698,7 +2781,15 @@ imports (#466): `import ... from`, `export ... from` (`export *`,
 `export { x }`, `export type`), `import('x')` and `require('x')` whose
 specifier is a literal (a string or a template without `${}`; `require`
 with exactly one argument), and TypeScript `import x = require('x')`; a
-computed specifier is not an import row.
+computed specifier is not an import row. The #464 languages' imports:
+Rust `use` (the module path: `crate::store` for `use
+crate::store::{A, B}`, the path before `as` or `::*`; a list straight under
+`crate`, `self` or `super` gives one row per item, `crate::{a, b::C}` →
+`crate::a`, `crate::b::C`) and `mod x;` (the module `x`, a file), Java and Kotlin
+`import` (`a.b.C`, `a.b.*` for a wildcard), C/C++ `#include "x.h"` (never
+`<x.h>`), Ruby `require_relative 'x'`, PHP `require`/`require_once`/
+`include`/`include_once` of a string literal (not `__DIR__ . '/x.php'`); C#
+`using` names namespaces, not files, so C# has no import rows.
 
 **Symbol contract** (`SymbolKind`/`SYMBOL_KINDS` in `extraction.ts`; more
 languages, #464, and the symbol/edge table, #469, use the same kinds and
@@ -2718,6 +2809,39 @@ anonymous `export default` is named `default`. Kinds:
 | `namespace` | module-level `namespace N {}`, `module N {}` and ambient `declare module "x" {}` (named `x`) | — | — |
 | `method` | in a module-level class body: methods, getters, setters, static and abstract methods, `#private` methods, fields bound to an arrow function or function expression; `parent` is the class | a `def` in a module-level class body, decorators included; `parent` is the class | a receiver method; `parent` is the receiver's type (`*Repo[T]` → `Repo`) |
 | `variable` | an exported module-level `const`/`let`/`var` bound to anything else | — | — |
+
+The #464 languages (`extraction-languages.ts`; each grammar's
+`ScopeRules` say which nodes are bodies, classes and namespaces):
+
+| kind | Rust | Java | C / C++ | C# | Kotlin | Ruby | PHP |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `function` | `fn` | — | function definitions, and prototypes the file does not define | — | `fun` at module level | `def` at the top | `function` |
+| `class` | `struct`, `union` | `class`, `record` | `struct`/`union` (C++ also `class`) with a body | `class`, `struct`, `record` | `class`, `object` | `class` | `class`, `trait` |
+| `interface` | `trait` | `interface`, `@interface` | — | `interface` | `interface` | — | `interface` |
+| `type` | `type` | — | `typedef` (C++ also `using X = ...`) | `delegate` | `typealias` | — | — |
+| `enum` | `enum` | `enum` | `enum` with a body | `enum` | `enum class` | — | `enum` |
+| `namespace` | `mod m { ... }` (members: `parent` is `m`) | — | C++ `namespace` (members: `parent` is it; an anonymous one is transparent) | `namespace` (block or file-scoped; members have no `parent`) | — | `module` (members: `parent` is it) | `namespace` (members have no `parent`) |
+| `method` | functions in an `impl` (`parent`: its type, `Store<T>` → `Store`) or a `trait` | methods, constructors | C++: in a class body (definitions and declarations), and out-of-line `T Store<T>::load()` (`parent` `Store`) | methods, constructors | `fun` in a class, object or companion object | `def`, `def self.x` and `class << self` methods in a class or module | methods |
+| `variable` | `const`, `static` (in a module or `mod`) | `public` or `static` fields, interface constants (`parent`: the class) | — | `public`, `static` or `const` fields and properties | properties: module-level when not `private`, in a class when not `private`/`protected` | — | — |
+
+Their `exported`: `pub` (any `pub(...)`) in Rust; `public` in Java and
+C# (a namespace always); not `static` in C/C++; not `private` in Kotlin;
+always in Ruby and PHP; never on a method or a member field. A
+declaration counts at module level, in a namespace (at any depth), or
+directly in a class that is itself at one of those places; wrappers such
+as C++ `template <...>`, C preprocessor conditionals (`#ifndef` include
+guards), `extern "C" {}` and Kotlin `companion object` are transparent.
+Nested types and their members, local functions and lambdas are not
+symbols. Attributes, annotations and doc comments above a declaration are
+not in its lines unless the grammar makes them part of the node (Java and
+C# modifiers, PHP and Kotlin modifiers on the same node). A `.h` header is
+labelled `c` but parsed with the C++ grammar, which reads C declarations
+alike and also the classes and namespaces of a C++ header (most C++
+projects name headers `.h`). Out-of-line C++ definitions take the innermost
+scope as `parent` (`void ns::Store::load()` → `Store.load`), so they
+deduplicate with their in-class declaration. Known gaps: macro annotations
+such as `GUARDED_BY(mu)` on a member read as method declarations (a limit
+of the grammar without a preprocessor).
 
 Top level only: a declaration counts when only `export`, `declare`,
 decorators, its `const`/`let`/`var` statement or a statement wrapper stand
@@ -2765,20 +2889,41 @@ The fence-aware heading parser (`headings()`) lives there too, used by
 headings identically. For a note, `owner_id` is `notes.id` (it survives
 renames).
 *Code blocks* (`repositories/code-blocks.ts`): a `symbol` block per
-symbol; a `file` block for every file (lines 1..total, text
+symbol; a `section` block per heading of a Markdown or HTML file (#464,
+below); a `file` block for every file (lines 1..total, text
 `<path>\n<content>`, the old file vector's; the model reads its first 512
 tokens); and, when the file is not small — more than 300 lines
 (`SMALL_FILE_MAX_LINES`) or 16,000 characters (the embedder's cut) — and has
-symbols, a `skeleton` block for the file (`<path>` then every symbol's first
-line) and one per class with methods (`<kind> <Class> in <path>`, the
-class's first line, then its methods' first lines). The file-level blocks
-are always embedded. A symbol's embedded text is `<kind> <inner_path> in
-<path>:<start line>\n<snippet>`, the snippet its first 30 lines cut to
-1,500 code points (`SNIPPET_LINES`, `SNIPPET_CHARS`), stored on the block
-as `snippet` (the keyword legs match it and hits show it). The line stays
-in the text: without it chapters A13 fell out of the top 5 (bench run
-40076821407 vs 40076707623), so a symbol whose lines moved is embedded
-again while its id stays. *Note blocks*
+symbols or sections, a `skeleton` block for the file (`<path>` then every
+symbol's or heading's first line) and one per class with methods (`<kind>
+<Class> in <path>`, the class's first line, then its methods' first lines).
+The file-level blocks are always embedded. A symbol's embedded text is
+`<kind> <inner_path> in <path>:<start line>\n<snippet>`, the snippet its
+first 30 lines cut to 1,500 code points (`SNIPPET_LINES`, `SNIPPET_CHARS`),
+stored on the block as `snippet` (the keyword legs match it and hits show
+it). The line stays in the text: without it chapters A13 fell out of the
+top 5 (bench run 40076821407 vs 40076707623), so a symbol whose lines moved
+is embedded again while its id stays. *Repository outlines*
+(`repositories/outline.ts`, #464): a Markdown file's ATX headings
+(`headings()`, so none inside a fence; a leading `---` front matter block
+is skipped) and an HTML file's `h1`–`h6` (a small scanner: comments,
+`<script>` and `<style>` are skipped, the title is the element's text with
+tags dropped, entities decoded and white space collapsed). Each heading is
+a `section` block spanning its line through the line before the next
+heading of the same or a higher level, `inner_path` the heading titles
+joined with ` > ` (as a note's). A section is an **outline block, never
+embedded** (null `embed_key`, outside the embed budget): no search leg
+reads sections yet, and embedding them made indexing 2–3× slower on
+doc-heavy suites (chapters 243 → 689 s in bench run 40193946217);
+#414/#415 (per-block hits) decide whether they get vectors. Its `embedText`
+(`section <inner_path> in <path>\n<snippet>`, the snippet cut from its own
+text up to its first subheading, as a symbol's is) is what would be
+embedded; it stores no `snippet`. A section is **not a symbol** (no
+`symbol_kind`): `find_symbols`, the `search` symbol legs, `read_file`'s
+outline and the staleness check never see it. A Markdown file keeps its
+outline even with a line over the minified limit (that rule is about code);
+an HTML file with one does not. Migration 0048 clears the vectors earlier
+heads of #464's PR gave code sections. *Note blocks*
 (`notes/note-blocks.ts`, #452b): a `preamble` for the body before its first
 heading when it is not blank (a body with no heading that is empty or blank
 is one preamble whose embedded text is the path, so every note keeps a
@@ -2835,7 +2980,7 @@ the ADR-004 best-block roll-up let symbol blocks of large files crowd the
 leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
 outline put a 304-line hook above the answer to A13 (0.931), so both wait
 for #414/#415's per-block hits; `search` symbol legs and `find_symbols` —
-`kind = 'symbol'` blocks, keyword by name, `Class.name` or the stored
+`kind = 'symbol'` blocks (never a repository `section`), keyword by name, `Class.name` or the stored
 `snippet`, vector by the nearest symbol blocks (`blocks_symbol_embedding_idx`); semantic edges (`semantic-edges.ts`) — a note's or file's
 similarity to another node is its best block's (`blocks_note_embedding_idx`,
 `blocks_code_embedding_idx`), the query vectors a note's
@@ -2869,6 +3014,23 @@ specifiers name the compiled output, so `.js` tries `.ts` then `.tsx`,
 `.jsx` tries `.tsx`, `.mjs` tries `.mts`, `.cjs` tries `.cts`, before the
 literal path, then the path plus `.ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs/.py/.go`
 (TypeScript sources first, #451), then `<path>/index.<ext>`.
+
+The #464 languages resolve their own way, by the importing file's
+language, and never fall through to the rules above (a standard library,
+an external crate, gem or package, or a system header stays unresolved):
+Rust `use` — `crate::` from the crate's `src` directory (the importing
+path up to its last `src`), `self::` from the current module,
+`super::` one module up per `super`, any other path relative to the
+current module (2018 uniform paths); a module's submodules are in
+`a/b/` for `a/b.rs`, beside it for `mod.rs`, `lib.rs` and `main.rs`; the
+longest module path that is a known `x.rs` or `x/mod.rs` wins, so `use
+crate::store::Store` resolves to `src/store.rs` or `src/store/mod.rs`.
+Java and Kotlin `import a.b.C` (or a static member `a.b.C.f`) — the `.java`,
+`.kt` or `.kts` file whose path, without its extension, ends in `a/b/C`
+(then `a/b`, never one segment; a per-repository suffix index built once
+per file list); a wildcard never resolves. C/C++ `#include "x.h"` and PHP
+`require 'x.php'` — relative to the including file only; Ruby
+`require_relative 'x'` — the same, `.rb` optional.
 
 The **resolution context** (`buildResolutionContext`, #466) comes from the
 repository's indexed manifests (`isResolutionManifest`: package.json,
@@ -3004,13 +3166,17 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
 #452, migrations 0035 and 0036). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 4; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+an integer, now 5; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
 top-level rule and the embed-budget order, #450; 4 re-exports, literal
 `import()`/`require()` and `import x = require()` as imports, #466, which
-embeds nothing again): bump it with any change to the grammars and queries,
-symbol kinds, the minified-file rule or the embed-budget order (the
-snippet cut and block texts are `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
+embeds nothing again; 5 Rust, Java, C, C++, C#, Kotlin, Ruby and PHP
+symbols and imports, Markdown/HTML heading sections and the relabelling of
+files whose label changed, #464, which embeds only the new symbol texts;
+sections are never embedded): bump it with any change to the grammars and queries,
+symbol kinds, the outlines (`outline.ts`), the labels, the minified-file
+rule or the embed-budget order (the snippet cut and block texts are
+`CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
 (`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus
 `+text<EMBED_TEXT_VERSION>`, the version of the 16,000-character cut; bump
 `EMBED_TEXT_VERSION` with any change to it (that re-embeds every block).

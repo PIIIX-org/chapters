@@ -9,8 +9,8 @@
 --    repository file is queued, at catch-up priority (1, behind the jobs of writes); the server drains them
 --    in the background after boot, each recomputing one node's top-k from its stored vectors (`pnpm reindex`
 --    queues the same jobs).
--- Times are in the PR for #1007. Numbered 0046 because open PRs hold 0042-0045; its `when` (1792900000000) is
--- above theirs, so it applies whatever order they merge in.
+-- Times are in the PR for #1007. Numbered 0050 after dev's 0048, with a `when` (1793100000000) above every
+-- migration before it; one merged later must take a larger `when`.
 ALTER TABLE "semantic_edges" ALTER COLUMN "similarity" TYPE double precision;--> statement-breakpoint
 INSERT INTO "jobs" ("kind", "payload", "idempotency_key", "priority")
 SELECT 'semantic_edges', jsonb_build_object('nodeType', n.type, 'nodeId', n.id::text), 'semantic_edges:' || n.type || ':' || n.id, 1

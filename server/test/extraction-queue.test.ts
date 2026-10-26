@@ -192,10 +192,10 @@ describe('extraction queue', () => {
 
   it('embeds an unsupported-language file without producing import/symbol rows', async () => {
     const repo = await makeRepo()
-    await syncRepositoryFiles(repo.id, [{ path: 'README.rs', content: 'fn main() {}' }], ['README.rs'])
+    await syncRepositoryFiles(repo.id, [{ path: 'Sources/main.swift', content: 'func main() {}' }], ['Sources/main.swift'])
     await flushExtraction()
 
-    const file = await fileByPath(repo.id, 'README.rs')
+    const file = await fileByPath(repo.id, 'Sources/main.swift')
     expect(await fileEmbedding(file.id)).not.toBeNull()
     const symbols = await symbolBlocks(file.id)
     expect(symbols).toHaveLength(0)
@@ -241,6 +241,30 @@ describe('extraction queue', () => {
     expect(await fileEmbedding(file.id)).not.toBeNull()
     expect(await symbolBlocks(file.id)).toHaveLength(0)
     expect(await db.select().from(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, file.id))).toHaveLength(0)
+  })
+
+  it('keeps the outline of a Markdown file with a line over the minified limit; its sections are never embedded (#464)', async () => {
+    const repo = await makeRepo()
+    const content = ['# Guide', '', 'x'.repeat(1_500), '', '## Install', '', 'Run it.', ''].join('\n')
+    const embedSpy = vi.spyOn(embedder, 'embed')
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'docs/guide.md', content }], ['docs/guide.md'])
+      await flushExtraction()
+      // The file block only.
+      expect(embedSpy.mock.calls.map(([texts]) => texts.length)).toEqual([1])
+    } finally {
+      embedSpy.mockRestore()
+    }
+    const file = await fileByPath(repo.id, 'docs/guide.md')
+    const sections = await db
+      .select({ innerPath: blocks.innerPath, embedKey: blocks.embedKey, embedding: blocks.embedding })
+      .from(blocks)
+      .where(and(eq(blocks.ownerId, file.id), eq(blocks.kind, 'section')))
+      .orderBy(blocks.startLine)
+    expect(sections).toEqual([
+      { innerPath: 'Guide', embedKey: null, embedding: null },
+      { innerPath: 'Guide > Install', embedKey: null, embedding: null },
+    ])
   })
 
   it('embeds at most ELARA_EMBED_MAX_SYMBOLS_PER_FILE symbols of a file, keeps every symbol, and records why (#496)', async () => {
