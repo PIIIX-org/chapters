@@ -325,6 +325,13 @@
       "breakpoints": true
     },
     {
+      "idx": 52,
+      "version": "7",
+      "when": 1793200000000,
+      "tag": "0052_identifier_keywords",
+      "breakpoints": true
+    },
+    {
       "idx": 56,
       "version": "7",
       "when": 1793400000000,
