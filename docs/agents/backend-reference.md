@@ -2208,7 +2208,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     MCP Inspector) does, so every such client would get references
     without asking. A header opt-in has the same lifetime problem, and
     agents cannot set headers.
-  - Search snippets are not deduplicated yet (#683 follow-up).
+  - Search and `find_symbols` snippets are not deduplicated yet (#1030).
   `test/mcp-session-dedup.test.ts` (references, changed text, other
   session, token and account, expiry, permission change, pages, caps, the
   no-session bytes, and a scripted session on the repository's own files:
