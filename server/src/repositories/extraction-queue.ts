@@ -7,7 +7,7 @@ import { chunks, keywordVector, replaceBlockSet, vectorsByEmbedKey } from '../se
 import { CHUNK_VERSION, embedKey } from '../search/embed-key.js'
 import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
 import { fileKeywords, symbolKeywords } from '../search/identifiers.js'
-import { recomputeSemanticEdges } from '../search/semantic-edges.js'
+import { queueSemanticEdgeRefresh, runSemanticEdgeRefresh } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { hasOutline, outlineSections } from './outline.js'
@@ -561,13 +561,20 @@ async function processFile(fileId: string): Promise<void> {
     embedKey: keys.get(i) ?? null,
     embedding: vectors.get(i) ?? null,
   }))
-  const written = await db.transaction(async (tx) => {
+  // The file's own neighbours are those of its file-level block, and a neighbour counts the file by its best block:
+  // a block set that kept every vector it had and lost none has the edges it had. Otherwise its own and those of the
+  // nodes it can move (#1007: the vectors new to it), queued with the block set so a refresh that fails after the
+  // commit runs again.
+  const currentKeys = new Set(keys.values())
+  const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !currentKeys.has(k))
+  const newKeys = toEmbed.map((i) => keys.get(i)!)
+  const refreshJob = await db.transaction(async (tx) => {
     const [current] = await tx
       .select({ contentHash: repositoryFiles.contentHash })
       .from(repositoryFiles)
       .where(eq(repositoryFiles.id, fileId))
       .for('update')
-    if (current?.contentHash !== row.contentHash) return false
+    if (current?.contentHash !== row.contentHash) return null
     await tx.delete(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, fileId))
     // One row per specifier: a file importing one path twice keeps the first line (chunks insert in order).
     for (const chunk of chunks(importRows)) await tx.insert(repositoryFileImports).values(chunk).onConflictDoNothing()
@@ -581,10 +588,9 @@ async function processFile(fileId: string): Promise<void> {
         extractor_version = ${extractorVersion}, embedder_id = ${embedderId}, chunk_version = ${chunkVersion},
         keyword_fts = ${keywords ? sql`fts || ${keywords}` : null}
       WHERE id = ${fileId}`)
+    const job = changed ? await queueSemanticEdgeRefresh(tx, 'code', fileId, newKeys) : null
     failpoint('extract.before-commit')
-    return true
+    return job
   })
-  // The file's semantic neighbours are those of its file-level block (the first, always embedded);
-  // a file-level vector kept as it was has the edges it had.
-  if (written && toEmbed.includes(0)) await recomputeSemanticEdges('code', fileId, [vectors.get(0)!])
+  if (refreshJob !== null) await runSemanticEdgeRefresh(refreshJob, 'code', fileId, newKeys)
 }

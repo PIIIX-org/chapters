@@ -4,6 +4,7 @@ import {
   bigserial,
   boolean,
   customType,
+  doublePrecision,
   foreignKey,
   index,
   integer,
@@ -13,7 +14,6 @@ import {
   primaryKey,
   smallint,
   text,
-  real,
   timestamp,
   unique,
   uniqueIndex,
@@ -686,6 +686,11 @@ export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
  * The SQL columns are still named `node_a_*` / `node_b_*` from when the table
  * was modelled as an undirected pair — renaming them would buy nothing but a
  * migration. `node_a` is the source, `node_b` is the target.
+ *
+ * The rows are the true top-k of the content whatever the order it was
+ * embedded in (#1007, search/semantic-edges.ts). `similarity` holds the double
+ * the search computed (migration 0050; `real` before), so an embed compares
+ * its own similarity with a list's last row exactly.
  */
 export const semanticEdges = pgTable(
   'semantic_edges',
@@ -694,7 +699,7 @@ export const semanticEdges = pgTable(
     sourceId: uuid('node_a_id').notNull(),
     targetType: semanticNodeType('node_b_type').notNull(),
     targetId: uuid('node_b_id').notNull(),
-    similarity: real('similarity').notNull(),
+    similarity: doublePrecision('similarity').notNull(),
   },
   (t) => [
     primaryKey({ columns: [t.sourceType, t.sourceId, t.targetType, t.targetId] }),
