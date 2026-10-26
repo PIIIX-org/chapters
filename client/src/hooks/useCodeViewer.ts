@@ -30,10 +30,10 @@ interface ModeSpec {
 }
 
 /**
- * The four languages `server/src/repositories/extraction.ts` parses, which are
- * also the four worth colouring: everything else the index labels (rust, java,
- * c, cpp, ruby — see `server/src/repositories/language.ts`) has no outline
- * either, so it renders as the plain mono text it already was.
+ * The four languages coloured here: TypeScript, JavaScript, Python and Go.
+ * `server/src/repositories/extraction.ts` parses more (Rust, Java, C, C++,
+ * C#, Kotlin, Ruby, PHP, #464); those still render as plain mono text, their
+ * outline comes from the server.
  *
  * ponytail: keyword/comment/string/number tokens off one shared scanner, not
  * four real grammars. That is one `StreamLanguage` and no new dependency

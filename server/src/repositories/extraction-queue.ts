@@ -10,6 +10,7 @@ import { fileKeywords, symbolKeywords } from '../search/identifiers.js'
 import { recomputeSemanticEdges } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
+import { hasOutline, outlineSections } from './outline.js'
 import {
   RESOLUTION_MANIFEST_PATTERN,
   buildResolutionContext,
@@ -478,15 +479,18 @@ async function processFile(fileId: string): Promise<void> {
   const chunkVersion = CHUNK_VERSION
 
   // The language comes from the path, not the stored label: a row indexed
-  // before its extension was mapped (`.mts`/`.cts` before #451) keeps a stale
-  // label, since a sync skips unchanged content. It is written back below.
+  // before its extension was mapped (`.mts`/`.cts` before #451, `.kt`, `.md`
+  // before #464) keeps a stale label, since a sync skips unchanged content.
+  // It is written back below.
   const language = detectLanguage(row.path)
+  const structured = !looksMinified(row.content)
   // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
-  const minified = looksMinified(row.content)
   const { imports, symbols }: ExtractionResult =
-    isSupportedLanguage(language) && !minified ? await extractStructure(language, row.content, row.path) : { imports: [], symbols: [] }
+    structured && isSupportedLanguage(language) ? await extractStructure(language, row.content, row.path) : { imports: [], symbols: [] }
+  // The minified rule is about code: a Markdown file with one long line (a table, a paragraph) keeps its outline.
+  const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, row.content) : []
   // The keyword channel's identifier lexemes (#455): a minified file's mangled names are left out, its path kept.
-  const keywords = keywordVector(fileKeywords(row.path, minified ? null : row.content))
+  const keywords = keywordVector(fileKeywords(row.path, structured ? row.content : null))
 
   const importRows: Array<typeof repositoryFileImports.$inferInsert> = []
   if (imports.length > 0) {
@@ -497,7 +501,7 @@ async function processFile(fileId: string): Promise<void> {
     }
   }
 
-  const fileBlocks = codeBlocks(fileId, row.path, row.content, symbols)
+  const fileBlocks = codeBlocks(fileId, row.path, row.content, symbols, sections)
 
   // Per-file budget (#496): the file-level block and N of its symbols get a
   // vector, the rest are stored without one (null embed_key), so one file
@@ -516,9 +520,10 @@ async function processFile(fileId: string): Promise<void> {
     embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolOrder.length} symbols embedded, the rest are keyword-searchable only`
     console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${embeddingNote}`)
   }
-  // The file-level block first, then the symbols in budget order, then the class skeletons.
+  // The file-level blocks first, then the symbols in budget order, then the class skeletons. Sections
+  // (Markdown/HTML outline blocks, #464) are never embedded: their rows keep a null embed_key.
   const embedOrder = [
-    ...fileBlocks.flatMap((b, i) => (b.budgetTier === null && b.outlineOf === undefined ? [i] : [])),
+    ...fileBlocks.flatMap((b, i) => (b.budgetTier === null && b.outlineOf === undefined && b.kind !== 'section' ? [i] : [])),
     ...symbolOrder.filter(({ i }) => budgeted.has(i)).map(({ i }) => i),
     ...fileBlocks.flatMap((b, i) => (b.outlineOf !== undefined && budgeted.has(b.outlineOf) ? [i] : [])),
   ]

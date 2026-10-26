@@ -304,6 +304,13 @@
       "breakpoints": true
     },
     {
+      "idx": 48,
+      "version": "7",
+      "when": 1793000000000,
+      "tag": "0048_unembed_code_sections",
+      "breakpoints": true
+    },
+    {
       "idx": 52,
       "version": "7",
       "when": 1793200000000,

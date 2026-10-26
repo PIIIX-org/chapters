@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { Parser, Language, Query, Tree, type Node, type QueryMatch } from 'web-tree-sitter'
+import { LANGUAGE_GRAMMARS, scopedSymbol, withoutDefinedPrototypes, type NewLanguage, type ScopeRules } from './extraction-languages.js'
 
 const require = createRequire(import.meta.url)
 
@@ -28,7 +29,12 @@ const require = createRequire(import.meta.url)
  * 4: TS/TSX/JS imports also from `export ... from`, `import('x')` and
  * `require('x')` with a literal specifier, and TypeScript `import x =
  * require('x')` (#466). No block text changes, so no vector is embedded again.
- * 5 is #998's (extraction languages).
+ * 5: Rust, Java, C, C++, C#, Kotlin, Ruby and PHP symbols and imports
+ * (extraction-languages.ts), and Markdown/HTML heading sections (outline.ts)
+ * (#464); a file whose language label changed (`.kt`, `.md`, ...) is
+ * relabelled. Unchanged texts keep their vectors: the file blocks of these
+ * files are not embedded again, only their new symbol blocks (sections are
+ * outline blocks, never embedded).
  * 6: identifier lexemes for the keyword channel (#455, search/identifiers.ts):
  * `repository_files.keyword_fts` and symbol blocks' `keywords` (migration 0052).
  * No block text changes, so no vector is embedded again.
@@ -38,9 +44,12 @@ export const EXTRACTOR_VERSION = 6
 /**
  * What a symbol declares (#450; the contract more languages, #464, and the
  * symbol/edge table, #469, build on). `method`: a function declared in a
- * class body (or on a Go receiver type), its class in `parent`. `variable`:
- * an exported module-level binding that is not a function or a class.
- * `namespace`: a TypeScript `namespace`, its members carrying it in `parent`.
+ * class body (or on a Go receiver type, in a Rust `impl`), its class in
+ * `parent`. `variable`: an exported module-level binding that is not a
+ * function or a class (and in #464's languages a constant, or a public or
+ * static field with its class in `parent`). `namespace`: a TypeScript
+ * `namespace` (a Rust `mod`, a C++ namespace, a Ruby module), its members
+ * carrying it in `parent`.
  */
 export const SYMBOL_KINDS = ['function', 'class', 'interface', 'type', 'enum', 'method', 'variable', 'namespace'] as const
 export type SymbolKind = (typeof SYMBOL_KINDS)[number]
@@ -72,12 +81,12 @@ export interface ExtractionResult {
   symbols: ExtractedSymbol[]
 }
 
-type SupportedLanguage = 'typescript' | 'javascript' | 'python' | 'go'
+type SupportedLanguage = 'typescript' | 'javascript' | 'python' | 'go' | NewLanguage
 
-const SUPPORTED = new Set<SupportedLanguage>(['typescript', 'javascript', 'python', 'go'])
+const SUPPORTED = new Set<string>(['typescript', 'javascript', 'python', 'go', ...Object.keys(LANGUAGE_GRAMMARS)])
 
 export function isSupportedLanguage(language: string | null): language is SupportedLanguage {
-  return language !== null && SUPPORTED.has(language as SupportedLanguage)
+  return language !== null && SUPPORTED.has(language)
 }
 
 const wasmPath = (pkg: string, file: string): string =>
@@ -85,17 +94,22 @@ const wasmPath = (pkg: string, file: string): string =>
 
 interface GrammarConfig {
   wasm: string
-  importQuery: string
+  /** `@src` captures; none: the language's imports name no file (C# `using`). */
+  importQuery?: string
+  /** The specifiers of an `@src` node whose text is not just one (a Rust `use` tree, a Java `import`); none: not an import of a file. */
+  importTarget?: (node: Node) => string[]
   /**
    * Candidate declarations, `@decl.<kind>` with their `@name`, wherever they
    * are: `symbolOf` keeps those at module level (or in a module-level
    * namespace or class) and decides the kind of `@decl.binding`
    * (`const f = ...`), `@decl.default` (`export default () => ...`) and
-   * `@decl.exports` (`exports.f = ...`).
+   * `@decl.exports` (`exports.f = ...`). With `scopes` (#464's grammars),
+   * extraction-languages.ts `scopedSymbol` does instead.
    */
   symbolQuery: string
   /** Languages that export by naming convention rather than by an `export` keyword. */
   exportedName?: (name: string) => boolean
+  scopes?: ScopeRules
 }
 
 /** A grammar: the language's own, or TSX for a `.tsx` file (#449). */
@@ -201,6 +215,10 @@ const GRAMMARS: Record<Grammar, GrammarConfig> = {
     `,
     exportedName: (name) => /^\p{Lu}/u.test(name),
   },
+  // #464's grammars, each loaded the first time a file of its language is extracted.
+  ...(Object.fromEntries(
+    Object.entries(LANGUAGE_GRAMMARS).map(([language, { wasm, ...grammar }]) => [language, { ...grammar, wasm: wasmPath(...wasm) }]),
+  ) as Record<NewLanguage, GrammarConfig>),
 }
 
 const SYMBOL_KIND_BY_CAPTURE: Record<string, SymbolKind> = {
@@ -366,8 +384,11 @@ export async function extractStructure(language: string, content: string, path: 
   }
   // The grammar comes from the extension, not the label: a `.tsx` file is
   // labelled `typescript` (language.ts) but JSX only parses with TSX, and TSX
-  // cannot parse the `<T>value` casts `.ts/.mts/.cts` allow.
-  const grammar: Grammar = language === 'typescript' && /\.tsx$/i.test(path) ? 'tsx' : language
+  // cannot parse the `<T>value` casts `.ts/.mts/.cts` allow. A `.h` header is
+  // labelled `c` but may be C++ (most C++ projects name headers `.h`): the C++
+  // grammar reads C declarations alike and also C++ classes and namespaces.
+  const grammar: Grammar =
+    language === 'typescript' && /\.tsx$/i.test(path) ? 'tsx' : language === 'c' && /\.h$/i.test(path) ? 'cpp' : language
   const config = GRAMMARS[grammar]
   const lang = await loadLanguage(grammar)
   const parser = new Parser()
@@ -378,20 +399,22 @@ export async function extractStructure(language: string, content: string, path: 
     tree = parser.parse(content)
     if (!tree) return { imports: [], symbols: [] }
 
-    const importQuery = getCompiledQuery(lang, grammar, 'import', config.importQuery)
     const imports: ExtractedImport[] = []
-    for (const match of importQuery.matches(tree.rootNode)) {
-      for (const capture of match.captures) {
-        if (capture.name === 'src') imports.push({ target: capture.node.text, line: capture.node.startPosition.row + 1 })
+    if (config.importQuery) {
+      for (const match of getCompiledQuery(lang, grammar, 'import', config.importQuery).matches(tree.rootNode)) {
+        for (const capture of match.captures) {
+          if (capture.name !== 'src') continue
+          const line = capture.node.startPosition.row + 1
+          for (const target of config.importTarget ? config.importTarget(capture.node) : [capture.node.text]) imports.push({ target, line })
+        }
       }
     }
 
-    const symbolQuery = getCompiledQuery(lang, grammar, 'symbol', config.symbolQuery)
-    const symbols: ExtractedSymbol[] = []
-    for (const match of symbolQuery.matches(tree.rootNode)) {
-      const symbol = symbolOf(match, config)
-      if (symbol) symbols.push(symbol)
-    }
+    const matches = getCompiledQuery(lang, grammar, 'symbol', config.symbolQuery).matches(tree.rootNode)
+    const { scopes } = config
+    const symbols = scopes
+      ? withoutDefinedPrototypes(matches.flatMap((match) => scopedSymbol(match, scopes) ?? []))
+      : matches.flatMap((match) => symbolOf(match, config) ?? [])
     // Stable: declarations sharing a line (`export const a = 1, b = 2`) keep their order.
     symbols.sort((a, b) => a.startLine - b.startLine)
 

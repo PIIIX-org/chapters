@@ -169,6 +169,15 @@ describe('prose keeps its stemming (#455)', () => {
   })
 })
 
+describe('only symbol blocks hold identifier keywords (#455)', () => {
+  it('a Markdown heading section (#464) gets none', async () => {
+    const rows = (await db.execute(sql`SELECT b.kind, b.keywords IS NULL AS empty FROM blocks b JOIN repository_files f ON f.id = b.owner_id
+      WHERE f.repository_id = ${repo} AND f.path = 'docs/reading.md' AND b.kind = 'section'`)) as unknown as Array<{ kind: string; empty: boolean }>
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.every((r) => r.empty)).toBe(true)
+  })
+})
+
 describe('a file changed since its extraction (#455)', () => {
   // Last: it rewrites a fixture file. A sync stores new content (its generated `fts` with it) before the file
   // is extracted again; until then the leg reads that `fts`, not the identifiers of the old content.
