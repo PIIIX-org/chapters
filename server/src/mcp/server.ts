@@ -85,6 +85,7 @@ import { countPendingExtractions, extractionFailures } from '../repositories/ext
 import { skippedField } from '../repositories/fs-scan.js'
 import { SYMBOL_KINDS, type SymbolKind } from '../repositories/extraction.js'
 import { prepareGitRemote } from '../repositories/git-remote.js'
+import { removeGitMirror } from '../repositories/git-mirror.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
@@ -2520,6 +2521,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireRepositoryOwner(target)
       await deleteRepositoryRecord(target)
       stopWatchingLocalRepository(target)
+      // In the background: it waits for a sync still fetching into the mirror (#684).
+      void removeGitMirror(target).catch(console.error)
       return { status: 'deleted', id: target }
     },
   )
@@ -2922,7 +2925,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     async (args: { query: string; symbols?: boolean; limit?: number }, { resources }) => {
       const limit = args.limit ?? 20
       // The first `limit` hits of the ranking, plus one to know whether more match.
-      const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true })
+      const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id })
       return {
         // One repository: its indexed version, once in the head (#471).
         head: { ...head, ...(resources.repositoryIds.length === 1 ? await repositoryIndexedVersion(resources.repositoryIds[0]!) : {}) },
@@ -2974,7 +2977,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
       const limit = args.limit ?? 20
       // The first `limit` symbols of the ranking, plus one to know whether more match.
-      const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
+      const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1, accountId: auth.user.id })
       return {
         head: { ...head, ...(repoIds.length === 1 ? await repositoryIndexedVersion(repoIds[0]!) : {}) },
         sections: [
