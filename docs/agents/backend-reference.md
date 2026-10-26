@@ -1487,8 +1487,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     failed count as failed items), read beside the query embedding; left
     out when all zero.
   - **HNSW settings** (#462): every vector leg (`blockLeg`: the note,
-    code file and symbol legs of `search` and `find_symbols`) runs in a
-    transaction that first calls `setHnswScan(tx, efSearch)`
+    code file and symbol legs of `search` and `find_symbols`) whose scope
+    is not read exactly (next bullet) runs in a transaction that first
+    calls `setHnswScan(tx, efSearch)`
     (`search/hnsw.ts`, the one helper for every HNSW query): it sets
     `hnsw.ef_search` (200 for search) and, when the installed pgvector is
     0.8.0 or later (`pg_extension.extversion`; an older one refuses the
@@ -1501,6 +1502,25 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     leg has its rows. Relaxed order can return rows slightly out of
     distance order: every leg re-sorts its cut. Semantic edges
     (`semantic-edges.ts`) call the same helper with `ef_search` 100.
+  - **Small scopes read exactly** (#1035): `blockLeg` first counts the
+    blocks (every kind) of the leg's vaults or repositories, stopping at
+    `EXACT_SCAN_BLOCKS` + 1 (2,000; an index-only scan of
+    `blocks_container_idx`). At or under 2,000 the leg orders by
+    `cosine_distance(embedding, q)`, the function `<=>` calls (same
+    values), which no index can serve: the planner reads the scope's blocks
+    and sorts them, so the leg has every row of the scope that ranks in its
+    cut. Over 2,000 it orders by `<=>` with the HNSW settings above. Why:
+    the HNSW graph can leave a row that no other node links to (links
+    depend on insert order and random node levels; a small repository
+    whose files were extracted between a big one's, #497's fair turns, lost
+    `small/a.md` in 2 of 12 runs of
+    `search-deterministic-vectors.test.ts`), and the iterative scan stops
+    after `hnsw.max_scan_tuples`; neither can return such a row. Measured
+    on 50,000 file blocks with the HNSW plan: a 20-block scope 88 → 3.2 ms
+    (the HNSW scan walked toward the 20,000-tuple budget for rows the
+    scope does not have), 2,000 blocks 17 → 5.8 ms, 5,000 blocks would be
+    7 → 26 ms (why the cap is 2,000); a scope over the cap pays the count
+    only (under 1 ms) and stays approximate.
   - **Total order** (#623): every cut ends in a key that is unique and,
     where it can be, the same on two instances with the same content (ids
     are random per instance). The note keyword leg `ORDER BY rank DESC, path
@@ -3173,7 +3193,7 @@ that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same owner already has keeps that vector instead of being embedded again, so
 an edit to another symbol or section, a frontmatter edit, or a version bump that leaves a block's text
 alone, embeds nothing new for it. *Readers*: `search` note vector leg — the nearest 200 note blocks of the
-scoped vaults (`hnsw.ef_search` 200 and the iterative scan, #462; #967's distance gate on the best distance), then each live note's best block
+scoped vaults (`hnsw.ef_search` 200 and the iterative scan, #462; read exactly when the vaults hold at most 2,000 blocks, #1035; #967's distance gate on the best distance), then each live note's best block
 distance (filters applied to the note), one hit per note with the same
 `{…, snippet: left(body, 200)}` as before. A vault has about 12 times as
 many note blocks as notes; the partial `blocks_note_embedding_idx` keeps the
@@ -3183,7 +3203,7 @@ query after a restart is slower, 190–700 ms against 30–70 ms, while the
 larger index pages in); `search` code
 vector leg — the nearest `file` blocks of the scoped repositories
 (their own partial HNSW index `blocks_file_embedding_idx`, as the old
-file index held only files; `hnsw.ef_search` 200 and the iterative scan; #967's distance gate), one hit per file with the
+file index held only files; `hnsw.ef_search` 200 and the iterative scan; read exactly when the repositories hold at most 2,000 blocks, #1035; #967's distance gate), one hit per file with the
 same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
 the ADR-004 best-block roll-up let symbol blocks of large files crowd the
 leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
