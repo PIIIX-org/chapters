@@ -7,6 +7,9 @@
 // iterative index scan, so a leg whose WHERE (scope, kind) keeps few of the
 // nearest rows of the whole instance still gets its own rows when the planner
 // serves it from the HNSW index (as it does on a big instance).
+// #1035: a leg whose scope is small reads the scope's blocks instead of the
+// HNSW index, so it has every one of the scope's rows that ranks in its cut,
+// even those the index's graph or its scan budget never reaches.
 // Uses only entry points that exist on the base (the fails-before job runs
 // this file against it).
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -140,15 +143,18 @@ describe('equal scores keep one order whatever the write order (#623)', () => {
 /**
  * Runs every transaction with sequential scans, bitmap scans and explicit
  * sorts priced out, so a vector leg is served by its HNSW index as on an
- * instance big enough for the planner to choose it.
+ * instance big enough for the planner to choose it. `maxScanTuples` sets
+ * `hnsw.max_scan_tuples`, the iterative scan's budget, so a small instance
+ * runs out of it as a big one does.
  */
-function planAsOnABigInstance() {
+function planAsOnABigInstance(maxScanTuples?: number) {
   const transaction = db.transaction.bind(db)
   vi.spyOn(db, 'transaction').mockImplementation(((run: (tx: typeof db) => Promise<unknown>) =>
     transaction(async (tx) => {
       await tx.execute(
         sql`SELECT set_config('enable_seqscan', 'off', true), set_config('enable_bitmapscan', 'off', true), set_config('enable_sort', 'off', true)`,
       )
+      if (maxScanTuples !== undefined) await tx.execute(sql`SELECT set_config('hnsw.max_scan_tuples', ${String(maxScanTuples)}, true)`)
       return run(tx as unknown as typeof db)
     })) as unknown as typeof db.transaction)
 }
@@ -157,7 +163,8 @@ describe('a filtered vector leg is not starved by the rest of the instance (#462
   it('a small repository inside a big instance keeps its vector hits', async () => {
     // 500 files of another repository (more than the leg's ef_search of 200) are all nearer the query than
     // the small repository's files, which share one word with it (distance 0.74, under the fake embedder's
-    // gate of 0.8), so only the vector channel can find them.
+    // gate of 0.8), so only the vector channel can find them. Through the HNSW index `small/a.md` was missing
+    // in some builds (#1035: no node linked to it); a scope this small is now read exactly.
     const big = await repository('big')
     const files = Array.from({ length: 500 }, (_, i) => ({ path: `big/f${i}.md`, content: `starve query words w${i}\n` }))
     await syncRepositoryFiles(big, files, files.map((f) => f.path))
@@ -167,5 +174,36 @@ describe('a filtered vector leg is not starved by the rest of the instance (#462
     const answer = await searchNotes({ vaultIds: [], repositoryIds: [small] }, 'starve query words', 20)
     expect(answer.retrieval_mode).toBe('hybrid')
     expect(answer.results.map((r) => r.path)).toEqual(['small/a.md', 'small/c.md'])
+  }, 120_000)
+})
+
+describe('a small scope is read exactly, not through the HNSW graph (#1035)', () => {
+  it('a small vault the HNSW scan never reaches keeps its vector hits', async () => {
+    // An HNSW scan reaches a row only along the graph's links. 600 note blocks of one vault are nearer the
+    // query than any other block: they fill the scan's 200 candidates, and the scan expands nothing farther.
+    // 80 blocks of a second vault are nearer the small vault's notes than those 600 are, so the small vault's
+    // blocks, written last, link only to them. With `hnsw.max_scan_tuples` 1 the iterative scan stops there,
+    // as its default 20,000 does on an instance with that many rows nearer the query: through the index the
+    // leg answers [] in every build (40 of 40 bare-table builds). The small vault's notes share one word with
+    // the query (distance 0.71, under the fake embedder's gate of 0.8), so only the vector channel finds them.
+    const owner = await createActiveUser()
+    const vaultWith = async (name: string, notes: Array<{ path: string; body: string }>) => {
+      const [vault] = await db.insert(vaults).values({ name, ownerId: owner.id }).returning()
+      for (const note of notes) await createNote(vault!.id, note)
+      await flushEmbeddings()
+      return vault!.id
+    }
+    const sections = (count: number, text: string) => Array.from({ length: count }, (_, i) => `## s${i}\n${text}\n`).join('')
+    await vaultWith('near', Array.from({ length: 12 }, (_, n) => ({ path: `near/n${n}`, body: sections(50, 'starve query words') })))
+    await vaultWith('far', Array.from({ length: 2 }, (_, n) => ({ path: `far/f${n}`, body: sections(40, 'starve other') })))
+    const small = await vaultWith('small', [
+      { path: 'small/a', body: 'starve other\n' },
+      { path: 'small/c', body: 'starve other\n' },
+    ])
+
+    planAsOnABigInstance(1)
+    const answer = await searchNotes({ vaultIds: [small], repositoryIds: [] }, 'starve query words', 20)
+    expect(answer.retrieval_mode).toBe('hybrid')
+    expect(answer.results.map((r) => r.path)).toEqual(['small/a', 'small/c'])
   }, 120_000)
 })
