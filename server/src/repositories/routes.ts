@@ -29,7 +29,7 @@ import {
   syncLocalRepository,
   watchLocalRepository,
 } from './scheduler.js'
-import { listRepositoryFiles } from './store.js'
+import { deleteRepositoryRecord, listRepositoryFiles } from './store.js'
 import { buildGraph } from '../graph/assemble.js'
 import { graphQuerySchema, parseGraphFilters, type GraphQuery } from '../graph/filters.js'
 import { searchNotes } from '../search/search.js'
@@ -206,7 +206,7 @@ export function repositoryRoutes(app: FastifyInstance) {
     if (!(await requireOwner(req.user!.id, req.params.id))) {
       return reply.code(404).send({ error: 'not found' })
     }
-    await db.delete(repositories).where(eq(repositories.id, req.params.id))
+    await deleteRepositoryRecord(req.params.id)
     // Otherwise the watcher outlives the row and keeps re-inserting files for
     // a repository nobody can reach.
     stopWatchingLocalRepository(req.params.id)

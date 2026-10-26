@@ -10,7 +10,7 @@ import { recordJob } from '../monitoring/metrics.js'
 import { INSTANCE_LOCK_KEY, writesPaused } from './maintenance-lock.js'
 import { config } from '../config.js'
 import { embeddingJobKey, kickEmbeddings } from '../search/embedding-queue.js'
-import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
+import { kickSemanticEdges, queueSemanticEdgeRestore, removeSemanticNodes } from '../search/semantic-edges.js'
 import {
   closeNoteEditors,
   cloneDocument,
@@ -1310,6 +1310,8 @@ export async function softDeleteNote(
         if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
         const { row, rebased } = await catchUp(tx, locked, await readNoteCrdt(tx, locked.id), fold, { storeRow: true })
         const deleted = (await applyRowChange(tx, row, { deletedAt: new Date() }, { action: 'delete', actor })).row
+        // A trashed note leaves every node's top-k and keeps no rows; the nodes that held it recompute (#1015).
+        await removeSemanticNodes(tx, 'note', [row.id])
         await options.recordKey?.(tx, plainRow(deleted))
         return { row: deleted, rebased }
       })
@@ -1318,6 +1320,7 @@ export async function softDeleteNote(
       // §5.5: the note's editors are closed now (`note-deleted`); a reconnect is refused until a restore.
       closeNoteEditors(seen.id)
       afterCommit()
+      kickSemanticEdges()
       return plainRow(deleted.row)
     } finally {
       releaseFold(fold)
@@ -1362,6 +1365,8 @@ export async function restoreNote(
         const locked = await lockedNote(tx, seen.id)
         if (!locked || !locked.deletedAt) return null
         const restored = (await applyRowChange(tx, locked, { deletedAt: null }, { action: 'restore', actor })).row
+        // Back in the lists it belongs in (#1015): its kept blocks give its embed no new vector.
+        await queueSemanticEdgeRestore(tx, locked.id)
         await options.recordKey?.(tx, plainRow(restored))
         return restored
       })
@@ -1371,6 +1376,7 @@ export async function restoreNote(
     }
     if (!restored) return null
     afterCommit()
+    kickSemanticEdges()
     return plainRow(restored)
   })
 }
@@ -2188,8 +2194,9 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
       if (!locked || !locked.deletedAt) return false
       await tx.delete(notes).where(eq(notes.id, row.id))
       // semanticEdges is polymorphic and has no FK (spec 9), so it does not
-      // cascade — clear it by hand or the rows leak (#92).
-      await deleteSemanticEdgesFor('note', [row.id], tx)
+      // cascade — clear it by hand or the rows leak (#92). The trash removed
+      // them already, unless a write before #1015 left them.
+      await removeSemanticNodes(tx, 'note', [row.id])
       await insertStoreJob(tx, STORE_JOBS.removeFile, { vaultId, ownerId: row.id, paths: [`.trash/${row.id}.md`] })
       // The delete's dir_index projection cascades away with the row: the folders are queued here.
       await insertStoreJob(tx, STORE_JOBS.dirIndex, { vaultId, dirs: resolveNotePath(row.path).ancestorDirectories })
@@ -2199,6 +2206,7 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
     failpoint('purge.after-commit-before-remove')
     closeNoteEditors(row.id)
     wakeProjector()
+    kickSemanticEdges()
     return true
   })
   return purged ?? false

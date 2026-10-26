@@ -16,7 +16,7 @@ import {
 import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
-import { deleteSemanticEdgesFor, deleteVaultCodeEdges } from '../search/semantic-edges.js'
+import { kickSemanticEdges, removeSemanticNodes, transferVaultSemanticEdges } from '../search/semantic-edges.js'
 import { listAccessibleVaults, resolveAccess } from './permissions.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 
@@ -38,11 +38,15 @@ export async function purgeVaultRecord(vaultId: string): Promise<void> {
     .delete(notifications)
     .where(and(eq(notifications.entityType, 'vault'), eq(notifications.entityId, vaultId)))
 
-  // Everything else referencing the vault cascades via FK.
-  await db.delete(vaults).where(eq(vaults.id, vaultId))
-  // Edges after the rows: an embedding that locked its note before the delete
-  // has committed its edges by now, and none can be added after it.
-  await deleteSemanticEdgesFor('note', noteIds)
+  // Everything else referencing the vault cascades via FK. Edges after the
+  // rows, in the same transaction: an embedding that locked its note before
+  // the delete has committed its edges by now, and none can be added after
+  // it. The files that held one of its notes are queued (#1015).
+  await db.transaction(async (tx) => {
+    await tx.delete(vaults).where(eq(vaults.id, vaultId))
+    await removeSemanticNodes(tx, 'note', noteIds)
+  })
+  kickSemanticEdges()
   await rm(join(config.dataDir, 'vaults', vaultId), { recursive: true, force: true })
 }
 
@@ -280,12 +284,14 @@ export function vaultRoutes(app: FastifyInstance) {
       if (!newOwner || newOwner.status !== 'active') {
         return reply.code(400).send({ error: 'new owner must be an active user' })
       }
-      // Its notes' note↔code semantic edges joined the previous owner's repositories (D10, #461).
+      // Its notes' note↔code semantic edges joined the previous owner's repositories (D10, #461); the nodes
+      // whose lists the move changes are queued (#1015).
       const vault = await db.transaction(async (tx) => {
         const [row] = await tx.update(vaults).set({ ownerId: newOwner.id }).where(eq(vaults.id, req.params.id)).returning()
-        if (row) await deleteVaultCodeEdges(row.id, tx)
+        if (row) await transferVaultSemanticEdges(tx, row.id)
         return row
       })
+      kickSemanticEdges()
       await logSecurityEvent({
         type: 'vault_ownership_transferred',
         actorUserId: req.user!.id,
