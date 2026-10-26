@@ -330,6 +330,41 @@ describe('session_id (#683)', () => {
     ])
   })
 
+  it('leaves what the first page answered by reference out of every later page (#1031 r1)', async () => {
+    /** Every page of a read, following `truncated.cursor`. */
+    const allPages = async (args: Json) => {
+      const pages = [await readFile(args)]
+      for (let cursor = (pages[0]!.json.truncated as { cursor?: string }).cursor; cursor; cursor = (pages.at(-1)!.json.truncated as { cursor?: string }).cursor) {
+        expect(pages.length, 'pages').toBeLessThan(40)
+        pages.push(await readFile({ ...args, cursor }))
+      }
+      return pages
+    }
+    // A part answered by reference on page 1 is neither announced (`next`) nor sent on the pages that continue part 1.
+    const session = newSession()
+    await readFile({ path: 'src/big.ts', session_id: session, targets: [{ lines: '70-72' }] })
+    const parted = await allPages({ path: 'src/big.ts', session_id: session, budget_tokens: 256, targets: [{ lines: '1-60' }, { lines: '70-72' }] })
+    expect(parted.length).toBeGreaterThan(2)
+    expect(parts(parted[0]!).at(-1)).toEqual({ lines: [70, 72], same_as: expect.objectContaining({ call: 1, loc: 'src/big.ts#L70-L72' }) })
+    const later = parted.slice(1).flatMap((page) => parts(page))
+    expect(later.filter((part) => JSON.stringify(part).includes('70'))).toEqual([])
+    // A symbol list answered by reference on page 1 is not sent again on the last content page: the file changed
+    // (`first` → `other`, same length), so its content is sent in full by pages while its symbols are the same.
+    const lines = (word: string) =>
+      Array.from({ length: 60 }, (_, i) => `export const item${i} = '${word} literal long enough to make this line about seventy'\n`).join('')
+    const paths = ['src/store.ts', 'src/big.ts', 'src/changing.ts']
+    await syncRepositoryFiles(repoId, [{ path: 'src/changing.ts', content: lines('first') }], paths)
+    await flushExtraction()
+    const whole = newSession()
+    expect((await readFile({ path: 'src/changing.ts', session_id: whole, budget_tokens: 25_000 })).json.symbols).toEqual(expect.any(Array))
+    await syncRepositoryFiles(repoId, [{ path: 'src/changing.ts', content: lines('other') }], paths)
+    await flushExtraction()
+    const again = await allPages({ path: 'src/changing.ts', session_id: whole, budget_tokens: 256 })
+    expect(again.length).toBeGreaterThan(2)
+    expect(again[0]!.json.symbols).toEqual({ same_as: expect.objectContaining({ call: 1, loc: 'src/changing.ts' }) })
+    expect(again.slice(1).filter((page) => 'symbols' in page.json)).toEqual([])
+  })
+
   it('keeps at most MAX_PASSAGES per session, the newest, and MAX_SESSIONS per token', async () => {
     const [{ id: connectionId }] = (await sql`SELECT id FROM mcp_connections WHERE name = 'session-owner-again'`) as unknown as [{ id: string }]
     const doc = randomUUID()
@@ -450,8 +485,10 @@ describe('scripted session on the chapters files (#683)', () => {
     for (const [i, answer] of session.answers.entries()) {
       const [tool] = script[i]!
       const sent = session.answers.filter((a) => typeof a.json.call === 'number')
-      const expected = plain.answers[i]!.texts
-      expect(tool === 'search' ? answer.texts : expand(sent, answer), `call ${i + 1} (${tool})`).toEqual(expected)
+      // A cursor after a reference also names the referenced sections, which its later pages leave out (`r`).
+      const noCursor = ([json, ...rest]: string[]) => [json!.replace(/"cursor":"[^"]+"/, '"cursor":"…"'), ...rest]
+      const expected = noCursor(plain.answers[i]!.texts)
+      expect(noCursor(tool === 'search' ? answer.texts : expand(sent, answer)), `call ${i + 1} (${tool})`).toEqual(expected)
     }
     const totals = { plain: plain.answers.reduce((n, a) => n + tokens(a), 0), session: session.answers.reduce((n, a) => n + tokens(a), 0) }
     const perCall = session.answers.map((a, i) => `${i + 1} ${script[i]![0]} ${tokens(plain.answers[i]!)} -> ${tokens(a)}`)
