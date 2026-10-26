@@ -1,6 +1,6 @@
 // #1007 review round 1: what keeping every node's top-k current costs per embed, and that a refresh failing
-// after its write committed is not lost. `setHnswScan` runs once per recompute of a node's edges and once per
-// search for the nodes an embed enters (search/semantic-edges.ts), so its calls count the work.
+// after its write committed is not lost; #1015: per delete. `setHnswScan` runs once per recompute of a node's
+// edges and once per search for the nodes an embed enters (search/semantic-edges.ts), so its calls count the work.
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
@@ -9,6 +9,7 @@ import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { SEMANTIC_EDGES_JOB, recomputeSemanticEdges, runSemanticEdgeRebuild } from '../src/search/semantic-edges.js'
 import type * as Hnsw from '../src/search/hnsw.js'
+import { config } from '../src/config.js'
 import { createActiveUser } from './helpers.js'
 
 const scans = vi.hoisted(() => ({ calls: 0, fail: 0 }))
@@ -82,6 +83,31 @@ describe('the cost of an embed (#1007)', () => {
       rows.push(incremental)
     }
     expect(rows[1]).toEqual(rows[0])
+  }, 120_000)
+})
+
+describe('the cost of a delete (#1015)', () => {
+  it('a sync that removes 100 files queues one recompute per file that held one, and leaves the rows of a full recompute', async () => {
+    // Five contents, 24 files each: a file's K neighbours are the first others of its content by path.
+    const files = Array.from({ length: 120 }, (_, i) => ({ path: `pkg${String(i).padStart(3, '0')}/mod.py`, content: `def setup${i % 5}():\n    pass\n` }))
+    const id = await repository('deletes')
+    await syncRepositoryFiles(id, files, files.map((f) => f.path))
+    await flushExtraction()
+    const kept = files.slice(0, 20)
+    const keptIds = await Promise.all(kept.map((f) => fileId(id, f.path)))
+    expect((await syncRepositoryFiles(id, [], kept.map((f) => f.path))).deleted).toBe(100)
+    // Each of the 20 files left held 5 of the removed ones (its 3 others of one content come first by path): one job each.
+    const queued = (await db.execute(sql`
+      SELECT payload->>'nodeId' AS id FROM jobs WHERE kind = ${SEMANTIC_EDGES_JOB} AND done_at IS NULL`)) as unknown as Array<{ id: string }>
+    expect(queued.map((j) => j.id).sort()).toEqual([...keptIds].sort())
+    scans.calls = 0
+    await runSemanticEdgeRebuild()
+    expect(scans.calls).toBe(kept.length)
+    const incremental = await rowsOf(id)
+    // The 3 others of its content, then K - 3 of the other contents.
+    expect(incremental).toHaveLength(kept.length * config.semanticK)
+    for (const f of keptIds) await recomputeSemanticEdges('code', f)
+    expect(await rowsOf(id)).toEqual(incremental)
   }, 120_000)
 })
 
