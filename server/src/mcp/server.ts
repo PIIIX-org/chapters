@@ -87,7 +87,7 @@ import { SYMBOL_KINDS, type SymbolKind } from '../repositories/extraction.js'
 import { prepareGitRemote } from '../repositories/git-remote.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
-import { purgeVaultRecord } from '../vaults/routes.js'
+import { purgeVaultRecord, restoreVaultRecord, trashVaultRecord } from '../vaults/routes.js'
 import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
@@ -1198,7 +1198,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async (_args, { vaultId: target }) => {
       await requireVaultOwner(target)
-      await db.update(vaults).set({ deletedAt: new Date() }).where(eq(vaults.id, target))
+      await trashVaultRecord(target)
       return { status: 'trashed', id: target }
     },
   )
@@ -1220,12 +1220,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const vault = rows[0]
       if (!vault || vault.ownerId !== auth.user.id) throw new McpToolError('NOT_FOUND', 'vault not found')
       if (!vault.deletedAt) throw new McpToolError('CONFLICT', 'vault is not trashed')
-      const [restored] = await db
-        .update(vaults)
-        .set({ deletedAt: null })
-        .where(eq(vaults.id, vaultId))
-        .returning()
-      return restored
+      return restoreVaultRecord(vaultId)
     },
   )
 

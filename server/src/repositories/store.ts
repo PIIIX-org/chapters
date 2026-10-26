@@ -154,7 +154,7 @@ export async function syncRepositoryFiles(
           ),
         )
         .returning({ id: repositoryFiles.id })
-      await removeSemanticNodes(tx, 'code', deleted.map((r) => r.id))
+      await removeSemanticNodes(tx, 'code', repositoryId, deleted.map((r) => r.id))
     })
     kickSemanticEdges()
     result.deleted = toDelete.length
@@ -186,7 +186,7 @@ export async function syncRepositoryFiles(
  */
 export async function deleteRepositoryRecord(repositoryId: string): Promise<void> {
   await db.transaction(async (tx) => {
-    await removeSemanticNodes(tx, 'code', sql`SELECT id FROM repository_files WHERE repository_id = ${repositoryId}`)
+    await removeSemanticNodes(tx, 'code', repositoryId, sql`SELECT id FROM repository_files WHERE repository_id = ${repositoryId}`)
     await tx.delete(repositories).where(eq(repositories.id, repositoryId))
   })
   kickSemanticEdges()
