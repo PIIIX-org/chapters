@@ -141,6 +141,16 @@ async function getRepoSiblings(repositoryId: string): Promise<RepoSiblings> {
 const RERESOLVE_BATCH = 1000
 
 /**
+ * A row's stored `lookup_keys`: each `lookupKey` prefixed with its
+ * repository's id (`<id>:<key>`), sorted. The GIN index then finds one
+ * repository's rows for a key many repositories share (`index`, `util`),
+ * not every repository's (#1008).
+ */
+function storedLookupKeys(repositoryId: string, keys: Iterable<string>): string[] {
+  return [...keys].map((key) => `${repositoryId}:${key}`).sort()
+}
+
+/**
  * Resolves a repository's stored import rows again from their raw
  * `target_path` (no re-parse), with its current files and manifests, in
  * keyset pages of `RERESOLVE_BATCH` rows and one UPDATE per page for the
@@ -149,7 +159,7 @@ const RERESOLVE_BATCH = 1000
  * `nonRelative`: every row whose specifier does not start with `.`, the
  * ones manifests decide (#466): a renamed package loses its old name's
  * edges as the new name gains them. `keys`: the rows that tried a path
- * with one of these `lookupKey`s (#1008), by the GIN index. `siblings` is
+ * with one of these stored keys (`storedLookupKeys`, #1008), by the GIN index. `siblings` is
  * read only once a page has rows. Returns the rows that gained a target.
  */
 async function reresolveRepositoryImports(
@@ -187,8 +197,8 @@ async function reresolveRepositoryImports(
       const keys = new Set<string>()
       const resolved = resolveImportPath(r.sourcePath, r.targetPath, knownPaths, context, keys)
       const target = (resolved && pathToId.get(resolved)) ?? null
-      const lookupKeys = [...keys].sort()
-      // A key is a file name: no `/` in it.
+      const lookupKeys = storedLookupKeys(repositoryId, keys)
+      // A key is a repository id and a file name: no `/` in it.
       if (target === r.resolvedId && r.lookupKeys?.join('/') === lookupKeys.join('/')) return []
       if (target !== null && target !== r.resolvedId) gained += 1
       return [{ source: r.sourceFileId, path: r.targetPath, target, keys: lookupKeys }]
@@ -248,7 +258,8 @@ async function reresolveRequested(): Promise<void> {
     try {
       if (request.manifests) await reresolveRepositoryImports(repositoryId, 'nonRelative', siblings)
       if (request.paths.size > 0) {
-        await reresolveRepositoryImports(repositoryId, { keys: [...new Set([...request.paths].map(lookupKey))] }, siblings)
+        const keys = storedLookupKeys(repositoryId, new Set([...request.paths].map(lookupKey)))
+        await reresolveRepositoryImports(repositoryId, { keys }, siblings)
       }
     } catch (err) {
       addReresolutionRequest(repositoryId, request.manifests, request.paths)
@@ -543,7 +554,7 @@ async function processFile(fileId: string): Promise<void> {
         targetPath,
         resolvedTargetFileId: resolved ? pathToId.get(resolved) : undefined,
         line,
-        lookupKeys: [...keys].sort(),
+        lookupKeys: storedLookupKeys(row.repositoryId, keys),
       })
     }
   }

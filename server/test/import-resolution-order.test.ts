@@ -76,7 +76,11 @@ async function importsOf(repositoryId: string, path: string): Promise<Record<str
   return Object.fromEntries(rows.map((r) => [r.target, r.resolved]))
 }
 
-/** Every import row of the repository, whole, with the file ids replaced by their paths, sorted. */
+/**
+ * Every import row of the repository, whole, with the file ids replaced by
+ * their paths and the repository-id prefix of each lookup key (asserted)
+ * dropped, so rows of two repositories compare; sorted.
+ */
 async function allImportRows(repositoryId: string): Promise<string[]> {
   const rows = (await db.execute(sql`
     SELECT to_jsonb(i) - 'source_file_id' - 'resolved_target_file_id'
@@ -84,7 +88,13 @@ async function allImportRows(repositoryId: string): Promise<string[]> {
     FROM ${repositoryFileImports} i
     JOIN ${repositoryFiles} f ON f.id = i.source_file_id
     LEFT JOIN ${repositoryFiles} t ON t.id = i.resolved_target_file_id
-    WHERE f.repository_id = ${repositoryId}`)) as unknown as Array<{ row: unknown }>
+    WHERE f.repository_id = ${repositoryId}`)) as unknown as Array<{ row: { lookup_keys?: string[] | null } }>
+  const prefix = `${repositoryId}:`
+  for (const { row } of rows) {
+    if (!row.lookup_keys) continue
+    expect(row.lookup_keys.every((k) => k.startsWith(prefix)), JSON.stringify(row)).toBe(true)
+    row.lookup_keys = row.lookup_keys.map((k) => k.slice(prefix.length))
+  }
   return rows.map((r) => JSON.stringify(r.row)).sort()
 }
 

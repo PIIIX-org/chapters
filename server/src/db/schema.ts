@@ -872,9 +872,11 @@ export const repositoryFileImports = pgTable(
     /** The line of the import's specifier (1-based); null for rows extracted before 0031 (#453 re-extracts them). */
     line: integer('line'),
     /**
-     * The `lookupKey` of every path the resolver tried for this row, sorted
-     * (#1008, migration 0053): a sync that creates or deletes a path with one
-     * of these keys re-resolves the row. Null until computed (rows from before 0053: the boot backfill).
+     * The `lookupKey` of every path the resolver tried for this row, each as
+     * `<repository id>:<key>`, sorted (#1008, migration 0053): a sync that
+     * creates or deletes a path with one of these keys re-resolves the row;
+     * the prefix keeps the GIN probe of a common key (`index`) to one
+     * repository. Null until computed (rows from before 0053: the boot backfill).
      */
     lookupKeys: text('lookup_keys').array(),
   },

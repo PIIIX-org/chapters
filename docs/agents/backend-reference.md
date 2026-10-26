@@ -387,7 +387,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
-| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0); `lookup_keys` (migration 0053, #1008, GIN-indexed) the `lookupKey` of every path the resolver tried, null for rows written before 0053 until the boot backfill; a deleted target sets `resolved_target_file_id` to null (it deleted the row before 0053) |
+| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0); `lookup_keys` (migration 0053, #1008, GIN-indexed) the `lookupKey` of every path the resolver tried, as `<repository id>:<key>`, null for rows written before 0053 until the boot backfill; a deleted target sets `resolved_target_file_id` to null (it deleted the row before 0053) |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
 
@@ -3066,13 +3066,15 @@ whether a path is a known file, so each row stores in `lookup_keys` the
 `lookupKey` of every path it asked about (a file name up to its first dot;
 an `index.*` or `mod.rs` file keys on its directory's name, so `foo`,
 `foo.ts` and `foo/index.ts` share `foo`; a Java/Kotlin suffix keys on its
-class name). Creating or deleting a file whose key is not among them cannot
+class name), each stored as `<repository id>:<key>`. Creating or deleting a file whose key is not among them cannot
 change the row. When a sync creates or deletes files, `syncRepositoryFiles`
 calls `scheduleImportReresolution` with their paths: before its next turn
 the extraction worker drops the repository's cached file list and
 re-resolves, with the same `resolveImportPath`, the rows whose
 `lookup_keys` share a key with those paths (the GIN index on `lookup_keys`
-finds them; no other row of the repository is read). So an import pushed
+finds them; the repository prefix keeps a key many repositories share,
+such as `index` or `util`, to this repository's rows, and no other row of
+the repository is read). So an import pushed
 before its target gains it, `./foo` moves from `foo/index.ts` to a `foo.ts`
 that arrives later, and a row whose target is deleted (the FK sets it to
 null) takes the next candidate or stays unresolved, as one push of the
