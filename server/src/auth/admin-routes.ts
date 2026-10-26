@@ -15,7 +15,7 @@ import { WELCOME_SUBJECT, WELCOME_TEXT } from '../email/welcome.js'
 import { logSecurityEvent } from './security-events.js'
 import { notify } from '../notifications/notify.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
-import { deleteVaultCodeEdges } from '../search/semantic-edges.js'
+import { kickSemanticEdges, transferVaultSemanticEdges } from '../search/semantic-edges.js'
 
 export function adminRoutes(app: FastifyInstance) {
   app.addHook('preHandler', app.requireAdmin)
@@ -271,13 +271,15 @@ export function adminRoutes(app: FastifyInstance) {
       if (!newOwner || newOwner.status !== 'active') {
         return reply.code(400).send({ error: 'new owner must be an active user' })
       }
-      // Its notes' note↔code semantic edges joined the previous owner's repositories (D10, #461).
+      // Its notes' note↔code semantic edges joined the previous owner's repositories (D10, #461); the nodes
+      // whose lists the move changes are queued (#1015).
       const vault = await db.transaction(async (tx) => {
         const [row] = await tx.update(vaults).set({ ownerId: newOwner.id }).where(eq(vaults.id, req.params.id)).returning()
-        if (row) await deleteVaultCodeEdges(row.id, tx)
+        if (row) await transferVaultSemanticEdges(tx, row.id)
         return row
       })
       if (!vault) return reply.code(404).send({ error: 'vault not found' })
+      kickSemanticEdges()
       await logSecurityEvent({
         type: 'vault_ownership_transferred',
         actorUserId: req.user!.id,

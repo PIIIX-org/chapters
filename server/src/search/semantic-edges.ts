@@ -1,6 +1,5 @@
-import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm'
+import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { semanticEdges } from '../db/schema.js'
 import { config } from '../config.js'
 import { recordJob } from '../monitoring/metrics.js'
 import {
@@ -214,7 +213,8 @@ async function knn(client: DbOrTx, nodeType: SemanticNodeType, nodeId: string, s
  * (spec 9: one shared embedding space, semantic edges span both content
  * types) from its stored blocks, and stores the strong ones as the rows it
  * owns. A neighbour's similarity is that of its best block to the best of
- * the node's query vectors (`queryVectors`; ADR-004 §2.5).
+ * the node's query vectors (`queryVectors`; ADR-004 §2.5). A note in the
+ * trash has none: its rows are deleted (#1015).
  *
  * One transaction holds a lock on the node's id (an advisory lock: writes to
  * the note go on) from reading its vectors to writing its rows, so two
@@ -230,15 +230,21 @@ export async function recomputeSemanticEdges(nodeType: SemanticNodeType, nodeId:
     // setHnswScan sets it only where it exists) the scan goes on until the LIMIT is met (up to
     // `hnsw.max_scan_tuples`, default 20,000); without it a container whose blocks are not among the
     // ef_search nearest gets no neighbours from the HNSW plan.
-    await setHnswScan(tx, 100)
-    const neighbors = (await knn(tx, nodeType, nodeId, context.scope)).filter((n) => n.similarity >= config.semanticThreshold)
+    let neighbors: Neighbor[] = []
+    if (context.live) {
+      await setHnswScan(tx, 100)
+      neighbors = (await knn(tx, nodeType, nodeId, context.scope)).filter((n) => n.similarity >= config.semanticThreshold)
+    }
 
-    // A note purged while it was embedded keeps no edges: the row is locked (FOR SHARE) for the rest of the
-    // transaction, after the searches (a long note's searches never hold off writes to it, #452), so a purge
-    // either waits for it and then deletes the edges, or ran first and nothing is written.
+    // A note purged or trashed while it was embedded keeps no edges: the row is locked (FOR SHARE) for the rest
+    // of the transaction, after the searches (a long note's searches never hold off writes to it, #452), so a
+    // delete either waits for it and then removes the edges, or ran first and nothing is written. A restore
+    // meanwhile queued the note's own refresh (`queueSemanticEdgeRestore`).
     if (nodeType === 'note') {
-      const live = await tx.execute(sql`SELECT 1 FROM notes WHERE id = ${nodeId} FOR SHARE`)
-      if ((live as unknown as unknown[]).length === 0) return
+      const [row] = (await tx.execute(sql`SELECT deleted_at IS NULL AS live FROM notes WHERE id = ${nodeId} FOR SHARE`)) as unknown as Array<{
+        live: boolean
+      }>
+      if (!row || row.live !== context.live) return
     }
 
     // Only this node's OWN edges, in one statement: the rows it no longer has go, the others are written. kNN is
@@ -480,33 +486,84 @@ export async function refreshSemanticEdges(nodeType: SemanticNodeType, nodeId: s
   }
 }
 
-/** Removes every semantic edge touching a node, in both directions (inside `client`'s transaction when given). */
-export async function deleteSemanticEdgesFor(
-  nodeType: SemanticNodeType,
-  nodeIds: string[],
-  client: DbOrTx = db,
-): Promise<void> {
-  if (nodeIds.length === 0) return
-  await client
-    .delete(semanticEdges)
-    .where(
-      or(
-        and(eq(semanticEdges.sourceType, nodeType), inArray(semanticEdges.sourceId, nodeIds)),
-        and(eq(semanticEdges.targetType, nodeType), inArray(semanticEdges.targetId, nodeIds)),
-      ),
-    )
+/**
+ * The INSERT of the rebuild job (`recomputeSemanticEdges`, key `semantic_edges:<type>:<id>`, write priority)
+ * of each distinct node of `nodes` (a query of `type`, `id` rows), returning the jobs queued (#1015). A
+ * pending job that has not started stays: it reads the state the caller commits (it takes write priority).
+ * One that finished, or that started and may have read the state before, runs again: it takes a new id,
+ * so a run in progress completes nothing.
+ */
+function recomputeJobs(nodes: SQL): SQL {
+  return sql`INSERT INTO jobs (kind, payload, idempotency_key, priority)
+    SELECT ${SEMANTIC_EDGES_JOB}, jsonb_build_object('nodeType', n.type, 'nodeId', n.id::text),
+      ${SEMANTIC_EDGES_JOB} || ':' || n.type || ':' || n.id, ${JOB_PRIORITY.write}::smallint
+    FROM (SELECT DISTINCT x.type::text AS type, x.id FROM (${nodes}) x) n
+    ORDER BY n.type DESC, n.id
+    ON CONFLICT (idempotency_key) DO UPDATE
+      SET id = nextval(pg_get_serial_sequence('jobs', 'id')), done_at = NULL, attempts = 0, last_error = NULL, lease_until = NULL,
+        priority = least(jobs.priority, EXCLUDED.priority)
+      WHERE jobs.done_at IS NOT NULL OR jobs.attempts > 0 OR jobs.priority > EXCLUDED.priority
+    RETURNING id`
 }
 
 /**
- * After a vault changes owner (inside the transfer's transaction): its notes' note↔code edges, both
- * directions, joined the previous owner's repositories, so they go (D10, #461). Each end gets the new
- * owner's code neighbours at its next recompute; note→note edges stay, the vault is the same.
+ * Inside the transaction of a delete (#1015): removes the rows of the nodes `ids` of type `nodeType` (a list,
+ * or a query of one `id` column) and every row naming one of them (semantic_edges has no foreign key, #92),
+ * and queues the rebuild job of each other node whose rows named one: its list lost that row, and in a world
+ * that never had the node it holds its next neighbour instead. Once the jobs ran (`kickSemanticEdges` after
+ * the commit), the stored edges are those of the content without the nodes. A node that held several of them
+ * is queued once (a sync that removes 1,000 files queues one job set); every node holds at most K, so the
+ * holders of a node are about K on average. Returns the jobs queued.
  */
-export async function deleteVaultCodeEdges(vaultId: string, client: DbOrTx = db): Promise<void> {
-  await client.execute(sql`
-    DELETE FROM semantic_edges e USING notes n WHERE n.vault_id = ${vaultId}
-      AND ((e.node_a_type = 'note' AND e.node_a_id = n.id AND e.node_b_type = 'code')
-        OR (e.node_b_type = 'note' AND e.node_b_id = n.id AND e.node_a_type = 'code'))`)
+export async function removeSemanticNodes(tx: DbOrTx, nodeType: SemanticNodeType, ids: readonly string[] | SQL): Promise<number> {
+  if (Array.isArray(ids) && ids.length === 0) return 0
+  const gone = Array.isArray(ids) ? sql`SELECT unnest(${`{${ids.join(',')}}`}::uuid[]) AS id` : (ids as SQL)
+  const queued = (await tx.execute(sql`
+    WITH gone AS MATERIALIZED (SELECT DISTINCT g.id FROM (${gone}) g),
+    own AS (DELETE FROM semantic_edges e USING gone WHERE e.node_a_type = ${nodeType} AND e.node_a_id = gone.id),
+    held AS (
+      DELETE FROM semantic_edges e USING gone WHERE e.node_b_type = ${nodeType} AND e.node_b_id = gone.id
+        AND NOT (e.node_a_type = ${nodeType} AND e.node_a_id IN (SELECT id FROM gone))
+      RETURNING e.node_a_type AS type, e.node_a_id AS id)
+    ${recomputeJobs(sql`SELECT type, id FROM held`)}`)) as unknown as unknown[]
+  return queued.length
+}
+
+/**
+ * After a vault changes owner (inside the transfer's transaction; D10, #461, #1015): its notes' note↔code
+ * rows, both directions, joined the previous owner's repositories, so they go, and the nodes whose lists
+ * change are queued (`recomputeJobs`): the previous owner's files that held one of its notes, every live note
+ * of the vault (the new owner's files may enter its list) and every file of the new owner (its notes may
+ * enter theirs). Note→note rows stay: the vault is the same. Returns the jobs queued.
+ */
+export async function transferVaultSemanticEdges(tx: DbOrTx, vaultId: string): Promise<number> {
+  const queued = (await tx.execute(sql`
+    WITH dropped AS (
+      DELETE FROM semantic_edges e USING notes n WHERE n.vault_id = ${vaultId}
+        AND ((e.node_a_type = 'note' AND e.node_a_id = n.id AND e.node_b_type = 'code')
+          OR (e.node_b_type = 'note' AND e.node_b_id = n.id AND e.node_a_type = 'code'))
+      RETURNING e.node_a_type AS type, e.node_a_id AS id)
+    ${recomputeJobs(sql`
+      SELECT type, id FROM dropped WHERE type = 'code'
+      UNION ALL SELECT 'note', n.id FROM notes n WHERE n.vault_id = ${vaultId} AND n.deleted_at IS NULL
+      UNION ALL SELECT 'code', f.id FROM vaults v JOIN repositories r ON r.owner_id = v.owner_id
+        JOIN repository_files f ON f.repository_id = r.id WHERE v.id = ${vaultId}`)}`)) as unknown as unknown[]
+  return queued.length
+}
+
+/**
+ * Inside a restore's transaction (#1015): the note left every list when it was trashed, and its blocks are
+ * kept, so its embed finds no new vector. Queues its refresh as if every vector were new
+ * (`refreshSemanticEdges` with all its embed keys: its own top-k, then the lists it enters), for the edge
+ * worker (`kickSemanticEdges` after the commit). A note without vectors queues none: its embed does.
+ */
+export async function queueSemanticEdgeRestore(tx: DbOrTx, noteId: string): Promise<void> {
+  await tx.execute(sql`
+    INSERT INTO jobs (kind, payload, priority)
+    SELECT ${SEMANTIC_EDGES_JOB}, jsonb_build_object('nodeType', 'note', 'nodeId', ${noteId}::text,
+      'newKeys', jsonb_agg(DISTINCT b.embed_key ORDER BY b.embed_key)), ${JOB_PRIORITY.write}::smallint
+    FROM blocks b WHERE b.owner_type = 'note' AND b.owner_id = ${noteId} AND b.embedding IS NOT NULL
+    HAVING count(*) > 0`)
 }
 
 /**
@@ -514,9 +571,10 @@ export async function deleteVaultCodeEdges(vaultId: string, client: DbOrTx = db)
  * - the rebuild (#1007): payload `{nodeType, nodeId}`, key `semantic_edges:<type>:<id>`, each recomputing
  *   one node's top-k from its stored blocks (`recomputeSemanticEdges`). Once every node has run, the stored
  *   edges are those of the content whatever order it was embedded in. Queued for every node by
- *   `pnpm reindex` and, once, by migration 0050;
- * - a refresh (`queueSemanticEdgeRefresh`): payload `{nodeType, nodeId, newKeys}`, no key, runs
- *   `refreshSemanticEdges`.
+ *   `pnpm reindex` and, once, by migration 0050; at write priority for the nodes a delete or a vault
+ *   transfer changed (#1015: `removeSemanticNodes`, `transferVaultSemanticEdges`);
+ * - a refresh (`queueSemanticEdgeRefresh`, `queueSemanticEdgeRestore`): payload `{nodeType, nodeId,
+ *   newKeys}`, no key, runs `refreshSemanticEdges`.
  */
 export const SEMANTIC_EDGES_JOB = 'semantic_edges'
 
@@ -545,6 +603,11 @@ async function drainEdgeJobs(): Promise<void> {
 }
 
 const edgeJobs = jobDrainer('semantic-edges', drainEdgeJobs)
+
+/** After the commit of a write that queued `semantic_edges` jobs for the worker (a delete, a restore): starts a drain. */
+export function kickSemanticEdges(): void {
+  edgeJobs.kick()
+}
 
 /**
  * Inside the transaction of a write that embedded or dropped vectors of a node: its refresh as a job the
