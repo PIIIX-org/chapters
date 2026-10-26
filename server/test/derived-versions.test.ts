@@ -526,6 +526,73 @@ describe('boot catch-up re-derives rows of another version (#453)', () => {
       { target: './lazy', line: 3 },
     ])
   })
+
+  // #464 bumped EXTRACTOR_VERSION to 5: Rust, Kotlin and the other new
+  // languages get symbols, Markdown and HTML get section blocks. A file
+  // version 4 left with only its file block is extracted again at the next
+  // boot; a `.kt` or `.md` row synced before the new labels gets its label.
+  // The bump costs a parse: the file vectors are kept (same text), only the
+  // new symbol texts are embedded; sections are outline blocks, never embedded.
+  it('rows extractor version 4 produced gain the new languages’ symbols, labels and Markdown sections; file vectors are kept', async () => {
+    const owner = await createActiveUser()
+    const [repo] = await db
+      .insert(repositories)
+      .values({ name: 'versions-languages-v4', ownerId: owner.id, ingestionMethod: 'agent_push' })
+      .returning()
+    const files = [
+      { path: 'src/store.rs', content: 'pub struct Store;\n\nimpl Store {\n    pub fn open() -> Self { Store }\n}\n' },
+      { path: 'src/Registry.kt', content: 'object Registry {\n    fun register() {}\n}\n' },
+      { path: 'docs/guide.md', content: '# Guide\n\nIntro.\n\n## Install\n\nRun it.\n' },
+    ]
+    versions.extractor = 4
+    await syncRepositoryFiles(repo!.id, files, files.map((f) => f.path))
+    await flushExtraction()
+    // Version 4's labels: none for Kotlin or Markdown.
+    await db.execute(sql`UPDATE repository_files SET language = NULL WHERE repository_id = ${repo!.id} AND path <> 'src/store.rs'`)
+    const rows = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id)).orderBy(repositoryFiles.path)
+    const byPath = new Map(rows.map((r) => [r.path, r]))
+    // Stand-in for version 4's result: each file's file block only.
+    await db.execute(sql`DELETE FROM blocks WHERE owner_type = 'code' AND owner_id IN (${sql.join(rows.map((r) => sql`${r.id}`), sql`, `)}) AND kind <> 'file'`)
+    const fileVectorsBefore = await Promise.all(rows.map((r) => fileEmbedding(r.id)))
+    versions.extractor = shipped.extractor
+    await othersCurrent(repo!.id, null)
+    const texts = embeddedTexts()
+
+    expect(await scheduleMissingExtractions()).toBeGreaterThanOrEqual(3)
+    await flushExtraction()
+
+    const after = await db.select().from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repo!.id)).orderBy(repositoryFiles.path)
+    expect(after.map((r) => [r.path, r.language, r.extractorVersion])).toEqual([
+      ['docs/guide.md', 'markdown', EXTRACTOR_VERSION],
+      ['src/Registry.kt', 'kotlin', EXTRACTOR_VERSION],
+      ['src/store.rs', 'rust', EXTRACTOR_VERSION],
+    ])
+    expect((await symbolBlocks(byPath.get('src/store.rs')!.id)).map((s) => [s.name, s.kind, s.parent])).toEqual([
+      ['Store', 'class', null],
+      ['open', 'method', 'Store'],
+    ])
+    expect((await symbolBlocks(byPath.get('src/Registry.kt')!.id)).map((s) => [s.name, s.kind, s.parent])).toEqual([
+      ['Registry', 'class', null],
+      ['register', 'method', 'Registry'],
+    ])
+    const sections = await db
+      .select({ innerPath: blocks.innerPath, startLine: blocks.startLine, endLine: blocks.endLine, embedKey: blocks.embedKey })
+      .from(blocks)
+      .where(and(eq(blocks.ownerId, byPath.get('docs/guide.md')!.id), eq(blocks.kind, 'section')))
+      .orderBy(blocks.startLine)
+    expect(sections).toEqual([
+      { innerPath: 'Guide', startLine: 1, endLine: 7, embedKey: null },
+      { innerPath: 'Guide > Install', startLine: 5, endLine: 7, embedKey: null },
+    ])
+    expect(await Promise.all(rows.map((r) => fileEmbedding(r.id)))).toEqual(fileVectorsBefore)
+    const firstLines = texts.map((t) => t.split('\n')[0]!).filter((line) => files.some((f) => line.includes(` in ${f.path}`)))
+    expect(firstLines.sort()).toEqual([
+      'class Registry in src/Registry.kt:1',
+      'class Store in src/store.rs:1',
+      'method Registry.register in src/Registry.kt:2',
+      'method Store.open in src/store.rs:4',
+    ])
+  })
 })
 
 // Files extracted before migration 0033 (no `extracted_hash`, version 0): after 0035 their vectors are

@@ -3,12 +3,12 @@ import { extractStructure, isSupportedLanguage } from '../src/repositories/extra
 import { detectLanguage } from '../src/repositories/language.js'
 
 describe('isSupportedLanguage', () => {
-  it('recognizes the four launch languages, rejects everything else', () => {
+  it('recognizes the parsed languages (the four launch ones, #464 adds more), rejects everything else', () => {
     expect(isSupportedLanguage('typescript')).toBe(true)
     expect(isSupportedLanguage('javascript')).toBe(true)
     expect(isSupportedLanguage('python')).toBe(true)
     expect(isSupportedLanguage('go')).toBe(true)
-    expect(isSupportedLanguage('rust')).toBe(false)
+    expect(isSupportedLanguage('swift')).toBe(false)
     expect(isSupportedLanguage(null)).toBe(false)
   })
 })
@@ -243,6 +243,6 @@ describe('extractStructure', () => {
   })
 
   it('throws for an unsupported language', async () => {
-    await expect(extractStructure('rust', 'fn main() {}', 'src/main.rs')).rejects.toThrow()
+    await expect(extractStructure('swift', 'func main() {}', 'Sources/main.swift')).rejects.toThrow()
   })
 })

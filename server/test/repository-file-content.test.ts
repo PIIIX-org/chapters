@@ -73,7 +73,8 @@ describe('GET /repositories/:id/files/content', () => {
     const other = await app.inject({ method: 'GET', url: contentUrl(repo.id, 'README.md'), headers: { cookie } })
     expect(other.statusCode).toBe(200)
     expect(other.json().content).toBe(PROSE)
-    expect(other.json().language).toBeNull()
+    // Markdown is labelled (#464) and outlined by heading sections, which are not symbols.
+    expect(other.json().language).toBe('markdown')
     expect(other.json().symbols).toEqual([])
   })
 
