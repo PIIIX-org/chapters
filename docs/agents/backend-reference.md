@@ -387,7 +387,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0052; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
-| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
+| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0); `lookup_keys` (migration 0053, #1008, GIN-indexed) the `lookupKey` of every path the resolver tried, as `<repository id>:<key>`, null for rows written before 0053 until the boot backfill; a deleted target sets `resolved_target_file_id` to null (it deleted the row before 0053) |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
 
@@ -3268,20 +3268,39 @@ does not parse is ignored.
 
 Every other specifier (npm packages not in the repository, stdlib) is
 stored with no resolved target and produces no graph edge.
+
+An import row is a function of the repository's files and manifests, not
+of the order they arrived in (#1008, ADR-004 §1.3). The resolver only asks
+whether a path is a known file, so each row stores in `lookup_keys` the
+`lookupKey` of every path it asked about (a file name up to its first dot;
+an `index.*` or `mod.rs` file keys on its directory's name, so `foo`,
+`foo.ts` and `foo/index.ts` share `foo`; a Java/Kotlin suffix keys on its
+class name), each stored as `<repository id>:<key>`. Creating or deleting a file whose key is not among them cannot
+change the row. When a sync creates or deletes files, `syncRepositoryFiles`
+calls `scheduleImportReresolution` with their paths: before its next turn
+the extraction worker drops the repository's cached file list and
+re-resolves, with the same `resolveImportPath`, the rows whose
+`lookup_keys` share a key with those paths (the GIN index on `lookup_keys`
+finds them; the repository prefix keeps a key many repositories share,
+such as `index` or `util`, to this repository's rows, and no other row of
+the repository is read). So an import pushed
+before its target gains it, `./foo` moves from `foo/index.ts` to a `foo.ts`
+that arrives later, and a row whose target is deleted (the FK sets it to
+null) takes the next candidate or stays unresolved, as one push of the
+final files would give. When a sync creates, changes or deletes a
+manifest, the same request also re-resolves every non-relative import row,
+so a renamed package loses its old name's edges and the new name gains
+them without the importers changing.
 `backfillUnresolvedImports()` runs at boot and re-resolves, per repository
-with its context, every stored import row whose target is still null, in
-keyset pages of 1,000 rows with one UPDATE each, so repositories indexed
-before #398 or #466 gain their import edges without a re-sync (an
-unchanged file is re-extracted only when `EXTRACTOR_VERSION`,
-`EMBEDDER_ID` or `CHUNK_VERSION` changes, #453). When a sync creates,
-changes or deletes a manifest, `syncRepositoryFiles` calls
-`scheduleImportReresolution`: before its next turn the extraction worker
-drops the repository's cached context and re-resolves every non-relative
-import row the same way, so a renamed package loses its old name's edges
-and the new name gains them without the importers changing. That request
-is in memory: after a crash the boot backfill restores the targets gained,
-and a row whose target the change removed keeps that stale target until its file is
-extracted again. Wikilink rows without lines or a context are rewritten
+with its context, every stored import row whose target is still null or
+that has no `lookup_keys` yet, in keyset pages of 1,000 rows with one
+UPDATE each, so repositories indexed before #398 or #466 gain their import
+edges without a re-sync (an unchanged file is re-extracted only when
+`EXTRACTOR_VERSION`, `EMBEDDER_ID` or `CHUNK_VERSION` changes, #453). The
+re-resolution request is in memory: after a crash the boot backfill
+restores the targets gained and the rows a deletion left without one; a
+row whose target a created file or a manifest change replaced keeps the
+stale target until its file is extracted again. Wikilink rows without lines or a context are rewritten
 from their note's body by the `note_links` catch-up jobs (#472, see **Link
 catch-up** below), queued before `listen`.
 
@@ -3786,11 +3805,11 @@ pnpm -C server test # vitest run — needs Postgres reachable at DATABASE_URL
   twice in one database, which only catches randomness inside the process.
   In the other database they must give the same bytes once that database's
   ids and the allowlisted time keys are masked. A new read tool, or a new
-  argument that changes an answer's shape, adds its questions there. The
-  answers that still differ across databases name their issue and are
-  `it.fails`, which goes red once the issue is fixed: graph order from ids
-  (#1006), semantic edges from embed order (#1007) and imports pushed before
-  their target (#1008).
+  argument that changes an answer's shape, adds its questions there. An
+  answer that still differs across databases names its issue and is
+  `it.fails`, which goes red once the issue is fixed; none does since graph
+  order from ids (#1006), semantic edges from embed order (#1007) and
+  imports pushed before their target (#1008) were fixed.
 - Live/e2e verification (booting a real server against a real database
   and exercising it over real HTTP) is a standing project discipline,
   not optional — several real bugs in this codebase (an extraction

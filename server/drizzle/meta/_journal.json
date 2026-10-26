@@ -330,6 +330,13 @@
       "when": 1793200000000,
       "tag": "0052_identifier_keywords",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1793250000000,
+      "tag": "0053_import_lookup_keys",
+      "breakpoints": true
     }
   ]
 }
