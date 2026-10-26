@@ -75,13 +75,13 @@ async function makeTempDir(prefix: string): Promise<string> {
 }
 
 /** A local file:// remote with a working copy that pushes to it; HEAD pinned to main. */
-async function makeRemote(files: Record<string, string>) {
+async function makeRemote(files: Record<string, string>, objectFormat: 'sha1' | 'sha256' = 'sha1') {
   const bareDir = await makeTempDir('elara-mirror-remote-')
-  await simpleGit(bareDir).init(true)
+  await simpleGit(bareDir).raw(['init', '--bare', '--quiet', `--object-format=${objectFormat}`])
   await simpleGit(bareDir).raw(['symbolic-ref', 'HEAD', 'refs/heads/main'])
   const workDir = await makeTempDir('elara-mirror-work-')
   const git = simpleGit(workDir)
-  await git.init()
+  await git.raw(['init', '--quiet', `--object-format=${objectFormat}`])
   await git.addConfig('user.email', 'test@elara.local')
   await git.addConfig('user.name', 'Test')
   await git.raw(['checkout', '-b', 'main'])
@@ -214,6 +214,41 @@ describe('git sync into a persistent mirror (#684)', () => {
     const shallow = join(mirrorDir(repo.id), 'shallow')
     const roots = existsSync(shallow) ? (await readFile(shallow, 'utf8')).trim().split('\n') : []
     expect(roots.length).toBeLessThanOrEqual(5)
+  })
+
+  it('syncs a SHA-256 remote, first and incrementally', async () => {
+    const { remoteUrl, git, commit } = await makeRemote({ 'one.ts': ONE, 'two.ts': TWO }, 'sha256')
+    const { repo } = await makeRepo(remoteUrl)
+    await syncAndDrain(repo.id)
+    let [row] = await db.select().from(repositories).where(eq(repositories.id, repo.id))
+    expect(row!.syncStatus).toBe('idle')
+    expect(row!.lastSyncedCommit).toMatch(/^[0-9a-f]{64}$/)
+    expect((await listRepositoryFiles(repo.id)).map((f) => f.path).sort()).toEqual(['one.ts', 'two.ts'])
+
+    await commit({ 'two.ts': TWO.replace('2', '22') }, 'edit two')
+    resetCounts()
+    await syncAndDrain(repo.id)
+    ;[row] = await db.select().from(repositories).where(eq(repositories.id, repo.id))
+    expect(row!.lastSyncedCommit).toBe((await git.revparse(['HEAD'])).trim())
+    const two = await getRepositoryFile(repo.id, 'two.ts')
+    expect(two!.content).toContain('return 22')
+    expect(parsed).toEqual([two!.id])
+  })
+
+  it('re-creates the mirror when the remote switches hash algorithm', async () => {
+    const sha1 = await makeRemote({ 'one.ts': ONE })
+    const { repo } = await makeRepo(sha1.remoteUrl)
+    await syncAndDrain(repo.id)
+
+    const sha256 = await makeRemote({ 'one.ts': ONE, 'three.ts': THREE }, 'sha256')
+    await db.update(repositories).set({ gitUrl: sha256.remoteUrl }).where(eq(repositories.id, repo.id))
+    await syncAndDrain(repo.id)
+
+    const [row] = await db.select().from(repositories).where(eq(repositories.id, repo.id))
+    expect(row!.syncStatus).toBe('idle')
+    expect(row!.lastSyncedCommit).toBe((await sha256.git.revparse(['HEAD'])).trim())
+    expect((await listRepositoryFiles(repo.id)).map((f) => f.path).sort()).toEqual(['one.ts', 'three.ts'])
+    expect((await simpleGit(mirrorDir(repo.id)).raw(['rev-parse', '--show-object-format'])).trim()).toBe('sha256')
   })
 
   it('deleting the repository removes its mirror', async () => {

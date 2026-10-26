@@ -2890,7 +2890,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     async (args: { query: string; symbols?: boolean; limit?: number }, { resources }) => {
       const limit = args.limit ?? 20
       // The first `limit` hits of the ranking, plus one to know whether more match.
-      const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true })
+      const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id })
       return {
         // One repository: its indexed version, once in the head (#471).
         head: { ...head, ...(resources.repositoryIds.length === 1 ? await repositoryIndexedVersion(resources.repositoryIds[0]!) : {}) },
@@ -2942,7 +2942,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
       const limit = args.limit ?? 20
       // The first `limit` symbols of the ranking, plus one to know whether more match.
-      const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 })
+      const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1, accountId: auth.user.id })
       return {
         head: { ...head, ...(repoIds.length === 1 ? await repositoryIndexedVersion(repoIds[0]!) : {}) },
         sections: [

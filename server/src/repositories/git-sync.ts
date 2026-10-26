@@ -7,6 +7,7 @@ import {
   fetchIntoMirror,
   markMirrorSynced,
   mirrorHasCommit,
+  objectFormatOf,
   openMirror,
   remoteHead,
   scanMirrorTree,
@@ -114,7 +115,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       // mirror goes after this, and none may be created again).
       const current = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
       if (!current) return false
-      const dir = await openMirror(repositoryId)
+      const dir = await openMirror(repositoryId, remote ? objectFormatOf(remote.commit) : null)
       const headCommit = await fetchIntoMirror(dir, cloneUrl, remote?.branch ?? null)
       // A row with no skip report predates #465 (see above): read every file once.
       const previous =
@@ -130,7 +131,6 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       const { files, currentPaths, skipped } = await scanMirrorTree(dir, headCommit, previous, indexedPaths)
       // The index is the fetched commit's files: its commit is recorded with them (#471).
       await syncRepositoryFiles(repositoryId, files, currentPaths, { commit: headCommit })
-      await markMirrorSynced(dir, headCommit)
 
       await db
         .update(repositories)
@@ -143,6 +143,9 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
           skippedFiles: summarizeSkips(skipped),
         })
         .where(eq(repositories.id, repositoryId))
+      // After the row: the sync is done; recording the diff base and gc are
+      // upkeep, and a failure there is logged, never a failed sync.
+      await markMirrorSynced(dir, headCommit)
       return true
     })
     if (synced) recordJob('sync', 'ok', repositoryId)

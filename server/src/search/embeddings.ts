@@ -201,13 +201,16 @@ export const QUERY_EMBEDDING_CACHE_ENTRIES = 1000
 
 /**
  * Repeated search queries skip the embedder (#684): an in-process LRU of
- * query vectors keyed by sha256(embedder id + normalised text), where the
- * embedder id (`EMBEDDER_ID`: model + embed-text version) is read on every
- * call, so a vector never outlives the model that made it. A vector depends
- * on nothing else (no content, no caller), so the key needs no epoch
- * (backend-reference.md §5.11). Concurrent identical queries share one
- * embed; a failed embed is not kept. Vectors are shared: callers must not
- * mutate them.
+ * query vectors keyed by sha256(embedder id + account id + normalised text).
+ * The embedder id (`EMBEDDER_ID`: model + embed-text version) is read on
+ * every call, so a vector never outlives the model that made it. The account
+ * is in the key because a hit answers ~4 ms faster than an embed: shared
+ * across accounts, that timing would tell one account whether another
+ * searched the same text (backend-reference.md §5.11, the rule for every
+ * in-process cache). Agents of one account share hits. A vector depends on
+ * no content, so the key needs no epoch. Concurrent identical queries of one
+ * account share one embed; a failed embed is not kept. Vectors are shared:
+ * callers must not mutate them.
  *
  * In process only: an embed of a query costs milliseconds and a lookup in
  * Postgres a round trip, so a shared tier would save little (measured in
@@ -226,9 +229,9 @@ export class QueryEmbeddingCache {
     return this.entries.size
   }
 
-  embed(query: string): Promise<readonly number[]> {
+  embed(accountId: string, query: string): Promise<readonly number[]> {
     const text = normalizeQueryText(query)
-    const key = createHash('sha256').update(`${this.embedderId()}\n${text}`).digest('hex')
+    const key = createHash('sha256').update(`${this.embedderId()}\n${accountId}\n${text}`).digest('hex')
     const hit = this.entries.get(key)
     if (hit) {
       // Most recently used last: Map iteration order is insertion order.
@@ -259,7 +262,14 @@ export class QueryEmbeddingCache {
 /** The process's query cache; the test setup clears it per test, so an embedder mock sees every query. */
 export const queryEmbeddings = new QueryEmbeddingCache(embedder, () => EMBEDDER_ID, QUERY_EMBEDDING_CACHE_ENTRIES)
 
-/** A search query's vector, from the query cache when the same text was embedded before. */
-export function embedQuery(query: string): Promise<readonly number[]> {
-  return queryEmbeddings.embed(query)
+/**
+ * A search query's vector. With the asking account, from the query cache
+ * when that account embedded the same text before; with null (a caller with
+ * no account at hand) embedded afresh and not kept, so nothing is shared.
+ */
+export async function embedQuery(query: string, accountId: string | null): Promise<readonly number[]> {
+  if (accountId !== null) return queryEmbeddings.embed(accountId, query)
+  const [vector] = await embedder.embed([normalizeQueryText(query)])
+  if (!vector) throw new Error('embedder returned no vector for the query')
+  return vector
 }

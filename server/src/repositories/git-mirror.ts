@@ -96,19 +96,38 @@ export async function sweepGitMirrors(): Promise<number> {
   return removed
 }
 
-/** The mirror's directory, created (or re-created when it is not a usable bare repository). */
-export async function openMirror(repositoryId: string): Promise<string> {
+/** A repository's hash algorithm, as `git init --object-format` names it. */
+export type ObjectFormat = 'sha1' | 'sha256'
+
+/** The object format of a commit id: 64 hex digits are SHA-256, 40 are SHA-1. */
+export function objectFormatOf(commit: string): ObjectFormat {
+  return commit.length === 64 ? 'sha256' : 'sha1'
+}
+
+/**
+ * The mirror's directory, created (or re-created when it is not a usable
+ * bare repository). A fetch between repositories of different hash
+ * algorithms fails (`mismatched algorithms`), so a mirror is created in
+ * `format`, the remote's, and re-created when the remote's changes; with
+ * `format` null (the remote's is unknown: `ls-remote` failed) an existing
+ * mirror is kept as it is and a new one is SHA-1, git's default.
+ */
+export async function openMirror(repositoryId: string, format: ObjectFormat | null): Promise<string> {
   const dir = gitMirrorDir(repositoryId)
   if (existsSync(dir)) {
     try {
-      if ((await simpleGit(dir).raw(['rev-parse', '--is-bare-repository'])).trim() === 'true') return dir
+      const git = simpleGit(dir)
+      if ((await git.raw(['rev-parse', '--is-bare-repository'])).trim() === 'true') {
+        const current = (await git.raw(['rev-parse', '--show-object-format'])).trim()
+        if (format === null || current === format) return dir
+      }
     } catch {
       // Not a repository (an interrupted init): start it again.
     }
     await rm(dir, { recursive: true, force: true })
   }
   await mkdir(gitMirrorsRoot(), { recursive: true })
-  await simpleGit().raw(['init', '--bare', '--quiet', dir])
+  await simpleGit().raw(['init', '--bare', '--quiet', `--object-format=${format ?? 'sha1'}`, dir])
   for (const [key, value] of MIRROR_CONFIG) await simpleGit(dir).raw(['config', key, value])
   return dir
 }
@@ -164,10 +183,20 @@ export async function mirrorHasCommit(dir: string, commit: string): Promise<bool
   }
 }
 
-/** Records `commit` as indexed (the next sync's diff base) and lets gc fold old fetches. */
+/**
+ * Records `commit` as indexed (the next sync's diff base) and lets gc fold
+ * old fetches. Best effort: the index is already written, so a failure is
+ * logged and the sync stays a success. Without the ref the next sync still
+ * diffs against `last_synced_commit` while the mirror holds it, and reads
+ * every file once when it does not.
+ */
 export async function markMirrorSynced(dir: string, commit: string): Promise<void> {
-  await simpleGit(dir).raw(['update-ref', SYNCED_REF, commit])
-  await simpleGit(dir).raw(['gc', '--auto', '--quiet'])
+  try {
+    await simpleGit(dir).raw(['update-ref', SYNCED_REF, commit])
+    await simpleGit(dir).raw(['gc', '--auto', '--quiet'])
+  } catch (err) {
+    console.warn(`[git-mirror] upkeep of ${dir} failed (the sync is recorded):`, err)
+  }
 }
 
 interface TreeEntry {

@@ -2794,8 +2794,12 @@ skips.
    was removed, a commit gc dropped, a row synced before #465) every file
    is read, and the `syncRepositoryFiles` content-hash skip still keeps
    unchanged ones from being extracted or embedded again.
-4. `refs/elara/synced` is set to the new commit (the next diff base) and
-   `git gc --auto` runs.
+4. The repository row is written (status, skip report, default branch).
+   Then `refs/elara/synced` is set to the new commit (the next diff base)
+   and `git gc --auto` runs. Both are best effort: a failure is logged and
+   the sync stays a success. Without the ref the next sync diffs against
+   `last_synced_commit` while the mirror holds it, and reads every file
+   once when it does not.
 A force-push or a default-branch switch needs no special case: the diff
 is between two trees, whatever their ancestry, and the old commit stays
 in the mirror (`refs/elara/synced`) until the sync that replaces it
@@ -2810,8 +2814,15 @@ mirror in the background, after any sync still using it. A boot pass
 (`sweepGitMirrors`, before the server listens) removes mirrors whose row
 is gone, for example after a vault or user delete cascaded or a crash.
 A mirror that is no longer a bare repository (an interrupted init) is
-created again. Partial clone (`--filter`) is not used: fetching a missing
-blob later would need the URL and its credential stored in the mirror.
+created again. A mirror has the remote's hash algorithm: `ls-remote`'s
+commit of 64 hex digits makes it SHA-256 (`git init
+--object-format=sha256`), 40 SHA-1, and a mirror whose
+`rev-parse --show-object-format` no longer matches (the URL now names a
+repository of the other algorithm) is created again, since git refuses a
+fetch across algorithms. When `ls-remote` failed, an existing mirror is
+kept and a new one is SHA-1. Partial clone (`--filter`) is not used:
+fetching a missing blob later would need the URL and its credential
+stored in the mirror.
 
 **Indexed version** (#471, owner decision D11 in #930, ADR-004 §2.9):
 every repository records the version of its stored file contents, so an
@@ -3491,6 +3502,14 @@ contract. Permission checks themselves stay live (§1): a cache never
 authorizes anything. The query-embedding cache (below) caches no answer,
 only a function of the query text, and so needs no epochs.
 
+**Every in-process cache keys by account** (#684). A hit answers faster
+than a miss, so an entry one account filled and another account hits tells
+the second that the first asked the same thing (a query-vector hit is
+about 3.8 ms faster than an embed). So every cache in the process keeps the
+asking account in its key, even one whose entries depend on nothing about
+the caller. Agents and tokens of one account share entries. A caller that
+has no account at hand computes and caches nothing.
+
 **Epochs** (migration 0041). Triggers bump them, so every writer is
 covered (MCP, REST, the collab relay, the workers, the CLIs) without a call
 in each:
@@ -3608,14 +3627,19 @@ real epochs around writes and reads).
 Search embeds its query text through `embedQuery`; a repeated query does
 not run the embedder again.
 - **Key**: sha256 of `EMBEDDER_ID` (model and embed-text version, read on
-  every call) and the normalised text (`normalizeQueryText`: Unicode NFC,
-  whitespace runs collapsed to one space, trimmed; no case folding). The
-  normalised text is also what is embedded, so the key is exactly the
-  input. A new model or embed-text version misses every entry: a vector
-  never outlives the embedder that made it.
-- **No epochs, no caller in the key**: a query vector depends on nothing
-  but the model and the text, not on any content or access. A hit is
-  looked up after the call's live checks, like any other step of search.
+  every call), the asking account and the normalised text
+  (`normalizeQueryText`: Unicode NFC, whitespace runs collapsed to one
+  space, trimmed; no case folding). The normalised text is also what is
+  embedded, so the key is exactly the input. A new model or embed-text
+  version misses every entry: a vector never outlives the embedder that
+  made it.
+- **Per account** (the rule above): `searchNotes` and `findSymbols` take
+  `accountId` in their options, and every caller (REST search routes, MCP
+  `search` and `find_symbols`, the MCP prompts) passes the account it
+  serves. Without one the query is embedded and not kept.
+- **No epochs**: a query vector depends on nothing but the model and the
+  text, not on any content or access. A hit is looked up after the call's
+  live checks, like any other step of search.
 - **Bounded**: an in-process LRU of 1,000 vectors
   (`QUERY_EMBEDDING_CACHE_ENTRIES`, about 3 KB each, ~4 MB when full).
   Concurrent identical queries share one embed. A failed embed is not
@@ -3630,8 +3654,9 @@ not run the embedder again.
   own.
 - Tests: `query-embedding-cache.test.ts` (a repeat makes zero embedder
   calls, a new embedder id misses, eviction stays bounded, failures are not
-  kept). `test/setup-jobs.ts` empties it before every test, so an embedder
-  mock sees every query.
+  kept, two accounts never share an entry, search caches per account and
+  nothing without one). `test/setup-jobs.ts` empties it before every test,
+  so an embedder mock sees every query.
 
 ---
 

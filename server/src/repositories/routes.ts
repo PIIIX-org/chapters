@@ -344,6 +344,7 @@ export function repositoryRoutes(app: FastifyInstance) {
       if (!access) return reply.code(404).send({ error: 'not found' })
       return searchNotes({ vaultIds: [], repositoryIds: [req.params.id] }, req.query.q, req.query.limit, parseSearchFilters(req.query), {
         includeSymbols: req.query.symbols,
+        accountId: req.user!.id,
       })
     },
   )
