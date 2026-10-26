@@ -231,6 +231,7 @@ describe('git sync into a persistent mirror (#684)', () => {
     } finally {
       await app.close()
     }
-    expect(existsSync(mirrorDir(repo.id))).toBe(false)
+    // Removed in the background, after any sync still using it.
+    await vi.waitFor(() => expect(existsSync(mirrorDir(repo.id))).toBe(false), { timeout: 5_000, interval: 20 })
   })
 })

@@ -85,6 +85,7 @@ import { countPendingExtractions, extractionFailures } from '../repositories/ext
 import { skippedField } from '../repositories/fs-scan.js'
 import { SYMBOL_KINDS, type SymbolKind } from '../repositories/extraction.js'
 import { prepareGitRemote } from '../repositories/git-remote.js'
+import { removeGitMirror } from '../repositories/git-mirror.js'
 import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord } from '../vaults/routes.js'
@@ -2485,6 +2486,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireRepositoryOwner(target)
       await db.delete(repositories).where(eq(repositories.id, target))
       stopWatchingLocalRepository(target)
+      // In the background: it waits for a sync still fetching into the mirror (#684).
+      void removeGitMirror(target).catch(console.error)
       return { status: 'deleted', id: target }
     },
   )

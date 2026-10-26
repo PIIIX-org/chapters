@@ -1,7 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { config } from '../config.js'
-import { embedder } from './embeddings.js'
+import { embedQuery } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
 import { setHnswScan } from './hnsw.js'
 import { extractionState } from '../repositories/extraction-queue.js'
@@ -396,11 +396,13 @@ async function symbolRows(
   return rows as unknown as SymbolRow[]
 }
 
-/** The query's vector as a pgvector literal, or null when the embedder failed: search then answers from the keyword channel (#458). */
+/**
+ * The query's vector as a pgvector literal, or null when the embedder failed: search then answers from the keyword channel (#458).
+ * A repeated query comes from the query cache (#684).
+ */
 async function queryVector(query: string): Promise<string | null> {
   try {
-    const [vector] = await embedder.embed([query])
-    return JSON.stringify(vector)
+    return JSON.stringify(await embedQuery(query))
   } catch (err) {
     console.warn('[search] query embedding failed; answering from the keyword channel:', err)
     return null

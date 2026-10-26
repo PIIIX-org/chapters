@@ -185,3 +185,81 @@ export class LocalEmbedder implements Embedder {
 
 export const embedder: Embedder =
   config.embeddings === 'local' ? new LocalEmbedder() : new FakeEmbedder()
+
+/**
+ * The text a search query is embedded and cached as (#684): Unicode NFC,
+ * whitespace runs collapsed to one space, trimmed. The tokenizer splits on
+ * whitespace either way, so this only merges spellings that tokenize alike.
+ * No case folding: the cache must not decide what the model distinguishes.
+ */
+export function normalizeQueryText(text: string): string {
+  return text.normalize('NFC').replace(/\s+/g, ' ').trim()
+}
+
+/** Query vectors kept per process: ~3 KB each (384 numbers), so ~4 MB when full. */
+export const QUERY_EMBEDDING_CACHE_ENTRIES = 1000
+
+/**
+ * Repeated search queries skip the embedder (#684): an in-process LRU of
+ * query vectors keyed by sha256(embedder id + normalised text), where the
+ * embedder id (`EMBEDDER_ID`: model + embed-text version) is read on every
+ * call, so a vector never outlives the model that made it. A vector depends
+ * on nothing else (no content, no caller), so the key needs no epoch
+ * (backend-reference.md §5.11). Concurrent identical queries share one
+ * embed; a failed embed is not kept. Vectors are shared: callers must not
+ * mutate them.
+ *
+ * In process only: an embed of a query costs milliseconds and a lookup in
+ * Postgres a round trip, so a shared tier would save little (measured in
+ * the #684 PR).
+ */
+export class QueryEmbeddingCache {
+  private readonly entries = new Map<string, Promise<readonly number[]>>()
+
+  constructor(
+    private readonly inner: Embedder,
+    private readonly embedderId: () => string,
+    private readonly capacity: number,
+  ) {}
+
+  get size(): number {
+    return this.entries.size
+  }
+
+  embed(query: string): Promise<readonly number[]> {
+    const text = normalizeQueryText(query)
+    const key = createHash('sha256').update(`${this.embedderId()}\n${text}`).digest('hex')
+    const hit = this.entries.get(key)
+    if (hit) {
+      // Most recently used last: Map iteration order is insertion order.
+      this.entries.delete(key)
+      this.entries.set(key, hit)
+      return hit
+    }
+    const vector = this.inner.embed([text]).then(([v]) => {
+      if (!v) throw new Error('embedder returned no vector for the query')
+      return v
+    })
+    this.entries.set(key, vector)
+    vector.catch(() => {
+      if (this.entries.get(key) === vector) this.entries.delete(key)
+    })
+    for (const oldest of this.entries.keys()) {
+      if (this.entries.size <= this.capacity) break
+      this.entries.delete(oldest)
+    }
+    return vector
+  }
+
+  clear(): void {
+    this.entries.clear()
+  }
+}
+
+/** The process's query cache; the test setup clears it per test, so an embedder mock sees every query. */
+export const queryEmbeddings = new QueryEmbeddingCache(embedder, () => EMBEDDER_ID, QUERY_EMBEDDING_CACHE_ENTRIES)
+
+/** A search query's vector, from the query cache when the same text was embedded before. */
+export function embedQuery(query: string): Promise<readonly number[]> {
+  return queryEmbeddings.embed(query)
+}

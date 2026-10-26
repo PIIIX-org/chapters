@@ -1,16 +1,21 @@
-import { rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomBytes } from 'node:crypto'
-import { simpleGit } from 'simple-git'
 import { and, eq, isNull } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories } from '../db/schema.js'
 import { decryptCredential } from './credentials.js'
-import { scanRepository, summarizeSkips } from './fs-scan.js'
+import { summarizeSkips } from './fs-scan.js'
+import {
+  fetchIntoMirror,
+  markMirrorSynced,
+  mirrorHasCommit,
+  openMirror,
+  remoteHead,
+  scanMirrorTree,
+  withMirrorLock,
+  type RemoteHead,
+} from './git-mirror.js'
 import { authenticatedUrl, redactGitSecrets, splitGitUrlCredential } from './git-remote.js'
 import { isSafeGitUrl } from './permissions.js'
-import { syncRepositoryFiles } from './store.js'
+import { listRepositoryFiles, syncRepositoryFiles } from './store.js'
 import { recordJob } from '../monitoring/metrics.js'
 
 export type RepositorySyncStatus = (typeof repositories.$inferSelect)['syncStatus']
@@ -45,11 +50,13 @@ export async function recordSyncFailure(repositoryId: string, error: unknown, me
 }
 
 /**
- * Git URL ingestion (spec 8): a fresh shallow clone (depth 1, no
- * history) into a scratch temp directory on every sync — simpler and
- * more robust than reusing/fetching into a persistent working copy, at
- * the cost of a full re-clone each time. The clone is discarded after
- * its tree is read; only the extracted file content is durable.
+ * Git URL ingestion (spec 8, #684): an unchanged remote HEAD costs one
+ * `ls-remote` and nothing else. A moved one is fetched at depth 1 into the
+ * repository's persistent mirror (git-mirror.ts), and only the files whose
+ * blob differs from the last synced commit are read and handed to the store,
+ * whose content-hash skip is the last guard against re-extracting a file.
+ * Force-pushes and default-branch switches need no special case: the diff is
+ * between two trees, whatever their ancestry.
  */
 export async function syncGitRepository(repositoryId: string): Promise<void> {
   const repo = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
@@ -65,9 +72,8 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     .set({ syncStatus: 'syncing' })
     .where(eq(repositories.id, repositoryId))
 
-  const workDir = join(tmpdir(), 'elara-repo-clones', randomBytes(8).toString('hex'))
   // A row the boot scrub could not encrypt still holds its credential in the
-  // URL, and clones with it: redact that one too (#593).
+  // URL, and fetches with it: redact that one too (#593).
   const urlCredential = splitGitUrlCredential(repo.gitUrl).credential
   let credential: string | null = null
   try {
@@ -76,13 +82,13 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       : null
     const cloneUrl = authenticatedUrl(repo.gitUrl, credential)
 
-    // ponytail: check remote HEAD commit via ls-remote before expensive full shallow clone (INGEST-05).
+    // ponytail: check the remote HEAD commit via ls-remote before fetching (INGEST-05).
+    let remote: RemoteHead | null = null
     try {
-      const lsRemote = await simpleGit({ timeout: { block: 30_000 } }).listRemote([cloneUrl, 'HEAD'])
-      const remoteCommit = lsRemote ? lsRemote.trim().split(/\s+/)[0] : null
+      remote = await remoteHead(cloneUrl)
       // A row with no skip report was last synced before #465 indexed every
-      // tracked file: clone once more so a committed build/ shows up.
-      if (remoteCommit && repo.lastSyncedCommit && remoteCommit === repo.lastSyncedCommit && repo.skippedFiles) {
+      // tracked file: sync once more so a committed build/ shows up.
+      if (remote && repo.lastSyncedCommit && remote.commit === repo.lastSyncedCommit && repo.skippedFiles) {
         await db
           .update(repositories)
           .set({
@@ -98,35 +104,48 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       // git errors can echo the authenticated clone URL (#383).
       const detail = lsErr instanceof Error ? lsErr.message : String(lsErr)
       console.warn(
-        `[git-sync] listRemote check failed, falling back to clone: ${redactGitSecrets(detail, [credential, urlCredential])}`,
+        `[git-sync] listRemote check failed, falling back to fetch: ${redactGitSecrets(detail, [credential, urlCredential])}`,
       )
     }
 
-    await simpleGit({ timeout: { block: 300_000 } }).clone(cloneUrl, workDir, ['--depth', '1'])
+    const synced = await withMirrorLock(repositoryId, async () => {
+      // Read again under the lock: an overlapping sync may have indexed a
+      // newer commit (the diff base), or a delete removed the row (its
+      // mirror goes after this, and none may be created again).
+      const current = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
+      if (!current) return false
+      const dir = await openMirror(repositoryId)
+      const headCommit = await fetchIntoMirror(dir, cloneUrl, remote?.branch ?? null)
+      // A row with no skip report predates #465 (see above): read every file once.
+      const previous =
+        current.lastSyncedCommit && current.skippedFiles && (await mirrorHasCommit(dir, current.lastSyncedCommit))
+          ? current.lastSyncedCommit
+          : null
+      const indexedPaths = previous
+        ? new Set((await listRepositoryFiles(repositoryId)).map((f) => f.path))
+        : new Set<string>()
+      // Every tracked file is source (#465, D12): no ignore rules, only .git,
+      // binaries, size and the file cap. Skipped files leave currentPaths, so
+      // a stale row goes (#923).
+      const { files, currentPaths, skipped } = await scanMirrorTree(dir, headCommit, previous, indexedPaths)
+      // The index is the fetched commit's files: its commit is recorded with them (#471).
+      await syncRepositoryFiles(repositoryId, files, currentPaths, { commit: headCommit })
+      await markMirrorSynced(dir, headCommit)
 
-    // A depth-1 clone checks out the remote's default branch, so the name of
-    // the clone's HEAD *is* the default branch — no extra network call.
-    const defaultBranch = (await simpleGit(workDir).revparse(['--abbrev-ref', 'HEAD'])).trim()
-    const headCommit = (await simpleGit(workDir).revparse(['HEAD'])).trim()
-
-    // A clone holds only tracked files, and every tracked file is source
-    // (#465, D12): no ignore rules, only .git, binaries, size and the file cap.
-    // Skipped files leave currentPaths, so a stale row goes (#923).
-    const { files, currentPaths, skipped } = await scanRepository(workDir, null, 'git-sync')
-    // The index is HEAD's files: its commit is recorded with them (#471).
-    await syncRepositoryFiles(repositoryId, files, currentPaths, { commit: headCommit })
-
-    await db
-      .update(repositories)
-      .set({
-        syncStatus: 'idle',
-        lastSyncedAt: new Date(),
-        lastSyncError: null,
-        defaultBranch,
-        skippedFiles: summarizeSkips(skipped),
-      })
-      .where(eq(repositories.id, repositoryId))
-    recordJob('sync', 'ok', repositoryId)
+      await db
+        .update(repositories)
+        .set({
+          syncStatus: 'idle',
+          lastSyncedAt: new Date(),
+          lastSyncError: null,
+          // Without ls-remote's answer the branch name is unknown: keep the last one.
+          ...(remote?.branch ? { defaultBranch: remote.branch } : {}),
+          skippedFiles: summarizeSkips(skipped),
+        })
+        .where(eq(repositories.id, repositoryId))
+      return true
+    })
+    if (synced) recordJob('sync', 'ok', repositoryId)
   } catch (err) {
     // The raw message can carry the authenticated clone URL, and lastSyncError
     // is served to every viewer: store and rethrow only the redacted text (#383).
@@ -135,7 +154,5 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
     // New or repeat (#705, #775): see recordSyncFailure.
     await recordSyncFailure(repositoryId, err, errorMsg)
     throw new Error(errorMsg)
-  } finally {
-    await rm(workDir, { recursive: true, force: true })
   }
 }
