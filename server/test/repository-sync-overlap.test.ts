@@ -17,21 +17,22 @@ import { createActiveUser } from './helpers.js'
 // repository already in `error` failing again was counted as a new failure:
 // a report and an alert (#705) for a failure that was already alerted.
 //
-// The remote is a stand-in: every clone blocks until the test opens the gate,
-// then fails, so the second sync provably starts while the first is cloning.
-const remote = vi.hoisted(() => ({ clones: 0, open: (): void => {}, opened: Promise.resolve() }))
+// The remote is a stand-in: every ls-remote blocks until the test opens the
+// gate, then fails, and so does every git command after it (the mirror fetch,
+// #684), so the second sync provably starts while the first is at the remote.
+const remote = vi.hoisted(() => ({ calls: 0, open: (): void => {}, opened: Promise.resolve() }))
 vi.mock('simple-git', async (importOriginal) => {
   const actual = await importOriginal<typeof SimpleGit>()
   return {
     ...actual,
     simpleGit: () => ({
       listRemote: async () => {
+        remote.calls++
+        await remote.opened
         throw new Error('ls-remote: the remote end hung up')
       },
-      clone: async () => {
-        remote.clones++
-        await remote.opened
-        throw new Error('clone: the remote end hung up')
+      raw: async () => {
+        throw new Error('fetch: the remote end hung up')
       },
     }),
   }
@@ -46,7 +47,7 @@ afterAll(async () => app.close())
 
 // The server's TypeScript lib (ES2023) predates Promise.withResolvers, so the executor form.
 beforeEach(() => {
-  remote.clones = 0
+  remote.calls = 0
   remote.opened = new Promise<void>((resolve) => {
     remote.open = resolve
   })
@@ -91,19 +92,19 @@ const syncStatus = async (repositoryId: string) =>
   (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]!.syncStatus
 
 /**
- * A poll sync is cloning when a webhook delivery arrives; both clones fail.
+ * A poll sync is at the remote when a webhook delivery arrives; both syncs fail.
  * Resolves once both outcomes are counted.
  */
 async function overlapPollAndWebhook(repositoryId: string): Promise<void> {
   const before = syncJobs()
   // What the poller does for each candidate.
   const poll = syncGitRepository(repositoryId)
-  await vi.waitFor(() => expect(remote.clones).toBe(1), { timeout: 5_000, interval: 10 })
+  await vi.waitFor(() => expect(remote.calls).toBe(1), { timeout: 5_000, interval: 10 })
   expect(await syncStatus(repositoryId)).toBe('syncing')
   await deliverWebhook(repositoryId)
   // The webhook's sync runs fire-and-forget: let it read the row and start
-  // its own clone while the poll's is still blocked.
-  await vi.waitFor(() => expect(remote.clones).toBe(2), { timeout: 5_000, interval: 10 })
+  // its own ls-remote while the poll's is still blocked.
+  await vi.waitFor(() => expect(remote.calls).toBe(2), { timeout: 5_000, interval: 10 })
   remote.open()
   await expect(poll).rejects.toThrow('the remote end hung up')
   await vi.waitFor(
@@ -118,7 +119,7 @@ async function overlapPollAndWebhook(repositoryId: string): Promise<void> {
 
 describe('overlapping poll and webhook syncs of one repository (#775)', () => {
   it('a repository already in error that fails in both counts two repeats and no new failure', async () => {
-    const repo = await makeRepo({ syncStatus: 'error', lastSyncError: 'clone: the remote end hung up' })
+    const repo = await makeRepo({ syncStatus: 'error', lastSyncError: 'fetch: the remote end hung up' })
     const before = metricsSnapshot()
 
     await overlapPollAndWebhook(repo.id)

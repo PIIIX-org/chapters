@@ -18,7 +18,7 @@ export function searchRoutes(app: FastifyInstance) {
         req.query.q,
         req.query.limit,
         parseSearchFilters(req.query),
-        { includeSymbols: req.query.symbols },
+        { includeSymbols: req.query.symbols, accountId: req.user!.id },
       )
     },
   )
@@ -44,7 +44,7 @@ export function searchRoutes(app: FastifyInstance) {
         req.query.q,
         req.query.limit,
         parseSearchFilters(req.query),
-        { includeSymbols: req.query.symbols },
+        { includeSymbols: req.query.symbols, accountId: req.user!.id },
       )
     },
   )
@@ -61,7 +61,7 @@ export function searchRoutes(app: FastifyInstance) {
       return findSymbols(
         accessibleRepos.map((r) => r.id),
         req.query.q,
-        { kind: req.query.kind, limit: req.query.limit },
+        { kind: req.query.kind, limit: req.query.limit, accountId: req.user!.id },
       )
     },
   )
@@ -77,10 +77,7 @@ export function searchRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
       if (!access) return reply.code(404).send({ error: 'not found' })
-      return findSymbols([req.params.id], req.query.q, {
-        kind: req.query.kind,
-        limit: req.query.limit,
-      })
+      return findSymbols([req.params.id], req.query.q, { kind: req.query.kind, limit: req.query.limit, accountId: req.user!.id })
     },
   )
 }
