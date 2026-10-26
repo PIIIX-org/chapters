@@ -15,6 +15,7 @@ import { bootCollab } from './sync/collab-backfill.js'
 import { flushProjections, sweepOrphanFiles } from './notes/projector.js'
 import { holdSharedLockOrExit } from './notes/maintenance-lock.js'
 import { LINK_ROWS_JOB, scheduleLinkCatchUp } from './notes/link-catch-up.js'
+import { SEMANTIC_EDGES_JOB } from './search/semantic-edges.js'
 import { scheduleRevisionCompaction } from './notes/revision-compaction.js'
 import { COMPACT_REVISIONS_JOB } from './notes/store-tx.js'
 import { COLLAB_PATH } from './sync/routes.js'
@@ -70,7 +71,7 @@ try {
   // derived from other content or by another EXTRACTOR_VERSION / EMBEDDER_ID
   // (#453), that have no job for their current key, and re-run jobs of the
   // current key that failed with an error (an outage that outlasted the retries).
-  const pruned = await pruneFinishedJobs([EMBEDDING_JOB, EXTRACTION_JOB, COMPACT_REVISIONS_JOB, LINK_ROWS_JOB])
+  const pruned = await pruneFinishedJobs([EMBEDDING_JOB, EXTRACTION_JOB, COMPACT_REVISIONS_JOB, LINK_ROWS_JOB, SEMANTIC_EDGES_JOB])
   if (pruned > 0) console.log(`pruned ${pruned} finished background job(s)`)
   const missing = await scheduleMissingEmbeddings()
   if (missing > 0) console.log(`embedding catch-up: ${missing} notes without a current embedding or with a failed job`)
