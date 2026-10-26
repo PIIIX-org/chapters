@@ -13,10 +13,12 @@
  * Then the recorder alone on the call path: `withUsage` around a handler
  * that answers at once with a 20-hit search answer, 5,000 calls off and 5,000
  * on (µs per call). Then 10,000 more calls with it on: the recorder's own
- * write time per call (`recorderStats`) and `usage_events` growth (table,
- * indexes and TOAST) per 10,000 calls. Seeds one user, vault, 20 notes and
- * token, and deletes the user's usage rows afterwards; point DATABASE_URL at
- * a scratch database.
+ * write time per call (`recorderStats`) and the hits its searches kept.
+ * Last, storage: `usage_events` growth (heap and indexes) per 10,000 rows of
+ * the same mix written into the emptied table, with 0, 5 and 20 hit ids per
+ * search (the row size depends mostly on those). Seeds one user, vault, 20
+ * notes and token, and deletes the user's usage rows afterwards; point
+ * DATABASE_URL at a scratch database.
  */
 import { randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
@@ -123,29 +125,75 @@ const recorderCost = async (enabled: boolean) => {
 }
 await recorderCost(false)
 console.log(JSON.stringify({ recorder_on_call_path: { off: await recorderCost(false), on: await recorderCost(true) } }))
-const size = async () => {
-  const [row] = await sql<Array<{ bytes: number; rows: number }>>`
-    SELECT pg_total_relation_size('usage_events')::float8 AS bytes, (SELECT count(*) FROM usage_events)::int AS rows`
+
+interface TableSize {
+  heap: number
+  indexes: number
+  total: number
+  rows: number
+  hits_per_search: number | null
+}
+const size = async (): Promise<TableSize> => {
+  const [row] = await sql<TableSize[]>`
+    SELECT pg_relation_size('usage_events')::float8 AS heap, pg_indexes_size('usage_events')::float8 AS indexes,
+      pg_total_relation_size('usage_events')::float8 AS total, count(*)::int AS rows,
+      round(avg(cardinality(hit_ids)) FILTER (WHERE query_hash IS NOT NULL), 1)::float8 AS hits_per_search
+    FROM usage_events`
   return row!
 }
-await sql`DELETE FROM usage_events WHERE account_id = ${user!.id}`
-await sql`VACUUM FULL usage_events`
-const before = await size()
+const growth = (before: TableSize, after: TableSize) => ({
+  rows: after.rows - before.rows,
+  heap: after.heap - before.heap,
+  indexes: after.indexes - before.indexes,
+  total: after.total - before.total,
+  bytes_per_row: Math.round((after.total - before.total) / (after.rows - before.rows)),
+  hits_per_search: after.hits_per_search,
+})
+const emptyTable = async () => {
+  await sql`DELETE FROM usage_events WHERE account_id = ${user!.id}`
+  await sql`VACUUM FULL usage_events`
+}
+
+await emptyTable()
 const statsBefore = recorderStats()
 await setUsageEnabled(true)
 for (let i = 0; i < GROWTH_CALLS; i++) await call(i)
 await flushUsage()
-const after = await size()
 const stats = recorderStats()
 const written = stats.written - statsBefore.written
+const [kept] = await sql<Array<{ hits_per_search: number }>>`
+  SELECT round(avg(cardinality(hit_ids)), 1)::float8 AS hits_per_search FROM usage_events WHERE account_id = ${user!.id} AND query_hash IS NOT NULL`
 console.log(
   JSON.stringify({
-    growth: { calls: GROWTH_CALLS, rows: after.rows - before.rows, bytes: after.bytes - before.bytes, bytes_per_row: Math.round((after.bytes - before.bytes) / (after.rows - before.rows)) },
-    writes: { calls: written, batches: stats.batches - statsBefore.batches, ms: +(stats.write_ms - statsBefore.write_ms).toFixed(1), ms_per_call: +((stats.write_ms - statsBefore.write_ms) / written).toFixed(4), not_recorded: stats.not_recorded },
+    writes: {
+      calls: written,
+      batches: stats.batches - statsBefore.batches,
+      ms: +(stats.write_ms - statsBefore.write_ms).toFixed(1),
+      ms_per_call: +((stats.write_ms - statsBefore.write_ms) / written).toFixed(4),
+      not_recorded: stats.not_recorded,
+      hits_per_search: kept!.hits_per_search,
+    },
   }),
 )
 
+// Storage alone, independent of how many hits the searches above found: 10,000 rows of the same mix
+// (read_note with a target, search with N hit ids, list_vaults) written straight into an emptied table.
 await setUsageEnabled(false)
+for (const hits of [0, 5, 20]) {
+  await emptyTable()
+  const empty = await size()
+  await sql`
+    INSERT INTO usage_events (account_id, token, tool, profile, vault_id, outcome, response_tokens, latency_ms, retrieval_mode,
+      query_hash, query_length, query_lang, filters, hit_ids, target_id)
+    SELECT ${user!.id}, 'abcdef0123456789', CASE WHEN i % 10 < 5 THEN 'read_note' WHEN i % 10 < 8 THEN 'search' ELSE 'list_vaults' END,
+      'admin', ${vaultId}, 'ok', 1234, 12.5, CASE WHEN s THEN 'hybrid' END, CASE WHEN s THEN md5(i::text) END, CASE WHEN s THEN 12 END,
+      CASE WHEN s THEN 'latin' END, CASE WHEN s THEN '{}'::jsonb END,
+      CASE WHEN s THEN ARRAY(SELECT gen_random_uuid() FROM generate_series(1, ${hits}) WHERE i > 0) END,
+      CASE WHEN i % 10 < 5 THEN gen_random_uuid() END
+    FROM generate_series(1, 10000) AS i, LATERAL (SELECT i % 10 BETWEEN 5 AND 7 AS s) AS kind`
+  console.log(JSON.stringify({ storage: growth(empty, await size()) }))
+}
+
 await sql`DELETE FROM usage_events WHERE account_id = ${user!.id}`
 await app.close()
 await sql.end()

@@ -3555,6 +3555,111 @@ Tests: `cache-epochs.test.ts` (every write path bumps its own scope and no
 other; reads bump nothing) and `cache-key.test.ts` (key fields, refusals,
 real epochs around writes and reads).
 
+### 5.12 Usage report (`server/src/usage/`, #678)
+
+An opt-in, per-instance record of what agents did over MCP, for the
+people who run the instance: which searches find nothing, which notes no
+agent reads, which tools cost the tokens. Nothing of it leaves the instance
+and no note or query text is stored.
+
+- **Off by default.** `instance_state.usage_report_enabled` (migration
+  0058; out of the drizzle model and of backups, so a restored instance
+  starts off). `PUT /api/usage/settings {enabled}` turns it on or off; it
+  is for the instance's admins (`requireAdmin`: roles `owner`,
+  `superadmin`, `admin`; setup makes the first user `admin`, and no
+  instance has an `owner`-role user unless one was granted) and is logged
+  as the security event `usage_report_changed`. `GET /api/usage/settings`
+  answers `{enabled}` to any signed-in user. The flag lives in process
+  memory, read at boot (`onReady`) and set by the route (one process per
+  instance, §9). While it is off, `withUsage` calls the tool and nothing
+  else: no row is written; turning it off drops what is still queued.
+- **Recording** (`recorder.ts`). `tool()` in `mcp/server.ts` runs its
+  handler through `withUsage(auth, name, run)` and hands it, on a probe
+  object, the targets its scope resolved and the handler's answer. After
+  the answer is made, one call becomes one queued row: tool, profile,
+  account (`users.id`), a salted hash of the token (connection) id, a
+  salted hash of the agent's `session_id` argument when the tool takes one
+  (#683), the vault and repository the call resolved to (one each at most;
+  `everywhere` has neither), response tokens (`approxTokens`, characters /
+  4, of every text block of the answer), latency (performance.now around
+  the handler), outcome (`ok`; a search status with no result: `no_match`,
+  `index_building`, `unavailable`; or the error envelope's code), and the
+  answer head's `retrieval_mode` and `degraded` reason. A `search` or
+  `find_symbols` row adds a salted hash of the normalised query (NFKC,
+  lower case, white space collapsed), its length in code points, a guess
+  of its writing system (`queryLanguage`: `code` for one identifier- or
+  path-like token, else the script most letters are in) and its non-text
+  arguments (`everywhere`, `symbols`, `kind`, `limit`), plus the ids of its
+  first 20 ranked hits (a note's id, a file's id; a symbol hit as its
+  file's id). A `read_note` / `read_file` row adds the id of what it read:
+  the path the answer names is resolved to the live note or file id inside
+  the INSERT and never stored. Arguments, paths, note text and query text
+  are never stored. The salt (`instance_state.usage_salt`, 32 random bytes
+  made when the report is first turned on) never leaves the database and
+  the process. Calls the SDK refuses before `tool()` runs (schema errors,
+  unknown tool) are not recorded.
+- **Writes are batched off the call path.** The queue is flushed by one
+  `INSERT ... SELECT FROM jsonb_to_recordset` per FLUSH_MS (1 s), or at
+  once when 200 calls are queued; one write at a time, and a call never
+  awaits it. At most 10,000 calls queue; past that, and on a failed write,
+  calls are dropped and counted (`recorder_since_boot.not_recorded` in the
+  report, with `written`, `batches` and `write_ms`). Shutdown (`onClose`)
+  and every report write what is queued first.
+- **Client events.** What only the client knows (the agent turned to its
+  local grep or file reads after Elara's answers) arrives as the JSON-RPC
+  notification `notifications/elara/client_event` `{event: "local_fallback",
+  session_id?}` on the MCP endpoint (`acceptClientEvents`, mcp/routes.ts):
+  no tool, so no `tools/list` tokens, and no answer. It is a row with tool
+  `client_event`, outcome `local_fallback`. No known client sends it, so
+  the report's `fallbacks` stays unpopulated (`populated: false`) until
+  one does; the server infers no fallback on its own.
+- **Tables and retention.** `usage_events` (raw rows; indexes on
+  `(account_id, at)`, `at`, and `target_id` where set) is kept 7 days
+  (`RAW_DAYS`); older rows are added to `usage_daily` (per UTC day,
+  account, tool, profile: calls, tokens, latency sum, errors, zero-result
+  searches; client events are not rolled up) and deleted, and rollups are
+  kept 30 days (`ROLLUP_DAYS`). `pruneUsage` is one statement; it runs at
+  boot (also when the report is off), hourly while recording, and before
+  every report. Both tables reference `users` with `ON DELETE CASCADE`.
+- **The report** (`report.ts`, `GET /api/usage/report`, MCP `usage_report`).
+  `scope=account` (default): the caller's account, its tokens' calls and
+  the live notes of the vaults it owns. `scope=instance`: for the same
+  admin roles; every account as aggregates: no account id, token or
+  session hash, note id or path. Sections: `totals` and `tools` (calls,
+  response tokens, errors, zero-result searches per tool over 30 days;
+  p50 / p95 latency over the raw 7); `sessions` (calls and tokens per tool
+  per session, the latest 20, and their count; a session is the
+  `session_id` sent, else the token, split by 30 minutes without a call);
+  `searches` (total, `zero_result`, `with_hits`, `no_useful_hit`, and the
+  top 20 zero-result and no-useful-hit queries as `{tool, query_hash,
+  length, language, filters, count}`); `never_read` (live notes of the
+  account's vaults no token of the account read in the 7 days, `count` and
+  the first 50 `{id, vault_id, path}` by path; instance: `count` of live
+  notes no token read); `fallbacks` (client-reported events, and the notes
+  and files the same token read in the 5 calls before each). **"Useful
+  hit" is a proxy**: a search with hits counts as `no_useful_hit` when the
+  same token reads none of its hit ids in its next 5 calls
+  (`USEFUL_WITHIN_CALLS`). It over-counts misses (a snippet can be the
+  answer; a read through another token is not seen); the server has no
+  better signal. The report is ids, counts and salted hashes only.
+- **Surface.** REST above; MCP `usage_report` (`scope: "account" |
+  "instance"`), account-scoped, `read` capability, admin profile only, so
+  the reader and writer `tools/list` do not grow (admin `tools/list`
+  40,921 → 41,372 characters, under its 43,000 ceiling). No UI yet: a
+  settings page and report view are a follow-up.
+- **Choice: no query-text sample.** A query is user content (names,
+  secrets pasted into a search) and the issue says no content leaves the
+  instance; the salted hash already groups repeats, which is what tells an
+  owner that one question keeps failing. A sampled text store, if ever
+  wanted, needs its own opt-in and retention.
+- Tests: `usage-report.test.ts` (off writes nothing; no fixture note text,
+  path, query text or token in any stored row; zero-result and unread-hit
+  searches; never-read notes by id and path; sessions; a client-reported
+  fallback; account and instance separation over REST and MCP; the tool on
+  admin tokens only; retention). Lab: `aa-usage-report-on` and
+  `zzz-usage-report` (lab.md) run the fast tier with it on and report the
+  run's numbers. `pnpm -C server profile-usage` measures its cost.
+
 ---
 
 ## 6. Security posture
@@ -3931,7 +4036,7 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
 
 ## 9. Known limitation: single-process only (read before scaling)
 
-Five subsystems hold state in the Node process's memory, not in
+Six subsystems hold state in the Node process's memory, not in
 Postgres or any shared store. None of them are broken for the intended
 single-instance deployment, but **all of them silently misbehave the
 moment a second instance runs against the same database**:
@@ -3943,14 +4048,16 @@ moment a second instance runs against the same database**:
 | Permission-change bus | `sync/permission-events.ts` | an instance that didn't receive the in-process event never kicks its own live connections — a revoked user could keep a session open on a *different* instance |
 | MCP rate limiter | `mcp/rate-limit.ts` | a client can get up to N× the intended limit by landing requests across N instances behind a load balancer |
 | Git polling scheduler | `repositories/scheduler.ts` | multiple instances independently poll/clone the same repos on their own schedules |
+| Usage report flag and queue | `usage/recorder.ts` | the on/off flag is read at boot and set by the route of the instance that handled the toggle, so another instance keeps recording (or not) until it restarts; each instance queues and writes its own calls, which is correct |
 
 **Upgrade path, if this is ever actually needed**: Postgres
 `LISTEN`/`NOTIFY` or Redis pub/sub for the permission-event bus; a
 `jobs` table (or a real queue like BullMQ) with a claim/lock column for
 the embedding/extraction queues and the polling scheduler; move the
 lockout and rate-limit counters to Postgres or Redis with atomic
-increment. **None of this is built** — this was a deliberate scope
-decision (building distributed versions of all five with no current
+increment; the same `LISTEN`/`NOTIFY` for the usage report's flag.
+**None of this is built** — this was a deliberate scope
+decision (building distributed versions of all six with no current
 deployment need would be premature scaling work), not an oversight.
 Each site above carries its own `ponytail:` comment naming this same
 upgrade path in the code.

@@ -48,6 +48,7 @@ const SEARCH_FILTERS: Record<string, readonly string[]> = {
 /** The tools that read one note or one repository file. */
 const READS: Record<string, 'note' | 'file'> = { read_note: 'note', read_file: 'file' }
 
+// ponytail: per-process flag (read at boot, set by the toggle route); LISTEN/NOTIFY if multi-process (backend-reference.md §9).
 let enabled = false
 let salt: string | null = null
 let queue: QueuedCall[] = []
