@@ -99,9 +99,10 @@ Work queued in memory (embeddings, code extraction, note edits inside the collab
 
 A git repository stays current through its webhook (`POST /repositories/<id>/webhook`, signed with the secret set on the repository) and a polling fallback that never switches off.
 
-- [ ] **`POLL_INTERVAL_MS`** (default `300000`, 5 min): how often the server checks git repositories. An unchanged remote costs one `git ls-remote`, not a clone.
+- [ ] **`POLL_INTERVAL_MS`** (default `300000`, 5 min): how often the server checks git repositories. An unchanged remote costs one `git ls-remote`, not a fetch.
 - [ ] **`WEBHOOK_STALE_THRESHOLD_MS`** (default `600000`, 10 min): a repository whose webhook delivered within this window is left to the webhook. Once no delivery has arrived for longer (the hook was deleted, disabled or cannot reach your host), or when the last sync failed, the repository is polled on every interval again. So a broken hook delays updates by at most the threshold plus one poll interval; keep the threshold at least twice the poll interval so a working hook is not polled needlessly.
 - [ ] **A quiet webhook is not an error**: a repository nobody pushes to gets no deliveries, so it falls back to polling after the threshold. `lastWebhookAt` (MCP `list_repositories`, REST repository list) shows when the last signed delivery arrived; `syncStatus`/`lastSyncError` show whether the last sync worked.
+- [ ] **Disk for git mirrors** (#684): each git repository keeps a bare, shallow mirror at `DATA_DIR/git-mirrors/<repository id>.git`, and a sync fetches only what changed into it (a one-file commit is a few hundred bytes, not a new clone). Budget about the packed size of each repository's tip tree, plus up to four fetches' worth of replaced objects before git folds them (the `rea` benchmark repository: 11 MB for 3,764 files). Deleting a repository removes its mirror; mirrors of repositories deleted while the server was down go at the next start. Mirrors are a cache: you can leave `git-mirrors/` out of volume backups or delete it while the server is stopped, and the next sync of each repository fetches its tip once (the cost of one shallow clone) and re-reads its files without re-indexing unchanged ones. The first sync after upgrading to this release does the same.
 
 ---
 
