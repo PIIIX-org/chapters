@@ -662,7 +662,7 @@ All team and user tools are **account only**.
 
 ---
 
-## 7. Export & Notifications (4 tools)
+## 7. Export, Notifications & Usage (5 tools)
 
 ### `export_vault`
 - **Scope**: vault. Edit access.
@@ -691,6 +691,17 @@ All team and user tools are **account only**.
 - **Capability**: `write`.
 - **Parameters**: `notificationId` (uuid, required).
 - **Returns**: the updated notification row.
+
+### `usage_report`
+- **Scope**: account only.
+- **Capability**: `read`; `admin` profile only (owner tool: not on `reader` or `writer` tokens).
+- **Parameters**: `scope` (`"account"`, the default, or `"instance"`, optional). `instance` is for instance admins (role `owner`, `superadmin` or `admin`); anyone else gets `PERMISSION_REQUIRED`.
+- **Returns**: the instance's opt-in usage report (#678), the same object as `GET /api/usage/report`: `{ enabled, scope, window: {totals_days: 30, detail_days: 7, since}, totals: {calls, tokens, errors, zero_results}, tools: [{tool, calls, tokens, errors, zero_results, latency_p50_ms, latency_p95_ms}], sessions: {count, gap_minutes, latest: [{token, session, started, ended, calls, tokens, tools: {<tool>: {calls, tokens}}}]}, searches: {total, zero_result, with_hits, no_useful_hit, useful_within_calls, zero_result_queries, no_useful_hit_queries}, never_read: {count, notes: [{id, vault_id, path}]}, fallbacks: {reported, populated, lookback_calls, reads_before, notes_read_before}, not_recorded_since_boot }`.
+  - The report is off by default; only the instance owner turns it on (`PUT /api/usage/settings`). Off, nothing is recorded and the answer has `enabled: false` with whatever was kept before.
+  - `account`: the calls of this account's tokens, and the live notes of the vaults it owns. `instance`: every account, aggregates only: no account, token, session, note id or path (`never_read` is `{count}`, sessions carry no `token`/`session`, `fallbacks` no `notes_read_before`).
+  - Nothing of a note's or query's text is stored or answered. A query is `{tool, query_hash, length, language, filters, count}`: a salted hash of the normalised query, its length in code points, its script (`latin`, `cyrillic`, `han`, ..., `code` for an identifier or path) and its non-text arguments.
+  - Totals per tool cover 30 days; the other sections the last 7. A search has a `no_useful_hit` when none of its hits was read (`read_note`, `read_file`) by the same token within its next 5 calls: a proxy that over-counts (a snippet can be the answer; a read through another token is not seen). A session is the `session_id` an agent sends, else the token, split by 30 minutes without a call.
+  - `fallbacks` counts what a client reports and the notes it read in the 5 calls before: a client may send the JSON-RPC notification `notifications/elara/client_event` with `{"event": "local_fallback", "session_id"?}` when its agent turns to local tools (grep, file reads). It costs no `tools/list` tokens and answers nothing. No known client sends it yet, so `populated` stays `false` until one does.
 
 ---
 

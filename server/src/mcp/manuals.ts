@@ -29,7 +29,7 @@ const FAMILIES = [
   { slug: 'search', heading: '4. ', description: 'search and find_symbols: parameters and answers.' },
   { slug: 'graph', heading: '5. ', description: 'graph, find_graph_path and graph perspectives: parameters, answers and edge rows.' },
   { slug: 'teams', heading: '6. ', description: 'The team and user tools: parameters and answers.' },
-  { slug: 'export', heading: '7. ', description: 'The export and notification tools: parameters and answers.' },
+  { slug: 'export', heading: '7. ', description: 'The export, notification and usage report tools: parameters and answers.' },
 ] as const
 
 export interface ToolManual {

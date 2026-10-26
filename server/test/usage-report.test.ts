@@ -209,10 +209,12 @@ describe('usage report (#678)', () => {
     expect(search).toMatchObject({ calls: 4, zero_results: 2, errors: 0 })
     expect(search!.tokens as number).toBeGreaterThan(0)
     expect(tools.find((t) => t.tool === 'read_note')).toMatchObject({ calls: 2, errors: 1 })
-    const sessions = r.sessions as Array<{ calls: number; tokens: number; tools: Record<string, { calls: number; tokens: number }> }>
-    expect(sessions).toHaveLength(1)
-    expect(sessions[0]!.tools.search!.calls).toBe(4)
-    expect(sessions[0]!.calls).toBe((r.totals as Json).calls)
+    type Session = { token: string; calls: number; tokens: number; tools: Record<string, { calls: number; tokens: number }> }
+    const sessions = r.sessions as { count: number; latest: Session[] }
+    expect(sessions.count).toBe(1)
+    expect(sessions.latest[0]!.token).toMatch(/^[0-9a-f]{16}$/)
+    expect(sessions.latest[0]!.tools.search!.calls).toBe(4)
+    expect(sessions.latest[0]!.calls).toBe((r.totals as Json).calls)
   })
 
   it('records a client-reported fallback to local tools with the notes read just before it', async () => {
