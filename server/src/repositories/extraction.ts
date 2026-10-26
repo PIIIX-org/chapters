@@ -35,8 +35,11 @@ const require = createRequire(import.meta.url)
  * relabelled. Unchanged texts keep their vectors: the file blocks of these
  * files are not embedded again, only their new symbol blocks (sections are
  * outline blocks, never embedded).
+ * 6: identifier lexemes for the keyword channel (#455, search/identifiers.ts):
+ * `repository_files.keyword_fts` and symbol blocks' `keywords` (migration 0052).
+ * No block text changes, so no vector is embedded again.
  */
-export const EXTRACTOR_VERSION = 5
+export const EXTRACTOR_VERSION = 6
 
 /**
  * What a symbol declares (#450; the contract more languages, #464, and the

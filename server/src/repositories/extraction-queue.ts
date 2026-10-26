@@ -3,9 +3,10 @@ import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { repositoryFileImports, repositoryFiles } from '../db/schema.js'
 import { failpoint } from '../failpoints.js'
-import { chunks, replaceBlockSet, vectorsByEmbedKey } from '../search/block-rows.js'
+import { chunks, keywordVector, replaceBlockSet, vectorsByEmbedKey } from '../search/block-rows.js'
 import { CHUNK_VERSION, embedKey } from '../search/embed-key.js'
 import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
+import { fileKeywords, symbolKeywords } from '../search/identifiers.js'
 import { queueSemanticEdgeRefresh, runSemanticEdgeRefresh } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
@@ -542,6 +543,8 @@ async function processFile(fileId: string): Promise<void> {
     structured && isSupportedLanguage(language) ? await extractStructure(language, row.content, row.path) : { imports: [], symbols: [] }
   // The minified rule is about code: a Markdown file with one long line (a table, a paragraph) keeps its outline.
   const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, row.content) : []
+  // The keyword channel's identifier lexemes (#455): a minified file's mangled names are left out, its path kept.
+  const keywords = keywordVector(fileKeywords(row.path, structured ? row.content : null))
 
   const importRows: Array<typeof repositoryFileImports.$inferInsert> = []
   if (imports.length > 0) {
@@ -611,6 +614,7 @@ async function processFile(fileId: string): Promise<void> {
     symbolKind: b.symbolKind,
     symbolParent: b.symbolParent,
     snippet: b.snippet,
+    keywords: b.kind === 'symbol' ? symbolKeywords(b.innerPath) : null,
     startLine: b.startLine,
     endLine: b.endLine,
     contentHash: b.contentHash,
@@ -637,10 +641,14 @@ async function processFile(fileId: string): Promise<void> {
     for (const chunk of chunks(importRows)) await tx.insert(repositoryFileImports).values(chunk).onConflictDoNothing()
     // The block set is replaced whole: blocks this content no longer has go, the others are written over in place.
     await replaceBlockSet(tx, 'code', fileId, blockRows)
-    await tx
-      .update(repositoryFiles)
-      .set({ language, embeddingNote, extractedHash: row.contentHash, extractorVersion, embedderId, chunkVersion })
-      .where(eq(repositoryFiles.id, fileId))
+    // The code keyword leg's document (#455, migration 0052): the row's `fts` (of this content, checked above) plus
+    // the identifier lexemes. Raw SQL: `keyword_fts`, like `fts`, is kept out of the Drizzle model, so a `select()`
+    // of files never reads it.
+    await tx.execute(sql`
+      UPDATE repository_files SET language = ${language}, embedding_note = ${embeddingNote}, extracted_hash = ${row.contentHash},
+        extractor_version = ${extractorVersion}, embedder_id = ${embedderId}, chunk_version = ${chunkVersion},
+        keyword_fts = ${keywords ? sql`fts || ${keywords}` : null}
+      WHERE id = ${fileId}`)
     const job = changed ? await queueSemanticEdgeRefresh(tx, 'code', fileId, newKeys) : null
     failpoint('extract.before-commit')
     return job

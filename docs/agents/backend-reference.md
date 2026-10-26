@@ -175,8 +175,8 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 
 | Table | Purpose |
 |---|---|
-| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order |
+| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages, and on trashed rows (migration 0051, #682) `notes_vault_path_trashed (vault_id, path)` for `pathHadOtherNote` |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order. Migration 0051 (#682) indexes `from_path` where set (`note_revisions_from_path`), for `pathHadOtherNote` |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558) and `context` (migration 0039, #472: the link's paragraph, the non-blank lines around it, when at most 200 code points; else its own lines; else 200 code points of them around the link with `…` at each cut end; never half a surrogate pair; `okf.ts` `extractWikilinkLocations`). PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows, and of two links to one target on one line the row is the first (no count kept). Null `context` = not filled yet (rows from before 0039; rows from before 0031 also have line 0; or written by older code after a rollback; the column defaults keep that working): the boot `note_links` catch-up jobs (**Link catch-up**, §5) rewrite them from the body under the note lock at catch-up priority (5,000 notes with 30,000 rows: queued in 79 ms, rewritten in 62 s, 12 ms a note, locally; until then a backlink has `context: null` and an unlocated edge `evidence: null`), and the doctor's `links-differ` lists any whose targets or lines differ from the body |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -386,7 +386,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable`, the indexed version (`last_synced_commit`, `tree_hash`; migration 0040, #471, see §5.10) |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
+| `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0052; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0); `lookup_keys` (migration 0053, #1008, GIN-indexed) the `lookupKey` of every path the resolver tried, as `<repository id>:<key>`, null for rows written before 0053 until the boot backfill; a deleted target sets `resolved_target_file_id` to null (it deleted the row before 0053) |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -1372,7 +1372,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   parallel (note-keyword, note-semantic, code-keyword, code-semantic;
   six with symbols) and merges them with **Reciprocal Rank Fusion**
   (`k=60`), no score normalization to tune. Keyword hits use Postgres
-  `websearch_to_tsquery` + `ts_rank` + `ts_headline` snippets; semantic
+  full-text search + `ts_rank` + `ts_headline` snippets (see **Keyword
+  channel**); semantic
   hits use pgvector's `<=>` cosine-distance operator over partial HNSW
   indexes on `blocks`, one per kind of query, each query's WHERE naming the
   index predicate as SQL literals so the planner uses it:
@@ -1385,7 +1386,73 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   files by their `file` block, one hit per document (see **Blocks and the
   line contract**).
   `findSymbols()` does the same over symbols (keyword: `ILIKE` on the
-  whole query).
+  whole query, or the symbol's identifier keywords).
+  - **Keyword channel** (#455, `search/identifiers.ts`): note legs match
+    `notes.fts` (`to_tsvector('english', path || frontmatter || body)`,
+    stemmed) with `websearch_to_tsquery('english', q)`, unchanged.
+    Code legs also know identifiers. Postgres' parser keeps
+    `parseFrontmatter` as one word (`parsefrontmatt`), a member access
+    `fm.parseFrontmatter` or a name `mcp.server.ts` as one host lexeme
+    and a path as one file lexeme. So extraction stores identifier
+    lexemes beside `fts`. A compound (words joined by `.`, `-` or `::`;
+    a word is letters, digits, `_`, `$`) gives its lowercased whole, its
+    segments, its `_`/`$` words and their parts (camelCase/PascalCase
+    humps, acronyms, digit runs): `fm.parseFrontmatter` →
+    `fm.parsefrontmatter`, `fm`, `parsefrontmatter`, `parse`,
+    `frontmatter`. These are unstemmed and positionless
+    (`array_to_tsvector`), so no stemming touches them. Stored at
+    extraction, in the statements it already runs (migration 0052). A
+    file's lexemes are every path segment's, the path's dotted tails with
+    and without the extension (`src/mcp/server.ts`: `mcp.server.ts`,
+    `src.mcp.server.ts`, `mcp.server`, `src.mcp.server`) and those of each
+    compound of the content that is not a plain word (plain words are in
+    `fts`, stemmed); a minified file gets its path's only, and at most
+    20,000 are kept per file. `repository_files.keyword_fts` holds the row's `fts`
+    plus them: the code leg's document, stored whole because concatenating
+    at query time made the leg about 3x slower on rea's 3,757 files (53-65
+    ms against 21 ms for `evidence id`). Symbol
+    blocks' `blocks.keywords` hold the lexemes of the symbol's
+    `inner_path` only (its file's path is the code file leg's: `server`
+    must not find every symbol under `server/`). Both are null until the file is
+    extracted again (`EXTRACTOR_VERSION` 6 re-extracts every file at the
+    first boot; vectors are reused). A query lexeme longer than 200
+    characters (never stored) matches nothing instead of failing the
+    leg. The query: each whitespace term matches as its
+    English query, or as its identifiers (a plain word unstemmed, unless
+    English drops it as a stop word; a compound as one of its spellings:
+    its whole lexeme, or its parts joined plain, by `_` or by `-`); terms
+    are ANDed. So `frontmatter parse` and `parse_frontmatter` find
+    `parseFrontmatter`, and `mcp.server.ts` or `server.ts` find
+    `src/mcp/server.ts`. In the symbol leg, whose document is one name
+    path, a compound also matches as all its parts, each English or
+    unstemmed (`reader.load_body` finds `NoteReader.loadBody`). The code
+    leg's document is a whole file, so there a term matches as written: a
+    compound never by its parts alone, and a term of several plain words
+    (`host/platform`) keeps its English query. Their pieces anywhere in a
+    file matched every long document that uses the words, which the fusion
+    then ranked above the file defining the name (the benchmark regression
+    found on #1014: rea and context-mode lost gold). A query
+    with websearch syntax (a `"`, a `-term`, a standalone `or`) keeps the
+    English query. The code file leg's document is `keyword_fts` while
+    `extracted_hash = content_hash` and `extractor_version >= 6`, else
+    `fts` (a sync that changed the content, or older code that
+    re-extracted the file after a rollback, until it is extracted again), indexed by GIN
+    `repository_files_keyword_idx`, which replaced
+    `repository_files_fts_idx`. The leg orders by whole-identifier match,
+    then the English match's `ts_rank` (the order before #455), then the
+    keyword `ts_rank`. The symbol leg ORs `keywords` with its `ILIKE`
+    (no index: the `ILIKE` reads the repository's symbols anyway) and
+    ranks exact, prefix and contains as before, then a whole-identifier
+    match, then a parts-only match. So an exact identifier outranks its
+    other spellings and its parts within each leg. In the code leg, the rows the English query
+    matched keep their relative order except that whole-identifier
+    matches move ahead; in the symbol leg the rows the base matched keep
+    their order. A whole-identifier row the English query did not match
+    (a member access) can push English matches out of the 30-row cut.
+    A code hit's snippet is the English query's `ts_headline`; a file that
+    only the identifier keywords match gets the vector leg's snippet (its
+    first 200 characters): a headline would highlight nothing and still
+    parse the whole file (about 20 ms a file on rea's larger files).
   - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
     `SearchResponse` = `{status, retrieval_mode, degraded, index?,
     results}`, served as is by REST and inside the budget envelope by MCP.
@@ -1432,9 +1499,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     (`semantic-edges.ts`) call the same helper with `ef_search` 100.
   - **Total order** (#623): every cut ends in a key that is unique and,
     where it can be, the same on two instances with the same content (ids
-    are random per instance). Keyword legs `ORDER BY rank DESC, path
-    COLLATE "C", id`; the symbol keyword leg its exact/prefix/contains
-    `CASE`, then `path COLLATE "C", start_line, id`; vector legs `ORDER BY
+    are random per instance). The note keyword leg `ORDER BY rank DESC, path
+    COLLATE "C", id`, the code keyword leg its ranks (see **Keyword
+    channel**) then `path COLLATE "C", id`; the symbol keyword leg its
+    exact/prefix/contains/whole/parts `CASE`, then `path COLLATE "C",
+    start_line, id`; vector legs `ORDER BY
     distance, path COLLATE "C", id` (symbols: `path, start_line, id`) at
     the HNSW limit itself (an Incremental Sort over the index scan, which
     still serves it) and again after the gate; the note leg's 200-block cut
@@ -2097,13 +2166,64 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   writes refuse it). Keyed on profile only: a
   `read`-access token with the `writer` profile also gets the write
   sentence. The reader text fits the 2,000-token budget (1,995 measured
-  with #416/#417) because the shared `budgetArgs` (`response.ts`) list
+  with #416/#417; 1,993 with #682's `if_rev`, paid for by shorter
+  `read_note`, `read_file`, `browse_vault`, `browse_repository`,
+  `list_vaults` and `list_repositories` descriptions: the last two lost
+  "Account-scoped connections only.", which a pinned token never sees
+  because those tools are not listed for it) because the shared `budgetArgs` (`response.ts`) list
   `Default N` and `Next page`, check the budget's 256-25,000 range in a
   refinement instead of listing `minimum`/`maximum`, pinned ids say
   `omit when pinned`, and the read targets are explained once here
   rather than per tool. `test/mcp-instructions.test.ts` checks the rules per profile,
   that every manual named is in the token's `resources/list`, and the
   same bytes across two initializes and two vault pins per profile.
+- **Unchanged reads** (#682, ADR-004 §2.9): `read_note` and `read_file`
+  take `if_rev` (`read-targets.ts` `ifRevArg`, `z.coerce.string()`, so
+  the integer `rev` answers give works as sent and tools/list still says
+  `string`), the version an earlier
+  answer gave: a note's `rev` (`notes.seq`, which writes answer too), a
+  file's `hash` (16 hex of `content_hash`, now on every `read_file`
+  answer). When it equals the current one the read answers
+  `unchanged({rev | hash})`, a `Budgeted` of a head alone, rendered as
+  `{"unchanged":true,"rev":N,"truncated":false}` (~11 tokens; `slots` in
+  `response.ts` accepts an answer with no sections when there is no
+  cursor), for a body, `targets` or `outline` read alike. Rules:
+  - Access first: the comparison runs after `requireAccess` /
+    `requireRepositoryAccess` (and the token, profile and scope checks of
+    `tool()`), so a revoked share answers `NOT_FOUND`, never `unchanged`.
+    It is not a cache: the version is read live with the content, so no
+    epoch (§5.11) is involved.
+  - Notes compare the revision, never the text: a note changed and
+    changed back has a new `seq`. `readLiveNote` folds the editors' typing
+    first, so unsaved typing moves `seq` too. A new note's `seq` starts at
+    1, so `pathHadOtherNote` (`notes/store.ts`) refuses `unchanged` when a
+    trashed note has the path or another note of the vault has a revision
+    with `from_path` = the path (a rename, a restore elsewhere): two
+    lookups of migration 0051's partial indexes, run only when the `rev`
+    matches. A purged predecessor (owner-only `purge_note` after trash)
+    leaves no trace, the one case left.
+  - Files compare the per-file `hash`, never the repository `commit` /
+    `tree`: `syncRepositoryFiles` updates rows one by one and writes the
+    commit and tree at its end, so mid-sync (or after a failed sync) a
+    file can change under an unchanged commit or tree. The token encodes
+    the index state (owner decision on #1019): while `readRepositoryFile`
+    reports `index` (`pending` / `failed`) the answer's `hash` is
+    `<16 hex>~pending` / `~failed` and no `if_rev` matches, so an answer
+    that missed symbols or the outline is never held past extraction.
+  - Only a first page (`page.at === null`) answers `unchanged`: a cursor
+    continues the answer it came from, so a file that went back to the
+    held hash while the agent paged another version answers
+    `CURSOR_STALE` through the text guard, not `unchanged`.
+  - An `unchanged` note read moves the connection's base to the confirmed
+    rev (`last-read.ts` `confirmRead`, in `rendered`): the agent proved it
+    holds that rev, so a later whole-body edit merges from it (a base left
+    at an older rev would merge the agent's own `ops` changes in again).
+    No body is recorded, since the answer sent none: a base already at
+    that rev keeps the body the connection sent with a merged write, and
+    an older base takes the revision's text.
+  - `if_rev` is in the cursor fingerprint like any argument. Search and
+    graph have no not-modified answer: that is the result cache's (#685).
+  `test/mcp-read-if-rev.test.ts`.
 - **Cacheable prompt** (#681): what a token is sent before its first
   call opens every agent prompt, and providers bill a repeated prefix at
   a fraction of the price only if its bytes repeat. `initialize`,
@@ -2117,7 +2237,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   account token of that profile with admin access, computed once per
   process from the registrations, so it changes only when a definition
   does. It is outside the counted lists and instructions, so the reader
-  budget is unchanged (7,980 characters, ~1,995 tokens).
+  budget is unchanged by it (7,970 characters, ~1,993 tokens with #682's
+  `if_rev`).
   `test/mcp-cacheable-prompt.test.ts` compares the raw bytes of two
   accounts' tokens on two faked dates per profile and scope (account,
   vault pin) and the version against the served bytes;
@@ -2684,9 +2805,11 @@ extraction state in one query (`readRepositoryFile`) and adds
 `index: 'pending'` (its job is queued or running, or none exists and no
 block of its content does) or `'failed'` (the job gave up; the outline is
 from earlier content), the rule of `extractionState` for one file. Files
-carry no version of their own beyond `content_hash`. `list_repositories`
-and the REST rows do not carry it. Git history (`changed_since`, `diff`,
-reads at a `ref`) is deferred (D11).
+carry no version of their own beyond `content_hash`, whose first 16 hex
+every `read_file` answer carries as `hash` (what `if_rev` takes, #682;
+`~pending` / `~failed` appended while it carries `index`).
+`list_repositories` and the REST rows do not carry the indexed version.
+Git history (`changed_since`, `diff`, reads at a `ref`) is deferred (D11).
 
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
@@ -3185,16 +3308,17 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
 #452, migrations 0035 and 0036). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 5; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+an integer, now 6; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
 top-level rule and the embed-budget order, #450; 4 re-exports, literal
 `import()`/`require()` and `import x = require()` as imports, #466, which
 embeds nothing again; 5 Rust, Java, C, C++, C#, Kotlin, Ruby and PHP
 symbols and imports, Markdown/HTML heading sections and the relabelling of
 files whose label changed, #464, which embeds only the new symbol texts;
-sections are never embedded): bump it with any change to the grammars and queries,
+sections are never embedded; 6 the identifier `keywords` of files and symbols,
+#455, which embeds nothing again): bump it with any change to the grammars and queries,
 symbol kinds, the outlines (`outline.ts`), the labels, the minified-file
-rule or the embed-budget order (the snippet cut and block texts are
+rule, the embed-budget order or the stored identifier lexemes (the snippet cut and block texts are
 `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
 (`Xenova/bge-small-en-v1.5`, `fake` for the test embedder) plus
 `+text<EMBED_TEXT_VERSION>`, the version of the 16,000-character cut; bump
@@ -3442,7 +3566,9 @@ nothing):
 
 Epochs are internal: no answer carries them, and `tools/list` and
 `initialize.instructions` are unchanged (0 tokens). Answers carry content
-versions (`rev`, file `hash`, `commit` / `tree`) as ADR-004 §2.9 lists.
+versions (`rev`, file `hash`, `commit` / `tree`) as ADR-004 §2.9 lists;
+`read_note` / `read_file` `if_rev` (#682, §5.8 **Unchanged reads**)
+compares `rev` or `hash` live after the access check and caches nothing.
 Tests: `cache-epochs.test.ts` (every write path bumps its own scope and no
 other; reads bump nothing) and `cache-key.test.ts` (key fields, refusals,
 real epochs around writes and reads).
