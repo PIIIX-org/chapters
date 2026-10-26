@@ -1,5 +1,6 @@
 import { posix } from 'node:path'
 import { parse as parseYaml } from 'yaml'
+import { detectLanguage } from './language.js'
 
 /** Tried in order for an extensionless specifier: TypeScript sources before the JavaScript they compile to (#451). */
 const CANDIDATE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go']
@@ -77,8 +78,10 @@ const isUnder = (dir: string, path: string): boolean => dir === '' || path.start
 /**
  * Best-effort resolution of a raw import specifier to a file that
  * actually exists in this repository (spec 9: "relative and common
- * alias patterns", not exhaustive module-resolution semantics). A `?query`
- * or `#hash` suffix is ignored (#466). In order:
+ * alias patterns", not exhaustive module-resolution semantics). Rust, Java,
+ * Kotlin, C, C++, Ruby and PHP files resolve their own way
+ * (`resolveByLanguage`, #464). Otherwise a `?query` or `#hash` suffix is
+ * ignored (#466), and in order:
  * - relative specifiers, with TypeScript ESM `./x.js` -> `x.ts`/`x.tsx`
  *   (TS source preferred over a same-named `.js`);
  * - the `paths` of the nearest tsconfig/jsconfig above the importing file;
@@ -97,6 +100,8 @@ export function resolveImportPath(
   knownPaths: ReadonlySet<string>,
   context: ResolutionContext = EMPTY_CONTEXT,
 ): string | null {
+  const own = resolveByLanguage(sourcePath, rawSpecifier, knownPaths)
+  if (own !== undefined) return own
   const specifier = rawSpecifier.replace(QUERY_OR_HASH, '')
   if (specifier.startsWith('.')) return resolveFile(join(dirOf(sourcePath), specifier), knownPaths)
   // Manifests describe JavaScript module resolution: a Python or Go import never uses them.
@@ -137,6 +142,95 @@ function resolveFile(base: string, knownPaths: ReadonlySet<string>): string | nu
     ...CANDIDATE_EXTENSIONS.map((e) => posix.join(base, 'index' + e)),
   ]
   return candidates.find((c) => knownPaths.has(c)) ?? null
+}
+
+/** The first of `candidates` that is a known file. */
+const known = (knownPaths: ReadonlySet<string>, ...candidates: string[]): string | null => candidates.find((c) => knownPaths.has(c)) ?? null
+
+/**
+ * The imports of #464's languages, by the importing file's language;
+ * undefined for the others. A standard library, an external crate, gem,
+ * package or a system header never resolves:
+ * - Rust `use`: `crate::` from the crate's `src`, `self::`/`super::` from
+ *   the current module, anything else relative to the current module; the
+ *   longest module path that is a file (`a/b.rs` or `a/b/mod.rs`) wins;
+ * - Java and Kotlin `import a.b.C` (or a member `a.b.C.f`): a `.java`/`.kt`
+ *   file whose path ends in `a/b/C`; not a wildcard;
+ * - C/C++ `#include "x.h"`, Ruby `require_relative 'x'` (`.rb` optional),
+ *   PHP `require 'x.php'`: relative to the importing file only.
+ */
+function resolveByLanguage(sourcePath: string, specifier: string, knownPaths: ReadonlySet<string>): string | null | undefined {
+  switch (detectLanguage(sourcePath)) {
+    case 'rust':
+      return resolveRustPath(sourcePath, specifier, knownPaths)
+    case 'java':
+    case 'kotlin':
+      return resolveJvmImport(specifier, knownPaths)
+    case 'c':
+    case 'cpp':
+    case 'php':
+      return known(knownPaths, join(dirOf(sourcePath), specifier))
+    case 'ruby': {
+      const path = join(dirOf(sourcePath), specifier)
+      return known(knownPaths, path, `${path}.rb`)
+    }
+    default:
+      return undefined
+  }
+}
+
+function resolveRustPath(sourcePath: string, specifier: string, knownPaths: ReadonlySet<string>): string | null {
+  const segments = specifier.split('::')
+  // Where the current module's submodules are: `src/a/b.rs` has them in `src/a/b/`, `mod.rs`/`lib.rs`/`main.rs` beside it.
+  const stem = posix.basename(sourcePath, '.rs')
+  let base = ['mod', 'lib', 'main'].includes(stem) ? dirOf(sourcePath) : join(dirOf(sourcePath), stem)
+  if (segments[0] === 'crate') {
+    const parts = sourcePath.split('/')
+    const src = parts.lastIndexOf('src', parts.length - 2)
+    if (src === -1) return null
+    base = parts.slice(0, src + 1).join('/')
+    segments.shift()
+  } else if (segments[0] === 'self') {
+    segments.shift()
+  } else {
+    while (segments[0] === 'super') {
+      base = dirOf(base)
+      segments.shift()
+    }
+  }
+  for (let n = segments.length; n >= 1; n--) {
+    const module = join(base, segments.slice(0, n).join('/'))
+    const found = known(knownPaths, `${module}.rs`, `${module}/mod.rs`)
+    if (found) return found
+  }
+  return null
+}
+
+/** Each repository's Java/Kotlin files by every path suffix of two or more segments without the extension (`index/Entry`, `example/index/Entry`, ...). */
+const jvmIndexes = new WeakMap<ReadonlySet<string>, Map<string, string>>()
+
+function resolveJvmImport(specifier: string, knownPaths: ReadonlySet<string>): string | null {
+  if (specifier.endsWith('*')) return null
+  let index = jvmIndexes.get(knownPaths)
+  if (!index) {
+    index = new Map()
+    for (const path of [...knownPaths].sort()) {
+      const match = /\.(?:java|kts?)$/.exec(path)
+      if (!match) continue
+      const parts = path.slice(0, match.index).split('/')
+      for (let from = parts.length - 2; from >= 0; from--) {
+        const suffix = parts.slice(from).join('/')
+        if (!index.has(suffix)) index.set(suffix, path)
+      }
+    }
+    jvmIndexes.set(knownPaths, index)
+  }
+  const segments = specifier.split('.')
+  for (let n = segments.length; n >= 2; n--) {
+    const found = index.get(segments.slice(0, n).join('/'))
+    if (found) return found
+  }
+  return null
 }
 
 /**
