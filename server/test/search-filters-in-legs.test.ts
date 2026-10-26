@@ -7,8 +7,9 @@
 // the vector channel can find them, and only if the filter runs before the
 // cut. Each check runs twice: with this small instance's own plan (exact: a
 // sequential scan and a sort, so the base's cut deterministically drops the
-// targets) and as on a big instance (served by the HNSW index with the
-// iterative scan of #462, approximate).
+// targets) and as on a big instance (on the base, served by the HNSW index
+// with the iterative scan of #462, approximate; since #1035 a scope of at
+// most 2,000 blocks, as each one here, is read exactly in both).
 // Uses only entry points that exist on the base (the fails-before job runs
 // this file against it); filters the base lacks are ignored there.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
