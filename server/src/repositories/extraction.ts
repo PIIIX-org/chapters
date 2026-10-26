@@ -36,7 +36,9 @@ const require = createRequire(import.meta.url)
  * relabelled. Unchanged texts keep their vectors: the file blocks of these
  * files are not embedded again, only their new symbol blocks (sections are
  * outline blocks, never embedded).
- * 6: taken by #1014 (keyword channel).
+ * 6: identifier lexemes for the keyword channel (#455, search/identifiers.ts):
+ * `repository_files.keyword_fts` and symbol blocks' `keywords` (migration 0052).
+ * No block text changes, so no vector is embedded again.
  * 7: call, reference, import and test sites, stored as `code_edges` (#469,
  * code-edge-rules.ts, code-edges.ts). No block text changes, so no vector is
  * embedded again: the bump only fills the new table.

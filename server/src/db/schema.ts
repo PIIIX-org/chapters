@@ -410,6 +410,8 @@ export const notes = pgTable(
     index('notes_vault_type_idx').on(t.vaultId, t.type),
     // Search's tag filter inside the note legs (#454, migration 0043): `frontmatter -> 'tags' ?| …`.
     index('notes_tags_idx').using('gin', sql`(${t.frontmatter} -> 'tags')`),
+    // Trashed notes by path (migration 0051, #682): read_note's `if_rev` checks no other note held the path.
+    index('notes_vault_path_trashed').on(t.vaultId, t.path).where(sql`deleted_at is not null`),
   ],
 )
 
@@ -470,11 +472,21 @@ export const noteRevisions = pgTable(
       .defaultNow(),
     ord: bigserial('ord', { mode: 'number' }).notNull(),
   },
-  (t) => [index('note_revisions_note_idx').on(t.noteId, t.createdAt), index('note_revisions_note_ord').on(t.noteId, t.ord)],
+  (t) => [
+    index('note_revisions_note_idx').on(t.noteId, t.createdAt),
+    index('note_revisions_note_ord').on(t.noteId, t.ord),
+    // Revisions that moved a note away from a path (migration 0051, #682): read_note's `if_rev` checks no other note left it.
+    index('note_revisions_from_path').on(t.fromPath).where(sql`from_path is not null`),
+  ],
 )
 
 const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
   dataType: () => 'bytea',
+})
+
+/** A Postgres `tsvector`: written as SQL (`array_to_tsvector`, search/block-rows.ts `keywordVector`), matched in SQL, never read by the app. */
+const tsvector = customType<{ data: string }>({
+  dataType: () => 'tsvector',
 })
 
 // ADR-003 §4 (migration 0021): the store's CRDT, update-log, projection and
@@ -677,16 +689,18 @@ export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
  * Both ends are in one scope (D10, #461): two notes of one vault, two files of
  * one repository, or a note and a file whose vault and repository have one
  * owner. Migration 0038 deleted the rows from before; a vault transfer deletes
- * its notes' note↔code rows (`deleteVaultCodeEdges`).
+ * its notes' note↔code rows (`transferVaultSemanticEdges`).
  *
  * The SQL columns are still named `node_a_*` / `node_b_*` from when the table
  * was modelled as an undirected pair — renaming them would buy nothing but a
  * migration. `node_a` is the source, `node_b` is the target.
  *
  * The rows are the true top-k of the content whatever the order it was
- * embedded in (#1007, search/semantic-edges.ts). `similarity` holds the double
- * the search computed (migration 0050; `real` before), so an embed compares
- * its own similarity with a list's last row exactly.
+ * embedded in (#1007, search/semantic-edges.ts), and after a delete, those of
+ * the content without the node (#1015: `removeSemanticNodes`; a note in the
+ * trash has none). `similarity` holds the double the search computed
+ * (migration 0050; `real` before), so an embed compares its own similarity
+ * with a list's last row exactly.
  */
 export const semanticEdges = pgTable(
   'semantic_edges',
@@ -975,6 +989,14 @@ export const blocks = pgTable(
     symbolParent: text('symbol_parent'),
     /** A symbol block's snippet (code-blocks.ts): the keyword legs match it and hits show it, as `repository_file_symbols.snippet` was. */
     snippet: text('snippet'),
+    /**
+     * A symbol block's identifier lexemes (#455, migration 0052;
+     * search/identifiers.ts `symbolKeywords`: its `inner_path` only, split,
+     * unstemmed), which the symbol keyword leg matches beside
+     * `inner_path` and `snippet`. Null on other blocks and on a symbol not
+     * extracted since 0052 (`EXTRACTOR_VERSION` 6 extracts it again).
+     */
+    keywords: tsvector('keywords'),
     startLine: integer('start_line').notNull(),
     endLine: integer('end_line').notNull(),
     contentHash: text('content_hash').notNull(),

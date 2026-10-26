@@ -28,7 +28,7 @@ import { db, sql } from '../db/client.js'
 import { runMigrations } from '../db/migrate.js'
 import { noteLinks, notes, semanticEdges, users, vaults } from '../db/schema.js'
 import { buildGraph } from '../graph/assemble.js'
-import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
+import { removeSemanticNodes } from '../search/semantic-edges.js'
 import { config } from '../config.js'
 
 /** louvain ships CJS-flavored typings that fight NodeNext default imports. */
@@ -127,7 +127,8 @@ async function seed(n: number): Promise<{ userId: string; vaultId: string; noteI
 }
 
 async function teardown(userId: string, vaultId: string, noteIds: string[]): Promise<void> {
-  for (const part of chunk(noteIds, 5000)) await deleteSemanticEdgesFor('note', part)
+  // One statement: the ids are one array parameter, and no note is queued as the holder of another.
+  await removeSemanticNodes(db, 'note', noteIds)
   await db.delete(vaults).where(eq(vaults.id, vaultId)) // cascades notes + note_links
   await db.delete(users).where(eq(users.id, userId))
 }
