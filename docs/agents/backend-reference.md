@@ -2280,10 +2280,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     sends no body block then. `response.ts`: a section's `ref` is shown in
     place of its content and counted as shown whole; the section keeps its
     text, so cursor guards are unchanged.
-  - Only a first page refers: a cursor page is sent in full (and
-    remembered). `session_id` is left out of the cursor fingerprint
-    (`UNBOUND_ARGS`), so `truncated` and cursors are those of the call
-    without it, and a cursor continues with or without the session.
+  - Only a first page refers: a cursor page sends what it shows in full
+    (and remembers it). A cursor issued after a reference carries the
+    referenced section indices (`r`, round 1 of #1031); `slots()` treats
+    them as finished (`start: -1`) and `compose` leaves them out, so a
+    later page neither announces (`next`) nor resends them. A reference
+    frees budget, so a session page can show more than the same call
+    without `session_id`: its `truncated` and cursor differ accordingly.
+    `session_id` is left out of the cursor fingerprint (`UNBOUND_ARGS`),
+    so a cursor continues with or without the session. A cursor without
+    a reference has no `r`: the bytes of a no-session cursor are as before.
   - What a page showed whole is remembered after rendering
     (`Budgeted.rendered` gets `Seen`: per section the lines shown whole,
     a line split at a page edge excluded, or whether a list was shown
