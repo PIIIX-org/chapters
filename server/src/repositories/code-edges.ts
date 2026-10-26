@@ -399,10 +399,11 @@ async function reresolve(tx: Tx, repositoryId: string, scope: SQL): Promise<numb
 /**
  * After `files` gained or lost the definitions `changed` (re-extracted, or
  * deleted), re-resolves the rows of the repository whose answer can move:
- * those naming a definition whose name has at most one definition outside
- * these files (step 4 can change), and for a name with more, those that
- * point into these files or whose source is `near` them (`nearFiles`, steps
- * 2 and 3).
+ * those naming one of them that point into these files or whose source is
+ * `near` them (`nearFiles`: steps 2 and 3), and the `textual` ones naming a
+ * name with at most one definition outside these files (step 4). A row
+ * resolved through its imports or package into another file keeps its
+ * answer: neither its import rows nor that file changed.
  */
 export async function reresolveAfterChange(
   tx: Tx,
@@ -429,17 +430,16 @@ export async function reresolveAfterChange(
   const defined = new Map(others.flatMap((r) => (r.name !== null ? [[r.name, r.n] as const] : [])))
   const definedPath = new Map(others.flatMap((r) => (r.innerPath !== null ? [[r.innerPath, r.n] as const] : [])))
   const rare = [...names].filter((n) => (defined.get(n) ?? 0) <= 1)
-  const common = [...names].filter((n) => (defined.get(n) ?? 0) > 1)
   const rareQualified = changed.filter((d) => qualified.has(d.innerPath) && (definedPath.get(d.innerPath) ?? 0) <= 1)
-  const terms: SQL[] = []
-  if (rare.length > 0) terms.push(sql`e.target_name = ANY(${textArray(rare)})`)
+  const terms: SQL[] = [
+    sql`(e.target_name = ANY(${textArray(names)}) AND (e.target_file_id = ANY(${uuidArray(files)}) OR e.source_file_id = ANY(${uuidArray(near)})))`,
+  ]
+  if (rare.length > 0) terms.push(sql`(e.confidence = 'textual' AND e.target_name = ANY(${textArray(rare)}))`)
   if (rareQualified.length > 0) {
-    terms.push(sql`(e.target_name = ANY(${textArray(rareQualified.map((d) => d.name))}) AND e.target_qualified = ANY(${textArray(rareQualified.map((d) => d.innerPath))}))`)
+    terms.push(sql`(e.confidence = 'textual' AND e.target_name = ANY(${textArray(rareQualified.map((d) => d.name))})
+      AND e.target_qualified = ANY(${textArray(rareQualified.map((d) => d.innerPath))}))`)
   }
-  if (common.length > 0) {
-    terms.push(sql`(e.target_name = ANY(${textArray(common)}) AND (e.target_file_id = ANY(${uuidArray(files)}) OR e.source_file_id = ANY(${uuidArray(near)})))`)
-  }
-  return terms.length === 0 ? 0 : reresolve(tx, repositoryId, sql.join(terms, sql` OR `))
+  return reresolve(tx, repositoryId, sql.join(terms, sql` OR `))
 }
 
 /** Re-resolves every row of these source files (their import rows changed). */

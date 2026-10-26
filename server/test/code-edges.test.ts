@@ -334,12 +334,14 @@ describe('code edges (#469)', () => {
     const repo = await repoWith('edges-c', {
       'src/util.h': 'int helper(int x);\n',
       'src/util.c': ['#include "util.h"', '', 'int helper(int x) {', '    return x;', '}', ''].join('\n'),
-      'src/main.c': ['#include "util.h"', '', 'static int other(void) {', '    return 0;', '}', '', 'int main(void) {', '    return helper(1) + other() + printf("x");', '}', ''].join('\n'),
+      'src/main.c': ['#include "util.h"', '', 'static int other(void) {', '    return 0;', '}', '', 'int main(void) {', '    return helper(1) + other() + missing() + printf("x");', '}', ''].join('\n'),
     })
     const edges = await edgesOf(repo)
     expect(shape(edgeAt(edges, 'src/main.c', 8, 'call', 'helper'))).toEqual({ confidence: 'resolved', target: 'src/util.h#helper', source: 'main' })
     expect(shape(edgeAt(edges, 'src/main.c', 8, 'call', 'other'))).toEqual({ confidence: 'resolved', target: 'src/main.c#other', source: 'main' })
-    expect(shape(edgeAt(edges, 'src/main.c', 8, 'call', 'printf'))).toEqual({ confidence: 'textual', target: null, source: 'main' })
+    expect(shape(edgeAt(edges, 'src/main.c', 8, 'call', 'missing'))).toEqual({ confidence: 'textual', target: null, source: 'main' })
+    // The C library is not stored.
+    expect(edges.some((e) => e.name === 'printf')).toBe(false)
     expect(edges.filter((e) => e.kind === 'reference')).toEqual([])
   })
 

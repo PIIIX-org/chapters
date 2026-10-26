@@ -87,6 +87,14 @@ export interface EdgeRules {
   builtinTypes?: ReadonlySet<string>
   /** Parents of an identifier that binds or declares it, never a reference. */
   notReference?: ReadonlySet<string>
+  /**
+   * Calls into the language's own library, not stored unless the file defines or imports the name: their
+   * targets are never repository symbols, and matched by name they would land on any repository method
+   * sharing it (`arr.map()` on a repository's `map`). `methods`: of its core types (and of test
+   * assertions), on a receiver of unknown type; `functions`: called bare; `receivers`: global objects and
+   * types they are called on (`JSON.parse()`, `Vec::new()`) or called as (`String(x)`).
+   */
+  builtins?: { methods: ReadonlySet<string>; functions: ReadonlySet<string>; receivers: ReadonlySet<string> }
 }
 
 const capitalised = (name: string) => /^\p{Lu}/u.test(name)
@@ -218,31 +226,38 @@ export function extractSites(
     sites.push({ kind: 'import', name: b.imported, qualified: b.qualified ?? null, via: b.via, member: false, local: null, ...position(b.node) })
   }
 
-  /** A use of `nameNode`, through `receiver` when it is a member. */
-  const use = (kind: 'call' | 'reference', nameNode: Node, receiver: Node | null, scoped = false): ExtractedSite => {
+  const builtins = rules.builtins
+  /**
+   * A use of `nameNode`, through `receiver` when it is a member. Null for a call into the language's own
+   * library (`rules.builtins`) that the file does not define or import.
+   */
+  const use = (kind: 'call' | 'reference', nameNode: Node, receiver: Node | null, scoped = false): ExtractedSite | null => {
     const name = nameNode.text
     const at = position(nameNode)
     type Fields = Pick<ExtractedSite, 'name' | 'qualified' | 'via' | 'member' | 'local'>
     const plain: Fields = { name, qualified: null, via: null, member: false, local: null }
     const site = (fields: Partial<Fields>): ExtractedSite => ({ kind, ...plain, ...fields, ...at })
+    const library = kind === 'call' ? builtins : undefined
     const cls = classAt(at.enclosing)
     if (receiver) {
       if (rules.self(receiver, nameNode)) {
-        if (!cls) return site({ member: true })
+        if (!cls) return library?.methods.has(name) ? null : site({ member: true })
         const qualified = `${cls}.${name}`
         return site({ qualified, local: members.get(qualified) ?? null })
       }
       const qualifier = qualifierOf(receiver)
-      if (!qualifier) return site({ member: true })
-      const b = bound.get(qualifier.name)
+      const b = qualifier ? bound.get(qualifier.name) : undefined
       if (b && (b.namespace || !capitalised(b.local))) return site({ via: b.via })
       if (b) return site({ qualified: `${b.imported}.${name}`, via: b.via })
-      if (moduleLevel.has(qualifier.name) || capitalised(qualifier.name)) {
+      // `JSON.stringify()`, `Vec::new()`, `console.log()`.
+      if (qualifier && !moduleLevel.has(qualifier.name) && library?.receivers.has(qualifier.name)) return null
+      if (qualifier && (moduleLevel.has(qualifier.name) || capitalised(qualifier.name))) {
         const qualified = `${qualifier.name}.${name}`
         return site({ qualified, local: members.get(qualified) ?? null })
       }
       // `module::f()`: a path, not a variable.
-      return qualifier.path || scoped ? site({}) : site({ member: true })
+      if (qualifier && (qualifier.path || scoped)) return site({})
+      return library?.methods.has(name) ? null : site({ member: true })
     }
     if (rules.implicitSelf && cls) {
       const own = members.get(`${cls}.${name}`)
@@ -252,7 +267,7 @@ export function extractSites(
     if (local !== undefined) return site({ local })
     const b = bound.get(name)
     if (b) return site({ name: b.imported, qualified: b.qualified ?? null, via: b.via })
-    return site({})
+    return library?.functions.has(name) || library?.receivers.has(name) ? null : site({})
   }
 
   // Calls. Several patterns may match one callee (with and without its receiver): the one with a receiver wins.
@@ -275,7 +290,8 @@ export function extractSites(
   for (const [start, { callee, receiver, scoped }] of calls) {
     if (taken.has(start)) continue
     taken.add(start)
-    sites.push(use('call', callee, receiver, scoped))
+    const site = use('call', callee, receiver, scoped)
+    if (site) sites.push(site)
   }
 
   for (const node of typeNodes) {
@@ -285,7 +301,8 @@ export function extractSites(
     if (taken.has(node.startIndex) || name.length < 2 || rules.builtinTypes?.has(name) || (fieldOf(node) === 'name' && !qualifierField)) continue
     taken.add(node.startIndex)
     const receiver = qualifierField ? (parent!.childForFieldName(qualifierField) ?? null) : null
-    sites.push(use('reference', node, receiver, true))
+    const site = use('reference', node, receiver, true)
+    if (site) sites.push(site)
   }
 
   // Values: the names the file defines at module level or imports by name (a module is no symbol), where the text has them.
@@ -305,7 +322,8 @@ export function extractSites(
       if (field === 'name' || field === 'attribute' || field === 'field' || field === 'property' || field === 'key' || field === 'alias') continue
       if (inImport(node)) continue
       taken.add(start)
-      sites.push(use('reference', node, null))
+      const site = use('reference', node, null)
+      if (site) sites.push(site)
     }
   }
   return sites
@@ -514,6 +532,62 @@ const PYTHON_BUILTIN_TYPES = new Set([
   'bytes', 'dict', 'float', 'int', 'list', 'object', 'set', 'str', 'tuple', 'type',
 ])
 
+/** A `builtins` entry from space-separated names. */
+function library(methods: string, functions: string, receivers: string): NonNullable<EdgeRules['builtins']> {
+  const words = (s: string) => new Set(s.split(/\s+/).filter(Boolean))
+  return { methods: words(methods), functions: words(functions), receivers: words(receivers) }
+}
+// Generic verbs (`get`, `set`, `add`, `remove`, `insert`, `update`, `parse`, `run`, ...) are left out: repositories
+// define them too, and a call on an unknown receiver may be one of theirs.
+const JS_LIBRARY = library(
+  `at concat entries every fill filter find findIndex findLast findLastIndex flat flatMap forEach includes indexOf join keys
+   lastIndexOf map pop push reduce reduceRight reverse shift slice some sort splice toReversed toSorted unshift values then catch
+   finally toString toLocaleString valueOf charAt charCodeAt codePointAt endsWith localeCompare match matchAll normalize padEnd
+   padStart repeat replace replaceAll split startsWith substring substr toLowerCase toUpperCase trim trimEnd trimStart toFixed
+   toPrecision getTime toISOString hasOwnProperty bind call apply log warn info debug
+   toBe toEqual toStrictEqual toMatchObject toContain toContainEqual toHaveLength toHaveProperty toThrow toThrowError toBeDefined
+   toBeUndefined toBeNull toBeTruthy toBeFalsy toBeNaN toBeInstanceOf toBeGreaterThan toBeGreaterThanOrEqual toBeLessThan
+   toBeLessThanOrEqual toBeCloseTo toMatch toMatchSnapshot toMatchInlineSnapshot toHaveBeenCalled toHaveBeenCalledTimes
+   toHaveBeenCalledWith toHaveBeenLastCalledWith toSatisfy`,
+  `parseInt parseFloat isNaN isFinite setTimeout clearTimeout setInterval clearInterval setImmediate queueMicrotask structuredClone
+   encodeURIComponent decodeURIComponent encodeURI decodeURI fetch atob btoa`,
+  `${[...TS_BUILTIN_TYPES].join(' ')} JSON Math Reflect Intl Atomics console process globalThis window document crypto URL
+   URLSearchParams TextEncoder TextDecoder AbortController`,
+)
+const PYTHON_LIBRARY = library(
+  `append extend items keys values setdefault popitem join split rsplit splitlines strip lstrip rstrip replace startswith endswith
+   lower upper title capitalize encode decode rfind isdigit isalpha isalnum isspace zfill ljust rjust partition rpartition discard
+   issubset issuperset`,
+  `abs all any bool callable chr dict dir divmod enumerate filter float frozenset getattr globals hasattr hash hex id input int
+   isinstance issubclass iter len list locals map max min next object oct open ord pow print range repr reversed round set
+   setattr slice sorted str sum super tuple type vars zip`,
+  'str dict list set tuple int float bytes object type',
+)
+const GO_LIBRARY = library('', 'append cap clear close complex copy delete imag len make max min new panic print println real recover', '')
+const RUST_LIBRARY = library(
+  `unwrap expect unwrap_or unwrap_or_else unwrap_or_default unwrap_err expect_err ok err ok_or ok_or_else map map_err map_or
+   map_or_else and_then or_else is_some is_none is_some_and is_none_or is_ok is_err as_ref as_mut as_deref as_deref_mut as_str
+   as_slice as_bytes clone cloned copied to_string to_owned into iter iter_mut into_iter collect filter filter_map flat_map flatten
+   find find_map position any all enumerate zip rev chain fold sum product skip take step_by peekable windows chunks nth max_by
+   max_by_key min_by min_by_key sort sort_by sort_by_key sort_unstable dedup len is_empty push push_str truncate extend
+   extend_from_slice retain drain contains contains_key starts_with ends_with trim trim_start trim_end split split_whitespace
+   lines chars bytes to_lowercase to_uppercase borrow borrow_mut entry or_insert or_insert_with or_default abs min max clamp
+   floor ceil round sqrt powi powf`,
+  'Some Ok Err drop',
+  `${[...RUST_BUILTIN_TYPES].filter((t) => t !== 'Self').join(' ')} Default i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize f32
+   f64 bool char str`,
+)
+const JAVA_LIBRARY = library(
+  `equals hashCode toString length charAt substring indexOf isEmpty size stream forEach collect toList append println printf
+   valueOf getClass compareTo trim split startsWith endsWith toLowerCase toUpperCase contains containsKey`,
+  '',
+  `${[...JAVA_BUILTIN_TYPES].join(' ')} System Math Arrays Collections Objects Stream Collectors`,
+)
+const C_FUNCTIONS = `printf fprintf sprintf snprintf puts malloc calloc realloc free memcpy memset memmove memcmp strlen strcmp strncmp
+  strcpy strncpy strcat strchr strrchr strstr strdup sizeof assert exit abort fopen fclose fread fwrite fflush`
+const C_LIBRARY = library('', C_FUNCTIONS, '')
+const CPP_LIBRARY = library('push_back emplace_back c_str', C_FUNCTIONS, 'std')
+
 const JS_CALLS = `
   (call_expression function: (identifier) @callee (#not-eq? @callee "require"))
   (call_expression function: (member_expression object: (_) @receiver property: (property_identifier) @callee))
@@ -538,6 +612,7 @@ const typescript: EdgeRules = {
   self: thisOrSelf,
   builtinTypes: TS_BUILTIN_TYPES,
   notReference: JS_NOT_REFERENCE,
+  builtins: JS_LIBRARY,
 }
 
 export const EDGE_RULES: Record<string, EdgeRules> = {
@@ -549,6 +624,7 @@ export const EDGE_RULES: Record<string, EdgeRules> = {
     valueNames: JS_VALUE_NAMES,
     self: thisOrSelf,
     notReference: JS_NOT_REFERENCE,
+    builtins: JS_LIBRARY,
   },
   python: {
     query: `
@@ -561,6 +637,7 @@ export const EDGE_RULES: Record<string, EdgeRules> = {
     valueNames: IDENTIFIER,
     self: (receiver) => receiver.type === 'identifier' && (receiver.text === 'self' || receiver.text === 'cls'),
     builtinTypes: PYTHON_BUILTIN_TYPES,
+    builtins: PYTHON_LIBRARY,
     notReference: new Set(['parameters', 'default_parameter', 'typed_parameter', 'typed_default_parameter', 'keyword_argument', 'global_statement', 'nonlocal_statement']),
   },
   go: {
@@ -580,6 +657,7 @@ export const EDGE_RULES: Record<string, EdgeRules> = {
       return param?.childForFieldName('name')?.text === receiver.text
     },
     builtinTypes: GO_BUILTIN_TYPES,
+    builtins: GO_LIBRARY,
     notReference: new Set(['parameter_declaration', 'variadic_parameter_declaration', 'var_spec', 'const_spec', 'short_var_declaration', 'labeled_statement']),
   },
   rust: {
@@ -597,8 +675,10 @@ export const EDGE_RULES: Record<string, EdgeRules> = {
       return arg ? rustUse(arg, null, null) : []
     }),
     valueNames: IDENTIFIER,
-    self: thisOrSelf,
+    // `self.f()`, and `Self::f()`: the impl's type.
+    self: (receiver) => receiver.type === 'self' || receiver.text === 'Self',
     builtinTypes: RUST_BUILTIN_TYPES,
+    builtins: RUST_LIBRARY,
     notReference: new Set(['parameter', 'let_declaration', 'mod_item']),
   },
   java: {
@@ -614,6 +694,7 @@ export const EDGE_RULES: Record<string, EdgeRules> = {
     self: thisOrSelf,
     implicitSelf: true,
     builtinTypes: JAVA_BUILTIN_TYPES,
+    builtins: JAVA_LIBRARY,
     notReference: new Set(['formal_parameter', 'variable_declarator', 'catch_formal_parameter']),
   },
   c: {
@@ -621,6 +702,7 @@ export const EDGE_RULES: Record<string, EdgeRules> = {
       (call_expression function: (identifier) @callee)
       (call_expression function: (field_expression argument: (_) @receiver field: (field_identifier) @callee))`,
     self: () => false,
+    builtins: C_LIBRARY,
   },
   cpp: {
     query: `
@@ -630,6 +712,7 @@ export const EDGE_RULES: Record<string, EdgeRules> = {
       (call_expression function: (template_function name: (identifier) @callee))
       (new_expression type: (type_identifier) @callee)`,
     self: thisOrSelf,
+    builtins: CPP_LIBRARY,
     implicitSelf: true,
   },
   csharp: {

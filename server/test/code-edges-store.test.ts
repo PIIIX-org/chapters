@@ -26,11 +26,11 @@ describe('code edge reads (#469)', () => {
     )
     await flushExtraction()
 
+    // `String(...)` is the language's own: no row.
     const rows = await listCodeEdges(repo!.id, { path: 'src/main.ts' })
     expect(rows.map((r) => [r.line, r.kind, r.name, r.confidence, r.target && `${r.target.path}:${r.target.line} ${r.target.symbol}`, r.symbol])).toEqual([
       [1, 'import', 'load', 'resolved', 'src/b.ts:5 load', null],
       [4, 'call', 'parse', 'textual', null, 'main'],
-      [4, 'call', 'String', 'textual', null, 'main'],
       [4, 'call', 'load', 'resolved', 'src/b.ts:5 load', 'main'],
     ])
     expect(rows[1]!.context).toBe('return parse(String(load()))')
