@@ -386,7 +386,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable`, the indexed version (`last_synced_commit`, `tree_hash`; migration 0040, #471, see §5.10) |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0052; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
+| `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0052; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), `keyword_head` (the path's and symbols' name lexemes, the leg's **Fields**; migration 0059) and GIN trigram `repository_files_path_trgm_idx` on `path` (#455 part 2), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -1389,7 +1389,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   whole query, or the symbol's identifier keywords).
   - **Keyword channel** (#455, `search/identifiers.ts`): note legs match
     `notes.fts` (`to_tsvector('english', path || frontmatter || body)`,
-    stemmed) with `websearch_to_tsquery('english', q)`, unchanged.
+    stemmed) with `websearch_to_tsquery('english', q)`, ordered by
+    **Fields** and relaxed by **Relaxation** (below).
     Code legs also know identifiers. Postgres' parser keeps
     `parseFrontmatter` as one word (`parsefrontmatt`), a member access
     `fm.parseFrontmatter` or a name `mcp.server.ts` as one host lexeme
@@ -1439,20 +1440,68 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     re-extracted the file after a rollback, until it is extracted again), indexed by GIN
     `repository_files_keyword_idx`, which replaced
     `repository_files_fts_idx`. The leg orders by whole-identifier match,
-    then the English match's `ts_rank` (the order before #455), then the
+    then by how many query terms the file's fields hold (below), then the
+    English match's `ts_rank` (the order before #455), then the
     keyword `ts_rank`. The symbol leg ORs `keywords` with its `ILIKE`
     (no index: the `ILIKE` reads the repository's symbols anyway) and
     ranks exact, prefix and contains as before, then a whole-identifier
     match, then a parts-only match. So an exact identifier outranks its
     other spellings and its parts within each leg. In the code leg, the rows the English query
     matched keep their relative order except that whole-identifier
-    matches move ahead; in the symbol leg the rows the base matched keep
+    matches and field matches move ahead; in the symbol leg the rows the base matched keep
     their order. A whole-identifier row the English query did not match
     (a member access) can push English matches out of the 30-row cut.
     A code hit's snippet is the English query's `ts_headline`; a file that
     only the identifier keywords match gets the vector leg's snippet (its
     first 200 characters): a headline would highlight nothing and still
     parse the whole file (about 20 ms a file on rea's larger files).
+  - **Fields** (#455 part 2): a term in a file's path or in a name it
+    declares, or in a note's title or path, ranks above the same term in
+    a body. `repository_files.keyword_head` (migration 0059, written by
+    extraction beside `keyword_fts`, `EXTRACTOR_VERSION` 7) holds a file's
+    path lexemes and its symbols' name lexemes (`fieldKeywords`) with
+    their English stems; `keyword_fts` holds them too, so `Foo.bar` finds
+    the file that declares it. It counts while `extracted_hash =
+    content_hash` and `extractor_version >= 7`, else the file has no
+    fields (and ranks as before). A note's fields are its path's words and
+    its frontmatter `title`, computed at query time. Each leg orders its
+    AND matches by how many terms their fields match before their body
+    rank. Not `setweight` inside `keyword_fts`: `ts_rank` of an AND query
+    on positionless identifier lexemes is ~1e-16, and filtering the
+    weighted lexemes out of a whole-file vector costs a pass over it per row.
+  - **Relaxation** (#455 part 2): a leg relaxes only when its AND query
+    matched fewer rows than it keeps (30, so it returned every match) and
+    the query has two terms or more, without websearch syntax. One query
+    counts, per term, the leg's rows whose fields match it (and, for the
+    code leg, whether any file matches it at all, through the GIN index).
+    The relaxed rows are those whose fields match the rarest term but that
+    do not match every term, ordered by the rarer terms their fields
+    match (one bit per term, the rarest highest; a ladder that drops the
+    least selective term first; among terms as rare a compound counts as
+    rarer, then the query's order), then whole identifier, then rank. They
+    come after every AND row of the leg, and in the fusion their rank
+    counts from 30, as if the AND list were full, so a relaxed row
+    contributes less than any AND row. Fields only, never bodies: a
+    question word anywhere in a long file is the evidence that made
+    #1014's regression, and relaxing over bodies cost the benchmark
+    (local runs of the bench policy: chapters tokens-to-gold 3,692 →
+    5,579, context-mode 25,578 → 29,807, gold lost), while over fields it
+    gained. A stop word is ignored; a term no row matches is dropped (it
+    feeds the trigram leg). `relaxed` is not reported in the answer: the
+    MCP `structuredContent` must equal the text (ADR-004 §2.1), so it
+    would cost reader tokens.
+  - **Trigram** (#455 part 2, `pg_trgm`, migration 0059): the code and
+    symbol legs' last resort, when the AND and relaxed queries found
+    nothing. A term (of 5 characters or more) that no row matches is
+    matched by word similarity (`<%`, threshold 0.6) against file paths
+    (GIN `repository_files_path_trgm_idx`) and symbol name paths (partial
+    GIN `blocks_symbol_name_trgm_idx`, `kind = 'symbol'`), never bodies;
+    a file also by its symbols' names. Ordered by similarity; its rows
+    count like relaxed rows in the fusion. So `parseFrontmater` finds
+    `parseFrontmatter`. Not run while other rows matched: run whenever the
+    leg was short of 30, look-alike names of a long question's unknown
+    words cost diagram-design 17 % tokens-to-gold (local run). Notes have
+    no trigram leg.
   - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
     `SearchResponse` = `{status, retrieval_mode, degraded, index?,
     results}`, served as is by REST and inside the budget envelope by MCP.
@@ -3289,7 +3338,7 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
 #452, migrations 0035 and 0036). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 6; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+an integer, now 7; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
 top-level rule and the embed-budget order, #450; 4 re-exports, literal
 `import()`/`require()` and `import x = require()` as imports, #466, which
@@ -3297,7 +3346,8 @@ embeds nothing again; 5 Rust, Java, C, C++, C#, Kotlin, Ruby and PHP
 symbols and imports, Markdown/HTML heading sections and the relabelling of
 files whose label changed, #464, which embeds only the new symbol texts;
 sections are never embedded; 6 the identifier `keywords` of files and symbols,
-#455, which embeds nothing again): bump it with any change to the grammars and queries,
+#455, which embeds nothing again; 7 the code keyword leg's fields, `keyword_head`,
+#455 part 2, which embeds nothing again): bump it with any change to the grammars and queries,
 symbol kinds, the outlines (`outline.ts`), the labels, the minified-file
 rule, the embed-budget order or the stored identifier lexemes (the snippet cut and block texts are
 `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model

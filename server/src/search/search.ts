@@ -49,15 +49,19 @@ function spellings(id: Identifier): SQL {
 }
 
 /**
- * One term of a keyword leg's query (#455 part 2), what the relaxation ladder (`relaxed`) and the trigram leg
- * (`similar`) work with when the leg's AND query matches too little.
+ * One term of a keyword leg's query (#455 part 2), what the relaxation ladder (`ladder`) and the trigram leg
+ * (`similarity`) work with when the leg's AND query matches too little.
  */
 interface Term {
   /** The term's query in its leg; the leg's AND query is all of them. */
   query: SQL
   /** It holds a compound (`parseFrontmatter`, `mcp.server.ts`): among terms as rare, kept before a plain word. */
   compound: boolean
-  /** Its spellings for the trigram leg, should it match nothing: its identifiers' wholes of `MIN_SIMILAR_LENGTH` or more. */
+  /**
+   * What the trigram leg matches, should the term match nothing: its compounds' wholes (a typo'd identifier), and
+   * in a one-term query its plain words too; `MIN_SIMILAR_LENGTH` characters or more. A word of a longer query
+   * that no file holds is a word the corpus does not use, and its look-alike paths and names are noise.
+   */
   spelled: string[]
 }
 
@@ -157,8 +161,6 @@ function fieldHits(fields: SQL, terms: Term[] | null, match: SQL): SQL {
   )
 }
 
-/** Documents a term's count stops at: the ladder needs only which terms are rarer, and a count reads its rows. */
-const COUNT_CAP = 200
 /** Terms the ladder keeps at most, the rarest: a row's ladder rank is a bit per term. */
 const MAX_LADDER = 30
 
@@ -169,22 +171,20 @@ interface Ladder {
 }
 
 /**
- * The ladder of `terms` over a leg's rows (#455 part 2): each term's document frequency among the rows of
- * `scope` (`FROM ... WHERE ...`, the leg's own, filters included), counted up to `COUNT_CAP`. A stop word (an
- * empty query) is in neither list. Among terms as rare a compound comes first, then the query's order.
- * `perTerm`: one capped count per term (through the document's index); else one pass that counts them all
- * (symbols: their keywords have no index, and the leg reads every symbol of the scope anyway).
+ * The ladder of `terms` over a leg's rows (#455 part 2): each term's document frequency in the `fields` of the
+ * rows of `scope` (`FROM ... WHERE ...`, the leg's own, filters included), counted in one pass (fields are
+ * small, and have no index). A stop word (an empty query) is in neither list. Among terms as rare a compound
+ * comes first, then the query's order. `missing` are the terms no row's `doc` matches (an `EXISTS` through the
+ * document's index), the trigram leg's input; `doc` null: the fields are the whole document (a symbol's name).
  */
-async function ladder(scope: SQL, doc: SQL, terms: Term[], perTerm: boolean): Promise<Ladder> {
+async function ladder(scope: SQL, fields: SQL, doc: SQL | null, terms: Term[]): Promise<Ladder> {
   const columns = terms.map(({ query }, i) => {
-    const count = perTerm
-      ? sql`(SELECT count(*)::int FROM (SELECT 1 ${scope} AND ${doc} @@ (${query}) LIMIT ${COUNT_CAP}) c)`
-      : sql`count(*) FILTER (WHERE ${doc} @@ (${query}))::int`
-    return sql`numnode(${query}) AS ${sql.raw(`n${i}`)}, ${count} AS ${sql.raw(`d${i}`)}`
+    const exists = doc ? sql`, EXISTS (SELECT 1 ${scope} AND ${doc} @@ (${query})) AS ${sql.raw(`e${i}`)}` : sql``
+    return sql`numnode(${query}) AS ${sql.raw(`n${i}`)}, count(*) FILTER (WHERE ${fields} @@ (${query}))::int AS ${sql.raw(`d${i}`)}${exists}`
   })
-  const [row] = (await db.execute(sql`SELECT ${sql.join(columns, sql`, `)} ${perTerm ? sql`` : scope}`)) as unknown as Array<Record<string, number>>
+  const [row] = (await db.execute(sql`SELECT ${sql.join(columns, sql`, `)} ${scope}`)) as unknown as Array<Record<string, number | boolean>>
   const counted = terms
-    .map((term, i) => ({ term, i, nodes: row![`n${i}`]!, count: row![`d${i}`]! }))
+    .map((term, i) => ({ term, i, nodes: row![`n${i}`] as number, count: row![`d${i}`] as number, found: doc ? (row![`e${i}`] as boolean) : row![`d${i}`] !== 0 }))
     .filter(({ nodes }) => nodes > 0)
   return {
     live: counted
@@ -192,7 +192,7 @@ async function ladder(scope: SQL, doc: SQL, terms: Term[], perTerm: boolean): Pr
       .sort((a, b) => a.count - b.count || Number(b.term.compound) - Number(a.term.compound) || a.i - b.i)
       .slice(0, MAX_LADDER)
       .map(({ term }) => term),
-    missing: counted.filter(({ count }) => count === 0).map(({ term }) => term),
+    missing: counted.filter(({ found }) => !found).map(({ term }) => term),
   }
 }
 
@@ -200,21 +200,15 @@ async function ladder(scope: SQL, doc: SQL, terms: Term[], perTerm: boolean): Pr
  * A relaxed row's place on the ladder (#455 part 2): one bit per live term, the rarest the highest, so rows
  * that match the rarer terms come first, and among them those that match more.
  */
-function ladderRank(doc: SQL, live: Term[]): SQL {
+function ladderRank(fields: SQL, live: Term[]): SQL {
   return sql.join(
-    live.map(({ query }, i) => sql`CASE WHEN ${doc} @@ (${query}) THEN ${2 ** (live.length - 1 - i)}::bigint ELSE 0 END`),
+    live.map(({ query }, i) => sql`CASE WHEN ${fields} @@ (${query}) THEN ${2 ** (live.length - 1 - i)}::bigint ELSE 0 END`),
     sql` + `,
   )
 }
 
 /** Any of `terms`' queries. */
 const anyOf = (terms: Term[]): SQL => sql.join(terms.map(({ query }) => sql`(${query})`), sql` || `)
-
-/**
- * Whether a keyword leg relaxes (#455 part 2): only when its AND query matched fewer rows than it keeps
- * (`CANDIDATES`, so it returned every match), for a query of two terms or more without websearch syntax.
- */
-const relaxes = (rows: number, terms: Term[] | null): terms is Term[] => rows < CANDIDATES && terms !== null && terms.length > 1
 
 /** `strings`' trigram word similarity to `column` (pg_trgm), the best of them; `<%` is the index's operator. */
 function similarity(strings: string[], column: SQL): { matches: SQL; best: SQL } {
@@ -410,6 +404,12 @@ export interface SearchResponse<H> {
 }
 
 const CANDIDATES = 30
+/**
+ * RRF's k. A keyword leg's relaxed and trigram rows (#455 part 2) rank as if after a full AND list: rank
+ * `CANDIDATES + i`, so each contributes less than any row its leg's AND query matched (with their full rank,
+ * relaxed rows that only a keyword leg found took the top of the fusion; local bench runs, diagram-design
+ * tokens-to-gold +29 %).
+ */
 const RRF_K = 60
 /**
  * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
@@ -446,6 +446,8 @@ interface Row {
   language?: string | null
   snippet: string
   updated_at: string
+  /** A relaxed or trigram row of a keyword leg (#455 part 2): its fusion rank counts from `CANDIDATES`. */
+  relaxed?: true
 }
 
 interface SymbolRow {
@@ -460,6 +462,8 @@ interface SymbolRow {
   end_line: number
   snippet: string
   updated_at: string
+  /** A relaxed or trigram row of a keyword leg (#455 part 2): its fusion rank counts from `CANDIDATES`. */
+  relaxed?: true
 }
 
 /**
@@ -485,7 +489,8 @@ const looksFurther = (rows: number, terms: Term[] | null): terms is Term[] =>
 /**
  * The note keyword leg: the English query of the whole query (every word), its matches ordered by how many terms
  * their title and path hold (#455 part 2), then by rank; then, when it matched fewer than `CANDIDATES`, the
- * relaxed rows (`ladder`): those that match its rarest term but not every term, by the rarer terms they match.
+ * relaxed rows (`ladder`): those whose title or path match its rarest term but that do not match every term, by
+ * the rarer terms they match.
  */
 async function noteKeywordRows(vaultIds: string[], query: string, filterSql: SQL): Promise<Row[]> {
   const scope = sql`FROM notes WHERE vault_id = ANY(${uuidArray(vaultIds)}) AND deleted_at IS NULL ${filterSql}`
@@ -507,22 +512,22 @@ async function noteKeywordRows(vaultIds: string[], query: string, filterSql: SQL
     ORDER BY field DESC, rank DESC, path COLLATE "C", id
   `)) as unknown as Row[]
   if (!looksFurther(rows.length, terms) || terms.length === 1) return rows
-  const { live } = await ladder(scope, sql`fts`, terms, true)
+  const { live } = await ladder(scope, NOTE_FIELDS, null, terms)
   if (live.length === 0) return rows
   const relaxed = (await db.execute(sql`
     WITH top_notes AS (
       SELECT id, vault_id AS container_id, path, type, frontmatter, body, ${UPDATED_AT(sql`updated_at`)},
-             ${ladderRank(sql`fts`, live)} AS ladder, ${field} AS field, ts_rank(fts, ${anyOf(live)}, 1) AS rank
-      ${scope} AND fts @@ (${live[0]!.query}) AND NOT (fts @@ ${match})
-      ORDER BY ladder DESC, field DESC, rank DESC, path COLLATE "C", id
+             ${ladderRank(NOTE_FIELDS, live)} AS ladder, ts_rank(fts, ${anyOf(live)}, 1) AS rank
+      ${scope} AND ${NOTE_FIELDS} @@ (${live[0]!.query}) AND NOT (fts @@ ${match})
+      ORDER BY ladder DESC, rank DESC, path COLLATE "C", id
       LIMIT ${CANDIDATES - rows.length}
     )
     SELECT id, container_id, path, type, frontmatter, updated_at,
            ts_headline('english', body, ${anyOf(live)}, 'MaxWords=30, MinWords=10') AS snippet
     FROM top_notes
-    ORDER BY ladder DESC, field DESC, rank DESC, path COLLATE "C", id
+    ORDER BY ladder DESC, rank DESC, path COLLATE "C", id
   `)) as unknown as Row[]
-  return [...rows, ...relaxed]
+  return [...rows, ...relaxed.map((r) => ({ ...r, relaxed: true as const }))]
 }
 
 async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'semantic', vec: string | undefined, filter: LegFilter): Promise<Row[]> {
@@ -560,11 +565,11 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
  * The code keyword leg (#455). Its AND query (`keywordQuery`): the whole identifier first, then how many terms
  * the file's fields hold (its path, the names it declares; #455 part 2), then the English match by its rank (the
  * order before identifiers), then what only the identifier keywords match (parts of a name, a path segment), by
- * their rank. When that matched fewer than `CANDIDATES` (#455 part 2): the relaxed rows (`ladder`), those that
- * match the rarest term but not every term, by the rarer terms they match; then, still short, the files whose
- * path or symbol names are similar (pg_trgm) to a term that matched nothing (a typo'd identifier). A row the
- * English query does not match gets the vector leg's snippet: its headline would highlight nothing and parse the
- * whole file (about 20 ms a file on rea's larger files).
+ * their rank. When that matched fewer than `CANDIDATES` (#455 part 2): the relaxed rows (`ladder`), those whose
+ * fields match the rarest term but that do not match every term, by the rarer terms their fields match; when
+ * nothing matched, the files whose path or symbol names are similar (pg_trgm) to a term no file matches (a
+ * typo'd identifier). A row the English query does not match gets the vector leg's snippet: its headline would
+ * highlight nothing and parse the whole file (about 20 ms a file on rea's larger files).
  */
 async function codeKeywordRows(repositoryIds: string[], query: string, filterSql: SQL): Promise<Row[]> {
   const repos = uuidArray(repositoryIds)
@@ -590,26 +595,26 @@ async function codeKeywordRows(repositoryIds: string[], query: string, filterSql
     ORDER BY whole DESC, field DESC, rank DESC NULLS LAST, keyword_rank DESC, path COLLATE "C", id
   `)) as unknown as Row[]
   if (!looksFurther(rows.length, keyword.terms)) return rows
-  const { live, missing } = await ladder(scope, CODE_DOCUMENT, keyword.terms, true)
+  const { live, missing } = await ladder(scope, CODE_FIELDS, CODE_DOCUMENT, keyword.terms)
   const relaxed =
     live.length === 0 || keyword.terms.length === 1
       ? []
       : ((await db.execute(sql`
           WITH top_code AS (
             SELECT id, repository_id AS container_id, path, language, content, ${UPDATED_AT(sql`updated_at`)},
-                   ${ladderRank(CODE_DOCUMENT, live)} AS ladder, ${whole} AS whole, ${field} AS field,
+                   ${ladderRank(CODE_FIELDS, live)} AS ladder, ${whole} AS whole,
                    ts_rank(${CODE_DOCUMENT}, ${anyOf(live)}, 1) AS keyword_rank
-            ${scope} AND ${CODE_DOCUMENT} @@ (${live[0]!.query}) AND NOT (${CODE_DOCUMENT} @@ (${keyword.match}))
-            ORDER BY ladder DESC, whole DESC, field DESC, keyword_rank DESC, path COLLATE "C", id
+            ${scope} AND ${CODE_FIELDS} @@ (${live[0]!.query}) AND NOT (${CODE_DOCUMENT} @@ (${keyword.match}))
+            ORDER BY ladder DESC, whole DESC, keyword_rank DESC, path COLLATE "C", id
             LIMIT ${CANDIDATES - rows.length}
           )
           SELECT id, container_id, path, language, updated_at, left(content, 200) AS snippet
           FROM top_code
-          ORDER BY ladder DESC, whole DESC, field DESC, keyword_rank DESC, path COLLATE "C", id
+          ORDER BY ladder DESC, whole DESC, keyword_rank DESC, path COLLATE "C", id
         `)) as unknown as Row[])
-  const found = [...rows, ...relaxed]
+  const found = [...rows, ...relaxed.map((r) => ({ ...r, relaxed: true as const }))]
   const strings = similarStrings(missing)
-  if (found.length >= CANDIDATES || strings.length === 0) return found
+  if (found.length > 0 || strings.length === 0) return found
   const byPath = similarity(strings, sql`f.path`)
   const byName = similarity(strings, sql`b.inner_path`)
   const similar = (await db.execute(sql`
@@ -624,11 +629,10 @@ async function codeKeywordRows(repositoryIds: string[], query: string, filterSql
     )
     SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet, ${UPDATED_AT(sql`f.updated_at`)}
     FROM best JOIN repository_files f ON f.id = best.id
-    WHERE f.id <> ALL(${uuidArray(found.map((r) => r.id))})
     ORDER BY best.similarity DESC, f.path COLLATE "C", f.id
-    LIMIT ${CANDIDATES - found.length}
+    LIMIT ${CANDIDATES}
   `)) as unknown as Row[]
-  return [...found, ...similar]
+  return similar.map((r) => ({ ...r, relaxed: true as const }))
 }
 
 async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' | 'semantic', vec: string | undefined, filter: LegFilter): Promise<Row[]> {
@@ -657,8 +661,9 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
 /**
  * The symbol keyword leg: by name, by Class.name (inner_path), or by snippet, as the symbol table was matched
  * before blocks; or by the identifier keywords of its inner_path (#455), ranked after those, the whole identifier
- * before its parts. When that matched fewer than `CANDIDATES` (#455 part 2): the relaxed rows (`ladder`), then the
- * symbols whose name path is similar (pg_trgm) to a term that matched nothing, as in `codeKeywordRows`.
+ * before its parts. When that matched fewer than `CANDIDATES` (#455 part 2): the relaxed rows (`ladder`, a
+ * symbol's name is its fields); when nothing matched, the symbols whose name path is similar (pg_trgm) to a term
+ * no symbol matches, as in `codeKeywordRows`.
  */
 async function symbolKeywordRows(repositoryIds: string[], query: string, filterSql: SQL): Promise<SymbolRow[]> {
   const repos = uuidArray(repositoryIds)
@@ -682,7 +687,7 @@ async function symbolKeywordRows(repositoryIds: string[], query: string, filterS
     LIMIT ${CANDIDATES}
   `)) as unknown as SymbolRow[]
   if (!looksFurther(rows.length, keyword.terms)) return rows
-  const { live, missing } = await ladder(scope, sql`b.keywords`, keyword.terms, false)
+  const { live, missing } = await ladder(scope, sql`b.keywords`, null, keyword.terms)
   const relaxed =
     live.length === 0 || keyword.terms.length === 1
       ? []
@@ -693,17 +698,17 @@ async function symbolKeywordRows(repositoryIds: string[], query: string, filterS
             ${keyword.whole ? sql`b.keywords @@ (${keyword.whole}) DESC,` : sql``} f.path COLLATE "C", b.start_line, b.id
           LIMIT ${CANDIDATES - rows.length}
         `)) as unknown as SymbolRow[])
-  const found = [...rows, ...relaxed]
+  const found = [...rows, ...relaxed.map((r) => ({ ...r, relaxed: true as const }))]
   const strings = similarStrings(missing)
-  if (found.length >= CANDIDATES || strings.length === 0) return found
+  if (found.length > 0 || strings.length === 0) return found
   const byName = similarity(strings, sql`b.inner_path`)
   const similar = (await db.execute(sql`
     SELECT ${SYMBOL_COLUMNS}
-    ${scope} AND ${byName.matches} AND b.id <> ALL(${uuidArray(found.map((r) => r.id))})
+    ${scope} AND ${byName.matches}
     ORDER BY ${byName.best} DESC, f.path COLLATE "C", b.start_line, b.id
-    LIMIT ${CANDIDATES - found.length}
+    LIMIT ${CANDIDATES}
   `)) as unknown as SymbolRow[]
-  return [...found, ...similar]
+  return similar.map((r) => ({ ...r, relaxed: true as const }))
 }
 
 async function symbolRows(
@@ -861,7 +866,7 @@ export async function findSymbols(
   const map = new Map<string, SymbolSearchResult>()
   const contribute = (rows: SymbolRow[], preferSnippet: boolean) => {
     rows.forEach((row, rank) => {
-      const contribution = 1 / (RRF_K + rank + 1)
+      const contribution = 1 / (RRF_K + rank + (row.relaxed ? CANDIDATES : 0) + 1)
       const existing = map.get(row.id)
       if (existing) {
         existing.score += contribution
@@ -932,7 +937,7 @@ export async function searchNotes(
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
       const key = `${resourceType}:${row.id}`
-      const contribution = 1 / (RRF_K + rank + 1)
+      const contribution = 1 / (RRF_K + rank + (row.relaxed ? CANDIDATES : 0) + 1)
       const existing = merged.get(key)
       if (existing) {
         existing.score += contribution
@@ -957,7 +962,7 @@ export async function searchNotes(
   const contributeSymbols = (rows: SymbolRow[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
       const key = `symbol:${row.id}`
-      const contribution = 1 / (RRF_K + rank + 1)
+      const contribution = 1 / (RRF_K + rank + (row.relaxed ? CANDIDATES : 0) + 1)
       const existing = merged.get(key)
       if (existing) {
         existing.score += contribution

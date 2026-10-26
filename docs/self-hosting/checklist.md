@@ -60,6 +60,7 @@ Before going public or admitting production users, verify each of the following 
 
 - [ ] **Node Version**: When running natively without Docker, ensure Node `>=24.0.0` is installed (pinned in [`.nvmrc`](file:///.nvmrc)). Run `nvm use`.
 - [ ] **Vector Extension**: PostgreSQL must have `pgvector` enabled (included by default in `pgvector/pgvector:pg17` image).
+- [ ] **Trigram Extension**: migration 0059 runs `CREATE EXTENSION IF NOT EXISTS pg_trgm` (Postgres contrib, included in the `pgvector/pgvector:pg17` image; a trusted extension, so the database owner can create it). On a Postgres without contrib, install it first.
 
 ---
 

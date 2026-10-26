@@ -2,12 +2,14 @@
 // weights a file's path and symbol names and a note's title and path above
 // its body, and falls back to trigram similarity on paths and symbol names
 // for a term that matches nothing (a typo'd identifier). Relaxation is a
-// ladder, not a blanket OR: the least selective terms are dropped first, the
-// rarest one always matches, and every row that matches all the terms ranks
-// above every relaxed row. Every check runs on the keyword channel alone: the
-// query embedding fails, so search answers `keyword_only` and the order of
-// each resource type is its keyword leg's. Uses only entry points that exist
-// on the base (the fails-before job runs this file against it).
+// ladder over those fields, not a blanket OR over bodies: the least selective
+// terms are dropped first, the rarest one always matches, a file that holds
+// the words only in its body is no relaxed match (the #1014 lesson), and every
+// row that matches all the terms ranks above every relaxed row. Every check
+// runs on the keyword channel alone: the query embedding fails, so search
+// answers `keyword_only` and the order of each resource type is its keyword
+// leg's. Uses only entry points that exist on the base (the fails-before job
+// runs this file against it).
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { db } from '../src/db/client.js'
 import { repositories, vaults } from '../src/db/schema.js'
@@ -85,20 +87,22 @@ async function symbols(query: string): Promise<string[]> {
 describe('relaxation (#455)', () => {
   const QUESTION = 'Which file and function build the Ghidra analyzeHeadless command line for a project?'
 
-  it('a question whose words no file holds all of finds its file, and its rarest term decides', async () => {
-    // No file has every word, so the AND query matches nothing. `docs/install.md` has every word but the
-    // identifier; the ladder keeps the rarest term (`analyzeHeadless`), so only the file that has it matches.
+  it('a question whose words no file holds all of finds its file by the words of its path and names', async () => {
+    // No file has every word, so the AND query matches nothing. `src/ghidra/headless.ts` has `ghidra` in its path
+    // and `build` and `command` in a name it declares. `docs/install.md` has every word but the identifier, in its
+    // body only: a blanket OR would rank it first, the ladder over fields does not match it.
     expect(await search(QUESTION, 'code')).toEqual(['src/ghidra/headless.ts'])
     expect(await search(QUESTION, 'symbol')).toEqual(['src/ghidra/headless.ts#buildAnalyzeHeadlessCommand'])
   })
 
-  it('a note question', async () => {
+  it('a note question, by the words of its path', async () => {
     expect(await search('When do the nightly backups run, and who checks them?', 'note')).toEqual(['ops/backups'])
   })
 
   it('every row that matches all the terms ranks above every relaxed row', async () => {
-    // `docs/delivery.md` has all three; `src/queue/retry.ts` has the two rarer ones (in its path, which would rank
-    // it first among equals); `timeout`, in three files, is dropped first, so its other files do not match.
+    // `docs/delivery.md` has all three in its body; `src/queue/retry.ts` has the two rarer ones in its path, which
+    // would rank it first among equals; `timeout`, the name of two other files' constants, is dropped first, so
+    // those files do not match.
     expect(await search('queue retry timeout', 'code')).toEqual(['docs/delivery.md', 'src/queue/retry.ts'])
   })
 })
