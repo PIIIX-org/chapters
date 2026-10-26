@@ -352,14 +352,16 @@ function symbolOf(match: QueryMatch, config: GrammarConfig): ExtractedSymbol | n
 
 let initPromise: Promise<void> | null = null
 const languageCache = new Map<Grammar, Language>()
-const queryCache = new Map<string, Query>()
+/** Each grammar's one query, compiled the first time a file needs it. */
+const queryCache = new Map<Grammar, Query>()
 
-function getCompiledQuery(lang: Language, grammar: Grammar, type: string, queryString: string): Query {
-  const key = `${grammar}:${type}`
-  let query = queryCache.get(key)
+/** The import, symbol and code edge (#469) patterns of a grammar as one query: one walk of a tree finds them all. */
+function grammarQuery(lang: Language, grammar: Grammar): Query {
+  let query = queryCache.get(grammar)
   if (!query) {
-    query = new Query(lang, queryString)
-    queryCache.set(key, query)
+    const config = GRAMMARS[grammar]
+    query = new Query(lang, [config.importQuery, config.symbolQuery, EDGE_RULES[grammar]?.query].filter(Boolean).join('\n'))
+    queryCache.set(grammar, query)
   }
   return query
 }
@@ -403,27 +405,30 @@ export async function extractStructure(language: string, content: string, path: 
     tree = parser.parse(content)
     if (!tree) return { imports: [], symbols: [], sites: [] }
 
+    // Told apart by their captures: `@src` (imports), `@decl.*` (symbols), the others code edges'.
     const imports: ExtractedImport[] = []
-    if (config.importQuery) {
-      for (const match of getCompiledQuery(lang, grammar, 'import', config.importQuery).matches(tree.rootNode)) {
+    const matches: QueryMatch[] = []
+    const edgeMatches: QueryMatch[] = []
+    for (const match of grammarQuery(lang, grammar).matches(tree.rootNode)) {
+      if (match.captures.some((c) => c.name.startsWith('decl.'))) matches.push(match)
+      else if (match.captures.some((c) => c.name === 'src')) {
         for (const capture of match.captures) {
           if (capture.name !== 'src') continue
           const line = capture.node.startPosition.row + 1
           for (const target of config.importTarget ? config.importTarget(capture.node) : [capture.node.text]) imports.push({ target, line })
         }
-      }
+      } else edgeMatches.push(match)
     }
 
-    const matches = getCompiledQuery(lang, grammar, 'symbol', config.symbolQuery).matches(tree.rootNode)
     const { scopes } = config
     const symbols = scopes
       ? withoutDefinedPrototypes(matches.flatMap((match) => scopedSymbol(match, scopes) ?? []))
       : matches.flatMap((match) => symbolOf(match, config) ?? [])
     // Stable: declarations sharing a line (`export const a = 1, b = 2`) keep their order.
     symbols.sort((a, b) => a.startLine - b.startLine)
-    // On the same tree, after the symbols: a site names its enclosing symbol and its local definition by index.
+    // After the symbols: a site names its enclosing symbol and its local definition by index.
     const rules = EDGE_RULES[grammar]
-    const sites = rules ? extractSites(tree.rootNode, content, rules, symbols, (source) => getCompiledQuery(lang, grammar, 'edges', source)) : []
+    const sites = rules ? extractSites(tree.rootNode, content, rules, symbols, edgeMatches) : []
 
     return { imports, symbols, sites }
   } finally {

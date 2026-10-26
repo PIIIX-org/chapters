@@ -26,7 +26,7 @@
  * `via` when an import binds the name or its qualifier, and `member` for a
  * method of a receiver of unknown type, which is matched by name only.
  */
-import type { Node, Query, QueryMatch } from 'web-tree-sitter'
+import type { Node, QueryMatch } from 'web-tree-sitter'
 import type { ExtractedSymbol } from './extraction.js'
 import { RUST_ROOT_PATH, jvmImportTarget } from './extraction-languages.js'
 
@@ -165,15 +165,15 @@ function innermostByLine(symbols: readonly ExtractedSymbol[], lines: number): In
 
 /**
  * The sites of a parsed file. `symbols` are its symbols in line order (their
- * indexes are the sites' `local` and `enclosing`); `query` compiles the
- * rules' query once per grammar.
+ * indexes are the sites' `local` and `enclosing`); `matches` are those of
+ * the rules' query on the same tree (extraction.ts runs it with its own).
  */
 export function extractSites(
   root: Node,
   content: string,
   rules: EdgeRules,
   symbols: readonly ExtractedSymbol[],
-  query: (source: string) => Query,
+  matches: readonly QueryMatch[],
 ): ExtractedSite[] {
   const lines = root.endPosition.row + 1
   const enclosingAt = innermostByLine(symbols, lines)
@@ -187,7 +187,7 @@ export function extractSites(
   const callMatches: QueryMatch[] = []
   const typeNodes: Node[] = []
   const bindingMatches: QueryMatch[] = []
-  for (const match of query(rules.query).matches(root)) {
+  for (const match of matches) {
     const type = match.captures.find((c) => c.name === 'type')
     if (type) typeNodes.push(type.node)
     else if (match.captures.some((c) => c.name === 'stmt')) bindingMatches.push(match)
