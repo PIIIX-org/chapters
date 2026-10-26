@@ -59,9 +59,12 @@ async function owner() {
   return user
 }
 
+// Each container is embedded before the next is added: a note embedding while a file is extracted can leave a
+// list that a recompute changes (#1027), which is not what these tests compare.
 async function addVault(ownerId: string, without: string[] = []): Promise<string> {
   const [vault] = await db.insert(vaults).values({ name: 'deletes-vault', ownerId }).returning({ id: vaults.id })
   for (const n of NOTES) if (!without.includes(n.path)) await createNote(vault!.id, n)
+  await settle()
   return vault!.id
 }
 
@@ -69,6 +72,7 @@ async function addRepository(ownerId: string, name: string, without: string[] = 
   const [repo] = await db.insert(repositories).values({ name, ownerId, ingestionMethod: 'agent_push' }).returning({ id: repositories.id })
   const files = FILES.filter((f) => !without.includes(f.path))
   await syncRepositoryFiles(repo!.id, files, files.map((f) => f.path))
+  await settle()
   return repo!.id
 }
 

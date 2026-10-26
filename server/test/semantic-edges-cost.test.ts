@@ -1,6 +1,6 @@
 // #1007 review round 1: what keeping every node's top-k current costs per embed, and that a refresh failing
-// after its write committed is not lost. `setHnswScan` runs once per recompute of a node's edges and once per
-// search for the nodes an embed enters (search/semantic-edges.ts), so its calls count the work.
+// after its write committed is not lost; #1015: per delete. `setHnswScan` runs once per recompute of a node's
+// edges and once per search for the nodes an embed enters (search/semantic-edges.ts), so its calls count the work.
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
