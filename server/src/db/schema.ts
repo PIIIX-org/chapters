@@ -688,16 +688,18 @@ export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
  * Both ends are in one scope (D10, #461): two notes of one vault, two files of
  * one repository, or a note and a file whose vault and repository have one
  * owner. Migration 0038 deleted the rows from before; a vault transfer deletes
- * its notes' note↔code rows (`deleteVaultCodeEdges`).
+ * its notes' note↔code rows (`transferVaultSemanticEdges`).
  *
  * The SQL columns are still named `node_a_*` / `node_b_*` from when the table
  * was modelled as an undirected pair — renaming them would buy nothing but a
  * migration. `node_a` is the source, `node_b` is the target.
  *
  * The rows are the true top-k of the content whatever the order it was
- * embedded in (#1007, search/semantic-edges.ts). `similarity` holds the double
- * the search computed (migration 0050; `real` before), so an embed compares
- * its own similarity with a list's last row exactly.
+ * embedded in (#1007, search/semantic-edges.ts), and after a delete, those of
+ * the content without the node (#1015: `removeSemanticNodes`; a note in the
+ * trash has none). `similarity` holds the double the search computed
+ * (migration 0050; `real` before), so an embed compares its own similarity
+ * with a list's last row exactly.
  */
 export const semanticEdges = pgTable(
   'semantic_edges',

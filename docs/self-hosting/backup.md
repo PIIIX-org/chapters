@@ -2,7 +2,7 @@
 
 Chapters stores its state across two locations:
 1. **PostgreSQL Database (`db-data` volume)**: the authority for every note (body, frontmatter, every revision; since ADR-003 S2a), plus users, teams, access control, metadata, repository indexing, security events, notifications, and vector embeddings.
-2. **Disk Filesystem (`chapters-data` volume)**: attachments (`assets/`, which have no database rows), local repository mirrors, and the Markdown files of your vaults. Since S2a those files are a projection Elara writes from the database after each save: readable, greppable, but not read back. A hand or `git` edit of a `.md` file is not imported; Elara copies it to `.conflicts/` the next time it writes that path (see "Files Elara set aside" below).
+2. **Disk Filesystem (`chapters-data` volume)**: attachments (`assets/`, which have no database rows), local repository mirrors, git repository mirrors (`git-mirrors/`, #684: a cache the next sync rebuilds, safe to leave out of a volume backup; see [checklist.md](checklist.md) §6), and the Markdown files of your vaults. Since S2a those files are a projection Elara writes from the database after each save: readable, greppable, but not read back. A hand or `git` edit of a `.md` file is not imported; Elara copies it to `.conflicts/` the next time it writes that path (see "Files Elara set aside" below).
 
 > **CRITICAL**: The database dump is the backup that matters for notes: the files alone no longer rebuild a vault exactly (revisions and anything not yet projected are only in the database). Back up both: the database, and the data volume for attachments.
 

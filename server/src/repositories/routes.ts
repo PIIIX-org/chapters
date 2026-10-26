@@ -23,12 +23,13 @@ import {
 import { createSyncToken, listSyncTokens, revokeSyncToken } from './sync-tokens.js'
 import { syncGitRepository } from './git-sync.js'
 import { prepareGitRemote } from './git-remote.js'
+import { removeGitMirror } from './git-mirror.js'
 import {
   stopWatchingLocalRepository,
   syncLocalRepository,
   watchLocalRepository,
 } from './scheduler.js'
-import { listRepositoryFiles } from './store.js'
+import { deleteRepositoryRecord, listRepositoryFiles } from './store.js'
 import { buildGraph } from '../graph/assemble.js'
 import { graphQuerySchema, parseGraphFilters, type GraphQuery } from '../graph/filters.js'
 import { searchNotes } from '../search/search.js'
@@ -205,10 +206,12 @@ export function repositoryRoutes(app: FastifyInstance) {
     if (!(await requireOwner(req.user!.id, req.params.id))) {
       return reply.code(404).send({ error: 'not found' })
     }
-    await db.delete(repositories).where(eq(repositories.id, req.params.id))
+    await deleteRepositoryRecord(req.params.id)
     // Otherwise the watcher outlives the row and keeps re-inserting files for
     // a repository nobody can reach.
     stopWatchingLocalRepository(req.params.id)
+    // In the background: it waits for a sync still fetching into the mirror (#684).
+    void removeGitMirror(req.params.id).catch(console.error)
     return { status: 'deleted' }
   })
 
@@ -341,6 +344,7 @@ export function repositoryRoutes(app: FastifyInstance) {
       if (!access) return reply.code(404).send({ error: 'not found' })
       return searchNotes({ vaultIds: [], repositoryIds: [req.params.id] }, req.query.q, req.query.limit, parseSearchFilters(req.query), {
         includeSymbols: req.query.symbols,
+        accountId: req.user!.id,
       })
     },
   )

@@ -130,7 +130,7 @@ INSTRUCTIONS:
       try {
         const vaultId = vaultFor(reqVaultId)
         await requireAccess(vaultId, 'read')
-        const { status, results } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, featureRequest)
+        const { status, results } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, featureRequest, undefined, {}, { accountId: auth.user.id })
         if (status === 'ok') {
           relevantNotes = results
             .slice(0, 3)
@@ -183,7 +183,7 @@ PLANNING GUIDELINES:
       try {
         const vaultId = vaultFor(reqVaultId)
         await requireAccess(vaultId, 'read')
-        const { results: hits } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, issueDescription)
+        const { results: hits } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, issueDescription, undefined, {}, { accountId: auth.user.id })
         for (const hit of hits.slice(0, 3)) {
           const note = await readNote(vaultId, hit.path).catch(() => null)
           if (note) hydratedContext += `\n--- Note: [[${hit.path}]] ---\n${note.body.slice(0, 600)}\n`
@@ -434,7 +434,7 @@ Include curl examples, payload schemas, and error tables. Offer to save it as \`
         const vaultId = vaultFor(reqVaultId)
         await requireAccess(vaultId, 'read')
         const query = symbol || filePath
-        const { status, results: hits } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, query)
+        const { status, results: hits } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, query, undefined, {}, { accountId: auth.user.id })
         if (status === 'ok') {
           linkedNotesSummary = hits
             .slice(0, 3)

@@ -7,6 +7,7 @@ import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } fro
 import { EXTRACTION_JOB, backfillUnresolvedImports, scheduleMissingExtractions } from './repositories/extraction-queue.js'
 import { pruneFinishedJobs, startJobPolling } from './jobs/durable.js'
 import { scrubStoredGitCredentials } from './repositories/git-remote.js'
+import { sweepGitMirrors } from './repositories/git-mirror.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
@@ -88,6 +89,8 @@ try {
   startJobPolling()
   const reconciled = await reconcileOrphanedSyncs()
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)
+  const sweptMirrors = await sweepGitMirrors()
+  if (sweptMirrors > 0) console.log(`removed ${sweptMirrors} git mirror(s) of deleted repositories`)
   const backfilled = await backfillUnresolvedImports()
   if (backfilled > 0) console.log(`resolved ${backfilled} previously unresolved code import(s)`)
   const { setupPending, setupToken } = await ensureInstanceState()

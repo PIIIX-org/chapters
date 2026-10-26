@@ -3,7 +3,7 @@ import { and, asc, eq, notInArray, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '../db/client.js'
 import { blocks, jobs, repositories, repositoryFiles } from '../db/schema.js'
-import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
+import { kickSemanticEdges, removeSemanticNodes } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
 import { enqueueExtractions, extractionJobKeySql, hasCurrentBlocksSql, scheduleImportReresolution } from './extraction-queue.js'
 import { isResolutionManifest } from './import-resolution.js'
@@ -145,17 +145,21 @@ export async function syncRepositoryFiles(
   const currentPathSet = new Set(currentPaths)
   const toDelete = existing.filter((r) => !currentPathSet.has(r.path))
   if (toDelete.length > 0) {
-    await db.delete(repositoryFiles).where(
-      and(
-        eq(repositoryFiles.repositoryId, repositoryId),
-        notInArray(
-          repositoryFiles.path,
-          currentPaths.length > 0 ? currentPaths : ['__empty_repository_path__'],
-        ),
-      ),
-    )
-    // Same as notes: semanticEdges has no FK and does not cascade (#92).
-    await deleteSemanticEdgesFor('code', toDelete.map((r) => r.id))
+    // Same as notes: semanticEdges has no FK and does not cascade (#92). The files' rows go in the delete's
+    // transaction and the nodes that held one are queued once each (#1015), the batch file below too.
+    await db.transaction(async (tx) => {
+      const deleted = await tx
+        .delete(repositoryFiles)
+        .where(
+          and(
+            eq(repositoryFiles.repositoryId, repositoryId),
+            notInArray(repositoryFiles.path, currentPaths.length > 0 ? currentPaths : ['__empty_repository_path__']),
+          ),
+        )
+        .returning({ id: repositoryFiles.id })
+      await removeSemanticNodes(tx, 'code', deleted.map((r) => r.id))
+    })
+    kickSemanticEdges()
     result.deleted = toDelete.length
     if (toDelete.some((r) => isResolutionManifest(r.path))) manifestChanged = true
     for (const r of toDelete) createdOrDeleted.push(r.path)
@@ -179,6 +183,19 @@ export async function syncRepositoryFiles(
   checkCodeStaleness(repositoryId).catch(console.error)
 
   return result
+}
+
+/**
+ * Deletes a repository (REST and MCP): its files cascade, their blocks with them (a trigger); the files'
+ * semantic edges, which have no foreign key (#92), go in the same transaction, and the notes that held one are
+ * queued (#1015).
+ */
+export async function deleteRepositoryRecord(repositoryId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await removeSemanticNodes(tx, 'code', sql`SELECT id FROM repository_files WHERE repository_id = ${repositoryId}`)
+    await tx.delete(repositories).where(eq(repositories.id, repositoryId))
+  })
+  kickSemanticEdges()
 }
 
 export async function getRepositoryFile(
