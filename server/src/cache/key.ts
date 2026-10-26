@@ -80,8 +80,8 @@ const sortedUnique = (ids: readonly string[]) => [...new Set(ids)].sort(compareC
  * sha256 (hex) of the tool, the caller, each resource with its index epoch,
  * the derived-artifact versions (`versionsKey`), the permission epoch and
  * the argument fingerprint (`argsFingerprint`, which
- * leaves out `cursor` and `budget_tokens`: an entry holds the whole result,
- * paged and budgeted per call). Null when `epochs` lacks a resource: the
+ * leaves out `cursor`, `budget_tokens` and `session_id`: an entry holds the whole result,
+ * paged, budgeted and sent per call). Null when `epochs` lacks a resource: the
  * answer is computed and not cached.
  */
 export function cacheKey(

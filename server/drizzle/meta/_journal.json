@@ -323,6 +323,13 @@
       "when": 1793150000000,
       "tag": "0051_note_path_history",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1793400000000,
+      "tag": "0056_mcp_sessions",
+      "breakpoints": true
     }
   ]
 }

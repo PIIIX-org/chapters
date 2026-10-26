@@ -47,6 +47,7 @@ When exploring a project or answering questions about architecture, concepts, or
   - Use `read_note` for the specific notes identified by the search/graph.
   - For code, `read_file` reads from line 1 in pages (`budget_tokens`, default 4,000; `truncated.cursor` continues). When the repo is checked out locally, read only the line range that `find_symbols` or `search` returned; use `read_file` only for repos you do not have locally.
   - Re-reading a note or file you already hold (to check it before you rely on it or edit it)? Send the `rev` (note, from the read or your last write) or `hash` (file) you have as `if_rev`: if nothing changed the answer is `{unchanged: true}` in a few tokens instead of the content.
+  - Reading many overlapping parts in one task (a whole file, then symbols in it, the same outline twice)? Send one `session_id` of your own (8-64 characters, e.g. a random id per conversation) on every `read_note` / `read_file`: a passage this session already got comes back as `same_as: {call, loc, rev|hash}` (the call that sent it, its lines and version) instead of its text, and every answer names its `call`. Use a new id when your context starts over (a new conversation, a subagent, after compaction or `/clear`), and drop `session_id` on a read whose referenced text you no longer have: without it every read answers in full.
 
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:
