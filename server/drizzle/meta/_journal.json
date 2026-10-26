@@ -311,6 +311,13 @@
       "breakpoints": true
     },
     {
+      "idx": 50,
+      "version": "7",
+      "when": 1793100000000,
+      "tag": "0050_semantic_edge_rebuild",
+      "breakpoints": true
+    },
+    {
       "idx": 53,
       "version": "7",
       "when": 1793250000000,
