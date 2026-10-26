@@ -31,7 +31,8 @@ name: Elara lab
 #   chapters  PRs to dev that change search, extraction, MCP, schema, server
 #             start-up/config, the image's dependencies or the benchmark (~9 min)
 #   all       nightly on dev, every PR to prod, and by hand (-f bench=...)
-# Docs: benchmarks/README.md.
+# Docs: benchmarks/README.md. The bench-session job (#683) runs only on a
+# dispatch with -f bench_session=plain|session.
 # The real-model job (#851) runs server/test/embedding-worker.test.ts with
 # ELARA_REAL_MODEL_TESTS=1 (the real bge-small model, cached by actions/cache)
 # with the nightly and with a full-tier dispatch.
@@ -61,6 +62,15 @@ on:
         type: choice
         options: [none, chapters, all]
         default: none
+      bench_session:
+        description: 'Session benchmark (#683, benchmarks/session/run.ts): none, plain (no session_id), or session (plain, then with session_id)'
+        type: choice
+        options: [none, plain, session]
+        default: none
+      bench_session_suites:
+        description: 'Session benchmark suites (comma list or all)'
+        required: false
+        default: 'all'
       tests:
         description: 'Comma-separated substrings of lab/tests file names (empty = every test of the tier)'
         required: false
@@ -342,6 +352,63 @@ jobs:
         with:
           name: bench-gate
           path: bench-gate/
+          retention-days: 90
+
+  # #683: the session benchmark (benchmarks/session/run.ts), by hand only:
+  #   gh workflow run elara-lab.yml --ref <branch> -f tier=none -f bench=none -f bench_session=session
+  # A re-reading scripted agent on the premise suites; `session` runs it
+  # without and then with a `session_id` on the same instance. Three
+  # instances, like the bench job. Not a gate: the premise benchmark and its
+  # fingerprint do not depend on it.
+  bench-session:
+    if: github.event_name == 'workflow_dispatch' && inputs.bench_session != 'none'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        instance: [1, 2, 3]
+    permissions:
+      contents: read
+    env:
+      COMPOSE: docker compose -f docker-compose.yml -f lab/docker-compose.lab.yml
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: ./.github/actions/lab-instance
+        with:
+          mcp_rate_limit: ${{ inputs.mcp_rate_limit || '600' }}
+
+      - name: Session benchmark (${{ inputs.bench_session }}, instance ${{ matrix.instance }})
+        env:
+          BENCH_SUITES: ${{ inputs.bench_session_suites || 'all' }}
+          BENCH_INSTANCE: ${{ matrix.instance }}
+          SESSION_FLAG: ${{ inputs.bench_session == 'session' && '--session' || '' }}
+        run: |
+          bun benchmarks/session/run.ts $SESSION_FLAG
+          cat bench-session-results/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect compose logs
+        if: always()
+        run: |
+          mkdir -p bench-session-results
+          $COMPOSE ps -a > bench-session-results/compose-ps.txt 2>&1 || true
+          $COMPOSE logs --no-color --timestamps > bench-session-results/compose.log 2>&1 || true
+
+      - name: Redact secrets from bench-session-results
+        if: always()
+        run: bun lab/redact.ts bench-session-results
+
+      - name: Upload bench-session-results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-session-results-${{ matrix.instance }}
+          path: bench-session-results/
           retention-days: 90
 
   # #851: the real bge-small model check (server/test/embedding-worker.test.ts),

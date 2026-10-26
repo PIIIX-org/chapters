@@ -10,7 +10,7 @@ committed baseline of known defects.
 
 | file | what |
 |---|---|
-| `.github/workflows/elara-lab.yml` | the workflow: `plan` picks the lab tier and the benchmark tier, `lab` builds, bootstraps, runs, gates, uploads; `bench` runs the premise benchmark on its own instance |
+| `.github/workflows/elara-lab.yml` | the workflow: `plan` picks the lab tier and the benchmark tier, `lab` builds, bootstraps, runs, gates, uploads; `bench` runs the premise benchmark on its own instance; `bench-session` (by hand only) the session benchmark |
 | `.github/workflows/agent-trial.yml` | the agent trial (#571): real AI agents on the 8 A/B tasks against a lab instance, weekly and by hand; skips without an agent credential (see below) |
 | `.github/actions/lab-instance/action.yml` | shared by `lab`, `bench` and the agent trial's `trial` job: per-run secrets and `ELARA_VERSION` (the commit, baked into the image like `publish.yml` does) in `.env`, `docker compose up -d --build`, `bun lab/bootstrap.ts` |
 | `lab/docker-compose.lab.yml` | compose override: mailpit for signup mail, `MCP_RATE_LIMIT`, local backups, the `ELARA_VERSION` build arg |
@@ -185,6 +185,13 @@ queue), then runs both scripted agents on every question and writes
 regressions against the base commit's baseline, and needs an owner label
 for a changed suite or a lowered baseline. Method, metrics, thresholds,
 overrides and how to regenerate the baseline: `benchmarks/README.md`.
+
+The `bench-session` jobs (#683) run only on a dispatch with
+`-f bench_session=plain|session` (`-f bench_session_suites=…`, default
+all): `benchmarks/session/run.ts`, a re-reading scripted agent on the same
+suites, without and (with `session`) then with a `session_id`, on three
+instances. Not a gate, and outside the premise fingerprint; method and
+commands: `benchmarks/README.md` (Session benchmark).
 
 ## The agent trial (`agent-trial.yml`)
 
