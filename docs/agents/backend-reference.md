@@ -175,8 +175,8 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 
 | Table | Purpose |
 |---|---|
-| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages |
-| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order |
+| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages, and on trashed rows (migration 0051, #682) `notes_vault_path_trashed (vault_id, path)` for `pathHadOtherNote` |
+| `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order. Migration 0051 (#682) indexes `from_path` where set (`note_revisions_from_path`), for `pathHadOtherNote` |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558) and `context` (migration 0039, #472: the link's paragraph, the non-blank lines around it, when at most 200 code points; else its own lines; else 200 code points of them around the link with `…` at each cut end; never half a surrogate pair; `okf.ts` `extractWikilinkLocations`). PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows, and of two links to one target on one line the row is the first (no count kept). Null `context` = not filled yet (rows from before 0039; rows from before 0031 also have line 0; or written by older code after a rollback; the column defaults keep that working): the boot `note_links` catch-up jobs (**Link catch-up**, §5) rewrite them from the body under the note lock at catch-up priority (5,000 notes with 30,000 rows: queued in 79 ms, rewritten in 62 s, 12 ms a note, locally; until then a backlink has `context: null` and an unlocated edge `evidence: null`), and the doctor's `links-differ` lists any whose targets or lines differ from the body |
 | `exportLinks` | expiring/revocable vault export download links |
 
@@ -2097,13 +2097,64 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   writes refuse it). Keyed on profile only: a
   `read`-access token with the `writer` profile also gets the write
   sentence. The reader text fits the 2,000-token budget (1,995 measured
-  with #416/#417) because the shared `budgetArgs` (`response.ts`) list
+  with #416/#417; 1,993 with #682's `if_rev`, paid for by shorter
+  `read_note`, `read_file`, `browse_vault`, `browse_repository`,
+  `list_vaults` and `list_repositories` descriptions: the last two lost
+  "Account-scoped connections only.", which a pinned token never sees
+  because those tools are not listed for it) because the shared `budgetArgs` (`response.ts`) list
   `Default N` and `Next page`, check the budget's 256-25,000 range in a
   refinement instead of listing `minimum`/`maximum`, pinned ids say
   `omit when pinned`, and the read targets are explained once here
   rather than per tool. `test/mcp-instructions.test.ts` checks the rules per profile,
   that every manual named is in the token's `resources/list`, and the
   same bytes across two initializes and two vault pins per profile.
+- **Unchanged reads** (#682, ADR-004 §2.9): `read_note` and `read_file`
+  take `if_rev` (`read-targets.ts` `ifRevArg`, `z.coerce.string()`, so
+  the integer `rev` answers give works as sent and tools/list still says
+  `string`), the version an earlier
+  answer gave: a note's `rev` (`notes.seq`, which writes answer too), a
+  file's `hash` (16 hex of `content_hash`, now on every `read_file`
+  answer). When it equals the current one the read answers
+  `unchanged({rev | hash})`, a `Budgeted` of a head alone, rendered as
+  `{"unchanged":true,"rev":N,"truncated":false}` (~11 tokens; `slots` in
+  `response.ts` accepts an answer with no sections when there is no
+  cursor), for a body, `targets` or `outline` read alike. Rules:
+  - Access first: the comparison runs after `requireAccess` /
+    `requireRepositoryAccess` (and the token, profile and scope checks of
+    `tool()`), so a revoked share answers `NOT_FOUND`, never `unchanged`.
+    It is not a cache: the version is read live with the content, so no
+    epoch (§5.11) is involved.
+  - Notes compare the revision, never the text: a note changed and
+    changed back has a new `seq`. `readLiveNote` folds the editors' typing
+    first, so unsaved typing moves `seq` too. A new note's `seq` starts at
+    1, so `pathHadOtherNote` (`notes/store.ts`) refuses `unchanged` when a
+    trashed note has the path or another note of the vault has a revision
+    with `from_path` = the path (a rename, a restore elsewhere): two
+    lookups of migration 0051's partial indexes, run only when the `rev`
+    matches. A purged predecessor (owner-only `purge_note` after trash)
+    leaves no trace, the one case left.
+  - Files compare the per-file `hash`, never the repository `commit` /
+    `tree`: `syncRepositoryFiles` updates rows one by one and writes the
+    commit and tree at its end, so mid-sync (or after a failed sync) a
+    file can change under an unchanged commit or tree. The token encodes
+    the index state (owner decision on #1019): while `readRepositoryFile`
+    reports `index` (`pending` / `failed`) the answer's `hash` is
+    `<16 hex>~pending` / `~failed` and no `if_rev` matches, so an answer
+    that missed symbols or the outline is never held past extraction.
+  - Only a first page (`page.at === null`) answers `unchanged`: a cursor
+    continues the answer it came from, so a file that went back to the
+    held hash while the agent paged another version answers
+    `CURSOR_STALE` through the text guard, not `unchanged`.
+  - An `unchanged` note read moves the connection's base to the confirmed
+    rev (`last-read.ts` `confirmRead`, in `rendered`): the agent proved it
+    holds that rev, so a later whole-body edit merges from it (a base left
+    at an older rev would merge the agent's own `ops` changes in again).
+    No body is recorded, since the answer sent none: a base already at
+    that rev keeps the body the connection sent with a merged write, and
+    an older base takes the revision's text.
+  - `if_rev` is in the cursor fingerprint like any argument. Search and
+    graph have no not-modified answer: that is the result cache's (#685).
+  `test/mcp-read-if-rev.test.ts`.
 - **Cacheable prompt** (#681): what a token is sent before its first
   call opens every agent prompt, and providers bill a repeated prefix at
   a fraction of the price only if its bytes repeat. `initialize`,
@@ -2117,7 +2168,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   account token of that profile with admin access, computed once per
   process from the registrations, so it changes only when a definition
   does. It is outside the counted lists and instructions, so the reader
-  budget is unchanged (7,980 characters, ~1,995 tokens).
+  budget is unchanged by it (7,970 characters, ~1,993 tokens with #682's
+  `if_rev`).
   `test/mcp-cacheable-prompt.test.ts` compares the raw bytes of two
   accounts' tokens on two faked dates per profile and scope (account,
   vault pin) and the version against the served bytes;
@@ -2684,9 +2736,11 @@ extraction state in one query (`readRepositoryFile`) and adds
 `index: 'pending'` (its job is queued or running, or none exists and no
 block of its content does) or `'failed'` (the job gave up; the outline is
 from earlier content), the rule of `extractionState` for one file. Files
-carry no version of their own beyond `content_hash`. `list_repositories`
-and the REST rows do not carry it. Git history (`changed_since`, `diff`,
-reads at a `ref`) is deferred (D11).
+carry no version of their own beyond `content_hash`, whose first 16 hex
+every `read_file` answer carries as `hash` (what `if_rev` takes, #682;
+`~pending` / `~failed` appended while it carries `index`).
+`list_repositories` and the REST rows do not carry the indexed version.
+Git history (`changed_since`, `diff`, reads at a `ref`) is deferred (D11).
 
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
@@ -3423,7 +3477,9 @@ nothing):
 
 Epochs are internal: no answer carries them, and `tools/list` and
 `initialize.instructions` are unchanged (0 tokens). Answers carry content
-versions (`rev`, file `hash`, `commit` / `tree`) as ADR-004 §2.9 lists.
+versions (`rev`, file `hash`, `commit` / `tree`) as ADR-004 §2.9 lists;
+`read_note` / `read_file` `if_rev` (#682, §5.8 **Unchanged reads**)
+compares `rev` or `hash` live after the access check and caches nothing.
 Tests: `cache-epochs.test.ts` (every write path bumps its own scope and no
 other; reads bump nothing) and `cache-key.test.ts` (key fields, refusals,
 real epochs around writes and reads).

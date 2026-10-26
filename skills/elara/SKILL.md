@@ -45,6 +45,7 @@ When exploring a project or answering questions about architecture, concepts, or
 - **Step 3 — Read Context**:
   - Use `read_note` for the specific notes identified by the search/graph.
   - For code, `read_file` reads from line 1 in pages (`budget_tokens`, default 4,000; `truncated.cursor` continues). Read just what you need with `targets` (`{symbol: "Class.method"}`, `{lines: "a-b"}`, `{block}`, `{heading}` on markdown), several in one call; `outline: true` lists a file's symbols (a note's headings) with `lines` and `tokens` instead of its body. `read_note` takes the same, without `symbol`. When the repo is checked out locally, read only the line range that `find_symbols` or `search` returned.
+  - Re-reading a note or file you already hold (to check it before you rely on it or edit it)? Send the `rev` (note, from the read or your last write) or `hash` (file) you have as `if_rev`: if nothing changed the answer is `{unchanged: true}` in a few tokens instead of the content.
 
 ### 2. Note Creation & Editing (OKF Standard)
 When creating or editing notes via `create_note` or `edit_note`:

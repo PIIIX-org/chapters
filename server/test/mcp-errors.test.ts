@@ -168,7 +168,7 @@ describe('structured MCP errors (#439)', () => {
 
     // No close name: the tool's parameters.
     const far = await failure(acctA, 'read_note', { vaultId: VA, path: 'concepts/x', zzNotAParameter: 1 })
-    expect(far.error).toMatchObject({ code: 'INVALID_ARGUMENT', field: 'zzNotAParameter', suggestions: ['vaultId', 'path', 'targets', 'outline', 'budget_tokens', 'cursor'] })
+    expect(far.error).toMatchObject({ code: 'INVALID_ARGUMENT', field: 'zzNotAParameter', suggestions: ['vaultId', 'path', 'targets', 'outline', 'if_rev', 'budget_tokens', 'cursor'] })
 
     const badUuid = await failure(acctA, 'read_note', { vaultId: 'not-a-uuid', path: 'concepts/x' })
     expect(badUuid.error).toMatchObject({ code: 'INVALID_ARGUMENT', field: 'vaultId' })

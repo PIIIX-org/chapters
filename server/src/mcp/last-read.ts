@@ -39,6 +39,22 @@ export async function rememberRead(connectionId: string, noteId: string, rev: nu
 }
 
 /**
+ * `connectionId` showed it still holds note `noteId` at `rev` (read_note
+ * `if_rev` answered `unchanged`, #682): its base moves to `rev`, as a read
+ * of it would. The answer sent no text, so no body is recorded: a base
+ * already at `rev` keeps the body it was sent with (after a merged whole
+ * body write, what the agent built on), and a base at another rev takes
+ * the revision's text (null), which is what the agent confirmed it holds.
+ */
+export async function confirmRead(connectionId: string, noteId: string, rev: number): Promise<void> {
+  await db.execute(sql`
+    WITH pruned AS (DELETE FROM note_reads WHERE read_at < now() - make_interval(hours => ${READ_WINDOW_HOURS}))
+    INSERT INTO note_reads (connection_id, note_id, rev, body) VALUES (${connectionId}, ${noteId}, ${rev}, NULL)
+    ON CONFLICT (connection_id, note_id) DO UPDATE
+      SET body = CASE WHEN note_reads.rev = EXCLUDED.rev THEN note_reads.body END, rev = EXCLUDED.rev, read_at = now()`)
+}
+
+/**
  * `connectionId` wrote note `noteId` to `rev` with a whole body: its new
  * base, if it has one in the window. `sent` is the body it sent when the
  * result differs from it (merged), null when the revision holds it.
