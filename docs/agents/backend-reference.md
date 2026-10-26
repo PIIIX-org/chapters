@@ -473,7 +473,8 @@ collab socket and live view it opened closes at once (#498, §5.7).
   access" and "doesn't exist" are made indistinguishable on purpose.
   A transfer (here and in `admin-routes.ts`) deletes the vault's notes'
   note↔code semantic edges in its transaction: they joined the previous
-  owner's repositories (D10, #461).
+  owner's repositories (D10, #461); it queues the recompute of the nodes
+  whose lists change (#1015, `transferVaultSemanticEdges`, §5.6).
 - **`team-routes.ts`**: team CRUD, membership management. Adding/
   removing a member notifies both that user and every owner of a vault
   currently shared with the team.
@@ -1751,9 +1752,33 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   of 10,000 notes (45,000 blocks, threshold 0.75): 3.8 → 0.4 s, no
   temporary file. With exact search the rows left by all of that are those
   of a full rebuild, row for row; with the HNSW plan a few differ (HNSW
-  recall, not order). Deleting a node (trash, purge, a file gone) or moving
-  a vault removes its rows, and the nodes that held it keep fewer than K
-  until their next recompute or a rebuild (#1015).
+  recall, not order). **A delete leaves the rows of the content without
+  the node** (#1015): every delete path calls `removeSemanticNodes(tx,
+  type, ids)` in its own transaction (a note's trash and purge, the files
+  a sync removes, a repository delete through `deleteRepositoryRecord`
+  for REST and MCP, a vault purge), one statement that deletes the nodes'
+  rows and the rows naming them and queues the rebuild job of each other
+  node whose rows named one (the holders: about K per node on average,
+  each queued once, so a sync that removes 1,000 files queues one job
+  set); the edge worker runs them after the commit (`kickSemanticEdges`).
+  The enqueue leaves a pending job that has not started (it reads the
+  committed state) and runs again one that finished or started (a new id,
+  so the run in progress completes nothing). A note in the trash has no
+  rows and is in no list (its recompute writes none); a restore queues
+  its refresh with every embed key it has (`queueSemanticEdgeRestore`),
+  since its kept blocks give its embed no new vector, so it re-enters the
+  lists it belongs in as #1007's merge does for a new node. A vault
+  transfer (`transferVaultSemanticEdges`) deletes the vault's notes'
+  note↔code rows and queues the previous owner's files that held one, the
+  vault's live notes and the new owner's files. Measured on the chapters
+  tree at 6be9626c (1,246 files and 800 notes cut from its markdown, one
+  owner, fake embedder, threshold 0.2, K 8, the shared test Postgres),
+  base → this, the write and then its jobs: a sync removing 1 file 18 → 12
+  ms, then 3 holders recomputed in 24 ms; one removing 100 files 16 → 18
+  ms, then 359 holders in 2.6 s (7.2 ms each); trashing a note 14 → 12 ms,
+  then 2 holders in 14 ms. Trashing or restoring a vault recomputes
+  nothing (#1025); a recompute in flight while a node it holds is deleted
+  can still write that row (#1026).
   Neighbours come from the node's scope only (D10 on #930, #461): of its
   own type, its vault (a note) or its repository (a file), never another
   one, even of the same owner; of the other type, the owner's repositories
@@ -1769,13 +1794,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   HNSW plan and found 160/160 of its 20 notes' 8 neighbours (recall 0.98)
   with the iterative scan, 113/160 (recall 0.71) without; vaults of 500
   and 30 notes took the exact plan (recall 1.0). Migration 0038 deleted
-  the edges stored before (100,000 edges: about 150 ms); a vault transfer
-  deletes the vault's notes' note↔code edges (`deleteVaultCodeEdges`).
+  the edges stored before (100,000 edges: about 150 ms).
   **Jobs** (#1007): durable kind `semantic_edges`, monitoring job kind
   `semantic-edges`. A refresh (above): payload `{nodeType, nodeId,
-  newKeys}`, no key, write priority, queued with its lease running. The
-  rebuild: payload `{nodeType, nodeId}`, key `semantic_edges:<type>:<id>`,
-  each job runs `recomputeSemanticEdges` for one node;
+  newKeys}`, no key, write priority, queued with its lease running (a
+  restore's without one, for the worker). The rebuild: payload
+  `{nodeType, nodeId}`, key `semantic_edges:<type>:<id>`, each job runs
+  `recomputeSemanticEdges` for one node; a delete or a transfer queues
+  the nodes it changed at write priority (above);
   `enqueueSemanticEdgeRebuild(rerun)` queues one for every live note and
   every repository file (keyset pages of 1,000, catch-up priority, no
   drain started: the server's job polling or `runSemanticEdgeRebuild`
