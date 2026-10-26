@@ -114,7 +114,8 @@ beforeAll(async () => {
   await app.listen({ port: 0, host: '127.0.0.1' })
   const address = app.server.address()
   baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
-  owner = await account('owner', 'usage-owner')
+  // The instance's operator: setup makes the first user `admin` (no instance has an `owner` role user by default).
+  owner = await account('admin', 'usage-owner')
   other = await account('member', 'usage-other')
 }, 60_000)
 
@@ -136,10 +137,7 @@ describe('usage report (#678)', () => {
     expect(off).toMatchObject({ enabled: false })
   })
 
-  it('only the instance owner turns it on or off', async () => {
-    const admin = await createActiveUser({ role: 'admin' })
-    const adminCookie = await loginCookie(app, admin.email)
-    expect((await setEnabled(adminCookie, true)).statusCode).toBe(403)
+  it('only an instance admin (the instance owner) turns it on or off', async () => {
     expect((await setEnabled(other.cookie, true)).statusCode).toBe(403)
     expect(await ok(owner.cookie, 'GET', '/api/usage/settings')).toEqual({ enabled: false })
     const on = await setEnabled(owner.cookie, true)

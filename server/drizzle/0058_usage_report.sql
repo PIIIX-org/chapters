@@ -1,4 +1,4 @@
--- #678: the opt-in usage report (server/src/usage/, backend-reference.md §5.13). Off by default:
+-- #678: the opt-in usage report (server/src/usage/, backend-reference.md §5.12). Off by default:
 -- while `instance_state.usage_report_enabled` is false nothing is written to these tables.
 -- `usage_salt` keys the hashes of tokens, session ids and search queries (never stored as text).
 -- Both columns stay out of the drizzle model, so a backup carries neither: a restored instance

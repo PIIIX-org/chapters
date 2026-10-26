@@ -26,7 +26,7 @@ Software knowledge splits across two silos: human team wikis stored in closed cl
 
 **Elara** joins the two. It stores all documentation as plain, human-readable Markdown files directly on disk using the **Google Open Knowledge Format (OKF v0.2)** with strict ISO 8601 timestamps (explicit UTC or offset). It also connects to your Git repositories and indexes TypeScript, JavaScript, Python, Go, Rust, Java, C, C++, C#, Kotlin, Ruby and PHP source files into a **Tree-sitter symbol and import index**, and outlines the headings of their Markdown and HTML files.
 
-When you write notes, you link directly to code files using `[[repo:<repo>/<path>]]` syntax. When code changes, Elara re-syncs and re-indexes the repository, so links and symbols follow the codebase. For AI agents, Elara exposes a native **Model Context Protocol (MCP)** server with 60 tools and 20 engineering prompts.
+When you write notes, you link directly to code files using `[[repo:<repo>/<path>]]` syntax. When code changes, Elara re-syncs and re-indexes the repository, so links and symbols follow the codebase. For AI agents, Elara exposes a native **Model Context Protocol (MCP)** server with 61 tools and 20 engineering prompts.
 
 ---
 
@@ -142,12 +142,13 @@ A token's `tools/list` shows only the tools it can call: its allow-list, its acc
 
 ### Key MCP Capabilities
 
-- **60 tools**, documented with their exact parameters in [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md):
+- **61 tools**, documented with their exact parameters in [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md):
   - `list_vaults`, `browse_vault`, `read_note`, `create_note`, `edit_note`, `append_note`, `upsert_note`, `delete_note`
   - `list_repositories`, `browse_repository`, `read_file`, `find_symbols`, `repository_status`
   - `search` (hybrid full-text + 384d semantic search with permission scoping)
   - `graph` (nodes and edges with Louvain communities) and `find_graph_path` (shortest path, breadth-first)
   - `audit_okf_conformance` (structural validation against OKF v0.2)
+  - `usage_report` (the instance's opt-in usage report for its owner: no note or query text is kept)
 - **20 engineering prompts**, for example:
   - `draft_adr` — drafts an Architecture Decision Record linking relevant notes and code.
   - `audit_architecture_drift` — compares recent code changes with linked notes.
@@ -174,7 +175,7 @@ chapters/
 │   ├── src/auth/               # Sessions, OIDC, MFA, lockout
 │   ├── src/sync/               # Hocuspocus WebSocket relay for live Yjs sync
 │   ├── src/graph/              # Graph assembly, Louvain communities, shortest path
-│   ├── src/mcp/                # Model Context Protocol server (60 tools, 20 prompts)
+│   ├── src/mcp/                # Model Context Protocol server (61 tools, 20 prompts)
 │   ├── src/notes/              # OKF v0.2 parser, validation, and disk storage
 │   ├── src/repositories/       # Git/local ingestion, Tree-sitter extraction, import resolution
 │   ├── src/search/             # Hybrid search (Postgres full-text + pgvector) and embeddings

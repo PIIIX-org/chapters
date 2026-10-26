@@ -9,9 +9,11 @@ import { usageReport } from './report.js'
 
 /**
  * The usage report over REST (#678), under `/api/usage`, for a signed-in
- * user: `GET /settings` (whether it is on), `PUT /settings` (instance owner
- * only), `GET /report` (the caller's account; `?scope=instance` for an
- * instance admin, aggregates only). No UI yet.
+ * user: `GET /settings` (whether it is on), `PUT /settings` (the instance's
+ * operators only: the roles `requireAdmin` admits, `owner`, `superadmin`
+ * and `admin`; instance setup makes its first user `admin`), `GET /report`
+ * (the caller's account; `?scope=instance` for those same roles, aggregates
+ * only). No UI yet.
  */
 export function usageRoutes(app: FastifyInstance) {
   app.addHook('onReady', loadUsageSetting)
@@ -24,12 +26,12 @@ export function usageRoutes(app: FastifyInstance) {
   app.put<{ Body: { enabled: boolean } }>(
     '/settings',
     {
+      preHandler: app.requireAdmin,
       schema: {
         body: { type: 'object', required: ['enabled'], additionalProperties: false, properties: { enabled: { type: 'boolean' } } },
       },
     },
-    async (req, reply) => {
-      if (req.user!.role !== 'owner') return reply.code(403).send({ error: 'instance owner required' })
+    async (req) => {
       await setUsageEnabled(req.body.enabled)
       await logSecurityEvent({ type: 'usage_report_changed', actorUserId: req.user!.id, ip: req.ip, detail: { enabled: req.body.enabled } })
       return { enabled: req.body.enabled }

@@ -6,7 +6,7 @@ import { approxTokens } from '../mcp/response.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 
 /**
- * The opt-in usage report's recorder (#678, backend-reference.md §5.13).
+ * The opt-in usage report's recorder (#678, backend-reference.md §5.12).
  *
  * Off by default (`instance_state.usage_report_enabled`, set by the instance
  * owner): then `withUsage` calls the tool and nothing else, and no row is
@@ -14,7 +14,7 @@ import type { McpAuth } from '../vaults/mcp-connection-routes.js'
  * written in batches, after the answer is sent: every FLUSH_MS, or at once
  * past FLUSH_AT queued calls, one INSERT per batch. No call waits on it; a
  * full queue (MAX_QUEUED) drops calls, and a failed write drops its batch:
- * both are counted (`notRecorded`) and shown in the report.
+ * both are counted (`recorderStats`, shown in the report).
  *
  * Never stored: note or file text, paths, a search query's text, tool
  * arguments. A search keeps a salted hash of its normalised query, the
@@ -54,7 +54,15 @@ let queue: QueuedCall[] = []
 let timer: NodeJS.Timeout | null = null
 let writing: Promise<void> = Promise.resolve()
 let lastPrune = 0
-let notRecorded = 0
+
+/** The recorder since boot: calls written, the INSERTs that wrote them and their time, calls dropped (queue full, failed write). */
+export interface RecorderStats {
+  written: number
+  batches: number
+  write_ms: number
+  not_recorded: number
+}
+const stats: RecorderStats = { written: 0, batches: 0, write_ms: 0, not_recorded: 0 }
 
 /** What tool() hands the recorder: the targets its scope resolved and the handler's answer, as far as the call got. */
 export interface UsageProbe {
@@ -91,9 +99,8 @@ export function usageEnabled(): boolean {
   return enabled
 }
 
-/** Calls dropped since boot: queue full or a failed write. */
-export function usageNotRecorded(): number {
-  return notRecorded
+export function recorderStats(): RecorderStats {
+  return { ...stats, write_ms: Math.round(stats.write_ms * 10) / 10 }
 }
 
 /** Reads the setting (at boot, `usageRoutes`). */
@@ -259,7 +266,7 @@ function recordCall(auth: McpAuth, tool: string, raw: unknown, probe: UsageProbe
       read_path: readKind ? (stringOrNull(head.path) ?? stringOrNull(args.path)) : null,
     })
   } catch (err) {
-    notRecorded++
+    stats.not_recorded++
     console.error('[usage] call not recorded:', err instanceof Error ? err.name : typeof err)
   }
 }
@@ -298,11 +305,11 @@ export function recordClientEvent(auth: McpAuth, event: 'local_fallback', sessio
 
 function enqueue(call: QueuedCall): void {
   if (queue.length >= MAX_QUEUED) {
-    notRecorded++
+    stats.not_recorded++
     return
   }
   queue.push(call)
-  if (queue.length >= FLUSH_AT) {
+  if (queue.length === FLUSH_AT) {
     void flushUsage()
     return
   }
@@ -312,22 +319,31 @@ function enqueue(call: QueuedCall): void {
   }, FLUSH_MS).unref()
 }
 
-/** Writes every queued call (the report, shutdown and tests await it); one write at a time. */
+/**
+ * Writes every call queued when its turn comes (the report, shutdown and
+ * tests await it), in one INSERT; one write at a time. Calls queued while
+ * it writes wait for the next timer, so a steady stream is written about
+ * once per FLUSH_MS, not one small INSERT after another.
+ */
 export function flushUsage(): Promise<void> {
   writing = writing.then(writeQueued)
   return writing
 }
 
 async function writeQueued(): Promise<void> {
-  while (queue.length > 0) {
+  if (queue.length > 0) {
     const batch = queue
     queue = []
+    const started = performance.now()
     try {
       await insertCalls(batch)
+      stats.written += batch.length
+      stats.batches++
     } catch (err) {
-      notRecorded += batch.length
+      stats.not_recorded += batch.length
       console.error('[usage] write failed, calls dropped:', batch.length, err instanceof Error ? err.name : typeof err)
     }
+    stats.write_ms += performance.now() - started
   }
   if (enabled && Date.now() - lastPrune > PRUNE_EVERY_MS) await pruneUsage().catch(() => {})
 }

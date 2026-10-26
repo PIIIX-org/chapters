@@ -1,9 +1,9 @@
 import type { Fragment } from 'postgres'
 import { sql } from '../db/client.js'
-import { CLIENT_EVENT, RAW_DAYS, ROLLUP_DAYS, ZERO_RESULT, flushUsage, pruneUsage, usageEnabled, usageNotRecorded } from './recorder.js'
+import { CLIENT_EVENT, RAW_DAYS, ROLLUP_DAYS, ZERO_RESULT, flushUsage, pruneUsage, recorderStats, usageEnabled } from './recorder.js'
 
 /**
- * The usage report (#678, backend-reference.md §5.13): `account` covers the
+ * The usage report (#678, backend-reference.md §5.12): `account` covers the
  * calls of one account's tokens and the notes of the vaults it owns;
  * `instance` (instance admins) covers every account as aggregates, with no
  * account, token, session, note id or path in it.
@@ -125,7 +125,8 @@ export async function usageReport(scope: ReportScope): Promise<Record<string, un
     searches,
     never_read: neverRead,
     fallbacks,
-    not_recorded_since_boot: usageNotRecorded(),
+    // This process's recorder (calls written, INSERTs and their time, calls dropped): instance-wide, no account in it.
+    recorder_since_boot: recorderStats(),
   }
 }
 
