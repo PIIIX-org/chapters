@@ -3658,7 +3658,18 @@ and no note or query text is stored.
   fallback; account and instance separation over REST and MCP; the tool on
   admin tokens only; retention). Lab: `aa-usage-report-on` and
   `zzz-usage-report` (lab.md) run the fast tier with it on and report the
-  run's numbers. `pnpm -C server profile-usage` measures its cost.
+  run's numbers.
+- **Cost** (`pnpm -C server profile-usage`, 2026-10-26, a laptop shared
+  with other suites, load average 14-39). On the call path the recorder
+  adds 5.5-7.5 µs at p50 and 13-36 µs at p95 (`withUsage` around a handler
+  answering a 20-hit search at once, 5,000 calls; off: under 1 µs). End to
+  end over 1,000 MCP calls off and 1,000 on, interleaved, the p50 / p95
+  differences stayed inside run-to-run noise (13.4 / 22.9 ms off, 13.7 /
+  22.3 ms on in the quietest run). Writes, off the call path: 0.7-2.1 ms of
+  database time per call, in one INSERT per second. Storage per 10,000
+  calls of a read_note 50 % / search 30 % / list_vaults 20 % mix, heap and
+  indexes: 2.2 MB with no hit ids per search, 2.4-2.5 MB with 5, 3.4-3.5 MB
+  with 20.
 
 ---
 
