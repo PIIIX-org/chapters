@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { Parser, Language, Query, Tree, type Node, type QueryMatch } from 'web-tree-sitter'
 import { LANGUAGE_GRAMMARS, scopedSymbol, withoutDefinedPrototypes, type NewLanguage, type ScopeRules } from './extraction-languages.js'
+import { EDGE_RULES, extractSites, type ExtractedSite } from './code-edge-rules.js'
 
 const require = createRequire(import.meta.url)
 
@@ -35,8 +36,12 @@ const require = createRequire(import.meta.url)
  * relabelled. Unchanged texts keep their vectors: the file blocks of these
  * files are not embedded again, only their new symbol blocks (sections are
  * outline blocks, never embedded).
+ * 6: taken by #1014 (keyword channel).
+ * 7: call, reference, import and test sites, stored as `code_edges` (#469,
+ * code-edge-rules.ts, code-edges.ts). No block text changes, so no vector is
+ * embedded again: the bump only fills the new table.
  */
-export const EXTRACTOR_VERSION = 5
+export const EXTRACTOR_VERSION = 7
 
 /**
  * What a symbol declares (#450; the contract more languages, #464, and the
@@ -76,6 +81,8 @@ export interface ExtractedImport {
 export interface ExtractionResult {
   imports: ExtractedImport[]
   symbols: ExtractedSymbol[]
+  /** Calls, references and imported names (#469), in no particular order. */
+  sites: ExtractedSite[]
 }
 
 type SupportedLanguage = 'typescript' | 'javascript' | 'python' | 'go' | NewLanguage
@@ -347,7 +354,7 @@ let initPromise: Promise<void> | null = null
 const languageCache = new Map<Grammar, Language>()
 const queryCache = new Map<string, Query>()
 
-function getCompiledQuery(lang: Language, grammar: Grammar, type: 'import' | 'symbol', queryString: string): Query {
+function getCompiledQuery(lang: Language, grammar: Grammar, type: string, queryString: string): Query {
   const key = `${grammar}:${type}`
   let query = queryCache.get(key)
   if (!query) {
@@ -394,7 +401,7 @@ export async function extractStructure(language: string, content: string, path: 
   let tree: Tree | null = null
   try {
     tree = parser.parse(content)
-    if (!tree) return { imports: [], symbols: [] }
+    if (!tree) return { imports: [], symbols: [], sites: [] }
 
     const imports: ExtractedImport[] = []
     if (config.importQuery) {
@@ -414,8 +421,11 @@ export async function extractStructure(language: string, content: string, path: 
       : matches.flatMap((match) => symbolOf(match, config) ?? [])
     // Stable: declarations sharing a line (`export const a = 1, b = 2`) keep their order.
     symbols.sort((a, b) => a.startLine - b.startLine)
+    // On the same tree, after the symbols: a site names its enclosing symbol and its local definition by index.
+    const rules = EDGE_RULES[grammar]
+    const sites = rules ? extractSites(tree.rootNode, content, rules, symbols, (source) => getCompiledQuery(lang, grammar, 'edges', source)) : []
 
-    return { imports, symbols }
+    return { imports, symbols, sites }
   } finally {
     // ponytail: explicitly delete Tree and Parser to release WebAssembly linear memory (INGEST-01).
     tree?.delete()

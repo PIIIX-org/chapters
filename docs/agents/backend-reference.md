@@ -386,8 +386,9 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable`, the indexed version (`last_synced_commit`, `tree_hash`; migration 0040, #471, see §5.10) |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
+| `repositoryFiles` | indexed file content — same generated `fts` as `notes`, its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424). `edge_note` (migration 0054) says when its code edges were capped |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
+| `codeEdges` | (migration 0054, #469) symbol-level call, reference, import and test edges of each file, with the enclosing symbol, the target symbol block and `resolved`/`textual`; see **Code edges** in §5.10 |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
 
@@ -3076,6 +3077,83 @@ extracted again. Wikilink rows without lines or a context are rewritten
 from their note's body by the `note_links` catch-up jobs (#472, see **Link
 catch-up** below), queued before `listen`.
 
+**Code edges** (`code-edge-rules.ts`, `code-edges.ts`, table `code_edges`,
+migration 0054, #469, ADR-004 §2.8): the symbol-level edges #470
+(`symbol_at`, `references`, `callers`, `impact`, `tests_for`) and #534 (the
+ranked repo map) read, beside the file-level `repository_file_imports`
+(which stays: `graph`, staleness and the import backfill read it; `graph`
+output is unchanged). Found on the tree `extractStructure` parsed for the
+symbols, never a second parse. One row per site, keyed `(source_file_id,
+line, col, kind)` (1-based; `col` in UTF-16 code units):
+
+| column | what |
+| :--- | :--- |
+| `kind` | `call` (a function, method or constructor call, `new X()`, a JSX component), `reference` (a type name, or a name the file defines at module level or imports, used as a value), `import` (a name an import binds: `import { a as b }` gives `a`), `test` (see below) |
+| `source_block_id` | the innermost symbol block of the source file around the site (`Class.method`); null at module level |
+| `target_name` | the name looked up: as written, or the imported name an alias stands for |
+| `target_qualified` | `Parent.name` (the target's `inner_path`) when the site names the parent: `this.save()` / `self.save()` in class `Store`, a Go method's receiver variable, `Store.open()`, `Store::new()` |
+| `via` | the import specifier (`repository_file_imports.target_path`) binding the name or its qualifier (`ns.f()` after `import * as ns`) |
+| `member` | a method of a receiver of unknown type (`obj.save()`): matched by name only, never by scope |
+| `target_file_id`, `target_block_id` | the target symbol block (no foreign key: re-resolution keeps them current) |
+| `confidence` | `resolved` (found through the file's scope, its imports or its package) or `textual` (matched by name only; with no target when the name is ambiguous or undefined) |
+| `context` | the source line, trimmed, at most 160 code points (`CONTEXT_CHARS`) |
+
+Languages: TS/TSX/JS, Python, Go, Rust and Java get calls, references and
+import rows; C, C++, C#, Kotlin, Ruby and PHP calls only (their includes
+and requires name files, not names). A `reference` is never a declaration's
+own name, a parameter, a property key or an identifier inside an import; a
+plain identifier counts only when the file defines it at module level or
+imports it by name (a local variable is not one), a type name always,
+except one-letter names and each language's built-in and standard types
+(`Promise`, `string`, `Vec`, `String`, ...). Calls are all kept, standard
+library ones included (they stay `textual` with no target). **Resolution
+order:** (1) a definition in the source file (a module-level symbol; a
+member of the enclosing class through `this`/`self`/the Go receiver, or
+bare in Java, C#, Kotlin, C++, Ruby and PHP), at extraction: `resolved`;
+(2) a definition in the file the binding import resolves to through the
+source file's import rows, or for C, C++, Ruby and PHP in any file it
+includes or requires: `resolved`; (3) Go and Java: a definition in another
+file of the source file's directory and language (its package): `resolved`;
+(4) the one definition of that name in the repository (`target_qualified`
+first, then the bare name): `textual` with that target; (5) otherwise
+`textual` with no target: `symbolCandidates(repositoryId, name)` lists an
+ambiguous name's definitions. Steps 2 and 3 match a module-level definition
+for a plain name and the named member for a qualified one; a step that
+finds definitions in two files, or under two inner paths, finds none;
+overloads (one inner path) resolve to the first by line. Python and Go
+module specifiers do not resolve to files (see **Import resolution**), so
+their cross-file edges are `textual` (Go's same-package ones are
+`resolved` by step 3). **Test edges:** a file named like a test
+(`*.test.*`, `*.spec.*`, `*_test.go`, `test_*.py`, `*_test.py`, or under
+`src/test/` or `__tests__/`) gets one `test` row per distinct name it calls
+or references that is not its own definition, at its first site, resolved
+like it; its source is the test around it. **Cap:** at most 5,000 rows a
+file (`MAX_CODE_EDGES_PER_FILE`); past it `test`, then `reference`, then
+`call` rows are dropped first, and `repository_files.edge_note` says how
+many of each (null otherwise; logged as a warning too). **Incremental:**
+`processFile` replaces the file's rows in its transaction, after its blocks
+and import rows, resolving them against those; then, when the file gained
+or lost a symbol block (by `inner_path` and block id), it re-resolves the
+repository's rows that can name one: every row naming it when the name has
+at most one definition outside the file (step 4 can change), else the rows
+pointing into the file or whose source imports it or shares its Go/Java
+package. A sync that deletes files does the same for their definitions in
+one transaction with the delete, and an import row whose target changes
+(the manifest re-resolution, the boot backfill) re-resolves its source
+file's rows. Rows resolved in their own file never change until it does.
+Every write takes the repository's advisory lock (`code_edges:<id>`), and
+the extraction transaction takes it before the file row's. Steps 2-5 read
+only blocks and import rows, so after any sequence of pushes the table is
+the one a single push builds whenever the import rows are (an import row
+left unresolved by a target pushed later, #1008, keeps its edges on the
+name). Reads: `listCodeEdges(repositoryId, {path?, name?})` (the #470 row:
+`path:line`, the enclosing symbol, the context, the confidence, the
+target's path, symbol and line) and `symbolCandidates`; indexes
+`code_edges_target_idx` (by resolved target), `code_edges_name_idx`
+(repository, name), the key (by source file and line), and
+`blocks_symbol_name_idx` (a repository's symbol blocks by bare name, for
+resolution). No MCP tool reads them yet (#470).
+
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,
 repositoryId}`, key `extract:<fileId>:<contentHash>:<EXTRACTOR_VERSION>:<EMBEDDER_ID>+chunk<CHUNK_VERSION>`
@@ -3103,8 +3181,10 @@ cuts the file into blocks and embeds the blocks whose `embed_key` it does
 not already have (the slow part) outside any transaction,
 then one short transaction locks the file row, drops the result if
 `content_hash` changed meanwhile (the push that changed it enqueued the
-new content's job), and replaces imports and the whole block set and writes
-`embedding_note`, `extracted_hash`, `extractor_version`, `embedder_id` and
+new content's job), and replaces imports, the whole block set and the code
+edges (re-resolving those elsewhere that name a definition it gained or
+lost, **Code edges** above) and writes
+`embedding_note`, `edge_note`, `extracted_hash`, `extractor_version`, `embedder_id` and
 `chunk_version` together; semantic edges are refreshed after the commit
 (`refreshSemanticEdges`, §5.6; skipped when the block set kept every vector
 it had and lost none).
@@ -3166,14 +3246,15 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
 #452, migrations 0035 and 0036). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 5; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+an integer, now 7; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
 top-level rule and the embed-budget order, #450; 4 re-exports, literal
 `import()`/`require()` and `import x = require()` as imports, #466, which
 embeds nothing again; 5 Rust, Java, C, C++, C#, Kotlin, Ruby and PHP
 symbols and imports, Markdown/HTML heading sections and the relabelling of
 files whose label changed, #464, which embeds only the new symbol texts;
-sections are never embedded): bump it with any change to the grammars and queries,
+sections are never embedded; 6 is #1014's; 7 the **Code edges**, #469, which
+embeds nothing again and only fills `code_edges`): bump it with any change to the grammars and queries,
 symbol kinds, the outlines (`outline.ts`), the labels, the minified-file
 rule or the embed-budget order (the snippet cut and block texts are
 `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model

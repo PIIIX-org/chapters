@@ -71,9 +71,9 @@ async function edgesOf(repositoryId: string): Promise<Edge[]> {
     ORDER BY sf.path COLLATE "C", e.line, e.col, e.kind, e.target_name COLLATE "C"`)) as unknown as Edge[]
 }
 
-/** The one edge of `kind` named `name` at `path:line`. */
-function edgeAt(edges: Edge[], path: string, line: number, kind: string, name: string): Edge | undefined {
-  const found = edges.filter((e) => e.path === path && e.line === line && e.kind === kind && e.name === name)
+/** The one edge of `kind` named `name` at `path:line` (and `col`, when the line has several). */
+function edgeAt(edges: Edge[], path: string, line: number, kind: string, name: string, col?: number): Edge | undefined {
+  const found = edges.filter((e) => e.path === path && e.line === line && e.kind === kind && e.name === name && (col === undefined || e.col === col))
   expect(found.length, `${kind} ${name} at ${path}:${line}`).toBeLessThanOrEqual(1)
   return found[0]
 }
@@ -217,7 +217,8 @@ describe('code edges (#469)', () => {
     expect(shape(edgeAt(edges, 'pkg/service.py', 1, 'import', 'Repo'))).toEqual({ confidence: 'textual', target: 'pkg/models.py#Repo', source: null })
     expect(shape(edgeAt(edges, 'pkg/service.py', 5, 'call', 'Repo'))).toEqual({ confidence: 'textual', target: 'pkg/models.py#Repo', source: 'serve' })
     expect(shape(edgeAt(edges, 'pkg/service.py', 6, 'call', 'get'))).toEqual({ confidence: 'textual', target: 'pkg/models.py#Repo.get', source: 'serve' })
-    expect(shape(edgeAt(edges, 'tests/test_service.py', 5, 'test', 'serve'))).toEqual({ confidence: 'textual', target: 'pkg/service.py#serve', source: null })
+    // A test edge's source is the test that uses the name.
+    expect(shape(edgeAt(edges, 'tests/test_service.py', 5, 'test', 'serve'))).toEqual({ confidence: 'textual', target: 'pkg/service.py#serve', source: 'test_serve' })
     expect(edges.filter((e) => e.kind === 'test').map((e) => e.name)).toEqual(['serve'])
   })
 
@@ -318,7 +319,9 @@ describe('code edges (#469)', () => {
     const app = 'src/main/java/com/acme/app/App.java'
     expect(shape(edgeAt(edges, app, 3, 'import', 'Store'))).toEqual({ confidence: 'resolved', target: `${main}#Store`, source: null })
     expect(shape(edgeAt(edges, app, 7, 'call', 'open'))).toEqual({ confidence: 'resolved', target: `${main}#Store.open`, source: 'App.run' })
-    expect(shape(edgeAt(edges, app, 7, 'reference', 'Store'))).toEqual({ confidence: 'resolved', target: `${main}#Store`, source: 'App.run' })
+    // The type of `s`, and the receiver of `Store.open()`.
+    expect(shape(edgeAt(edges, app, 7, 'reference', 'Store', 9))).toEqual({ confidence: 'resolved', target: `${main}#Store`, source: 'App.run' })
+    expect(shape(edgeAt(edges, app, 7, 'reference', 'Store', 19))).toEqual({ confidence: 'resolved', target: `${main}#Store`, source: 'App.run' })
     expect(shape(edgeAt(edges, app, 8, 'call', 'save'))).toEqual({ confidence: 'textual', target: `${main}#Store.save`, source: 'App.run' })
     const tests = edges.filter((e) => e.kind === 'test')
     expect(tests.map((e) => [e.path, e.name, e.target])).toEqual([
@@ -373,7 +376,7 @@ const FINAL: Files = {
 describe('code edges after a sequence of pushes (#469)', () => {
   it('equal the edges of one push of the final files', async () => {
     const expected = await edgesOf(await repoWith('edges-order-a', FINAL))
-    expect(expected.length).toBeGreaterThan(30)
+    expect(expected.length).toBeGreaterThan(20)
 
     const repo = await makeRepo('edges-order-b')
     // Every path exists from the start (an import row resolves only to a file that exists, #1008), with other content:

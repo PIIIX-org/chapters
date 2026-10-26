@@ -6,6 +6,7 @@ import { blocks, jobs, repositories, repositoryFiles } from '../db/schema.js'
 import { deleteSemanticEdgesFor } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
 import { enqueueExtractions, extractionJobKeySql, hasCurrentBlocksSql, scheduleImportReresolution } from './extraction-queue.js'
+import { lockRepositoryEdges, nearFiles, reresolveAfterChange, storedDefinitions } from './code-edges.js'
 import { isResolutionManifest } from './import-resolution.js'
 import { checkCodeStaleness } from '../notes/staleness.js'
 
@@ -142,17 +143,27 @@ export async function syncRepositoryFiles(
   const currentPathSet = new Set(currentPaths)
   const toDelete = existing.filter((r) => !currentPathSet.has(r.path))
   if (toDelete.length > 0) {
-    await db.delete(repositoryFiles).where(
-      and(
-        eq(repositoryFiles.repositoryId, repositoryId),
-        notInArray(
-          repositoryFiles.path,
-          currentPaths.length > 0 ? currentPaths : ['__empty_repository_path__'],
+    const deletedIds = toDelete.map((r) => r.id)
+    // One transaction under the repository's code edge lock (#469): the code edges that named a deleted file's
+    // definitions, or resolved through it, resolve again without them.
+    await db.transaction(async (tx) => {
+      await lockRepositoryEdges(tx, repositoryId)
+      const definitions = await storedDefinitions(tx, deletedIds)
+      const near = definitions.size > 0 ? await nearFiles(tx, repositoryId, deletedIds) : []
+      await tx.delete(repositoryFiles).where(
+        and(
+          eq(repositoryFiles.repositoryId, repositoryId),
+          notInArray(
+            repositoryFiles.path,
+            currentPaths.length > 0 ? currentPaths : ['__empty_repository_path__'],
+          ),
         ),
-      ),
-    )
+      )
+      const deleted = new Set(deletedIds)
+      await reresolveAfterChange(tx, repositoryId, deletedIds, [...definitions.values()], near.filter((id) => !deleted.has(id)))
+    })
     // Same as notes: semanticEdges has no FK and does not cascade (#92).
-    await deleteSemanticEdgesFor('code', toDelete.map((r) => r.id))
+    await deleteSemanticEdgesFor('code', deletedIds)
     result.deleted = toDelete.length
     if (toDelete.some((r) => isResolutionManifest(r.path))) manifestChanged = true
     // The delete also takes a batch file outside currentPaths.

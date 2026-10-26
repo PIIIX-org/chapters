@@ -174,7 +174,7 @@ export function withoutDefinedPrototypes(found: ScopedSymbol[]): ExtractedSymbol
 // ---------------------------------------------------------------- grammars
 
 /** A path that names no module of its own: `crate`, `self`, `super`, `super::super`. */
-const RUST_ROOT_PATH = /^(?:crate|self|super(?:::super)*)$/
+export const RUST_ROOT_PATH = /^(?:crate|self|super(?:::super)*)$/
 
 /**
  * A `use` tree as the module paths it imports from: `crate::store` for
@@ -205,7 +205,7 @@ function rustUseTargets(node: Node): string[] {
 }
 
 /** A Java or Kotlin import as the name it imports, `a.b.*` for a wildcard. */
-function jvmImportTarget(node: Node): string[] {
+export function jvmImportTarget(node: Node): string[] {
   const name = node.namedChildren.find((c) => c?.type === 'scoped_identifier' || c?.type === 'qualified_identifier' || c?.type === 'identifier')
   if (!name) return []
   return [node.children.some((c) => c?.type === 'asterisk' || c?.type === '*') ? `${name.text}.*` : name.text]
