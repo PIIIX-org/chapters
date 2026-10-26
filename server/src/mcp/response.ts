@@ -236,10 +236,12 @@ const CursorJson = z
     f: z.string(),
     k: z.object({ s: z.number().int().min(0), p: z.union([z.string(), z.number(), z.null()]) }).strict(),
     g: z.string().optional(),
+    // Sections a session reference (#683) answered on the first page: the pages after it leave them out.
+    r: z.array(z.number().int().min(0)).optional(),
   })
   .strict()
 type CursorJson = z.infer<typeof CursorJson>
-export type CursorAt = CursorJson['k'] & { g?: string }
+export type CursorAt = CursorJson['k'] & { g?: string; r?: number[] }
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
 
@@ -287,7 +289,8 @@ export function decodeCursor(cursor: string, tool: string, fingerprint: string):
   if (!parsed.success) throw invalid('not a cursor this server issued')
   if (parsed.data.t !== tool) throw invalid(`issued by ${parsed.data.t}`)
   if (parsed.data.f !== fingerprint) throw invalid('issued for other arguments')
-  return { ...parsed.data.k, ...(parsed.data.g === undefined ? {} : { g: parsed.data.g }) }
+  const { g, r } = parsed.data
+  return { ...parsed.data.k, ...(g === undefined ? {} : { g }), ...(r === undefined ? {} : { r }) }
 }
 
 /** Where a budgeted handler's answer starts. */
@@ -350,8 +353,9 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
   if (at !== null && at.s >= answer.sections.length) throw invalid('not a position of this answer')
   const s0 = at?.s ?? 0
   return answer.sections.map((section, i): Slot => {
-    if (i < s0) return { section, start: -1, avail: [], more: false, limit: 0 }
-    // A session reference (#683) shows nothing of its content; only a first page has one.
+    // A section the first page answered by a session reference (#683) is left out of every later page, as one an
+    // earlier page finished; on the first page it shows nothing of its content.
+    if (i < s0 || at?.r?.includes(i)) return { section, start: -1, avail: [], more: false, limit: 0 }
     if (refOf(section)) return { section, start: 0, avail: [], more: false, limit: 0 }
     const here = at !== null && i === s0
     if (section.kind === 'keyset') {
@@ -611,8 +615,13 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   }
   const blocks: Block[] = []
   const seen: Seen = plan.map(() => false)
+  // Every cursor of this answer carries the sections answered by reference, on this page or the first (#683).
+  const refs = [...(ctx.at?.r ?? []), ...plan.flatMap((slot, n) => (refOf(slot.section) ? [n] : []))]
+  const cursorOf = (k: CursorJson['k'], g?: string) =>
+    encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k, ...(g === undefined ? {} : { g }), ...(refs.length > 0 ? { r: refs } : {}) })
   for (const [n, slot] of plan.entries()) {
     const { section } = slot
+    if (ctx.at?.r?.includes(n)) continue
     const ref = refOf(section)
     if (ref) {
       // A session reference (#683), in place of the content: counted as shown whole (the session has it), nothing
@@ -633,7 +642,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
         counts.shown[section.name] = 0
         counts.total[section.name] = total
         counts.dropped[section.name] = total
-        if (cursor === null && total > 0) cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: 0 }, g: guardOf(section.text) })
+        if (cursor === null && total > 0) cursor = cursorOf({ s: n, p: 0 }, guardOf(section.text))
         anyDropped ||= total > 0
         withheld = true
         continue
@@ -682,7 +691,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
         if (section.lines && partial && chunk !== '') out.lines = [first, first + totalLines(chunk) - 1]
       }
       if (cursor === null && !counted && chunk.length < rest.length) {
-        cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: slot.start + chunk.length }, g: guardOf(section.text) })
+        cursor = cursorOf({ s: n, p: slot.start + chunk.length }, guardOf(section.text))
       }
       anyDropped ||= chunk.length < rest.length
       continue
@@ -711,10 +720,10 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
     if (section.kind === 'keyset') {
       const last = items.length - 1
       const p: Resume = last >= 0 ? section.resume(items[last] as never, last) : n === ctx.at?.s ? ctx.at.p : null
-      cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p } })
+      cursor = cursorOf({ s: n, p })
     } else {
       const p = slot.start + items.length
-      cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p }, g: rankedGuard(answer.sections, n, p) })
+      cursor = cursorOf({ s: n, p }, rankedGuard(answer.sections, n, p))
     }
   }
   for (const [name, value] of values) out[name] = value

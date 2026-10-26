@@ -1456,20 +1456,21 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const note = await readLiveNote(target, args.path)
       if (!note) throw await noteNotFound(target, args.path)
       showAgentPresence(target, note.row.id, presence, 'reading')
-      // Lines count over the note's file (ADR-004 §2.2, D3): line 1 is `---`, the body starts at body_start_line.
-      // `note.frontmatter` is already in its file's key order, so no `frontmatter_src` is needed to render it.
-      const file = renderNoteFile({ frontmatter: note.frontmatter, frontmatterSrc: null, body: note.body })
       // Under `session_id` (#683), a passage this session already got is sent as a reference (session-reads.ts).
       const session = args.session_id === undefined ? null : await openSession(auth.connection.id, args.session_id, note.row.id)
-      const doc = { path: note.row.path, version: { rev: note.row.seq }, text: file }
       // Not modified (#682): the revision is compared, not the text, and only for a note no other note was at the path
       // before, and only on a first page (a cursor continues an answer already sent). The agent has shown it holds this
       // rev, so the base a whole-body edit merges from moves to it, as after a read; no body is recorded, since this
-      // answer sent none (confirmRead keeps one sent with that rev, last-read.ts).
+      // answer sent none (confirmRead keeps one sent with that rev, last-read.ts). It has no passage, so its session
+      // document needs no text (and the note's file is not rendered).
       if (page.at === null && args.if_rev === String(note.row.seq) && !(await pathHadOtherNote(note.row))) {
         const answer = { ...unchanged({ rev: note.row.seq }), rendered: () => confirmRead(auth.connection.id, note.row.id, note.row.seq) }
-        return inSession(session, doc, answer, page.at)
+        return inSession(session, { path: note.row.path, version: { rev: note.row.seq }, text: '' }, answer, page.at)
       }
+      // Lines count over the note's file (ADR-004 §2.2, D3): line 1 is `---`, the body starts at body_start_line.
+      // `note.frontmatter` is already in its file's key order, so no `frontmatter_src` is needed to render it.
+      const file = renderNoteFile({ frontmatter: note.frontmatter, frontmatterSrc: null, body: note.body })
+      const doc = { path: note.row.path, version: { rev: note.row.seq }, text: file }
       const bodyStart = bodyStartLine({ frontmatter: note.frontmatter, frontmatterSrc: null })
       const lines = { body_start_line: bodyStart, total_lines: totalLines(file) }
       const foldError = note.foldError ? { fold_error: note.foldError } : {}
