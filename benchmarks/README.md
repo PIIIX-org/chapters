@@ -319,9 +319,12 @@ gets references (every suite has 15 or more questions sharing a file).
 - `bench_session=plain`: no `session_id` (the only mode a server before
   #683 takes; use it on the base side).
 - `bench_session=session`: the plain pass, then the same policy with one
-  `session_id` per suite on every `read_file`, on the same instance. Each
-  session answer, its references expanded to the text they name, is compared
-  with the plain answer of the same call (`answers` in `results.json`).
+  `session_id` per suite on every `read_file`, on the same instance. A
+  referenced outline reads as the outline its call sent, so both passes make
+  the same calls. Each session answer, its references expanded to the text
+  they name, is compared with the plain answer of the same call (`answers`
+  in `results.json`: `equal`; `more` or `less` when one shows every line the
+  other does and more, kept with both texts; `differ`; `unaligned`).
 
 ```sh
 gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f tier=none -f bench=none -f bench_session=session   # -f bench_session_suites=chapters

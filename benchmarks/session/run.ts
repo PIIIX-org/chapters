@@ -146,16 +146,25 @@ function outcome(gold: LineRange[], j: Judgments, run: RereadRun): { outcome: Qu
   }
 }
 
+/** What a non-equal answer shows in each mode: its text, its characters and the lines it puts in context. */
+interface Mismatch {
+  call: string
+  plain: { chars: number; lines: string; text: string }
+  session: { chars: number; lines: string; text: string }
+}
+
 /**
  * The session answers against the plain ones, call by call: `equal` when
  * the expanded session answer is the plain answer (search answers as sent);
- * `more` when it is not but shows every line the plain one shows and more
- * (a reference frees page room, so a cut answer goes further); `differ`
- * otherwise; `unaligned` when the two passes made other calls.
+ * else `more` when it shows every line the plain one shows and more (a
+ * reference frees page room, so a cut answer goes further), `less` when the
+ * plain one shows every line it shows and more (the `call` field takes page
+ * room, so a page can end a line earlier), `differ` otherwise; `unaligned`
+ * when the two passes made other calls.
  */
 function compareModes(plain: Answer[][], session: Answer[][]) {
   const sent = new Map<number, unknown>()
-  const result = { calls: 0, equal: 0, references: 0, more: [] as string[], differ: [] as string[], unaligned: 0 }
+  const result = { calls: 0, equal: 0, references: 0, more: [] as Mismatch[], less: [] as Mismatch[], differ: [] as Mismatch[], unaligned: 0 }
   for (const [qi, answers] of session.entries()) {
     for (const [ci, answer] of answers.entries()) {
       result.calls++
@@ -169,21 +178,28 @@ function compareModes(plain: Answer[][], session: Answer[][]) {
         continue
       }
       const otherJson = parseJson(other.text)
-      const where = `question ${qi + 1} call ${ci + 1} ${answer.tool} ${answer.args}`
       if (answer.tool === 'search' ? answer.text === other.text : json !== undefined && comparable(expandAnswer(json, sent)) === comparable(otherJson)) {
         result.equal++
         continue
       }
-      const path = answer.path ?? ''
-      const lines = (j: unknown) => {
+      const shown = (j: unknown) => {
+        const ranges = shownRanges(answer.path ?? '', j)
         const set = new LineSet()
-        for (const r of shownRanges(path, j)) set.add(r.path, r.start, r.end)
-        return set
+        for (const r of ranges) set.add(r.path, r.start, r.end)
+        return { set, lines: ranges.map((r) => `${r.start}-${r.end}`).join(',') }
       }
-      const mine = lines(json)
-      const theirs = lines(otherJson)
-      if (answer.tool === 'read_file' && mine.size > theirs.size && mine.intersectionSize(theirs) === theirs.size) result.more.push(where)
-      else result.differ.push(where)
+      const mine = shown(json)
+      const theirs = shown(otherJson)
+      const mismatch = {
+        call: `question ${qi + 1} call ${ci + 1} ${answer.tool} ${answer.args}`,
+        plain: { chars: other.text.length, lines: theirs.lines, text: other.text },
+        session: { chars: answer.text.length, lines: mine.lines, text: answer.text },
+      }
+      const both = mine.set.intersectionSize(theirs.set)
+      if (answer.tool !== 'read_file' || mine.set.size === theirs.set.size) result.differ.push(mismatch)
+      else if (both === theirs.set.size) result.more.push(mismatch)
+      else if (both === mine.set.size) result.less.push(mismatch)
+      else result.differ.push(mismatch)
     }
   }
   return result
@@ -249,7 +265,7 @@ for (const p of prepared) {
     ...(answers ? { answers } : {}),
   }
   if (answers) {
-    const line = `${s.suite}: ${answers.equal} of ${answers.calls} session answers equal the plain ones once expanded, ${answers.more.length} show more (a reference freed page room), ${answers.differ.length} differ, ${answers.unaligned} unaligned; ${answers.references} carry references.`
+    const line = `${s.suite}: ${answers.equal} of ${answers.calls} session answers equal the plain ones once expanded, ${answers.more.length} show more lines, ${answers.less.length} fewer, ${answers.differ.length} differ otherwise, ${answers.unaligned} unaligned; ${answers.references} carry references.`
     ctx.log(line)
     compared.push(line)
   }
