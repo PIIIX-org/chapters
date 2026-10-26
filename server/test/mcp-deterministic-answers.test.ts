@@ -41,7 +41,7 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
-import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { flushExtraction, scheduleImportReresolution } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -171,9 +171,11 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
     if (reverse) await flushEmbeddings()
   }
   // A file's row is inserted empty under its id just before its push, which then fills it: an update keeps the id.
+  // The insert creates the path outside syncRepositoryFiles, so it reports the new path as a sync's insert does (#1008).
   const placeFile = async (f: (typeof FILES)[number]) => {
     const id = idAt(FILES.indexOf(f))
     await db.insert(repositoryFiles).values({ id, repositoryId: repoId, path: f.path, content: '', contentHash: '', size: 0 })
+    scheduleImportReresolution(repoId, { manifests: false, paths: [f.path] })
     ownerLabel.set(id, `<file:${f.path}>`)
   }
   if (reverse) {
@@ -290,8 +292,6 @@ interface Question {
 
 /** Each node's semantic neighbours are those that existed when it was embedded. */
 const SEMANTIC_HISTORY = '#1007'
-/** An import pushed before the file it imports stays unresolved. */
-const IMPORT_HISTORY = '#1008'
 
 const QUESTIONS: Question[] = [
   { name: 'search notes', tool: 'search', args: (w) => ({ vaultId: w.vaultId, query: 'upload chunk' }) },
@@ -312,13 +312,13 @@ const QUESTIONS: Question[] = [
     name: 'graph every node',
     tool: 'graph',
     args: (w) => ({ vaultId: w.vaultId, repositoryId: w.repoId, aggregate: 'none' }),
-    differs: `${SEMANTIC_HISTORY}, ${IMPORT_HISTORY}`,
+    differs: SEMANTIC_HISTORY,
   },
   {
     name: 'graph neighbours',
     tool: 'graph',
     args: (w) => ({ vaultId: w.vaultId, repositoryId: w.repoId, neighborsOf: 'index', depth: 2 }),
-    differs: `${SEMANTIC_HISTORY}, ${IMPORT_HISTORY}`,
+    differs: SEMANTIC_HISTORY,
   },
   { name: 'browse_vault root', tool: 'browse_vault', args: (w) => ({ vaultId: w.vaultId }) },
   {
@@ -379,7 +379,7 @@ describe('read tools answer deterministically (#473)', () => {
       expect(await rows(B, args(B))).toEqual(await rows(A, args(A)))
     })
 
-    it.fails(`an import pushed before the file it imports resolves once that file arrives (${IMPORT_HISTORY})`, async () => {
+    it(`an import pushed before the file it imports resolves once that file arrives (#1008)`, async () => {
       const args = (w: World) => ({ repositoryId: w.repoId, edgeTypes: ['extracted'] })
       expect(await rows(B, args(B))).toEqual(await rows(A, args(A)))
     })

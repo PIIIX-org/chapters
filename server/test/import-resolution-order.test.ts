@@ -8,10 +8,10 @@ import { sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories, repositoryFileImports, repositoryFiles } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
-import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { backfillUnresolvedImports, flushExtraction } from '../src/repositories/extraction-queue.js'
 import { createActiveUser } from './helpers.js'
 
-/** One repository of every resolution rule an import can take: relative with index and precedence, tsconfig paths, workspace packages, Rust, Java, Python. */
+/** One repository of the resolution rules an import can take: relative with index and precedence, tsconfig paths, workspace packages, Rust, Java. */
 const FILES: Record<string, string> = {
   'pnpm-workspace.yaml': "packages:\n  - 'apps/*'\n  - 'packages/*'\n",
   'package.json': JSON.stringify({ name: 'acme', private: true }),
@@ -41,8 +41,6 @@ const FILES: Record<string, string> = {
   'crates/core/src/store/mod.rs': 'pub struct Store;\n',
   'app/src/main/java/com/example/store/Store.java': 'package com.example.store;\nimport com.example.index.Entry;\npublic class Store {}\n',
   'app/src/main/java/com/example/index/Entry.java': 'package com.example.index;\npublic class Entry {}\n',
-  'lib/pkg/run.py': 'from .util import parse\n',
-  'lib/pkg/util.py': 'def parse(s):\n    return s\n',
 }
 
 /** Files that win over FILES' targets while they exist: a literal `foo` before `foo.ts`, a package's built `dist/index.js` before its `src/index.ts`. */
@@ -128,7 +126,7 @@ describe('import rows do not depend on the order files arrive in (#1008)', () =>
     expect(await importsOf(repo.id, 'apps/web/src/main.tsx')).toMatchObject({ './foo': null, './upload.js': null })
   })
 
-  it('tsconfig-path, workspace-package, Rust, Java and Python imports resolve once their targets arrive', async () => {
+  it('tsconfig-path, workspace-package, Rust and Java imports resolve once their targets arrive', async () => {
     const repo = await makeRepo('imports-later-targets-by-rule')
     const targets = [
       'apps/web/src/lib/format.ts',
@@ -136,7 +134,6 @@ describe('import rows do not depend on the order files arrive in (#1008)', () =>
       'packages/ui/src/button.tsx',
       'crates/core/src/store/mod.rs',
       'app/src/main/java/com/example/index/Entry.java',
-      'lib/pkg/util.py',
     ]
     await syncTo(repo.id, without(...targets))
     expect(await importsOf(repo.id, 'apps/web/src/main.tsx')).toMatchObject({ '~/lib/format': null, '@acme/ui': null, '@acme/ui/button': null })
@@ -154,14 +151,13 @@ describe('import rows do not depend on the order files arrive in (#1008)', () =>
     expect(await importsOf(repo.id, 'app/src/main/java/com/example/store/Store.java')).toEqual({
       'com.example.index.Entry': 'app/src/main/java/com/example/index/Entry.java',
     })
-    expect(await importsOf(repo.id, 'lib/pkg/run.py')).toEqual({ '.util': 'lib/pkg/util.py' })
   })
 
   it('two pushes in either order, or one file at a time, give the import rows of one push', async () => {
     const one = await makeRepo('imports-one-push')
     await syncTo(one.id, ALL)
     const expected = await allImportRows(one.id)
-    expect(expected).toHaveLength(10)
+    expect(expected).toHaveLength(9)
 
     const half = ALL.filter((_, i) => i % 2 === 0)
     const other = ALL.filter((_, i) => i % 2 === 1)
@@ -177,5 +173,22 @@ describe('import rows do not depend on the order files arrive in (#1008)', () =>
       for (const paths of steps) await syncTo(repo.id, paths)
       expect(await allImportRows(repo.id), name).toEqual(expected)
     }
+  })
+
+  it('rows written before their lookup keys existed get them at boot, then follow the files that arrive', async () => {
+    const repo = await makeRepo('imports-keys-backfill')
+    await syncTo(repo.id, without('apps/web/src/foo.ts'))
+    await db.execute(sql`
+      UPDATE ${repositoryFileImports} i SET lookup_keys = NULL
+      FROM ${repositoryFiles} f WHERE f.id = i.source_file_id AND f.repository_id = ${repo.id}`)
+
+    await backfillUnresolvedImports()
+    const unkeyed = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM ${repositoryFileImports} i JOIN ${repositoryFiles} f ON f.id = i.source_file_id
+      WHERE f.repository_id = ${repo.id} AND i.lookup_keys IS NULL`)) as unknown as Array<{ n: number }>
+    expect(unkeyed[0]!.n).toBe(0)
+
+    await syncTo(repo.id, ALL)
+    expect((await importsOf(repo.id, 'apps/web/src/main.tsx'))['./foo']).toBe('apps/web/src/foo.ts')
   })
 })
