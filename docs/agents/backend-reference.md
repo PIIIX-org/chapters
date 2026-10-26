@@ -3105,8 +3105,18 @@ own name, a parameter, a property key or an identifier inside an import; a
 plain identifier counts only when the file defines it at module level or
 imports it by name (a local variable is not one), a type name always,
 except one-letter names and each language's built-in and standard types
-(`Promise`, `string`, `Vec`, `String`, ...). Calls are all kept, standard
-library ones included (they stay `textual` with no target). **Resolution
+(`Promise`, `string`, `Vec`, `String`, ...). Calls into the language's own
+library are not stored unless the file defines or imports the name
+(`EdgeRules.builtins`): methods of its core types and test assertions on a
+receiver of unknown type (`arr.map()`, `x.unwrap()`, `expect(x).toBe()`),
+bare library functions (`len`, `printf`, `Some`), and calls on or of global
+objects and types (`JSON.parse()`, `Vec::new()`, `String(x)`). Their
+targets are never repository symbols, and matched by name they would land
+on any repository method sharing it; generic verbs (`get`, `set`, `add`,
+`remove`, `parse`, `run`, ...) are kept, since repositories define them
+too. This drops a fifth to a quarter of the rows (rea 364,606 → 287,783
+sites, vectorcraft 404,592 → 298,088). Every other call is kept, also when
+it stays `textual` with no target. **Resolution
 order:** (1) a definition in the source file (a module-level symbol; a
 member of the enclosing class through `this`/`self`/the Go receiver, or
 bare in Java, C#, Kotlin, C++, Ruby and PHP), at extraction: `resolved`;
@@ -3134,10 +3144,11 @@ many of each (null otherwise; logged as a warning too). **Incremental:**
 `processFile` replaces the file's rows in its transaction, after its blocks
 and import rows, resolving them against those; then, when the file gained
 or lost a symbol block (by `inner_path` and block id), it re-resolves the
-repository's rows that can name one: every row naming it when the name has
-at most one definition outside the file (step 4 can change), else the rows
-pointing into the file or whose source imports it or shares its Go/Java
-package. A sync that deletes files does the same for their definitions in
+repository's rows whose answer can move: those naming one that point into
+the file or whose source imports it or shares its Go/Java package (steps 2
+and 3), and the `textual` ones naming one whose name has at most one
+definition outside the file (step 4). A row resolved through its imports or
+its package into another file keeps its answer. A sync that deletes files does the same for their definitions in
 one transaction with the delete, and an import row whose target changes
 (the manifest re-resolution, the boot backfill) re-resolves its source
 file's rows. Rows resolved in their own file never change until it does.
