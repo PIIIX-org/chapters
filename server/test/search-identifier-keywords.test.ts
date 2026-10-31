@@ -111,8 +111,8 @@ describe('find_symbols by identifier parts (#455)', () => {
 
   it('the exact identifier ranks before a match on its parts alone', async () => {
     expect(await symbols('parse_frontmatter')).toEqual(['py/notes_io.py#parse_frontmatter', 'src/notes/frontmatter.ts#parseFrontmatter'])
-    // `load` calls `fm.parseFrontmatter`: its snippet holds the query, which ranked it before (contains).
-    expect(await symbols('parseFrontmatter')).toEqual(['src/notes/frontmatter.ts#parseFrontmatter', 'src/load.ts#load', 'py/notes_io.py#parse_frontmatter'])
+    // #456: exact and identifier matches outrank a snippet match on `load` (`fm.parseFrontmatter`).
+    expect(await symbols('parseFrontmatter')).toEqual(['src/notes/frontmatter.ts#parseFrontmatter', 'py/notes_io.py#parse_frontmatter', 'src/load.ts#load'])
   })
 })
 

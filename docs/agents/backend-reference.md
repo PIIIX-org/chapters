@@ -1525,6 +1525,32 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     Keyword rows
     always count. The gate cuts a suffix of a distance-ordered list, so the
     RRF ranks of the rows it keeps do not change.
+  - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
+    merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a
+    fixed window of `CANDIDATES = 30` rows per leg (the population the
+    relevance gate calibrates on). A row that is an exact match receives
+    `EXACT_BOOST = 1`, so it outranks every fuzzy-only vector or snippet hit
+    across legs. Exact means: a symbol name, a file path or basename (with its
+    extension), or a note path or title equals the WHOLE query; or equals a
+    query term that is itself identifier- or file-shaped (camelCase,
+    snake_case, dotted, `a::b`, or `path/file.ext`) AND singled out by the
+    asker: written in backticks, or in a query of at most three words
+    (`SHORT_QUERY_WORDS`), by any spelling from `identifiers.ts`. A plain word
+    never grants the boost, and neither does an identifier merely mentioned in
+    a longer question (on the benchmark `SessionDB`, `SKILL.md` and
+    `run_command` named in passing pushed the symbol of that name above the
+    answer), so a name hit cannot outrank rows that match what the question
+    asks (the #1014 failure). A relaxed or trigram row (#455 part 2) never counts
+    as exact. The boost is a pure function of the row, and `byScore`'s
+    tie-breaks are unchanged.
+    For code-shaped queries (#457: at least two independent code signals, or one
+    strong one, such as a `file.ext` token; never a plain English word), code
+    hits receive a bounded boost `CODE_BOOST = 0.0008` (about 3 RRF positions)
+    over documentation, plans and data (`resourceType: 'note'`, or repository files
+    with doc or data extensions, `.json`, `.yml`, `.toml` among them, README-type
+    names, or under a `docs`, `plans`, `wiki` or `specs` folder at
+    any depth). Prose queries are untouched, and a doc that genuinely answers
+    the question still wins.
   - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a
     repeated query text comes from the in-process query-embedding cache
     (§5.11) without running the embedder.
