@@ -135,15 +135,24 @@ export function showAgentPresence(vaultId: string, noteId: string, agent: AgentI
 
 /**
  * For the relay's `beforeHandleAwareness`: a client speaks only for itself.
- * Its states lose any `agent` claim, and a state aimed at an agent's client id
- * (to replace or remove it) is dropped.
+ * Its states lose any `agent` claim, and a state or removal aimed at an agent's client id
+ * is dropped.
  */
-export function stripAgentClaims(documentName: string, states: Map<number, Record<string, unknown>>): void {
+export function stripAgentClaims(
+  documentName: string,
+  states: Map<number, Record<string, unknown>>,
+  removedClients?: Set<number>,
+): void {
   const agents = present.get(documentName)
   const agentIds = new Set([...(agents?.values() ?? [])].map((p) => p.clientId))
   for (const [clientId, state] of states) {
     if (agentIds.has(clientId)) states.delete(clientId)
     else if (Object.hasOwn(state, 'agent')) delete state.agent
+  }
+  if (removedClients) {
+    for (const clientId of agentIds) {
+      removedClients.delete(clientId)
+    }
   }
 }
 
