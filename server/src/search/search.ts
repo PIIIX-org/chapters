@@ -2,7 +2,7 @@ import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { config } from '../config.js'
 import { textArray } from './block-rows.js'
-import { embedder } from './embeddings.js'
+import { embedQuery } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
 import { setHnswScan } from './hnsw.js'
 import { MAX_KEYWORD_LENGTH, isPlainWord, keywordTerms, type Identifier } from './identifiers.js'
@@ -362,6 +362,8 @@ export interface SymbolSearchResult {
 
 export interface SearchNotesOptions {
   includeSymbols?: boolean
+  /** The asking account: its repeated queries come from the query-embedding cache (#684). Without it nothing is cached. */
+  accountId?: string
 }
 
 /**
@@ -738,11 +740,13 @@ async function symbolRows(
   return rows as unknown as SymbolRow[]
 }
 
-/** The query's vector as a pgvector literal, or null when the embedder failed: search then answers from the keyword channel (#458). */
-async function queryVector(query: string): Promise<string | null> {
+/**
+ * The query's vector as a pgvector literal, or null when the embedder failed: search then answers from the keyword channel (#458).
+ * A repeated query of the same account comes from the query cache (#684).
+ */
+async function queryVector(query: string, accountId: string | undefined): Promise<string | null> {
   try {
-    const [vector] = await embedder.embed([query])
-    return JSON.stringify(vector)
+    return JSON.stringify(await embedQuery(query, accountId ?? null))
   } catch (err) {
     console.warn('[search] query embedding failed; answering from the keyword channel:', err)
     return null
@@ -850,6 +854,8 @@ export async function findSymbols(
   options?: {
     kind?: string
     limit?: number
+    /** As `SearchNotesOptions.accountId`. */
+    accountId?: string
   },
 ): Promise<SearchResponse<SymbolSearchResult>> {
   if (repositoryIds.length === 0 || query.trim() === '') return { ...NOTHING, results: [] }
@@ -857,7 +863,7 @@ export async function findSymbols(
   const filter = symbolFilter({ kinds: options?.kind ? [options.kind] : undefined })
 
   const state = indexState([], repositoryIds)
-  const vec = await queryVector(query)
+  const vec = await queryVector(query, options?.accountId)
   const [keyword, vector] = await Promise.all([
     channel<[SymbolRow[]]>('keyword', [symbolRows(repositoryIds, query, 'keyword', undefined, filter)]),
     vec === null ? null : channel<[SymbolRow[]]>('vector', [symbolRows(repositoryIds, query, 'semantic', vec, filter)]),
@@ -916,7 +922,7 @@ export async function searchNotes(
   const symbolRepos = includeSymbols ? repositoryIds : []
   const state = indexState(vaultIds, repositoryIds)
   const [notes, files, symbols] = [noteFilter(filters), fileFilter(filters), symbolFilter(filters)]
-  const vec = await queryVector(query)
+  const vec = await queryVector(query, options.accountId)
   const [keyword, vector] = await Promise.all([
     channel<[Row[], Row[], SymbolRow[]]>('keyword', [
       noteRows(vaultIds, query, 'keyword', undefined, notes),

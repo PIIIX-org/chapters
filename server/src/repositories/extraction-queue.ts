@@ -14,6 +14,7 @@ import { hasOutline, outlineSections } from './outline.js'
 import {
   RESOLUTION_MANIFEST_PATTERN,
   buildResolutionContext,
+  lookupKey,
   resolveImportPath,
   type ResolutionContext,
 } from './import-resolution.js'
@@ -141,23 +142,45 @@ async function getRepoSiblings(repositoryId: string): Promise<RepoSiblings> {
 const RERESOLVE_BATCH = 1000
 
 /**
+ * A row's stored `lookup_keys`: each `lookupKey` prefixed with its
+ * repository's id (`<id>:<key>`), sorted. The GIN index then finds one
+ * repository's rows for a key many repositories share (`index`, `util`),
+ * not every repository's (#1008).
+ */
+function storedLookupKeys(repositoryId: string, keys: Iterable<string>): string[] {
+  return [...keys].map((key) => `${repositoryId}:${key}`).sort()
+}
+
+/**
  * Resolves a repository's stored import rows again from their raw
  * `target_path` (no re-parse), with its current files and manifests, in
  * keyset pages of `RERESOLVE_BATCH` rows and one UPDATE per page for the
- * rows whose target changed. `unresolved`: the rows without a target.
+ * rows whose target or `lookup_keys` changed. `unresolved`: the rows
+ * without a target or without keys (written before migration 0053).
  * `nonRelative`: every row whose specifier does not start with `.`, the
  * ones manifests decide (#466): a renamed package loses its old name's
- * edges as the new name gains them. Returns the rows that gained a target.
+ * edges as the new name gains them. `keys`: the rows that tried a path
+ * with one of these stored keys (`storedLookupKeys`, #1008), by the GIN index. `siblings` is
+ * read only once a page has rows. Returns the rows that gained a target.
  */
-async function reresolveRepositoryImports(repositoryId: string, rows: 'unresolved' | 'nonRelative'): Promise<number> {
-  const { pathToId, knownPaths, context } = await loadRepoSiblings(repositoryId)
-  const scope = rows === 'unresolved' ? sql`i.resolved_target_file_id IS NULL` : sql`i.target_path NOT LIKE '.%'`
+async function reresolveRepositoryImports(
+  repositoryId: string,
+  rows: 'unresolved' | 'nonRelative' | { keys: string[] },
+  siblings: () => Promise<RepoSiblings> = () => loadRepoSiblings(repositoryId),
+): Promise<number> {
+  const scope =
+    rows === 'unresolved'
+      ? sql`(i.resolved_target_file_id IS NULL OR i.lookup_keys IS NULL)`
+      : rows === 'nonRelative'
+        ? sql`i.target_path NOT LIKE '.%'`
+        : sql`i.lookup_keys && ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(rows.keys)}::jsonb))`
+  let loaded: RepoSiblings | undefined
   let after: { sourceFileId: string; targetPath: string } | null = null
   let gained = 0
   for (;;) {
     const page = (await db.execute(sql`
       SELECT i.source_file_id AS "sourceFileId", i.target_path AS "targetPath",
-        i.resolved_target_file_id AS "resolvedId", f.path AS "sourcePath"
+        i.resolved_target_file_id AS "resolvedId", i.lookup_keys AS "lookupKeys", f.path AS "sourcePath"
       FROM repository_file_imports i JOIN repository_files f ON f.id = i.source_file_id
       WHERE f.repository_id = ${repositoryId} AND ${scope}
         ${after ? sql`AND (i.source_file_id, i.target_path) > (${after.sourceFileId}::uuid, ${after.targetPath})` : sql``}
@@ -166,19 +189,26 @@ async function reresolveRepositoryImports(repositoryId: string, rows: 'unresolve
       sourceFileId: string
       targetPath: string
       resolvedId: string | null
+      lookupKeys: string[] | null
       sourcePath: string
     }>
+    if (page.length > 0) loaded ??= await siblings()
     const changed = page.flatMap((r) => {
-      const resolved = resolveImportPath(r.sourcePath, r.targetPath, knownPaths, context)
+      const { pathToId, knownPaths, context } = loaded!
+      const keys = new Set<string>()
+      const resolved = resolveImportPath(r.sourcePath, r.targetPath, knownPaths, context, keys)
       const target = (resolved && pathToId.get(resolved)) ?? null
-      return target === r.resolvedId ? [] : [{ source: r.sourceFileId, path: r.targetPath, target }]
+      const lookupKeys = storedLookupKeys(repositoryId, keys)
+      // A key is a repository id and a file name: no `/` in it.
+      if (target === r.resolvedId && r.lookupKeys?.join('/') === lookupKeys.join('/')) return []
+      if (target !== null && target !== r.resolvedId) gained += 1
+      return [{ source: r.sourceFileId, path: r.targetPath, target, keys: lookupKeys }]
     })
     if (changed.length > 0) {
       await db.execute(sql`
-        UPDATE repository_file_imports i SET resolved_target_file_id = u.target
-        FROM jsonb_to_recordset(${JSON.stringify(changed)}::jsonb) AS u(source uuid, path text, target uuid)
+        UPDATE repository_file_imports i SET resolved_target_file_id = u.target, lookup_keys = u.keys
+        FROM jsonb_to_recordset(${JSON.stringify(changed)}::jsonb) AS u(source uuid, path text, target uuid, keys text[])
         WHERE i.source_file_id = u.source AND i.target_path = u.path`)
-      gained += changed.filter((c) => c.target !== null).length
     }
     if (page.length < RERESOLVE_BATCH) break
     after = page.at(-1)!
@@ -186,31 +216,54 @@ async function reresolveRepositoryImports(repositoryId: string, rows: 'unresolve
   return gained
 }
 
-/** Repositories whose manifests a sync changed; the extraction worker re-resolves their imports (#466). */
-const manifestsChanged = new Set<string>()
+/** What syncs changed in a repository that the extraction worker re-resolves its imports for (#466, #1008). */
+interface ReresolutionRequest {
+  /** A manifest was created, changed or deleted. */
+  manifests: boolean
+  /** The paths created or deleted. */
+  paths: Set<string>
+}
+
+const reresolutionRequests = new Map<string, ReresolutionRequest>()
+
+function addReresolutionRequest(repositoryId: string, manifests: boolean, paths: Iterable<string>): void {
+  const request = reresolutionRequests.get(repositoryId) ?? { manifests: false, paths: new Set<string>() }
+  request.manifests ||= manifests
+  for (const path of paths) request.paths.add(path)
+  reresolutionRequests.set(repositoryId, request)
+}
 
 /**
- * A sync created, changed or deleted a package.json, pnpm-workspace.yaml or
- * tsconfig/jsconfig of this repository: before its next turn the extraction
- * worker re-resolves the repository's non-relative imports with the new
- * manifests and drops its cached ones, so no file it extracts afterwards
- * resolves with the old ones. In memory: after a crash the boot backfill
- * resolves what gained a target; a row that lost one keeps it until its
- * file is extracted again.
+ * A sync of this repository created or deleted `paths`, or created, changed
+ * or deleted a package.json, pnpm-workspace.yaml or tsconfig/jsconfig
+ * (`manifests`). Before its next turn the extraction worker drops the
+ * repository's cached file list and manifests, so no file it extracts
+ * afterwards resolves with the old ones, and re-resolves the import rows the
+ * change can affect: every non-relative row after a manifest change (#466);
+ * the rows that tried one of the paths (by `lookupKey`, #1008), so an import
+ * pushed before its target gains it, a higher-precedence file wins, and a
+ * deleted target gives way to the next candidate or to none. In memory:
+ * after a crash the boot backfill resolves what has no target; a row whose
+ * target the change replaced keeps it until its file is extracted again.
  */
-export function scheduleImportReresolution(repositoryId: string): void {
-  manifestsChanged.add(repositoryId)
+export function scheduleImportReresolution(repositoryId: string, change: { manifests: boolean; paths: Iterable<string> }): void {
+  addReresolutionRequest(repositoryId, change.manifests, change.paths)
   extraction.kick()
 }
 
-async function reresolveChangedManifests(): Promise<void> {
-  for (const repositoryId of manifestsChanged) {
-    manifestsChanged.delete(repositoryId)
+async function reresolveRequested(): Promise<void> {
+  for (const [repositoryId, request] of reresolutionRequests) {
+    reresolutionRequests.delete(repositoryId)
     repoSiblingsCache.delete(repositoryId)
+    const siblings = () => getRepoSiblings(repositoryId)
     try {
-      await reresolveRepositoryImports(repositoryId, 'nonRelative')
+      if (request.manifests) await reresolveRepositoryImports(repositoryId, 'nonRelative', siblings)
+      if (request.paths.size > 0) {
+        const keys = storedLookupKeys(repositoryId, new Set([...request.paths].map(lookupKey)))
+        await reresolveRepositoryImports(repositoryId, { keys }, siblings)
+      }
     } catch (err) {
-      manifestsChanged.add(repositoryId)
+      addReresolutionRequest(repositoryId, request.manifests, request.paths)
       throw err
     }
   }
@@ -257,13 +310,14 @@ export async function flushExtraction(): Promise<void> {
  * `target_path` (no re-parse), per repository with its manifests
  * (`reresolveRepositoryImports`). Extraction only re-runs when content
  * changes, so rows written by an older resolver stay unresolved until
- * this runs. Idempotent; called once at startup. Returns rows resolved.
+ * this runs; rows written before migration 0053 get their `lookup_keys`
+ * (#1008). Idempotent; called once at startup. Returns rows resolved.
  */
 export async function backfillUnresolvedImports(): Promise<number> {
   const repos = (await db.execute(sql`
     SELECT DISTINCT f.repository_id AS "repositoryId"
     FROM repository_file_imports i JOIN repository_files f ON f.id = i.source_file_id
-    WHERE i.resolved_target_file_id IS NULL`)) as unknown as Array<{ repositoryId: string }>
+    WHERE i.resolved_target_file_id IS NULL OR i.lookup_keys IS NULL`)) as unknown as Array<{ repositoryId: string }>
   let resolvedCount = 0
   for (const { repositoryId } of repos) resolvedCount += await reresolveRepositoryImports(repositoryId, 'unresolved')
   return resolvedCount
@@ -422,8 +476,8 @@ async function drainOnce(): Promise<void> {
   try {
     await failCrashedJobs(EXTRACTION_JOB, 'extraction', 'fileId')
     for (;;) {
-      // Between turns, so no file is mid-extraction with the manifests a sync replaced.
-      await reresolveChangedManifests()
+      // Between turns, so no file is mid-extraction with the files or manifests a sync replaced.
+      await reresolveRequested()
       const next = await nextRepository()
       if (!next) return
       lastTurn.set(next.repositoryId, ++turn)
@@ -496,8 +550,15 @@ async function processFile(fileId: string): Promise<void> {
   if (imports.length > 0) {
     const { pathToId, knownPaths, context } = await getRepoSiblings(row.repositoryId)
     for (const { target: targetPath, line } of imports) {
-      const resolved = resolveImportPath(row.path, targetPath, knownPaths, context)
-      importRows.push({ sourceFileId: fileId, targetPath, resolvedTargetFileId: resolved ? pathToId.get(resolved) : undefined, line })
+      const keys = new Set<string>()
+      const resolved = resolveImportPath(row.path, targetPath, knownPaths, context, keys)
+      importRows.push({
+        sourceFileId: fileId,
+        targetPath,
+        resolvedTargetFileId: resolved ? pathToId.get(resolved) : undefined,
+        line,
+        lookupKeys: storedLookupKeys(row.repositoryId, keys),
+      })
     }
   }
 
