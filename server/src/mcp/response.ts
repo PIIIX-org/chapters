@@ -146,6 +146,8 @@ export interface RankedSection<T> {
   ladder?: Ladder<T>
   /** No items: the answer has no key for it (a read's outline outside outline mode, #417). */
   omitEmpty?: boolean
+  /** A session reference (#683): shown as the value of `name` in place of the items; see `TextSection.ref`. */
+  ref?: Record<string, unknown>
 }
 
 /**
@@ -166,6 +168,12 @@ export interface RankedSection<T> {
  * not reach is `{...part, next}`, and one an earlier page finished is left
  * out. With `lines` false a part has no text and is shown as it is (a
  * target's error).
+ *
+ * `ref` (#683): a passage the session already got, shown in place of the
+ * text: as the value of `name`, or for a part as its item (`part` with
+ * `ref`'s keys). The page shows none of the text and counts it as shown
+ * whole (the session has it); `text` stays the content, so cursor guards
+ * are those of the answer without the reference.
  */
 export interface TextSection {
   name: string
@@ -175,6 +183,7 @@ export interface TextSection {
   firstLine?: number
   withheld?: boolean
   part?: Record<string, unknown>
+  ref?: Record<string, unknown>
 }
 
 export type Section =
@@ -185,6 +194,7 @@ export type Section =
 export const keyset = <T>(s: KeysetSection<T>): Section => ({ kind: 'keyset', ...(s as unknown as KeysetSection<never>) })
 export const ranked = <T>(s: RankedSection<T>): Section => ({ kind: 'ranked', ...(s as unknown as RankedSection<never>) })
 export const textSection = (s: TextSection): Section => ({ kind: 'text', ...s })
+const refOf = (section: Section) => (section.kind === 'keyset' ? undefined : section.ref)
 
 export interface Budgeted {
   /** Fields shown whole, before the sections. */
@@ -192,9 +202,19 @@ export interface Budgeted {
   sections: Section[]
   /** Arguments that would narrow this answer, e.g. `path: "docs"`; shown when something was left out. */
   narrow?: string[]
-  /** Runs after rendering with what was left out (read_note's last-read record, #864). */
-  rendered?: (truncated: Truncated) => Promise<void>
+  /**
+   * Runs after rendering with what was left out and what the page showed of
+   * each section (read_note's last-read record, #864; a session's memory, #683).
+   */
+  rendered?: (truncated: Truncated, seen: Seen) => Promise<void>
 }
+
+/**
+ * What a page showed whole of each section, in section order (#683): a
+ * text with `lines`, the range of its lines shown whole (`false`: none, or
+ * a text without lines); a list, `true` when every item was shown at `full`.
+ */
+export type Seen = Array<readonly [number, number] | boolean>
 
 /** A refused cursor; `code` is the error envelope's code (#439, ADR-004 §2.7). */
 export class CursorError extends Error {
@@ -216,10 +236,12 @@ const CursorJson = z
     f: z.string(),
     k: z.object({ s: z.number().int().min(0), p: z.union([z.string(), z.number(), z.null()]) }).strict(),
     g: z.string().optional(),
+    // Sections a session reference (#683) answered on the first page: the pages after it leave them out.
+    r: z.array(z.number().int().min(0)).optional(),
   })
   .strict()
 type CursorJson = z.infer<typeof CursorJson>
-export type CursorAt = CursorJson['k'] & { g?: string }
+export type CursorAt = CursorJson['k'] & { g?: string; r?: number[] }
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
 
@@ -233,12 +255,16 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? 'null'
 }
 
-/** Arguments a cursor is not bound to: the paging ones, and the ids the resolved scope stands for. */
-const UNBOUND_ARGS: Record<string, true> = { cursor: true, budget_tokens: true, vaultId: true, repositoryId: true, everywhere: true }
+/**
+ * Arguments a cursor is not bound to: the paging ones, the ids the resolved scope stands for, and `session_id`
+ * (#683), which changes how a first page sends what it shows, never what a later page shows (a cursor page is sent
+ * in full, and a section a reference replaced keeps its text for the guards).
+ */
+const UNBOUND_ARGS: Record<string, true> = { cursor: true, budget_tokens: true, vaultId: true, repositoryId: true, everywhere: true, session_id: true }
 
 /**
- * The arguments a cursor is bound to: every argument except `cursor` and
- * `budget_tokens` (a page may take another budget), with the ids the call
+ * The arguments a cursor is bound to: every argument except `cursor`,
+ * `budget_tokens` (a page may take another budget) and `session_id`, with the ids the call
  * resolved to in place of the id arguments, so a pinned connection's
  * cursor works with and without its pin's id.
  */
@@ -263,7 +289,8 @@ export function decodeCursor(cursor: string, tool: string, fingerprint: string):
   if (!parsed.success) throw invalid('not a cursor this server issued')
   if (parsed.data.t !== tool) throw invalid(`issued by ${parsed.data.t}`)
   if (parsed.data.f !== fingerprint) throw invalid('issued for other arguments')
-  return { ...parsed.data.k, ...(parsed.data.g === undefined ? {} : { g: parsed.data.g }) }
+  const { g, r } = parsed.data
+  return { ...parsed.data.k, ...(g === undefined ? {} : { g }), ...(r === undefined ? {} : { r }) }
 }
 
 /** Where a budgeted handler's answer starts. */
@@ -326,7 +353,10 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
   if (at !== null && at.s >= answer.sections.length) throw invalid('not a position of this answer')
   const s0 = at?.s ?? 0
   return answer.sections.map((section, i): Slot => {
-    if (i < s0) return { section, start: -1, avail: [], more: false, limit: 0 }
+    // A section the first page answered by a session reference (#683) is left out of every later page, as one an
+    // earlier page finished; on the first page it shows nothing of its content.
+    if (i < s0 || at?.r?.includes(i)) return { section, start: -1, avail: [], more: false, limit: 0 }
+    if (refOf(section)) return { section, start: 0, avail: [], more: false, limit: 0 }
     const here = at !== null && i === s0
     if (section.kind === 'keyset') {
       const limit = section.limit ?? Infinity
@@ -379,7 +409,7 @@ function fill(slots: Slot[], room: number, itemLength: (slot: number, i: number)
   let any = false
   let counted = false
   for (const [n, slot] of slots.entries()) {
-    if (slot.start < 0 || (slot.section.kind === 'text' && slot.section.withheld)) continue
+    if (slot.start < 0 || (slot.section.kind === 'text' && (slot.section.withheld || slot.section.ref))) continue
     if (slot.section.kind === 'text') {
       if (counted) continue
       const { text } = slot.section
@@ -476,11 +506,12 @@ export interface Block {
   text: string
 }
 
-/** A rendered answer: the JSON text, the blocks after it in order, and what was left out. */
+/** A rendered answer: the JSON text, the blocks after it in order, what was left out, and what each section showed whole. */
 export interface Rendered {
   text: string
   blocks: Block[]
   truncated: Truncated
+  seen: Seen
 }
 
 /**
@@ -573,9 +604,37 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   let withheld = false
   const values: Array<[string, unknown]> = []
   const parts = new Map<string, unknown[]>()
+  const partsOf = (name: string): unknown[] => {
+    let list = parts.get(name)
+    if (!list) {
+      list = []
+      parts.set(name, list)
+      values.push([name, list])
+    }
+    return list
+  }
   const blocks: Block[] = []
+  const seen: Seen = plan.map(() => false)
+  // Every cursor of this answer carries the sections answered by reference, on this page or the first (#683).
+  const refs = [...(ctx.at?.r ?? []), ...plan.flatMap((slot, n) => (refOf(slot.section) ? [n] : []))]
+  const cursorOf = (k: CursorJson['k'], g?: string) =>
+    encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k, ...(g === undefined ? {} : { g }), ...(refs.length > 0 ? { r: refs } : {}) })
   for (const [n, slot] of plan.entries()) {
     const { section } = slot
+    if (ctx.at?.r?.includes(n)) continue
+    const ref = refOf(section)
+    if (ref) {
+      // A session reference (#683), in place of the content: counted as shown whole (the session has it), nothing
+      // dropped or continued.
+      if (section.kind === 'text' && section.part) partsOf(section.name).push({ ...section.part, ...ref })
+      else values.push([section.name, ref])
+      const whole = section.kind === 'text' ? totalLines(section.text) : section.items.length
+      const before = counts.total[section.name]
+      counts.shown[section.name] = (counts.shown[section.name] ?? 0) + whole
+      counts.total[section.name] = (typeof before === 'number' ? before : 0) + whole
+      counts.dropped[section.name] ??= 0
+      continue
+    }
     if (section.kind === 'text') {
       if (slot.start < 0 && (section.part || section.withheld)) continue
       if (section.withheld) {
@@ -583,7 +642,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
         counts.shown[section.name] = 0
         counts.total[section.name] = total
         counts.dropped[section.name] = total
-        if (cursor === null && total > 0) cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: 0 }, g: guardOf(section.text) })
+        if (cursor === null && total > 0) cursor = cursorOf({ s: n, p: 0 }, guardOf(section.text))
         anyDropped ||= total > 0
         withheld = true
         continue
@@ -595,13 +654,14 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
       const total = totalLines(rest)
       // The first line this page shows (or would), in the document's numbering.
       const first = (section.firstLine ?? 1) + newlines(section.text, slot.start)
+      if (section.lines && chunk !== '') {
+        // The lines shown whole: not a line split at the page's start or end.
+        const from = slot.start === 0 || section.text[slot.start - 1] === '\n' ? first : first + 1
+        const to = first + totalLines(chunk) - (chunk.length === rest.length || chunk.endsWith('\n') ? 1 : 2)
+        if (to >= from) seen[n] = [from, to]
+      }
       if (section.part) {
-        let list = parts.get(section.name)
-        if (!list) {
-          list = []
-          parts.set(section.name, list)
-          values.push([section.name, list])
-        }
+        const list = partsOf(section.name)
         const last = (section.firstLine ?? 1) + totalLines(section.text) - 1
         if (!section.lines) list.push(section.part)
         else if (chunk === '') list.push({ ...section.part, next: `${first}-${last}` })
@@ -631,7 +691,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
         if (section.lines && partial && chunk !== '') out.lines = [first, first + totalLines(chunk) - 1]
       }
       if (cursor === null && !counted && chunk.length < rest.length) {
-        cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p: slot.start + chunk.length }, g: guardOf(section.text) })
+        cursor = cursorOf({ s: n, p: slot.start + chunk.length }, guardOf(section.text))
       }
       anyDropped ||= chunk.length < rest.length
       continue
@@ -651,6 +711,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
     const form = formOf(section, ctx.level)
     values.push([section.name, form ? items.map((item) => form(item as never)) : items])
     counts.shown[section.name] = items.length
+    seen[n] = ctx.level === 'full' && slot.start === 0 && items.length === slot.avail.length && !slot.more
     counts.dropped[section.name] = exact - items.length
     anyDropped ||= exact > items.length
     anyMore ||= slot.start >= 0 && slot.more
@@ -659,10 +720,10 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
     if (section.kind === 'keyset') {
       const last = items.length - 1
       const p: Resume = last >= 0 ? section.resume(items[last] as never, last) : n === ctx.at?.s ? ctx.at.p : null
-      cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p } })
+      cursor = cursorOf({ s: n, p })
     } else {
       const p = slot.start + items.length
-      cursor = encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k: { s: n, p }, g: rankedGuard(answer.sections, n, p) })
+      cursor = cursorOf({ s: n, p }, rankedGuard(answer.sections, n, p))
     }
   }
   for (const [name, value] of values) out[name] = value
@@ -670,5 +731,5 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   const whole = cursor === null && !anyDropped && !anyMore && ctx.level === 'full'
   const truncated: Truncated = whole ? false : { ...counts, level: withheld && ctx.level === 'full' ? 'locations' : ctx.level, cursor, narrow: ctx.narrow }
   out.truncated = truncated
-  return { text: JSON.stringify(out), blocks, truncated }
+  return { text: JSON.stringify(out), blocks, truncated, seen }
 }
