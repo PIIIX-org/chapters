@@ -14,6 +14,7 @@ import { buildApp } from '../src/app.js'
 import { sql } from '../src/db/client.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 type Args = Record<string, unknown>
@@ -39,7 +40,7 @@ interface Account {
 let owner: Account
 let other: Account
 
-async function rest(cookie: string, method: 'GET' | 'POST' | 'PUT', url: string, body?: Args) {
+async function rest(cookie: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, body?: Args) {
   return app.inject({ method, url, headers: { cookie }, ...(body ? { body } : {}) })
 }
 
@@ -259,6 +260,48 @@ describe('usage report (#678)', () => {
     const refused = await call(other.admin, 'usage_report', { scope: 'instance' })
     expect(refused.isError).toBe(true)
     expect(JSON.stringify(refused.json)).toMatch(/PERMISSION_REQUIRED/)
+  })
+
+  it('lists a note or file read before a fallback only while the account can still reach it', async () => {
+    // B (other) shares a vault and a repository with A (owner); A reads a note and a file, then reports a fallback.
+    const shared = await createNote(other, 'harmless', 'nothing to see')
+    const share = await ok(other.cookie, 'POST', `/api/vaults/${other.vaultId}/shares`, { granteeType: 'user', granteeId: owner.id, permission: 'read' })
+    const repositoryId = (await ok(other.cookie, 'POST', '/api/repositories', { name: 'usage-shared', ingestionMethod: 'agent_push' })).id as string
+    await syncRepositoryFiles(repositoryId, [{ path: 'src/plan.ts', content: 'export const plan = 1\n' }], ['src/plan.ts'])
+    const repoShare = await ok(other.cookie, 'POST', `/api/repositories/${repositoryId}/shares`, { granteeType: 'user', granteeId: owner.id })
+    const read = await call(owner.admin, 'read_note', { vaultId: other.vaultId, path: 'docs/harmless' })
+    expect(read.isError, JSON.stringify(read.json)).toBe(false)
+    const file = await call(owner.admin, 'read_file', { repositoryId, path: 'src/plan.ts' })
+    expect(file.isError, JSON.stringify(file.json)).toBe(false)
+    await owner.admin.notification({ method: 'notifications/elara/client_event', params: { event: 'local_fallback' } })
+    const paths = (r: Json) => ((r.fallbacks as Json).notes_read_before as Array<{ path: string }>).map((n) => n.path)
+    const reachable = await report(owner.cookie)
+    expect(paths(reachable)).toEqual(expect.arrayContaining(['docs/harmless', 'src/plan.ts']))
+
+    // B revokes both shares and moves the note to a telling path: A's report names neither, by id or path.
+    expect((await rest(other.cookie, 'DELETE', `/api/vaults/${other.vaultId}/shares/${share.id as string}`)).statusCode).toBe(200)
+    expect((await rest(other.cookie, 'DELETE', `/api/repositories/${repositoryId}/shares/${repoShare.id as string}`)).statusCode).toBe(200)
+    const moved = await call(other.admin, 'rename_note', { vaultId: other.vaultId, from: 'docs/harmless', toName: 'docs/layoffs-acme-2027' })
+    expect(moved.isError, JSON.stringify(moved.json)).toBe(false)
+    for (const r of [await report(owner.cookie), (await call(owner.admin, 'usage_report', {})).json]) {
+      const text = JSON.stringify(r)
+      for (const secret of ['layoffs-acme-2027', 'docs/harmless', shared, 'src/plan.ts', repositoryId]) expect(text, secret).not.toContain(secret)
+    }
+  })
+
+  it('keeps query hashes out of the instance view and never counts one query across accounts', async () => {
+    // The owner searched MISSING_QUERY twice; the other account now searches it once.
+    await call(other.admin, 'search', { vaultId: other.vaultId, query: MISSING_QUERY })
+    const mine = (await report(owner.cookie)).searches as { zero_result_queries: Array<{ query_hash: string; count: number }> }
+    const hash = mine.zero_result_queries[0]!.query_hash
+    expect(hash).toMatch(/^[0-9a-f]{16}$/)
+    const instance = (await report(owner.cookie, 'instance')).searches as { zero_result_queries: Json[]; no_useful_hit_queries: Json[] }
+    const listed = [...instance.zero_result_queries, ...instance.no_useful_hit_queries]
+    expect(JSON.stringify(instance)).not.toContain(hash)
+    for (const q of listed) expect(Object.keys(q)).not.toContain('query_hash')
+    // Grouped per account: the owner's two and the other's one stay apart (no count of 3 an admin could probe).
+    const sameShape = instance.zero_result_queries.filter((q) => q.length === MISSING_QUERY.length).map((q) => q.count)
+    expect(sameShape.sort()).toEqual([1, 2])
   })
 
   it('lists usage_report only on admin-profile tokens', async () => {
