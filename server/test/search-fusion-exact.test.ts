@@ -343,4 +343,16 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     expect(indexHit).toBeDefined()
     expect(indexHit!.score).toBeLessThan(0.1)
   })
+
+  it('a relaxed row never counts as exact, even when its name is an identifier term of the query (#455 part 2)', async () => {
+    // No file holds `zzznomatchword`, so the AND query is empty and `requestQueueRetry` can only arrive as a
+    // relaxed row (its name matches the rarest term). The embedder fails so no vector leg returns it as a
+    // non-relaxed row; it must rank by its fusion rank and not take EXACT_BOOST.
+    vi.spyOn(embedder, 'embed').mockRejectedValue(new Error('embedder down'))
+    const res = await findSymbols([repoId], 'requestQueueRetry zzznomatchword', { limit: 10 })
+    expect(res.retrieval_mode).toBe('keyword_only')
+    const hit = res.results.find((r) => r.name === 'requestQueueRetry')
+    expect(hit).toBeDefined()
+    expect(hit!.score).toBeLessThan(0.1)
+  })
 })
