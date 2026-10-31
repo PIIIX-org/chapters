@@ -121,7 +121,7 @@ chapters/
 │   │   ├── app.ts                  # Fastify assembly: plugin/route registration order
 │   │   ├── index.ts                # entry point — boots HTTP API + collab relay
 │   │   ├── config.ts               # single source for all env-derived config
-│   │   ├── monitoring/             # in-process request/job metrics + error reports, GET /api/admin/monitoring
+│   │   ├── monitoring/             # in-process request/job metrics + error reports, GET /api/admin/monitoring and /metrics (Prometheus)
 │   │   ├── lifecycle.ts            # process identity for /health; DATA_DIR/lifecycle.json shutdown marker
 │   │   ├── db/                     # Drizzle schema + migrations + client
 │   │   ├── auth/                   # sessions, passwords, lockout, MFA, admin, bootstrap
@@ -4468,12 +4468,97 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     Production uptime monitor); 5xx and failed jobs once per streak, not
     per run. Single-process, like the queues (§9); lost on restart, which
     `/health` reports.
+  - **`GET /api/admin/metrics`** (`routes.ts`, `metricsText()`): the same
+    store in the Prometheus text format (`text/plain; version=0.0.4`),
+    same access rule as `/monitoring`, `cache-control: no-store`, no
+    database read on a scrape. Every metric is prefixed `elara_`, durations
+    and ages are in seconds, sizes in bytes. A scrape before the first
+    sample reads `0` for the sampled gauges and `0` in their
+    `*_sample_timestamp_seconds`. The metrics and the alert each is for:
+    - `elara_requests_total`, `elara_request_server_errors_total`,
+      `elara_job_failures_total` (counters), `elara_jobs_total{kind,outcome}`
+      (`outcome` = `succeeded` / `failed` / `repeated`, the monitoring
+      kinds above), `elara_conflict_copies_total`,
+      `elara_process_start_time_seconds`: the `/monitoring` totals.
+      Alert: `rate(elara_request_server_errors_total[5m]) > 0`,
+      `increase(elara_job_failures_total[15m]) > 0`; a reset of
+      `elara_process_start_time_seconds` is a restart (`/health` says how
+      the previous one ended).
+    - `elara_process_resident_memory_bytes`, `elara_process_heap_used_bytes`,
+      `elara_process_heap_total_bytes`, `elara_process_external_memory_bytes`,
+      `elara_process_array_buffers_bytes` (gauges, `process.memoryUsage()`),
+      `elara_process_memory_sample_timestamp_seconds`. Sampled every
+      `SAMPLE_INTERVAL_MS` (15 s) by `sampler.ts`, started by `index.ts`
+      after the job pollers. Alert: RSS above ~75 % of the container's
+      memory limit for 10 min (the OOM kill `/health` reports as an
+      `unclean` shutdown comes next); heap used growing across an hour
+      with no load change is a leak.
+    - `elara_event_loop_lag_p50_seconds`, `_p99_seconds`, `_max_seconds`,
+      `_mean_seconds` (gauges), `elara_event_loop_lag_sample_timestamp_seconds`:
+      `perf_hooks.monitorEventLoopDelay` (10 ms resolution: its timer's
+      own period is part of every delay it measures, so an idle loop reads
+      about 0.011 s, not 0), read and **reset at every sample**, so each
+      value describes the last 15 s, not the uptime. Alert: p99 above
+      0.2 s for 2 samples (something synchronous holds the loop: a large
+      extraction, a graph assembly; every request and the collab relay wait
+      with it); max above 1 s once.
+    - `elara_jobs_pending{kind}` and `elara_jobs_oldest_pending_age_seconds{kind}`
+      (gauges, `kind` = `jobs.kind`: `extract`, `embed_note`,
+      `compact_revisions`, `note_links`, `semantic_edges`, `store_*`),
+      `elara_jobs_sample_timestamp_seconds`. One query per sample,
+      `SELECT kind, count(*), min(created_at) FROM jobs WHERE done_at IS
+      NULL GROUP BY kind` over the `jobs_pending` index; running jobs and
+      jobs in backoff count as pending. A failed read keeps the previous
+      sample and logs the error's name. Alert: oldest age above 15 min for
+      `extract` or `embed_note` while `elara_jobs_total{outcome="succeeded"}`
+      for that kind does not move (a stuck or dead drainer, an embedder
+      that cannot load); pending rising for 30 min is a backlog the
+      instance cannot drain at its rate (a version bump re-deriving
+      everything is expected to show this once).
+    - `elara_search_leg_duration_seconds{leg}` (histogram, buckets
+      `DURATION_BUCKETS_MS` 1 ms to 60 s plus `+Inf`): `search.ts` times
+      each leg that runs a query (`note_keyword`, `code_keyword`,
+      `symbol_keyword`, `note_vector`, `code_vector`, `symbol_vector`;
+      a leg skipped for an empty scope or a filter no row can match is not
+      observed; a leg that throws is observed, then fails its channel as
+      before), `query_embed` (`embedQuery`, cache hits included) and
+      `fusion` (the RRF merge and sort, from the legs' return to the cut).
+      Alert: `histogram_quantile(0.95, rate(..._bucket{leg="note_vector"}[5m]))`
+      above 0.5 s (HNSW index lost or `ef_search` scanning a huge scope),
+      any keyword leg p95 above 1 s (the relaxation ladder or the trigram
+      leg over an unindexed column), `query_embed` p95 above 0.3 s (the
+      embedder's worker is starved), `fusion` p99 above 50 ms (the legs
+      return far more rows than `CANDIDATES`).
+    - `elara_index_stage_duration_seconds{stage}` (histogram, same
+      buckets): `extraction-queue.ts` `processFile` times, per file,
+      `extract` (from the row read to the blocks, their edge drafts and
+      keyword fields; parse, outline, imports), `embed` (the
+      `embedder.embed` call, observed only when the file has vectors to
+      compute: a re-extraction that reuses every vector has no `embed`
+      sample) and `write` (the transaction: imports, block set, keyword
+      columns, code edges; not the semantic-edge refresh after it). Alert:
+      `write` p95 above 2 s (lock contention on `lockRepositoryEdges` or a
+      bloated `blocks` table), `extract` p99 above 10 s (a pathological
+      file; `looksMinified` should have caught it), `embed` p50 above 5 s
+      (the embedder runs on a CPU it shares with the request path).
+    - Overhead: an observation is a bucket scan over 16 bounds and three
+      updates on preallocated arrays (`observe`), one `performance.now()`
+      pair per leg or stage; nothing is allocated per row. Instruments
+      reset only with the process (`resetInstruments` is test-only).
+    - Not exported: the per-route latency window (it is a sliding 15-minute
+      window, not a counter; `/monitoring` has it) and the error ring.
   - Tests: `monitoring.test.ts` (a route error, an embedding, extraction,
     git sync and collab store failure each carrying a marker and a
     `ghp_` secret: reported with the right fields, neither in the endpoint
     nor the log lines; a repository that keeps failing reported once;
     access rules), `monitoring-metrics.test.ts` (bounds, percentiles,
-    format checks, repeats); lab `monitoring-alerts`.
+    format checks, repeats; the exposition format, histogram buckets,
+    process and event-loop samples, queue gauges),
+    `monitoring-prometheus.test.ts` (`/api/admin/metrics` access; the leg
+    histograms move under a `searchNotes` and a `findSymbols`, the stage
+    histograms under an extraction job, the queue gauges from a pending
+    `jobs` row, the sampler's first sample and stop); lab
+    `monitoring-alerts`.
 - **`server/.env.example`**: every environment variable, documented, in
   one place. For compose, copy it to `.env` at the **repo root** (that is
   the file compose interpolates); for a direct run, `server/.env` with

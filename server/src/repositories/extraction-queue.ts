@@ -30,7 +30,7 @@ import {
   type ResolutionContext,
 } from './import-resolution.js'
 import { detectLanguage } from './language.js'
-import { recordJob } from '../monitoring/metrics.js'
+import { observeIndexStage, recordJob } from '../monitoring/metrics.js'
 import {
   JOB_PRIORITY,
   MAX_JOB_ATTEMPTS,
@@ -547,6 +547,9 @@ export const extractionWork = { processFile }
 async function processFile(fileId: string): Promise<void> {
   const row = (await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, fileId)))[0]
   if (!row) return
+  // Stage timers for `elara_index_stage_duration_seconds` (metrics.ts): extract until the blocks and their edge
+  // drafts exist, embed around the embedder call (only when there is something to embed), write around the transaction.
+  const extractStarted = performance.now()
   const extractorVersion = EXTRACTOR_VERSION
   const embedderId = EMBEDDER_ID
   const chunkVersion = CHUNK_VERSION
@@ -588,6 +591,7 @@ async function processFile(fileId: string): Promise<void> {
   // The fields the code keyword leg ranks above the body (#455 part 2): the path's and the symbol names' lexemes.
   const fields = fieldKeywords(row.path, fileBlocks.flatMap((b) => (b.kind === 'symbol' ? [b.innerPath] : [])))
   const head = keywordVector(fields) ?? sql`''::tsvector`
+  observeIndexStage('extract', performance.now() - extractStarted)
 
   // Per-file budget (#496): the file-level block and N of its symbols get a
   // vector, the rest are stored without one (null embed_key), so one file
@@ -624,7 +628,9 @@ async function processFile(fileId: string): Promise<void> {
     else toEmbed.push(i)
   }
   if (toEmbed.length > 0) {
+    const embedStarted = performance.now()
     const embedded = await embedder.embed(toEmbed.map((i) => fileBlocks[i]!.embedText))
+    observeIndexStage('embed', performance.now() - embedStarted)
     toEmbed.forEach((i, k) => vectors.set(i, embedded[k]!))
   }
   failpoint('extract.after-embed-before-write')
@@ -654,6 +660,7 @@ async function processFile(fileId: string): Promise<void> {
   const currentKeys = new Set(keys.values())
   const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !currentKeys.has(k))
   const newKeys = toEmbed.map((i) => keys.get(i)!)
+  const writeStarted = performance.now()
   const refreshJob = await db.transaction(async (tx) => {
     // Before the row lock, as every code edge writer takes them (code-edges.ts).
     await lockRepositoryEdges(tx, row.repositoryId)
@@ -689,5 +696,6 @@ async function processFile(fileId: string): Promise<void> {
     failpoint('extract.before-commit')
     return job
   })
+  observeIndexStage('write', performance.now() - writeStarted)
   if (refreshJob !== null) await runSemanticEdgeRefresh(refreshJob, 'code', fileId, newKeys)
 }
