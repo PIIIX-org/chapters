@@ -3774,23 +3774,38 @@ and no note or query text is stored.
   `scope=account` (default): the caller's account, its tokens' calls and
   the live notes of the vaults it owns. `scope=instance`: for the same
   admin roles; every account as aggregates: no account id, token or
-  session hash, note id or path. Sections: `totals` and `tools` (calls,
-  response tokens, errors, zero-result searches per tool over 30 days;
-  p50 / p95 latency over the raw 7); `sessions` (calls and tokens per tool
-  per session, the latest 20, and their count; a session is the
-  `session_id` sent, else the token, split by 30 minutes without a call);
-  `searches` (total, `zero_result`, `with_hits`, `no_useful_hit`, and the
-  top 20 zero-result and no-useful-hit queries as `{tool, query_hash,
-  length, language, filters, count}`); `never_read` (live notes of the
-  account's vaults no token of the account read in the 7 days, `count` and
-  the first 50 `{id, vault_id, path}` by path; instance: `count` of live
-  notes no token read); `fallbacks` (client-reported events, and the notes
-  and files the same token read in the 5 calls before each). **"Useful
-  hit" is a proxy**: a search with hits counts as `no_useful_hit` when the
-  same token reads none of its hit ids in its next 5 calls
-  (`USEFUL_WITHIN_CALLS`). It over-counts misses (a snippet can be the
-  answer; a read through another token is not seen); the server has no
-  better signal. The report is ids, counts and salted hashes only.
+  session hash, query hash, note id or path. Sections: `totals` and
+  `tools` (calls, response tokens, errors, zero-result searches per tool
+  over 30 days; p50 / p95 latency over the raw 7); `sessions` (calls and
+  tokens per tool per session, the latest 20, and their count; a session
+  is the `session_id` sent, else the token, split by 30 minutes without a
+  call); `searches` (total, `zero_result`, `with_hits`, `no_useful_hit`,
+  and the top 20 zero-result and no-useful-hit queries as `{tool,
+  query_hash, length, language, filters, count}`, grouped per account;
+  the instance view leaves `query_hash` out, because one salt serves the
+  instance and a hash there would let an admin test a guessed phrase
+  against other accounts' searches, and never adds one account's count to
+  another's); `never_read` (live notes of the account's vaults no token of
+  the account read in the 7 days, `count` and the first 50 `{id, vault_id,
+  path}` by path; instance: `count` of live notes no token read);
+  `fallbacks` (client-reported events, and the notes and files the same
+  token read in the 5 calls before each, listed by id and current path
+  only in the vaults and repositories the account can reach now,
+  `listAccessibleVaults` / `listAccessibleRepositories`: a revoked share
+  hides them; instance: counts only). **"Useful hit" is a proxy**: a
+  search with hits counts as `no_useful_hit` when the same token reads
+  none of its hit ids in its next 5 calls (`USEFUL_WITHIN_CALLS`). It
+  over-counts misses (a snippet can be the answer; a read through another
+  token is not seen); the server has no better signal. The report is ids,
+  counts and salted hashes only.
+- **Report queries.** "Next 5 calls" and "5 calls before" are window
+  frames over each token's calls in id order (`array_agg(target_id) OVER
+  (PARTITION BY token ORDER BY id ROWS ...)`), so each section is one sort
+  of the window's rows and no query joins the calls to themselves (a
+  correlated `EXISTS` did, and ran for minutes at 70,000 rows). The
+  queries run in one transaction with `statement_timeout`
+  `REPORT_TIMEOUT_MS` (30 s); past it, REST answers 503 and the tool
+  `BUSY` (retryable), so a report never holds a request indefinitely.
 - **Surface.** REST above; MCP `usage_report` (`scope: "account" |
   "instance"`), account-scoped, `read` capability, admin profile only, so
   the reader and writer `tools/list` do not grow (admin `tools/list`
@@ -3805,9 +3820,10 @@ and no note or query text is stored.
   path, query text or token in any stored row; zero-result and unread-hit
   searches; never-read notes by id and path; sessions; a client-reported
   fallback; account and instance separation over REST and MCP; the tool on
-  admin tokens only; retention). Lab: `aa-usage-report-on` and
-  `zzz-usage-report` (lab.md) run the fast tier with it on and report the
-  run's numbers.
+  admin tokens only; a revoked share hides the notes and files read before
+  a fallback; no query hash in the instance view and no count across
+  accounts; retention). Lab: `aa-usage-report-on` and `zzz-usage-report`
+  (lab.md) run the fast tier with it on and report the run's numbers.
 - **Cost** (`pnpm -C server profile-usage`, 2026-10-26, a laptop shared
   with other suites, load average 14-39). On the call path the recorder
   adds 5.5-7.5 µs at p50 and 13-36 µs at p95 (`withUsage` around a handler
@@ -3818,7 +3834,15 @@ and no note or query text is stored.
   database time per call, in one INSERT per second. Storage per 10,000
   calls of a read_note 50 % / search 30 % / list_vaults 20 % mix, heap and
   indexes: 2.2 MB with no hit ids per search, 2.4-2.5 MB with 5, 3.4-3.5 MB
-  with 20.
+  with 20. The report itself (`pnpm -C server profile-usage-report`,
+  2026-10-31, same laptop, load average 15-20; 20 accounts, 10,000 notes,
+  the 7-day window full, one account making half the calls), median /
+  slowest of 3: at 70,000 raw rows, instance 425 / 582 ms, the heavy
+  account (35,000 rows) 292 / 304 ms, a light one 46 / 47 ms; at 500,000
+  rows, instance 4.2 / 5.5 s, the heavy account (250,000 rows) 1.3 / 1.3 s,
+  a light one 0.19 / 0.37 s. It grows about linearly with the window's
+  rows, so the 30 s timeout is reached near 3 million raw rows in 7 days
+  (about 400,000 calls a day).
 
 ---
 
