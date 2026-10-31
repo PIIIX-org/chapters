@@ -1469,13 +1469,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     RRF ranks of the rows it keeps do not change.
   - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
     merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a
-    fixed window of 60 candidates per leg (`RRF_WINDOW = 60`, widened from 30).
-    Exact and identifier matches always outrank fuzzy-only hits across legs: an
-    exact match receives `EXACT_BOOST = 1`, guaranteeing that exact symbol
-    matches (by name or spelling set from `identifiers.ts`), exact file matches
-    (by path or basename), and exact note matches (by path or frontmatter title)
-    outrank all fuzzy-only vector or snippet hits, while preserving RRF ordering
-    among exact matches and among fuzzy matches.
+    fixed window of 30 candidates per leg (`RRF_WINDOW = 30`, the population
+    the relevance gate calibrates on). A row that is an exact match receives
+    `EXACT_BOOST = 1`, so it outranks every fuzzy-only vector or snippet hit
+    across legs. Exact means: a symbol name, a file path or basename (with its
+    extension), or a note path or title equals the WHOLE query; or equals a
+    query term that is itself identifier- or file-shaped (camelCase,
+    snake_case, dotted, `a::b`, or `path/file.ext`), by any spelling from
+    `identifiers.ts`. A plain word of a multi-word query never grants the
+    boost, so a one-word name hit cannot outrank rows that match every word
+    (the #1014 failure). The boost is a pure function of the row, and
+    `byScore`'s tie-breaks are unchanged.
   - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a
     repeated query text comes from the in-process query-embedding cache
     (§5.11) without running the embedder.
