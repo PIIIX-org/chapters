@@ -10,7 +10,8 @@ Two long-lived branches, everything else is short-lived.
 - Feature branches: `<type>/<short-topic>` off `dev` — types: `feat`,
   `fix`, `ci`, `docs`, `chore`, `test` (`<type>-<topic>` is checked the
   same way). Deleted after merge. `bot/` is for branches a workflow writes
-  (`bot/state-md`, see **STATE.md** under CI); nobody else pushes there.
+  (`bot/state-md`, see **STATE.md** under CI; `bot/review-archive`, see
+  **Review records** under the review gate); nobody else pushes there.
 - Never commit directly to `dev` or `prod`. No exceptions, including docs.
 
 ## The change cycle
@@ -23,7 +24,9 @@ Every change — code, spec, doc — follows the same loop:
    `Co-Authored-By: <model> <email>` trailer (for example
    `Co-Authored-By: Claude Opus <noreply@anthropic.com>`), the only record
    that an agent wrote it (step 7); the `attribution` check (see CI) flags
-   commits without one.
+   commits without one. After `pnpm install` the hook
+   `.githooks/prepare-commit-msg` adds that trailer to any commit that
+   lacks one (see **Commit attribution** under CI).
 3. **Open a PR** targeting `dev`. Fill in the template
    (`.github/pull_request_template.md`): Problem, Change, **Evidence**,
    Not covered, `Closes #N`. Evidence is links, not adjectives: the CI
@@ -403,6 +406,22 @@ fails (the API lists no more). Unit tests:
 required check: it reports on every PR, and making it required is an
 owner decision (add `attribution` to both branches' required checks).
 
+The hook **`.githooks/prepare-commit-msg`** adds the trailer so the check
+has nothing to flag. The root `prepare` script
+(`git config core.hooksPath .githooks`, run by `pnpm install`; a no-op
+outside a git checkout, so the Docker build is unaffected) installs it for
+the clone. On every commit (`-m`, editor, merge, squash, amend) it runs
+`git interpret-trailers --if-exists doNothing --trailer 'Co-Authored-By:
+Claude Opus <noreply@anthropic.com>'`, so a message that already carries
+a `Co-Authored-By` trailer in any case (another model, say) is left alone,
+and an empty message about to open in the editor gets the trailer two lines
+down, so the subject stays its own paragraph. The owner committing by hand
+from the shared account turns it off for that clone with
+`git config chapters.coauthor none` (and labels the PR `human-only`);
+`git config chapters.coauthor 'Name <email>'` names another model. The
+hook is a convenience for local commits only: commits made elsewhere (web
+UI, other machines) are still checked by `attribution`.
+
 **STATE.md** (`.github/workflows/state-md.yml`, #582). The block of
 `docs/agents/STATE.md` between `<!-- state:generated:start -->` and
 `<!-- state:generated:end -->` is built from GitHub data by
@@ -424,15 +443,21 @@ always gives the same text.
   changed. Don't run it in every fix PR: a PR's own `Closes #N` changes
   the data when it merges, so the block it commits is already stale, and
   parallel PRs would all conflict on the block under strict protection.
-  The `refresh` job catches up after each merge. Without `--write` the
+  The nightly `refresh` job catches up. Without `--write` the
   script only prints the block and says whether the file is current. It
   keeps the file's line endings.
-- **refresh** job: daily (05:17 UTC), on every push to `dev` and by
-  `gh workflow run state-md.yml --ref dev`. When `dev`'s block is stale,
-  it writes the diff to the job summary and force-pushes `bot/state-md`
-  (one commit on top of `dev` by `github-actions[bot]`, changing only
-  STATE.md). When `dev` is current, it closes the bot PR and deletes the
-  branch.
+- **refresh** job: daily at 02:00 UTC and by
+  `gh workflow run state-md.yml --ref dev`; not per push. `dev` takes no
+  direct commit (ruleset 24421063 requires a PR with no bypass actor and
+  classic protection enforces the required checks on admins too), so every
+  refresh is a bot PR with a full CI cycle; running it on every push to
+  `dev` meant up to a dozen such cycles a day for the same block (eleven
+  on 2026-10-31). One refresh a day batches a day's merges into one PR;
+  dispatch it by hand when the block must be current sooner. When `dev`'s
+  block is stale, it writes the diff to the job summary and force-pushes
+  `bot/state-md` (one commit on top of `dev` by `github-actions[bot]`,
+  changing only STATE.md). When `dev` is current, it closes the bot PR
+  and deletes the branch.
   - With the secret **`STATE_MD_TOKEN`** (a secret of the Actions
     environment `state-md`, whose deployment branches are limited to
     `dev`; the job runs in that environment) it pushes with that
@@ -444,8 +469,8 @@ always gives the same text.
     (skipped: not a `fix` title), `plan`, `lab` and `bench-gate` (both
     skipped: no image or search change) like any PR; `attribution`
     skips `bot/` branches. Review it like any PR (the diff must touch
-    only the block) and merge it. The merge is a push to `dev`, which
-    regenerates the same block and opens nothing.
+    only the block) and merge it. A merge between two refreshes leaves the
+    block one day behind at most; the next refresh rebases the bot branch.
   - Without the secret it pushes with `GITHUB_TOKEN` and ends with a
     **warning**, not a failure (`dev` is fine; only the block is behind),
     with the diff, the PR body and the commands in its summary. Pushes
@@ -786,6 +811,32 @@ The rules:
 
 If the status looks stale, re-run the newest **Review verdict** run, or
 edit the PR body.
+
+**Review records.** A review's record is a file
+`docs/reviews/<pr>-<head sha>.md` (`# Review of #<pr> — <title>`, `Head
+reviewed:`, `Verdict:`, then the findings), committed to the PR branch with
+a `review: <title> (#<pr> at <sha>)` commit before the verdict is posted,
+and linked from the verdict by commit sha
+(`https://github.com/PIIIX-org/chapters/blob/<sha>/docs/reviews/<file>`,
+or the `tree/<sha>/docs/reviews` directory). One PR can have several (one
+per head reviewed). The top-level directory holds the records of **open and
+recently merged PRs only**: once a PR has been merged (or closed without
+merging) for more than **7 days**, its records move to
+`docs/reviews/archive/YYYY-MM/`, the month it was merged or closed. A
+verdict link pins a sha, so it keeps working after the move; never link a
+record by branch. `.github/scripts/review-archive.mjs` does the move
+(`node .github/scripts/review-archive.mjs --write`; without `--write` it
+lists what is due; `--days` changes the age; token and repository as for
+`state-md.mjs`) and the workflow **`review-archive.yml`** runs it every
+Monday at 02:30 UTC (or by `gh workflow run review-archive.yml --ref
+dev`): with `STATE_MD_TOKEN` it force-pushes `bot/review-archive` (one
+commit of renames on top of `dev`; the job fails if the commit is anything
+but `R100` moves into `docs/reviews/archive/`) and opens or updates the PR
+`docs(reviews): archive review records of PRs merged over 7 days ago
+(bot)`, reviewed and merged like the STATE.md bot PR; without the secret
+it only reports, for the same reason as there. When nothing is due it
+closes that PR and deletes the branch. Unit tests:
+`.github/scripts/review-archive.test.mjs`, run by `checks`.
 
 What the gate does and does not guarantee. By policy everything is done
 from the `Taha-Mahmoodi` account (step 7 of the change cycle), and GitHub
