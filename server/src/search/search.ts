@@ -725,36 +725,65 @@ function isExactNote(path: string, frontmatter: unknown, ctx: ExactContext): boo
   return false
 }
 
-const CODE_KEYWORDS: Record<string, true> = {
-  function: true, class: true, method: true, interface: true, struct: true, enum: true, trait: true, impl: true,
-  type: true, const: true, let: true, var: true, def: true, fn: true, func: true, val: true,
-  import: true, export: true, package: true, namespace: true, module: true, async: true, await: true,
-  return: true, extends: true, implements: true,
+const PROSE_TERMS: Record<string, true> = {
+  github: true, webassembly: true, javascript: true, typescript: true, postgresql: true, mongodb: true,
+  graphql: true, devops: true, openai: true, chatgpt: true, anthropic: true, claude: true, gemini: true,
+  vscode: true, nextjs: true, nuxtjs: true, nodejs: true, fastapi: true, dockerhub: true, macos: true,
+  ios: true, ipados: true, watchos: true, iphone: true, ipad: true, imac: true, quicktime: true, webkit: true,
+  apis: true, uuids: true, urls: true, uris: true, sdks: true, adrs: true, prs: true, ips: true, vms: true, dbs: true, cpus: true, gpus: true,
+  'and/or': true, 'curl/wget': true, 'node/v8': true, 'input/output': true, 'read/write': true, 'client/server': true,
+  'true/false': true, 'yes/no': true, 'on/off': true, 'up/down': true, 'in/out': true, 'either/or': true, 'before/after': true,
 }
 
-const CODE_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|cpp|cc|cxx|h|hpp|rb|php|cs|swift|kt|scala|sh|bash|sql|json|ya?ml|toml)\b/i
-const PATH_SEPARATOR = /[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+/
-const CAMEL_OR_PASCAL = /(?:\p{Ll}\p{Lu}|\p{Lu}{2,}\p{Ll})/u
-const SNAKE_CASE = /[a-zA-Z0-9]+_[a-zA-Z0-9_]+/
-const SCOPE_OR_DOLLAR = /::|\$|\(\)/
+const CODE_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|cpp|cc|cxx|h|hpp|rb|php|cs|swift|kt|scala|sh|bash|sql)$/i
+const CODE_PATH = /(?:^|\/)(?:src|server|client|lib|crates|pkg|internal)\/[a-zA-Z0-9_.-]+/i
+const DECL_KEYWORD = /\b(?:function|def|fn|class|interface|struct|enum)\s+[a-zA-Z_$][a-zA-Z0-9_$]*/i
+const CAMEL_IDENTIFIER = /(?:\p{Ll}\p{Lu}|\p{Lu}{2,}\p{Ll})/u
+const SNAKE_IDENTIFIER = /^[a-zA-Z0-9]+_[a-zA-Z0-9_]+$/
 
 /**
  * Classifies whether a query is code-shaped (#457) based on explicit syntactic
- * features (identifiers, extensions, path separators, declaration keywords).
- * Pure prose queries remain untouched.
+ * features (code file extensions, paths in source trees, declaration constructs).
+ * Architectural rationale questions ('why') and pure prose queries remain untouched.
  */
 export function isCodeShaped(query: string): boolean {
+  const qLower = query.trim().toLowerCase()
+  if (/^(?:why\b|how\s+come\b)/i.test(qLower)) return false
+  if (DECL_KEYWORD.test(query)) return true
+
   const tokens = query.trim().split(/\s+/).filter(Boolean)
+  let signals = 0
+  let strongSignal = false
+
   for (const token of tokens) {
-    const cleaned = token.replace(/^[^\p{L}\p{N}_$]+|[^\p{L}\p{N}_$]+$/gu, '').toLowerCase()
-    if (cleaned in CODE_KEYWORDS) return true
-    if (CODE_EXTENSIONS.test(token)) return true
-    if (PATH_SEPARATOR.test(token)) return true
-    if (CAMEL_OR_PASCAL.test(token)) return true
-    if (SNAKE_CASE.test(token)) return true
-    if (SCOPE_OR_DOLLAR.test(token)) return true
+    const cleaned = token.replace(/^[^\p{L}\p{N}_$]+|[^\p{L}\p{N}_$]+$/gu, '')
+    const cleanedLower = cleaned.toLowerCase()
+    const tokenLower = token.toLowerCase()
+
+    if (cleanedLower in PROSE_TERMS || tokenLower in PROSE_TERMS) continue
+
+    if (CODE_EXTENSIONS.test(cleaned)) {
+      strongSignal = true
+      signals += 2
+      continue
+    }
+
+    if (CODE_PATH.test(token)) {
+      strongSignal = true
+      signals += 2
+      continue
+    }
+
+    if (CAMEL_IDENTIFIER.test(cleaned) && !cleanedLower.endsWith('s') && cleaned.length >= 4) {
+      signals += 1
+    }
+
+    if (SNAKE_IDENTIFIER.test(cleaned) && cleaned.length >= 5) {
+      signals += 1
+    }
   }
-  return false
+
+  return strongSignal || signals >= 2
 }
 
 /** Whether a hit represents documentation/prose rather than executable source code (#457). */
@@ -762,8 +791,8 @@ function isDocHit(resourceType: ResourceType, path: string): boolean {
   if (resourceType === 'note') return true
   if (resourceType === 'symbol') return false
   const lower = path.toLowerCase()
-  if (/\.(?:md|markdown|rst|txt|adoc|org)$/i.test(lower)) return true
-  if (/^(?:docs?|plans?|wiki|specs?)\//i.test(lower)) return true
+  if (/\.(?:md|markdown|mdx|rst|txt|adoc|org)$/i.test(lower)) return true
+  if (/(?:^|\/)(?:docs?|plans?|wiki|specs?)(?:\/|$)/i.test(lower)) return true
   const base = lower.split('/').pop() ?? lower
   if (/^(?:readme|changelog|contributing|license|notice)(?:\..+)?$/i.test(base)) return true
   return false
@@ -820,7 +849,7 @@ export async function findSymbols(
           startLine: row.start_line,
           endLine: row.end_line,
           snippet: row.snippet || null,
-          score: contribution + (exact ? EXACT_BOOST : 0) + (isCodeShaped(query) ? CODE_BOOST : 0),
+          score: contribution + (exact ? EXACT_BOOST : 0),
         })
       }
     })
