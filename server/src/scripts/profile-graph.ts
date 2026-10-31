@@ -128,7 +128,7 @@ async function seed(n: number): Promise<{ userId: string; vaultId: string; noteI
 
 async function teardown(userId: string, vaultId: string, noteIds: string[]): Promise<void> {
   // One statement: the ids are one array parameter, and no note is queued as the holder of another.
-  await removeSemanticNodes(db, 'note', noteIds)
+  await removeSemanticNodes(db, 'note', vaultId, noteIds)
   await db.delete(vaults).where(eq(vaults.id, vaultId)) // cascades notes + note_links
   await db.delete(users).where(eq(users.id, userId))
 }

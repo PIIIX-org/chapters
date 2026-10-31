@@ -476,7 +476,13 @@ collab socket and live view it opened closes at once (#498, §5.7).
   A transfer (here and in `admin-routes.ts`) deletes the vault's notes'
   note↔code semantic edges in its transaction: they joined the previous
   owner's repositories (D10, #461); it queues the recompute of the nodes
-  whose lists change (#1015, `transferVaultSemanticEdges`, §5.6).
+  whose lists change (#1015, `transferVaultSemanticEdges`, §5.6). Trash
+  and restore (REST `DELETE /vaults/:id`, `POST /vaults/:id/restore`, MCP
+  `delete_vault`, `restore_vault`) go through `trashVaultRecord` and
+  `restoreVaultRecord`: the trash removes the vault's notes' semantic
+  edges and queues the files that held one (`removeSemanticNodes`), the
+  restore queues each live note's refresh (`queueSemanticEdgeRestore`),
+  each in the same transaction (#1025, §5.6).
 - **`team-routes.ts`**: team CRUD, membership management. Adding/
   removing a member notifies both that user and every owner of a vault
   currently shared with the team.
@@ -1661,9 +1667,31 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   advisory lock on the node (`hashtextextended('semantic_edges:<type>:<id>')`,
   taken by the statement that reads its scope; writes to the note go on)
   from reading its vectors to writing its rows, so two recomputes of one
-  node never leave the older vectors' rows; it locks the note row
-  (`FOR SHARE`, against a purge) only after the searches, so a long note's
-  recompute never holds off writes to it.
+  node never leave the older vectors' rows.
+  **Locking** (#1026, #1027): every vault and repository has a second
+  advisory lock (`semantic_edges:container:<id>`). A writer of lists takes
+  it shared, in id order, in one statement after its node locks, and holds
+  it to its commit: a recompute on every container of its scope and of its
+  rows' targets, in the statement that takes its node lock; a merge on the
+  containers of its lists, of their rows' targets and of the node, in the
+  statement that takes the lists' locks, after them. A writer's write
+  statement keeps only rows whose node and target are still live and in
+  each other's reach (`inReach`), read in its own snapshot, so a delete or
+  a vault move that committed while the writer waited for the locks is
+  seen; a reach that grew meanwhile (a vault restored or moved in) is
+  filled by that change's refreshes and queued recomputes. A delete
+  (`removeSemanticNodes`, a vault transfer) takes its one container's lock
+  exclusively before it removes rows or reads holders, so a writer in
+  flight commits first and its rows are there to remove, and a writer that
+  starts later finds the node gone. An embed's refresh takes its node's
+  container exclusively in one statement outside any transaction before it
+  reads any list (`awaitSearches`): a recompute in flight that read the
+  blocks before the embed committed writes its list first, so the refresh
+  sees it among the holders. No deadlock: a delete takes one container and
+  waits on no writer's lock; a writer takes the container locks after its
+  node locks and then only reads and writes rows whose ends are in them;
+  the refresh's exclusive lock is released at once. Edits to a note never
+  wait for its recompute.
   **The stored rows are a function of the content, not of the order it was
   embedded in** (#1007, ADR-004 §1.3): each node's rows are its true top-k.
   The search per query vector reads its 100 nearest blocks; when the far
@@ -1692,9 +1720,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   gigabytes for a long note). It enters when it has fewer than K rows, a
   K-th below the similarity, or a K-th of the same similarity whose
   target's tie key comes after the node's. The lists it enters are locked
-  in id order (up to 256 per transaction) and changed in one statement: the
-  new row in, the last row out; a list whose last row names a node that is
-  gone is recomputed instead. Measured on the chapters tree at 65bdb534
+  in id order (up to 256 per type per transaction), then the container
+  locks; the merge statement reads the node and each list again
+  (`inReach`): one trashed, purged or moved meanwhile enters no list. Each
+  list is changed in one statement: the new
+  row in, the last row out. A list whose last row names a node that is
+  gone, or that holds the node by then (a recompute that started after the
+  holders were read; dropping its last row for a row it has would leave
+  K-1 rows, #1027), is recomputed instead. Measured on the chapters tree at 65bdb534
   (1,187 files and 800 notes of one owner, fake embedder at threshold 0.2,
   K 8, the shared test Postgres), base → this, back to back: 54 → 39 ms per
   file of the first push (1 recompute and 7.1 lists merged into per file),
@@ -1710,21 +1743,25 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   of a full rebuild, row for row; with the HNSW plan a few differ (HNSW
   recall, not order). **A delete leaves the rows of the content without
   the node** (#1015): every delete path calls `removeSemanticNodes(tx,
-  type, ids)` in its own transaction (a note's trash and purge, the files
-  a sync removes, a repository delete through `deleteRepositoryRecord`
-  for REST and MCP, a vault purge), one statement that deletes the nodes'
-  rows and the rows naming them and queues the rebuild job of each other
-  node whose rows named one (the holders: about K per node on average,
-  each queued once, so a sync that removes 1,000 files queues one job
-  set); the edge worker runs them after the commit (`kickSemanticEdges`).
-  The enqueue leaves a pending job that has not started (it reads the
-  committed state) and runs again one that finished or started (a new id,
-  so the run in progress completes nothing). A note in the trash has no
-  rows and is in no list (its recompute writes none); a restore queues
-  its refresh with every embed key it has (`queueSemanticEdgeRestore`),
-  since its kept blocks give its embed no new vector, so it re-enters the
-  lists it belongs in as #1007's merge does for a new node. A vault
-  transfer (`transferVaultSemanticEdges`) deletes the vault's notes'
+  type, container, ids)` in its own transaction (a note's trash and purge,
+  the files a sync removes, a repository delete through
+  `deleteRepositoryRecord` for REST and MCP, a vault's trash and purge),
+  which takes the container's lock (above), then in one statement deletes
+  the nodes' rows and the rows naming them and queues the rebuild job of
+  each other node whose rows named one (the holders: about K per node on
+  average, each queued once, so a sync that removes 1,000 files queues one
+  job set); the edge worker runs them after the commit
+  (`kickSemanticEdges`). The enqueue leaves a pending job that has not
+  started (it reads the committed state) and runs again one that finished
+  or started (a new id, so the run in progress completes nothing). A note
+  in the trash, or in a vault in the trash (#1025), has no rows and is in
+  no list: it is in no node's reach and reaches none (its recompute writes
+  none, and a file's reach is the owner's live vaults). A note's restore
+  queues its refresh with every embed key it has
+  (`queueSemanticEdgeRestore`), since its kept blocks give its embed no new
+  vector, so it re-enters the lists it belongs in as #1007's merge does for
+  a new node; a vault's restore queues that of each of its live notes. A
+  vault transfer (`transferVaultSemanticEdges`) deletes the vault's notes'
   note↔code rows and queues the previous owner's files that held one, the
   vault's live notes and the new owner's files. Measured on the chapters
   tree at 6be9626c (1,246 files and 800 notes cut from its markdown, one
@@ -1732,9 +1769,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   base → this, the write and then its jobs: a sync removing 1 file 18 → 12
   ms, then 3 holders recomputed in 24 ms; one removing 100 files 16 → 18
   ms, then 359 holders in 2.6 s (7.2 ms each); trashing a note 14 → 12 ms,
-  then 2 holders in 14 ms. Trashing or restoring a vault recomputes
-  nothing (#1025); a recompute in flight while a node it holds is deleted
-  can still write that row (#1026).
+  then 2 holders in 14 ms.
   Neighbours come from the node's scope only (D10 on #930, #461): of its
   own type, its vault (a note) or its repository (a file), never another
   one, even of the same owner; of the other type, the owner's repositories

@@ -165,7 +165,7 @@ export async function syncRepositoryFiles(
         )
         .returning({ id: repositoryFiles.id })
       const deletedNow = deleted.map((r) => r.id)
-      await removeSemanticNodes(tx, 'code', deletedNow)
+      await removeSemanticNodes(tx, 'code', repositoryId, deletedNow)
       const gone = new Set(deletedNow)
       await reresolveAfterChange(tx, repositoryId, deletedNow, [...definitions.values()], near.filter((id) => !gone.has(id)))
     })
@@ -202,7 +202,7 @@ export async function syncRepositoryFiles(
  */
 export async function deleteRepositoryRecord(repositoryId: string): Promise<void> {
   await db.transaction(async (tx) => {
-    await removeSemanticNodes(tx, 'code', sql`SELECT id FROM repository_files WHERE repository_id = ${repositoryId}`)
+    await removeSemanticNodes(tx, 'code', repositoryId, sql`SELECT id FROM repository_files WHERE repository_id = ${repositoryId}`)
     await tx.delete(repositories).where(eq(repositories.id, repositoryId))
   })
   kickSemanticEdges()

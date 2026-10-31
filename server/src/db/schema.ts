@@ -700,9 +700,9 @@ export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
  * The rows are the true top-k of the content whatever the order it was
  * embedded in (#1007, search/semantic-edges.ts), and after a delete, those of
  * the content without the node (#1015: `removeSemanticNodes`; a note in the
- * trash has none). `similarity` holds the double the search computed
- * (migration 0050; `real` before), so an embed compares its own similarity
- * with a list's last row exactly.
+ * trash, or in a vault in the trash, has none, #1025). `similarity` holds
+ * the double the search computed (migration 0050; `real` before), so an
+ * embed compares its own similarity with a list's last row exactly.
  */
 export const semanticEdges = pgTable(
   'semantic_edges',
