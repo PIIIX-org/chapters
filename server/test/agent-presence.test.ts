@@ -200,4 +200,32 @@ describe('agents in editor presence (#481)', () => {
     expect(watcher.awareness!.getStates().get(impostorId)).toEqual({ user: { id: 'u-x', name: 'mallory' } })
     expect(agentsSeenBy(watcher)).toEqual([])
   })
+
+  it('a person cannot remove an agent: the relay ignores the removal', async () => {
+    const path = await freshNote()
+    const watcher = await open(path)
+    const editor = await open(path)
+
+    await call('edit_note', { path, body: 'Agent was here.' })
+    await seen(watcher, () => agentsSeenBy(watcher).length === 1)
+    expect(agentsSeenBy(watcher)).toEqual([{ agent: { name: AGENT_NAME, activity: 'editing' } }])
+
+    const [agentId] = [...watcher.awareness!.getStates().entries()]
+      .filter(([id, state]) => id !== watcher.awareness!.clientID && state.agent !== undefined)
+      .map(([id]) => id)
+    expect(agentId).toBeDefined()
+
+    // An editor attempts to remove the agent's client id
+    editor.awareness!.states.delete(agentId!)
+    editor.awareness!.emit('update', [{ added: [], updated: [], removed: [agentId!] }, 'timeout'])
+    // Then updates its own state so we have a deterministic signal that the relay processed the update
+    editor.awareness!.setLocalState({ user: { id: 'u-editor', name: 'alice' }, ping: 1 })
+    await seen(
+      watcher,
+      () => (watcher.awareness!.getStates().get(editor.awareness!.clientID) as { ping?: number } | undefined)?.ping === 1,
+    )
+
+    // The agent must stay present on watcher
+    expect(agentsSeenBy(watcher)).toEqual([{ agent: { name: AGENT_NAME, activity: 'editing' } }])
+  })
 })
