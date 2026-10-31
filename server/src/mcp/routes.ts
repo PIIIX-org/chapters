@@ -6,6 +6,7 @@ import { buildMcpServer } from './server.js'
 import { checkRateLimit } from './rate-limit.js'
 import { rateLimitedError } from './errors.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
+import { acceptClientEvents } from '../usage/routes.js'
 
 /**
  * MCP endpoint: stateless Streamable HTTP — a fresh server+transport per
@@ -42,6 +43,8 @@ export function mcpRoutes(app: FastifyInstance) {
     }
 
     const server = buildMcpServer(auth)
+    // A client's report of what the server cannot see (#678): a notification, recorded while the usage report is on.
+    acceptClientEvents(server, auth)
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

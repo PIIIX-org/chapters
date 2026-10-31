@@ -33,6 +33,7 @@ import { repositoryWebhookRoutes } from './repositories/git-webhook-routes.js'
 import { repositoryFileContentRoutes } from './repositories/file-content-routes.js'
 import { recordRequest } from './monitoring/metrics.js'
 import { monitoringRoutes } from './monitoring/routes.js'
+import { usageRoutes } from './usage/routes.js'
 
 export async function buildApp(
   opts: { clientDist?: string; logger?: FastifyServerOptions['logger']; trustProxy?: TrustProxy } = {},
@@ -201,6 +202,7 @@ export async function buildApp(
       await api.register(async (a) => adminRoutes(a), { prefix: '/admin' })
       await api.register(async (a) => adminDashboardRoutes(a), { prefix: '/admin' })
       await api.register(async (a) => monitoringRoutes(a), { prefix: '/admin' })
+      await api.register(async (a) => usageRoutes(a), { prefix: '/usage' })
     },
     { prefix: '/api' },
   )
