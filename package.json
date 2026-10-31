@@ -6,6 +6,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "prepare": "sh .githooks/install.sh",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

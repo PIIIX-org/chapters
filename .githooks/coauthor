@@ -1,0 +1,39 @@
+#!/bin/sh
+# Appends the agent attribution trailer to a commit message that has no
+# `Co-Authored-By:` trailer yet (docs/agents/github-workflow.md, change
+# cycle step 2; the `attribution` check fails PRs whose commits lack one).
+# Called by .githooks/commit-msg and .githooks/prepare-commit-msg with the
+# message file as $1; not a hook itself. Installed by the root `prepare`
+# script (.githooks/install.sh), which sets `core.hooksPath .githooks`.
+#
+# A human committing from the shared account turns it off for that clone:
+#   git config chapters.coauthor none
+# Another model or address: git config chapters.coauthor 'Name <email>'.
+#
+# The file still has git's comment lines and, under `commit -v`, the
+# scissors line and the diff below it. Steps: cut at the scissors line (git
+# drops that part itself); if what remains strips to nothing, leave the file
+# alone, so an editor commit the user left empty is still aborted by git;
+# else add the trailer with `git interpret-trailers`, which puts it after
+# the last paragraph (joining an existing trailer block such as
+# Signed-off-by; before trailing comment lines and a `Conflicts:` block) and,
+# with `--if-exists doNothing`, adds nothing when a trailer with that key, in
+# any case, is already there.
+
+set -e
+
+coauthor=$(git config --get chapters.coauthor || true)
+[ -z "$coauthor" ] && coauthor='Claude Opus <noreply@anthropic.com>'
+[ "$coauthor" = none ] && exit 0
+
+msg=$(mktemp)
+trap 'rm -f "$msg"' EXIT
+# Everything above the scissors line (`# ------------------------ >8 ---`,
+# with the configured comment string): what git keeps of a `commit -v` buffer.
+awk '/^[^[:alnum:][:space:]]+ ------------------------ >8 ------------------------$/ { exit } { print }' "$1" > "$msg"
+
+[ -n "$(git stripspace --strip-comments < "$msg")" ] || exit 0
+
+git interpret-trailers --in-place --if-exists doNothing \
+  --trailer "Co-Authored-By: $coauthor" -- "$msg"
+cat "$msg" > "$1"
