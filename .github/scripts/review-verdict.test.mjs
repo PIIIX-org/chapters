@@ -3,7 +3,17 @@
 
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { contextFor, evaluate, gateFor, headReviewed, headSince, reviewLinks, verdictOf } from './review-verdict.mjs'
+import {
+  contextFor,
+  evaluate,
+  gateFor,
+  headReviewed,
+  headSince,
+  mergeGroupPr,
+  queueContains,
+  reviewLinks,
+  verdictOf,
+} from './review-verdict.mjs'
 
 const HEAD = 'a1b2c3d'.padEnd(40, 'e')
 const OLD = 'b'.repeat(40)
@@ -88,6 +98,28 @@ describe('gateFor', () => {
   it('skips other bases and closed PRs', () => {
     assert.match(gateFor(prTo('lab/elara-study'), REPO).skip, /no review gate/)
     assert.match(gateFor(prTo('prod', REPO, 'closed'), REPO).skip, /is closed/)
+  })
+})
+
+describe('merge queue', () => {
+  const BASE = 'c'.repeat(40)
+  it('reads the PR number of the queue branch; the sha in it is the base, not the head', () => {
+    assert.equal(mergeGroupPr(`refs/heads/gh-readonly-queue/dev/pr-1050-${BASE}`), 1050)
+    assert.equal(mergeGroupPr(`refs/heads/gh-readonly-queue/prod/pr-7-${BASE.slice(0, 7)}`), 7)
+    assert.equal(mergeGroupPr('refs/heads/fix/pr-12-abcdef0'), null)
+    assert.equal(mergeGroupPr(`refs/heads/gh-readonly-queue/dev/pr-12`), null)
+    assert.equal(mergeGroupPr(undefined), null)
+  })
+  it('accepts a queue merge commit whose second parent is the PR head', () => {
+    assert.deepEqual(queueContains({ parents: [{ sha: BASE }, { sha: HEAD }], baseSha: BASE, prHead: HEAD }), { ok: true })
+    assert.deepEqual(queueContains({ parents: [{ sha: HEAD }, { sha: BASE }], baseSha: BASE, prHead: HEAD }), { ok: true })
+  })
+  it('refuses a queue commit built from another head, naming it', () => {
+    assert.deepEqual(queueContains({ parents: [{ sha: BASE }, { sha: OLD }], baseSha: BASE, prHead: HEAD }), { ok: false, contains: OLD })
+  })
+  it('cannot verify a commit that is not a merge and says so', () => {
+    assert.deepEqual(queueContains({ parents: [{ sha: BASE }], baseSha: BASE, prHead: HEAD }), { ok: true, unverified: true })
+    assert.deepEqual(queueContains({ parents: [], baseSha: BASE, prHead: HEAD }), { ok: true, unverified: true })
   })
 })
 

@@ -174,8 +174,8 @@ because Elara's ranks move between identical instances (#623).
 
 | tier | when | suites | time |
 |---|---|---|---|
-| chapters | PRs to `dev` touching `server/src/{search,mcp,repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, `benchmarks/`, `lab/bootstrap.ts`, `lab/lib/`, `lab/docker-compose.lab.yml`, the workflow, the action or `bench-gate.mjs` | `chapters` (29 questions) | about 9 min (instances in parallel) |
-| all | nightly, every PR to `prod`, by hand (`-f bench=all`) | all five suites (109 questions) | about 50 min (instances in parallel) |
+| chapters | PRs to `dev` touching `server/src/{repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, `lab/bootstrap.ts`, `lab/lib/`, `lab/docker-compose.lab.yml`, the workflow, the action, `lab-plan.mjs` or `bench-gate.mjs` (rules: `.github/scripts/lab-plan.mjs`) | `chapters` (29 questions) | 4 to 10 min (instances in parallel; job budget 45) |
+| all | PRs to `dev` touching `server/src/search/`, `server/src/mcp/` or `benchmarks/` (markdown excepted; the gate then also requires every suite's golds, `--require-golds`); nightly, every PR to `prod`, by hand (`-f bench=all`) | all five suites (109 questions) | 80 to 170 min (instances in parallel; job budget 240; the matrix is fail-fast) |
 
 Dispatches default to `bench=none`, so a hand-started lab run costs no
 extra runner. `benchmarks/run.ts` reads `lab-env.json`, refuses any base

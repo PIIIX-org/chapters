@@ -10,7 +10,7 @@ name: Elara lab
 #   fast  PRs to dev that change what goes into the image or the lab:
 #         server/**, client/**, lab/**, package.json, pnpm-lock.yaml,
 #         pnpm-workspace.yaml, tsconfig.base.json, Dockerfile, .dockerignore,
-#         docker-compose.yml, this workflow, the gate; pushes to lab/**.
+#         docker-compose.yml, this workflow, the plan, the gate; pushes to lab/**.
 #         Client collab code (useCollabDoc, useCodeMirrorEditor, api/collab)
 #         adds the browser test to the fast tier; backup or restore code
 #         (server/src/export/, the restore CLI, atomic-write, the test itself)
@@ -28,11 +28,25 @@ name: Elara lab
 # lab instances of their own, in parallel with the lab job; bench-gate takes
 # the per-metric median of the three and gates it against
 # benchmarks/baseline.json (.github/scripts/bench-gate.mjs):
-#   chapters  PRs to dev that change search, extraction, MCP, schema, server
-#             start-up/config, the image's dependencies or the benchmark (~9 min)
-#   all       nightly on dev, every PR to prod, and by hand (-f bench=...)
+#   chapters  PRs to dev that change extraction, schema, server start-up/
+#             config, the image's dependencies or the lab plumbing (~9 min)
+#   all       PRs to dev that change search or MCP (server/src/search/**,
+#             server/src/mcp/**: what shapes a response and its tokens) or
+#             the benchmark (benchmarks/**); the gate then also requires every
+#             suite to reach at least the base's golds (--require-golds).
+#             Also nightly on dev, every PR to prod, and by hand (-f bench=...)
+#             (80 to 170 min: embedding throughput varies between runners).
+# The path rules are .github/scripts/lab-plan.mjs (unit-tested). Every job
+# has a timeout-minutes; the bench matrix is fail-fast, so a failed or
+# timed-out instance cancels the others and bench-gate reports the missing
+# artifact at once instead of after the slowest instance.
 # Docs: benchmarks/README.md. The bench-session job (#683) runs only on a
 # dispatch with -f bench_session=plain|session.
+#
+# Merge queue: `merge_group` runs the same plan for the PR the queue branch
+# names (gh-readonly-queue/<base>/pr-<N>-<sha>), so `plan`, `lab` and
+# `bench-gate` report on the queue's temporary commit; HEAD^1 of that commit
+# is the queue's base, so the base copies of the gates run as on PR events.
 # The real-model job (#851) runs server/test/embedding-worker.test.ts with
 # ELARA_REAL_MODEL_TESTS=1 (the real bge-small model, cached by actions/cache)
 # with the nightly and with a full-tier dispatch.
@@ -45,6 +59,8 @@ name: Elara lab
 # a dry run (prints what it would post), and no other event runs it.
 on:
   pull_request:
+    branches: [dev, prod]
+  merge_group:
     branches: [dev, prod]
   push:
     branches: ['lab/**']
@@ -95,6 +111,7 @@ permissions:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
@@ -102,63 +119,76 @@ jobs:
       tier: ${{ steps.plan.outputs.tier }}
       also: ${{ steps.plan.outputs.also }}
       bench: ${{ steps.plan.outputs.bench }}
+      golds: ${{ steps.plan.outputs.golds }}
+      pr: ${{ steps.plan.outputs.pr }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # On a PR the base and number come from the event; on a merge_group
+      # event from the queue branch gh-readonly-queue/<base>/pr-<N>-<sha>.
+      # The path rules live in .github/scripts/lab-plan.mjs (unit-tested).
       - name: Pick the tier
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE_REF: ${{ github.base_ref }}
+          BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
           PR: ${{ github.event.pull_request.number }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
           INPUT_TIER: ${{ inputs.tier }}
           INPUT_BENCH: ${{ inputs.bench }}
         run: |
+          set -euo pipefail
           also=
+          golds=false
+          BASE_REF="${BASE_REF#refs/heads/}"
+          if [ -n "$QUEUE_REF" ]; then
+            PR=$(printf '%s' "$QUEUE_REF" | sed -En 's#^.*/pr-([0-9]+)-[0-9a-f]+$#\1#p')
+            [ -n "$PR" ] || { echo "cannot read the PR number from merge group ref $QUEUE_REF"; exit 1; }
+          fi
           case "$GITHUB_EVENT_NAME" in
             schedule) tier=full; bench=all ;;
             workflow_dispatch) tier="$INPUT_TIER"; bench="$INPUT_BENCH" ;;
             push) tier=fast; bench=none ;;
-            pull_request)
+            pull_request|merge_group)
               if [ "$BASE_REF" = prod ]; then
                 tier=full
                 bench=all
               else
                 gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
-                # Everything the Dockerfile copies into the image, plus the lab itself.
-                if grep -Eq '^(server/|client/|lab/|skills/elara/references/mcp-tools\.md$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.base\.json$|Dockerfile$|\.dockerignore$|docker-compose\.yml$|\.github/workflows/elara-lab\.yml$|\.github/actions/lab-instance/|\.github/scripts/lab-gate\.mjs$)' "$RUNNER_TEMP/changed.txt"; then
-                  tier=fast
-                else
-                  tier=none
-                fi
-                # The browser test is the only one that drives the client's collab code.
-                if grep -Eq '^client/src/(hooks/(useCollabDoc|useCodeMirrorEditor)|api/collab)' "$RUNNER_TEMP/changed.txt"; then
-                  also=browser
-                fi
-                # Backup -> restore into a fresh database -> verify counts, digests and content (#493).
-                if grep -Eq '^(server/src/export/|server/src/scripts/restore-backup\.ts$|server/src/notes/atomic-write\.ts$|lab/tests/backup-restore\.test\.ts$)' "$RUNNER_TEMP/changed.txt"; then
-                  also="${also:+$also,}backup-restore"
-                fi
-                # What decides what an agent gets back: search, extraction and
-                # ingestion, MCP responses, the schema, the image's dependencies,
-                # and the benchmark with its lab plumbing.
-                if grep -Eq '^(server/src/(search|mcp|repositories|db)/|server/src/(config|index|app)\.ts$|server/drizzle/|server/package\.json$|pnpm-lock\.yaml$|Dockerfile$|docker-compose\.yml$|benchmarks/|lab/bootstrap\.ts$|lab/lib/|lab/docker-compose\.lab\.yml$|\.github/workflows/elara-lab\.yml$|\.github/actions/lab-instance/|\.github/scripts/bench-gate\.mjs$)' "$RUNNER_TEMP/changed.txt"; then
-                  bench=chapters
-                else
-                  bench=none
-                fi
+                node .github/scripts/lab-plan.mjs --files "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/plan.txt"
+                cat "$RUNNER_TEMP/plan.txt"
+                tier=$(sed -n 's/^tier=//p' "$RUNNER_TEMP/plan.txt")
+                also=$(sed -n 's/^also=//p' "$RUNNER_TEMP/plan.txt")
+                bench=$(sed -n 's/^bench=//p' "$RUNNER_TEMP/plan.txt")
+                golds=$(sed -n 's/^golds=//p' "$RUNNER_TEMP/plan.txt")
               fi
               ;;
             *) echo "unexpected event $GITHUB_EVENT_NAME"; exit 1 ;;
           esac
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "also=$also" >> "$GITHUB_OUTPUT"
-          echo "bench=$bench" >> "$GITHUB_OUTPUT"
-          echo "Lab tier: **$tier**${also:+ + $also}, benchmark: **$bench** ($GITHUB_EVENT_NAME)" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "tier=$tier"
+            echo "also=$also"
+            echo "bench=$bench"
+            echo "golds=$golds"
+            echo "pr=${PR:-}"
+          } >> "$GITHUB_OUTPUT"
+          note=
+          if [ "$golds" = true ]; then note=' (every suite must keep its golds)'; fi
+          echo "Lab tier: **$tier**${also:+ + $also}, benchmark: **$bench**$note ($GITHUB_EVENT_NAME${PR:+, PR #$PR})" >> "$GITHUB_STEP_SUMMARY"
 
   lab:
     needs: plan
     if: needs.plan.outputs.tier != 'none'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Fast tier 7 to 9 min, full tier about an hour (docs/agents/lab.md).
+    timeout-minutes: ${{ needs.plan.outputs.tier == 'full' && 180 || 60 }}
     permissions:
       contents: read
       issues: read
@@ -214,16 +244,17 @@ jobs:
         if: always()
         run: bun lab/redact.ts lab-results
 
-      # On a PR, run the base's copy of the gate so a PR cannot edit the
-      # check it is judged by (the baseline comes from the PR: updating it is
-      # part of fixing a defect). The copy runs alone from $RUNNER_TEMP.
+      # On a PR (or the merge queue's commit, whose HEAD^1 is the queue's
+      # base), run the base's copy of the gate so a PR cannot edit the check
+      # it is judged by (the baseline comes from the PR: updating it is part
+      # of fixing a defect). The copy runs alone from $RUNNER_TEMP.
       - name: Gate against lab/known-defects.json
         if: always()
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           gate=.github/scripts/lab-gate.mjs
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] && git cat-file -e "HEAD^1:$gate" 2>/dev/null; then
+          if { [ "$GITHUB_EVENT_NAME" = pull_request ] || [ "$GITHUB_EVENT_NAME" = merge_group ]; } && git cat-file -e "HEAD^1:$gate" 2>/dev/null; then
             git show "HEAD^1:$gate" > "$RUNNER_TEMP/lab-gate.mjs"
             gate="$RUNNER_TEMP/lab-gate.mjs"
             echo "gate: base copy"
@@ -240,14 +271,20 @@ jobs:
 
   # Three instances of the same build: Elara's search has no tie-breaker for
   # equal scores (#623), so ranks move between instances; the gate uses the
-  # median of the three.
+  # median of the three. The gate needs all three, so the matrix is
+  # fail-fast: one failed or timed-out instance cancels the others and
+  # bench-gate reports at once. Budget: chapters 4 to 10 min measured; all
+  # suites 80 to 170 min (embedding throughput differs between runners; run
+  # 41189703249 took 80, 168 and over 180 min on its three instances). The
+  # step budget is below the job's so the logs are still collected and
+  # uploaded after a timeout.
   bench:
     needs: plan
     if: needs.plan.outputs.bench != 'none'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: ${{ needs.plan.outputs.bench == 'all' && 240 || 45 }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         instance: [1, 2, 3]
     permissions:
@@ -272,6 +309,7 @@ jobs:
           mcp_rate_limit: ${{ inputs.mcp_rate_limit || '600' }}
 
       - name: Premise benchmark (${{ needs.plan.outputs.bench }}, instance ${{ matrix.instance }})
+        timeout-minutes: ${{ needs.plan.outputs.bench == 'all' && 225 || 35 }}
         env:
           BENCH_SUITES: ${{ needs.plan.outputs.bench }}
           BENCH_INSTANCE: ${{ matrix.instance }}
@@ -300,13 +338,14 @@ jobs:
     needs: [plan, bench]
     if: always() && needs.plan.outputs.bench != 'none'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: read
     steps:
       - uses: actions/checkout@v7
         with:
-          # HEAD^1 (the base, on a PR) holds the gate and baseline the run is judged by.
+          # HEAD^1 (the base, on a PR or a merge-queue commit) holds the gate and baseline the run is judged by.
           fetch-depth: 2
           persist-credentials: false
 
@@ -314,24 +353,29 @@ jobs:
         with:
           node-version: 24
 
+      # A missing artifact is not an error here: the gate names it and fails.
       - uses: actions/download-artifact@v8
         with:
           pattern: bench-results-*
           path: bench-runs
 
-      # On a PR: the base's copy of the gate decides, the base's baseline is
-      # the reference for regressions, and the PR's labels and body are read
-      # now (not from the event), so re-running this job after adding an
-      # override label picks it up. Overrides: bench-suite-change,
-      # bench-baseline-lowered (see the gate's header).
+      # On a PR (or the merge queue's commit): the base's copy of the gate
+      # decides, the base's baseline is the reference for regressions, and
+      # the PR's labels and body are read now (not from the event), so
+      # re-running this job after adding an override label picks it up.
+      # Overrides: bench-suite-change, bench-baseline-lowered (see the gate's
+      # header). With plan's golds=true (search, MCP or benchmark changed)
+      # every suite must also reach at least the base's golds.
       - name: Gate against benchmarks/baseline.json (median of 3 instances)
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
+          PR: ${{ needs.plan.outputs.pr }}
+          GOLDS: ${{ needs.plan.outputs.golds }}
         run: |
           gate=.github/scripts/bench-gate.mjs
           set -- --results bench-runs/bench-results-1/results.json,bench-runs/bench-results-2/results.json,bench-runs/bench-results-3/results.json --baseline benchmarks/baseline.json --out bench-gate
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+          if [ "$GOLDS" = true ]; then set -- "$@" --require-golds; fi
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] || [ "$GITHUB_EVENT_NAME" = merge_group ]; then
             if git cat-file -e "HEAD^1:$gate" 2>/dev/null; then
               git show "HEAD^1:$gate" > "$RUNNER_TEMP/bench-gate.mjs"
               gate="$RUNNER_TEMP/bench-gate.mjs"

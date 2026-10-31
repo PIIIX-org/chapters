@@ -329,11 +329,17 @@ failing test names in the summary.
 **PR evidence** (`.github/workflows/pr-evidence.yml`, job `pr-evidence`,
 #579) runs on every PR to `dev` or `prod` (promotions included) when it
 is opened, pushed, reopened, edited or marked ready, so a body edit
-re-runs it. Like fails-before, it runs the base commit's copy of
-`.github/scripts/pr-evidence.mjs` when the base has one. Here, a **link**
-is a full URL to a GitHub Actions run, PR, issue, commit or file
-(`blob/`, `tree/`) of this repository; links to other repositories never
-count. It fails when:
+re-runs it, and on the merge queue's `merge_group` commit, where it reads
+the PR the queue branch names (`gh-readonly-queue/<base>/pr-<N>-<sha>`)
+from the API and judges it the same way. Like fails-before, it runs the
+base commit's copy of `.github/scripts/pr-evidence.mjs` when the base has
+one. Here, a **link** is a full URL to a GitHub Actions run or one of its
+artifacts (`actions/runs/<id>/artifacts/<id>`, or the artifact's
+`api.github.com` URL), a PR, an issue, a commit, or a file or directory
+of this repository at a ref (`blob/`, `tree/`; a review record such as
+`blob/<sha>/docs/reviews/<pr>-<sha>.md`, or its `raw.githubusercontent.com`
+URL, is a file). A bare path (`docs/reviews/1011-a6fe0b6.md`) is not a
+link, and links to other repositories never count. It fails when:
 
 1. the Evidence section is missing: no heading containing the word
    Evidence (`## Evidence`, `### Tests / Evidence`, any level) and no
@@ -495,8 +501,16 @@ that covers more than one kind of check, or a crashed test turns it red.
 A fix that makes a known defect pass removes its entry in the same PR.
 `lab` is a required status check on `dev` and `prod` (#574): when `plan`
 picks no tier the job is skipped, which passes; `plan` is required too, so
-a failed `plan` (which skips `lab`) cannot pass as a skipped lab. Tiers,
-the baseline, how to add a test: `docs/agents/lab.md`.
+a failed `plan` (which skips `lab`) cannot pass as a skipped lab. The
+path rules are `.github/scripts/lab-plan.mjs` (unit tests
+`lab-plan.test.mjs`, run by `checks`). On the merge queue's `merge_group`
+commit `plan` resolves the PR from the queue branch
+(`gh-readonly-queue/<base>/pr-<N>-<sha>`) and plans it the same way, so
+`plan`, `lab` and `bench-gate` report on the queue commit; its `HEAD^1`
+is the queue's base, so the base copies of the gates run there as on a
+PR. Every job has a `timeout-minutes` (`lab` 60 for the fast tier, 180
+for the full one). Tiers, the baseline, how to add a test:
+`docs/agents/lab.md`.
 
 **Premise benchmark** (same workflow, jobs `bench` ×3 and `bench-gate`,
 #570/#572) measures the tokens and calls a scripted agent needs to reach
@@ -504,27 +518,38 @@ the evidence for a question with Elara's MCP tools, against ripgrep +
 ranged reads on a checkout of the same pinned commit, plus hit@k, MRR,
 NDCG@10 and line-level precision/recall. It runs on three lab instances of
 its own, never against production (the runner refuses any other base
-URL), and gates their median. The `chapters` suite runs on PRs to `dev`
-that touch search, extraction or ingestion, MCP, the schema, server
-start-up/config, the image's dependencies or the benchmark; all five
-suites run nightly, on every PR to `prod` and by hand
+URL), and gates their median. Which suites run is decided by the paths a
+PR to `dev` changes (`lab-plan.mjs`): **all five suites, and no suite may
+lose a gold**, when it touches what shapes a response and its tokens,
+`server/src/search/**` or `server/src/mcp/**`, or the benchmark itself,
+`benchmarks/**` (markdown there excepted); the `chapters` suite alone when
+it touches extraction or ingestion, the schema, server start-up/config,
+the image's dependencies, the lab plumbing, the workflow or the gate; all
+five suites also run nightly, on every PR to `prod` and by hand
 (`-f tier=none -f bench=all`). The gate
 (`.github/scripts/bench-gate.mjs`, base copy on PRs) fails when Elara's
 hit@5 drops by more than one question of a suite or its mean
 tokens-to-gold rises by more than 10 % against the **base** commit's
-`benchmarks/baseline.json`; when the suite changed (questions, keywords,
-policy config or harness source) unless the PR has the label
-`bench-suite-change` and a `Bench-suite-change: <why>` line; when the PR's
-baseline is worse than the base's unless it has `bench-baseline-lowered`
-and a `Bench-baseline-lowered: <why>` line; and when the run no longer
-matches the PR's baseline (an improvement is recorded in the same PR with
-`--write-baseline` from the PR's own three instances). Labels are read when
-the gate runs: re-run `bench-gate` after adding one. The delta table is in
-the job summary. `bench-gate` is a required status check on `dev` and
-`prod` (#574); it is skipped (passes) when no suite applies, and it fails
-when a `bench` instance did not produce results.
-Method, thresholds and the only publishable numbers:
-`benchmarks/README.md`.
+`benchmarks/baseline.json`; with `--require-golds` (the all-suites path
+rule) when any suite's `goldReached` is below the base baseline's, with no
+tolerance; when the suite changed (questions, keywords, policy config or
+harness source) unless the PR has the label `bench-suite-change` and a
+`Bench-suite-change: <why>` line; when the PR's baseline is worse than
+the base's unless it has `bench-baseline-lowered` and a
+`Bench-baseline-lowered: <why>` line; and when the run no longer matches
+the PR's baseline (an improvement is recorded in the same PR with
+`--write-baseline` from the PR's own three instances). Labels are read
+when the gate runs: re-run `bench-gate` after adding one. The job summary
+opens with one row per suite (tokens-to-gold, golds, hit@5, MRR, reference
+-> run, verdict) and then the full delta tables. `bench-gate` is a
+required status check on `dev` and `prod` (#574); it is skipped (passes)
+when no suite applies. The `bench` matrix is fail-fast with a budget per
+tier (`chapters` 45 min, `all` 240 min; measured 4 to 10 and 80 to 170
+min, the all-suites spread being embedding throughput on the runner), so a
+failed or timed-out instance cancels the others, and the gate then stops
+at once naming the missing `bench-results-<n>` artifact instead of
+waiting for the slowest instance. Method, thresholds and the only
+publishable numbers: `benchmarks/README.md`.
 
 **Image check** (`.github/workflows/image-check.yml`, job
 `offline-scripts`, #872) builds the root `Dockerfile` and runs the
@@ -742,6 +767,16 @@ comment-triggered run belongs to the default branch and its check run
 would never show on the PR. The job itself is green whenever it could
 evaluate; read the status (its details link opens the run, whose summary
 lists what counted, each verdict author's permission and how to pass).
+
+On the merge queue's `merge_group` event the job resolves the PR from the
+queue branch (`gh-readonly-queue/<base>/pr-<N>-<sha>`; the sha in the name
+is the queue's base, not the PR head), applies the same rules to the PR's
+current head, which the queue's temporary merge commit must contain as its
+second parent (a queue commit built from another head gets a failure
+status naming both), and sets the status on the queue commit, so
+`review-verdict/dev` reports there too. A verdict posted while the PR is
+queued is picked up by re-running the newest **Review verdict** run of the
+queue commit.
 
 A status belongs to a **commit, not a PR**, and a promotion's head (the
 tip of `dev`) can also be the head of other PRs. So:

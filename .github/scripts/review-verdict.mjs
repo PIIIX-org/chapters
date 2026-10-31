@@ -9,7 +9,13 @@
 // A status belongs to a commit, not to a PR, so it is set only for PRs from
 // this repository to a base listed in CONTEXTS (each base its own context).
 // Two PRs with the same base and the same head have the same diff, so a
-// review of one is a review of the other. Workflow:
+// review of one is a review of the other.
+//
+// Merge queue: on a merge_group event the PR is the one the queue branch
+// names (gh-readonly-queue/<base>/pr-<N>-<sha>); the same rules are applied
+// to that PR's head, which the queue's temporary merge commit must contain
+// (its second parent), and the status is set on the queue commit, so the
+// required check reports there too. Workflow:
 // .github/workflows/review-verdict.yml; rules and caveats:
 // docs/agents/github-workflow.md (Branch protection and the review gate).
 //
@@ -81,6 +87,32 @@ export function gateFor(pr, repo) {
   if (!context) return { skip: `PR #${pr.number} targets \`${pr.base?.ref}\`, which has no review gate; no status set.` }
   if (pr.state !== 'open') return { skip: `PR #${pr.number} is ${pr.state}; no status set.` }
   return { context }
+}
+
+/**
+ * The PR number a merge-queue branch was made for:
+ * `refs/heads/gh-readonly-queue/<base>/pr-<N>-<base sha>` (the sha is the
+ * base the queue built on, not the PR head). null for any other ref.
+ */
+export function mergeGroupPr(headRef) {
+  const m = /(?:^|\/)gh-readonly-queue\/.+\/pr-(\d+)-[0-9a-f]{7,40}$/.exec(headRef ?? '')
+  return m ? Number(m[1]) : null
+}
+
+/**
+ * Whether the queue's temporary commit was built from the PR's current
+ * head: { ok } when the PR head is one of its parents (the first parent is
+ * the queue's base), { ok: false, contains } naming the head it was built
+ * from instead, or { ok: true, unverified: true } when the commit is not a
+ * merge (one parent), where the queue's own rule applies: a PR whose head
+ * moves leaves the queue.
+ */
+export function queueContains({ parents = [], baseSha, prHead }) {
+  const shas = parents.map((p) => p.sha ?? p)
+  if (shas.includes(prHead)) return { ok: true }
+  const other = shas.filter((s) => s !== baseSha)
+  if (shas.length < 2 || other.length === 0) return { ok: true, unverified: true }
+  return { ok: false, contains: other[0] }
 }
 
 /**
@@ -275,7 +307,9 @@ async function all(path, pick = (d) => d) {
 async function main() {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
   const repo = event.repository?.full_name ?? process.env.GITHUB_REPOSITORY
-  const number = event.pull_request?.number ?? (event.issue?.pull_request ? event.issue.number : null)
+  const queue = event.merge_group ?? null
+  const number =
+    event.pull_request?.number ?? (event.issue?.pull_request ? event.issue.number : null) ?? mergeGroupPr(queue?.head_ref)
   if (!number) return summary('Not a pull request; nothing to check.')
 
   const r = `/repos/${repo}`
@@ -284,7 +318,38 @@ async function main() {
   if (gate.skip) return summary(gate.skip)
   const { context } = gate
   const head = pr.head.sha
+  // The commit the status goes on: the PR head, or the queue's temporary
+  // commit on a merge_group event (the required check must report there).
+  const target = queue ? queue.head_sha : head
+  const runUrl = `${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`
+  const setStatus = (ok, description) =>
+    api(`${r}/statuses/${target}`, {
+      method: 'POST',
+      body: { state: ok ? 'success' : 'failure', context, description, target_url: runUrl },
+    })
 
+  let queueNote = ''
+  if (queue) {
+    const { data: qc } = await api(`${r}/commits/${queue.head_sha}`)
+    const contains = queueContains({ parents: qc.parents, baseSha: queue.base_sha, prHead: head })
+    if (!contains.ok) {
+      const description = `Queue commit ${short(queue.head_sha)} was built from ${short(contains.contains)}, not the PR head ${short(head)}`
+      await setStatus(false, description)
+      return summary(
+        [
+          `## Review verdict for #${number} (merge queue): failed`,
+          '',
+          `**${description}**`,
+          '',
+          `Status \`${context}\` set to failure on the queue commit \`${queue.head_sha}\`. The PR head moved after it was queued; the queue drops it. Review the new head, post the verdict again and re-queue.`,
+          ...(CHECKER ? ['', CHECKER] : []),
+        ].join('\n'),
+      )
+    }
+    queueNote = `Merge queue \`${queue.head_ref}\`: queue commit \`${queue.head_sha}\` ${
+      contains.unverified ? 'is not a merge commit; the PR head is taken as queued (a PR whose head moves leaves the queue)' : `contains the PR head \`${head}\` as a parent`
+    }.`
+  }
   const [reviews, comments, commit, suites, timeline] = await Promise.all([
     all(`${r}/pulls/${number}/reviews?per_page=100`),
     all(`${r}/issues/${number}/comments?per_page=100`),
@@ -322,18 +387,15 @@ async function main() {
   }
 
   const v = evaluate({ pr, reviews, comments, since, writers, lookupFailed })
-  const runUrl = `${process.env.GITHUB_SERVER_URL}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}`
-  await api(`${r}/statuses/${head}`, {
-    method: 'POST',
-    body: { state: v.ok ? 'success' : 'failure', context, description: v.description, target_url: runUrl },
-  })
+  await setStatus(v.ok, v.description)
   summary(
     [
-      `## Review verdict for #${number}: ${v.ok ? 'passed' : 'failed'}`,
+      `## Review verdict for #${number}${queue ? ' (merge queue)' : ''}: ${v.ok ? 'passed' : 'failed'}`,
       '',
       `**${v.description}**`,
       '',
-      `Status \`${context}\` set to ${v.ok ? 'success' : 'failure'} on \`${head}\` (base \`${pr.base.ref}\`).`,
+      `Status \`${context}\` set to ${v.ok ? 'success' : 'failure'} on \`${target}\` (base \`${pr.base.ref}\`${queue ? `, PR head \`${head}\`` : ''}).`,
+      ...(queueNote ? ['', queueNote] : []),
       '',
       v.report,
       '',
