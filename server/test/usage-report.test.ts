@@ -290,8 +290,9 @@ describe('usage report (#678)', () => {
   })
 
   it('keeps query hashes out of the instance view and never counts one query across accounts', async () => {
-    // The owner searched MISSING_QUERY twice; the other account now searches it once.
-    await call(other.admin, 'search', { vaultId: other.vaultId, query: MISSING_QUERY })
+    // The owner searched MISSING_QUERY twice with no result; the other account now does once, in an empty vault (no result there either).
+    const empty = (await ok(other.cookie, 'POST', '/api/vaults', { name: 'usage-empty' })).id as string
+    expect((await call(other.admin, 'search', { vaultId: empty, query: MISSING_QUERY })).json).toMatchObject({ status: 'no_match' })
     const mine = (await report(owner.cookie)).searches as { zero_result_queries: Array<{ query_hash: string; count: number }> }
     const hash = mine.zero_result_queries[0]!.query_hash
     expect(hash).toMatch(/^[0-9a-f]{16}$/)

@@ -5,7 +5,7 @@ import { logSecurityEvent } from '../auth/security-events.js'
 import { isInstanceAdmin } from '../graph/perspective-access.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import { flushUsage, loadUsageSetting, recordClientEvent, setUsageEnabled, usageEnabled } from './recorder.js'
-import { usageReport } from './report.js'
+import { UsageReportTimeout, usageReport } from './report.js'
 
 /**
  * The usage report over REST (#678), under `/api/usage`, for a signed-in
@@ -42,11 +42,14 @@ export function usageRoutes(app: FastifyInstance) {
     '/report',
     { schema: { querystring: { type: 'object', additionalProperties: false, properties: { scope: { enum: ['account', 'instance'] } } } } },
     async (req, reply) => {
-      if (req.query.scope === 'instance') {
-        if (!isInstanceAdmin(req.user!.role)) return reply.code(403).send({ error: 'admin required' })
-        return usageReport({ kind: 'instance' })
+      if (req.query.scope === 'instance' && !isInstanceAdmin(req.user!.role)) return reply.code(403).send({ error: 'admin required' })
+      try {
+        return await usageReport(req.query.scope === 'instance' ? { kind: 'instance' } : { kind: 'account', accountId: req.user!.id })
+      } catch (err) {
+        // Past REPORT_TIMEOUT_MS: a retryable 503, not a 500.
+        if (err instanceof UsageReportTimeout) return reply.code(503).send({ error: err.message })
+        throw err
       }
-      return usageReport({ kind: 'account', accountId: req.user!.id })
     },
   )
 }

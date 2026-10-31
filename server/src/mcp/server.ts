@@ -147,7 +147,7 @@ import {
   type Ladder,
 } from './response.js'
 import { withUsage, type UsageProbe } from '../usage/recorder.js'
-import { usageReport } from '../usage/report.js'
+import { UsageReportTimeout, usageReport } from '../usage/report.js'
 
 const UUID_PATTERN = z.regexes.uuid()
 /**
@@ -2882,9 +2882,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: { scope: z.enum(['account', 'instance']).optional().describe('instance: all accounts, aggregates only') },
     },
     async (args: { scope?: 'account' | 'instance' }) => {
-      if (args.scope !== 'instance') return usageReport({ kind: 'account', accountId: auth.user.id })
-      if (!isInstanceAdmin(auth.user.role)) throw new McpToolError('PERMISSION_REQUIRED', 'instance admin required')
-      return usageReport({ kind: 'instance' })
+      if (args.scope === 'instance' && !isInstanceAdmin(auth.user.role)) throw new McpToolError('PERMISSION_REQUIRED', 'instance admin required')
+      try {
+        return await usageReport(args.scope === 'instance' ? { kind: 'instance' } : { kind: 'account', accountId: auth.user.id })
+      } catch (err) {
+        // Past its statement timeout: BUSY, retryable.
+        throw err instanceof UsageReportTimeout ? new McpToolError('BUSY', err.message) : err
+      }
     },
   )
 
