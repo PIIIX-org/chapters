@@ -601,7 +601,42 @@ function byScore(a: Ranked, b: Ranked): number {
   )
 }
 
+const STOP_WORDS: Record<string, true> = {
+  a: true, about: true, above: true, after: true, again: true, against: true, all: true,
+  am: true, an: true, and: true, any: true, are: true, as: true, at: true,
+  be: true, because: true, been: true, before: true, being: true, below: true, between: true, both: true, but: true, by: true,
+  can: true, could: true, did: true, do: true, does: true, doing: true, down: true, during: true,
+  each: true, few: true, for: true, from: true, further: true,
+  had: true, has: true, have: true, having: true, he: true, her: true, here: true, hers: true, herself: true,
+  him: true, himself: true, his: true, how: true,
+  i: true, if: true, in: true, into: true, is: true, it: true, its: true, itself: true,
+  just: true, me: true, more: true, most: true, my: true, myself: true,
+  no: true, nor: true, not: true, now: true, of: true, off: true, on: true, once: true, only: true, or: true, other: true, our: true, ours: true, ourselves: true, out: true, over: true, own: true,
+  same: true, she: true, should: true, so: true, some: true, such: true,
+  than: true, that: true, the: true, their: true, theirs: true, them: true, themselves: true, then: true, there: true, these: true, they: true, this: true, those: true, through: true, to: true, too: true,
+  under: true, until: true, up: true, very: true,
+  was: true, we: true, were: true, what: true, when: true, where: true, which: true, while: true, who: true, whom: true, why: true, with: true,
+  you: true, your: true, yours: true, yourself: true, yourselves: true,
+}
+
+/** Common file stems that appear as generic vocabulary in multi-word questions (#456). */
+const GENERIC_BASE_STEMS: Record<string, true> = {
+  index: true,
+  main: true,
+  app: true,
+  readme: true,
+  license: true,
+  changelog: true,
+  types: true,
+  utils: true,
+  util: true,
+  helpers: true,
+  helper: true,
+  common: true,
+}
+
 interface ExactContext {
+  multiWord: boolean
   termSet: Set<string>
   termSetLower: Set<string>
   spellingSet: Set<string>
@@ -609,40 +644,48 @@ interface ExactContext {
   queryStripped: string
 }
 
-/** Extracts query terms and identifier spelling sets for cheap exact-match checks in fusion (#456). */
+/** Extracts non-stopword query terms and identifier spelling sets for cheap exact-match checks in fusion (#456). */
 function queryExactContext(query: string): ExactContext {
   const rawTokens = query.trim().split(/\s+/).filter(Boolean)
+  const multiWord = rawTokens.length >= 2
   const termSet = new Set<string>()
   const termSetLower = new Set<string>()
   const spellingSet = new Set<string>()
 
   for (const raw of rawTokens) {
-    termSet.add(raw)
-    termSetLower.add(raw.toLowerCase())
+    const rawLower = raw.toLowerCase()
     const cleaned = raw.replace(/^[^\p{L}\p{N}_$]+|[^\p{L}\p{N}_$]+$/gu, '')
+    const cleanedLower = cleaned.toLowerCase()
+
+    // Common stopwords never grant exact-match priority.
+    if (cleanedLower in STOP_WORDS || cleanedLower.length <= 1) continue
+
+    termSet.add(raw)
+    termSetLower.add(rawLower)
     if (cleaned.length > 0) {
       termSet.add(cleaned)
-      termSetLower.add(cleaned.toLowerCase())
+      termSetLower.add(cleanedLower)
       const id = splitIdentifier(cleaned)
       for (const s of [id.whole, id.parts.join(''), id.parts.join('_'), id.parts.join('-')]) {
-        if (s.length > 0) spellingSet.add(s)
+        if (s.length > 0 && !(s in STOP_WORDS)) spellingSet.add(s)
       }
     }
     const idRaw = splitIdentifier(raw)
     for (const s of [idRaw.whole, idRaw.parts.join(''), idRaw.parts.join('_'), idRaw.parts.join('-')]) {
-      if (s.length > 0) spellingSet.add(s)
+      if (s.length > 0 && !(s in STOP_WORDS)) spellingSet.add(s)
     }
   }
 
   const queryNorm = query.trim().toLowerCase()
   const queryStripped = queryNorm.replace(/^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu, '').trim()
-  return { termSet, termSetLower, spellingSet, queryNorm, queryStripped }
+  return { multiWord, termSet, termSetLower, spellingSet, queryNorm, queryStripped }
 }
 
 /** A symbol whose name equals a query term, case-sensitively or by spelling set from identifiers.ts (#456). */
 function isExactSymbol(name: string, parent: string | null | undefined, ctx: ExactContext): boolean {
-  if (ctx.termSet.has(name)) return true
   const lower = name.toLowerCase()
+  if (lower in STOP_WORDS || lower.length <= 1) return false
+  if (ctx.termSet.has(name)) return true
   if (ctx.spellingSet.has(lower)) return true
   if (parent) {
     const fullName = `${parent}.${name}`
@@ -653,9 +696,15 @@ function isExactSymbol(name: string, parent: string | null | undefined, ctx: Exa
 
 /** A file whose path or basename equals a term (#456). */
 function isExactFile(path: string, ctx: ExactContext): boolean {
-  if (ctx.termSet.has(path) || ctx.termSetLower.has(path.toLowerCase())) return true
+  const lower = path.toLowerCase()
+  if (ctx.termSet.has(path) || ctx.termSetLower.has(lower)) return true
   const base = path.split('/').pop() ?? path
-  if (ctx.termSet.has(base) || ctx.termSetLower.has(base.toLowerCase())) return true
+  const baseLower = base.toLowerCase()
+  if (ctx.termSet.has(base) || ctx.termSetLower.has(baseLower)) return true
+  // In multi-word questions, a generic stem (like index in index.ts) does not match unless typed with extension.
+  const stem = baseLower.replace(/(.)\.[^.]*$/, '$1')
+  if (ctx.multiWord && stem in GENERIC_BASE_STEMS) return false
+  if (ctx.termSetLower.has(stem)) return true
   return false
 }
 
