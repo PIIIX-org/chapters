@@ -77,10 +77,15 @@ beforeAll(async () => {
     path: 'src/zzz/exact-symbol.ts',
     content: 'export function targetSymbol(): void {}\n',
   }
+  // Generic basename file 'src/index.ts'
+  const indexFile = {
+    path: 'src/index.ts',
+    content: '// application index entry point\nexport const indexVersion = 1\n',
+  }
 
   await syncRepositoryFiles(
     repoId,
-    [fuzzyFile, exactSymbolFile, noiseSymbolFile, exactFile, fileNoise, ...noiseFiles, exactCamelSymbolFile],
+    [fuzzyFile, exactSymbolFile, noiseSymbolFile, exactFile, fileNoise, ...noiseFiles, exactCamelSymbolFile, indexFile],
     [
       fuzzyFile.path,
       exactSymbolFile.path,
@@ -89,6 +94,7 @@ beforeAll(async () => {
       fileNoise.path,
       ...noiseFiles.map((f) => f.path),
       exactCamelSymbolFile.path,
+      indexFile.path,
     ],
   )
   await flushExtraction()
@@ -220,5 +226,18 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     const res = await findSymbols([repoId], 'target_symbol', { limit: 10 })
     expect(res.results.length).toBeGreaterThan(0)
     expect(res.results[0]!.name).toBe('targetSymbol')
+  })
+
+  it('common stopwords and generic basenames in multi-word queries do not trigger exact boost', async () => {
+    // Multi-word question containing the word 'index': 'where is the index entry'
+    // The word 'index' is a generic base stem; 'where', 'is', 'the' are stopwords.
+    // src/index.ts must NOT receive EXACT_BOOST (it was not explicitly queried by full filename 'index.ts').
+    const res = await searchNotes({ vaultIds: [], repositoryIds: [repoId] }, 'where is the index entry', 10)
+    expect(res.results.length).toBeGreaterThan(0)
+    const indexHit = res.results.find((r) => r.path === 'src/index.ts')
+    if (indexHit) {
+      // Without EXACT_BOOST = 1, its score remains in the normal RRF range (< 0.1)
+      expect(indexHit.score).toBeLessThan(0.1)
+    }
   })
 })
