@@ -294,7 +294,7 @@ export const OUTLINE_ARG = z.boolean().optional().describe('true: outline only')
  * The `if_rev` argument (#682) of a read whose answers carry `version` (read_note `rev`, read_file `hash`). Coerced, so
  * the integer `rev` an answer gives works as sent; tools/list still says `string`.
  */
-export const ifRevArg = (version: 'rev' | 'hash') => z.coerce.string().optional().describe(`Your \`${version}\`: if current, answers \`unchanged\``)
+export const ifRevArg = (version: 'rev' | 'hash') => z.coerce.string().optional().describe(`Your \`${version}\`: \`unchanged\` if current`)
 
 /** The answer to a read whose `if_rev` is current (#682): `{unchanged: true, rev | hash}` and, as every budgeted answer, `truncated: false`. */
 export function unchanged(version: { rev: number } | { hash: string }): Budgeted {

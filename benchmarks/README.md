@@ -300,6 +300,51 @@ Then one instance moved hit@5 by at most one question and tokens-to-gold by
 at most 5.6 %. (Indexing took about half as long in run 38856349787 as in
 the earlier runs, on the same code; index time is reported, not gated.)
 
+## Session benchmark
+
+The premise agent above reads each file once per question, so it cannot
+show what per-session de-duplication (#683, `session_id` on `read_file` and
+`read_note`) saves. [`session/run.ts`](session/run.ts) runs a third scripted
+agent, [`session/policy.ts`](session/policy.ts), on the same suites and
+questions, reading the way the skill tells agents to: `search`; for each of
+the first 3 files, its `outline`, then `targets` on the outline entries the
+search's symbol hits fall in (else the entries whose names hold a word of
+the question), then those entries again with the section before and after
+each. A file without such an entry is read whole (first page). No oracle
+stop: every question runs the whole script under the premise caps, and
+tokens-to-gold is booked on the way.
+
+- `bench_session=plain`: no `session_id` (the only mode a server before
+  #683 takes; use it on the base side).
+- `bench_session=session` (`--session-scope=both`; `question` or `suite`
+  run one scope): on the same instance, the plain pass, then the
+  same policy with a `session_id` on every `read_file`, per scope:
+  - `question`: a new session per question (an agent that starts each task
+    in a new context, as the skill says to): only re-reads within one
+    question can be references;
+  - `suite`: one session for all the questions of a suite, in order (one
+    long context): a later question that opens a file an earlier one read
+    gets references too (every suite has 15 or more questions sharing a
+    file).
+
+  A referenced outline reads as the outline its call sent, so every pass
+  makes the same calls. Each session answer, its references expanded to the
+  text they name, is compared with the plain answer of the same call
+  (`answers` in `results.json`, per mode: `equal`; `more` or `less` when one
+  shows every line the other does and more, kept with both texts; `differ`;
+  `unaligned`).
+
+```sh
+gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f tier=none -f bench=none -f bench_session=session   # -f bench_session_suites=chapters
+gh run download <run-id> -R PIIIX-org/chapters -p 'bench-session-results-*' -D runs
+```
+
+It is not a gate and not part of the premise fingerprint: `benchmarks/run.ts`
+hashes only itself and `lib/`. `results.json` has per suite and mode the
+premise aggregate plus `tokensTotal` (all calls of all questions) and, per
+question, the trace; `config.harness` hashes `session/` and `lib/`, so two
+runs with the same value measured the same way.
+
 ## Agent trial
 
 The benchmark above runs no language model. The agent trial (#571) runs
