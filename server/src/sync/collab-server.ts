@@ -547,8 +547,8 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
     },
 
     /** Only the relay puts agents in presence (#481, agent-presence.ts). */
-    async beforeHandleAwareness({ documentName, states }) {
-      stripAgentClaims(documentName, states)
+    async beforeHandleAwareness({ documentName, states, removedClients }) {
+      stripAgentClaims(documentName, states, removedClients)
     },
 
     /**
