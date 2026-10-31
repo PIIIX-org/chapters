@@ -3,7 +3,8 @@
 // and does it without rewriting rows (a column default kept in the catalog;
 // a rewrite of every row held the boot for minutes). Only a note whose job
 // for its current `seq` is pending or failed is updated, to no id, for the
-// catch-up. Builds an instance at 0032, then applies the real journal.
+// catch-up. Builds an instance at 0032, applies 0033 and checks where the
+// rows are, then applies the rest of the real journal.
 import { afterAll, describe, expect, it } from 'vitest'
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -87,12 +88,19 @@ describe('migration 0033 stamps existing vectors (#453)', { timeout: 60_000 }, (
         ]) as Record<string, string>
       const before = await ctids()
 
-      await migrate(drizzle(client), { migrationsFolder: source })
+      // The journal through 0033 only: a later migration that rewrites a table (0059's generated `notes.field_fts`)
+      // moves every row, which says nothing about 0033.
+      const through = { ...journal, entries: journal.entries.filter((e) => e.when <= at0033.when) }
+      await writeFile(join(partial, 'meta', '_journal.json'), JSON.stringify(through))
+      await copyFile(join(source, `${at0033.tag}.sql`), join(partial, `${at0033.tag}.sql`))
+      await migrate(drizzle(client), { migrationsFolder: partial })
 
       // Rows are where they were (no new tuple), except the two notes updated on purpose.
       const after = await ctids()
       const moved = Object.keys(before).filter((path) => before[path] !== after[path])
       expect(moved.sort()).toEqual(['failed.md', 'pending.md'])
+
+      await migrate(drizzle(client), { migrationsFolder: source })
 
       const id = `${LOCAL_EMBEDDING_MODEL}+text1`
       const notes = Object.fromEntries(

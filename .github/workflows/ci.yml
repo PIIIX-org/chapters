@@ -46,9 +46,10 @@ jobs:
       - name: Test CI scripts
         run: node --test '.github/scripts/*.test.mjs'
       # Premise benchmark metrics, policies, question files, production guard (#570);
-      # agent trial grader, tool mapping, provider formats, loop caps, credential gate (#571).
+      # agent trial grader, tool mapping, provider formats, loop caps, credential gate (#571);
+      # session benchmark policy and session_id plumbing (#683).
       - name: Test benchmark harness
-        run: node --test 'benchmarks/lib/*.test.ts' 'benchmarks/agent-trial/lib/*.test.ts'
+        run: node --test 'benchmarks/lib/*.test.ts' 'benchmarks/agent-trial/lib/*.test.ts' 'benchmarks/session/*.test.ts'
       # Lab helpers that need no lab instance: SIGKILL recovery (#658), file-count
       # diffs (#663), the pinned git fixture restart-extraction syncs (#767).
       - name: Test lab helpers

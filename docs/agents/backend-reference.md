@@ -175,7 +175,7 @@ express — vector columns, HNSW indexes, generated `tsvector` columns).
 
 | Table | Purpose |
 |---|---|
-| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages, and on trashed rows (migration 0051, #682) `notes_vault_path_trashed (vault_id, path)` for `pathHadOtherNote` |
+| `notes` | derived index of the on-disk OKF file — frontmatter (jsonb), body, generated `fts` (GIN-indexed), generated `field_fts` (path words and `title`, the keyword leg's **Fields**; migration 0059, GIN `notes_field_fts_idx`, see §5.6), its vectors in `blocks` (migration 0036 dropped `embedding`; `chunk_version` and `embedder_id` say what made them); unique on `(vaultId, path)` **where `deleted_at IS NULL`** (a path can be reused once its old note is trashed), plus, on live rows (migration 0030, #425), `(vault_id, path COLLATE "C")` and `(vault_id, folder COLLATE "C", path COLLATE "C")` (folder = `coalesce(substring(path from '^(.*/)'), '')`) for `browse_vault`'s code-unit-order pages, and on trashed rows (migration 0051, #682) `notes_vault_path_trashed (vault_id, path)` for `pathHadOtherNote` |
 | `noteRevisions` | version history, `actorType` `user`/`mcp`/`collab`; `action` `create`/`update`, the events `delete`/`restore`/`rename`/`revert`, `restore_point` for the state before an MCP connection's first write in a session (#482), `quarantine` for a write kept out of the note (#492, not the note's content), or `proposal` for an `edit_note` with a stale `base_rev` that overlapped changes made since (#475, not the note's content). Events (#479) are always a new row (never deduped as a repeat) with the note's state; neither events, restore points, quarantine nor proposal rows are ever the row a later write is compared with (`recordRevision` compares with the latest `create`/`update`). Migration 0023 adds `from_path`/`to_path` (a `rename`) and `source_revision_id` (a `revert`: the revision brought back; a `proposal`: its base revision; no FK, a purged source leaves it dangling). Revert never relabels an earlier row. Migration 0024 (#825, #811) adds `ord` (`bigserial`, index `note_revisions_note_ord (note_id, ord)`): the order revisions were recorded in. Every list of a note's revisions and every "latest revision" lookup orders by `ord`, never by `created_at`, which comes from the database clock and can tie or step back. A restore point takes its `ord` (and its time) when it reads the state, before the write it precedes; a quarantine that is continued takes a new one with its new time. Rows from before 0024 got `ord` in `(created_at, id)` order. Migration 0051 (#682) indexes `from_path` where set (`note_revisions_from_path`), for `pathHadOtherNote` |
 | `noteLinks` | extracted `[[wikilink]]` edges, fully replaced on every body save: one row per link with its body-relative `start_line`/`end_line` (migration 0031, #558) and `context` (migration 0039, #472: the link's paragraph, the non-blank lines around it, when at most 200 code points; else its own lines; else 200 code points of them around the link with `…` at each cut end; never half a surrogate pair; `okf.ts` `extractWikilinkLocations`). PK (`source_note_id`, `target_path`, `start_line`), so a target linked on several lines has several rows, and of two links to one target on one line the row is the first (no count kept). Null `context` = not filled yet (rows from before 0039; rows from before 0031 also have line 0; or written by older code after a rollback; the column defaults keep that working): the boot `note_links` catch-up jobs (**Link catch-up**, §5) rewrite them from the body under the note lock at catch-up priority (5,000 notes with 30,000 rows: queued in 79 ms, rewritten in 62 s, 12 ms a note, locally; until then a backlink has `context: null` and an unlocated edge `evidence: null`), and the doctor's `links-differ` lists any whose targets or lines differ from the body |
 | `exportLinks` | expiring/revocable vault export download links |
@@ -386,7 +386,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositories` | ingestion method (`git`/`local_path`/`agent_push`), encrypted git credential/webhook secret, sync status/error, `mergeable`, the indexed version (`last_synced_commit`, `tree_hash`; migration 0040, #471, see §5.10) |
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
-| `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0052; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
+| `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0052; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), `keyword_head` (the path's and symbols' name lexemes, the leg's **Fields**; migration 0059) and GIN trigram `repository_files_path_trgm_idx` on `path` (#455 part 2), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0); `lookup_keys` (migration 0053, #1008, GIN-indexed) the `lookupKey` of every path the resolver tried, as `<repository id>:<key>`, null for rows written before 0053 until the boot backfill; a deleted target sets `resolved_target_file_id` to null (it deleted the row before 0053) |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -475,7 +475,13 @@ collab socket and live view it opened closes at once (#498, §5.7).
   A transfer (here and in `admin-routes.ts`) deletes the vault's notes'
   note↔code semantic edges in its transaction: they joined the previous
   owner's repositories (D10, #461); it queues the recompute of the nodes
-  whose lists change (#1015, `transferVaultSemanticEdges`, §5.6).
+  whose lists change (#1015, `transferVaultSemanticEdges`, §5.6). Trash
+  and restore (REST `DELETE /vaults/:id`, `POST /vaults/:id/restore`, MCP
+  `delete_vault`, `restore_vault`) go through `trashVaultRecord` and
+  `restoreVaultRecord`: the trash removes the vault's notes' semantic
+  edges and queues the files that held one (`removeSemanticNodes`), the
+  restore queues each live note's refresh (`queueSemanticEdgeRestore`),
+  each in the same transaction (#1025, §5.6).
 - **`team-routes.ts`**: team CRUD, membership management. Adding/
   removing a member notifies both that user and every owner of a vault
   currently shared with the team.
@@ -1391,7 +1397,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   whole query, or the symbol's identifier keywords).
   - **Keyword channel** (#455, `search/identifiers.ts`): note legs match
     `notes.fts` (`to_tsvector('english', path || frontmatter || body)`,
-    stemmed) with `websearch_to_tsquery('english', q)`, unchanged.
+    stemmed) with `websearch_to_tsquery('english', q)`, ordered by
+    **Fields** and relaxed by **Relaxation** (below).
     Code legs also know identifiers. Postgres' parser keeps
     `parseFrontmatter` as one word (`parsefrontmatt`), a member access
     `fm.parseFrontmatter` or a name `mcp.server.ts` as one host lexeme
@@ -1441,20 +1448,71 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     re-extracted the file after a rollback, until it is extracted again), indexed by GIN
     `repository_files_keyword_idx`, which replaced
     `repository_files_fts_idx`. The leg orders by whole-identifier match,
-    then the English match's `ts_rank` (the order before #455), then the
+    then by how many query terms the file's fields hold (below), then the
+    English match's `ts_rank` (the order before #455), then the
     keyword `ts_rank`. The symbol leg ORs `keywords` with its `ILIKE`
     (no index: the `ILIKE` reads the repository's symbols anyway) and
     ranks exact, prefix and contains as before, then a whole-identifier
     match, then a parts-only match. So an exact identifier outranks its
     other spellings and its parts within each leg. In the code leg, the rows the English query
     matched keep their relative order except that whole-identifier
-    matches move ahead; in the symbol leg the rows the base matched keep
+    matches and field matches move ahead; in the symbol leg the rows the base matched keep
     their order. A whole-identifier row the English query did not match
     (a member access) can push English matches out of the 30-row cut.
     A code hit's snippet is the English query's `ts_headline`; a file that
     only the identifier keywords match gets the vector leg's snippet (its
     first 200 characters): a headline would highlight nothing and still
     parse the whole file (about 20 ms a file on rea's larger files).
+  - **Fields** (#455 part 2): a term in a file's path or in a name it
+    declares, or in a note's title or path, ranks above the same term in
+    a body. `repository_files.keyword_head` (migration 0059, written by
+    extraction beside `keyword_fts`, `EXTRACTOR_VERSION` 7) holds a file's
+    path lexemes and its symbols' name lexemes (`fieldKeywords`) with
+    their English stems; `keyword_fts` holds them too, so `Foo.bar` finds
+    the file that declares it. It counts while `extracted_hash =
+    content_hash` and `extractor_version >= 7`, else the file has no
+    fields (and ranks as before). A note's fields are its path's words and
+    its frontmatter `title`: `notes.field_fts`, generated and stored like
+    `fts` (migration 0059), GIN `notes_field_fts_idx`: keyword-only search
+    over 20,000 notes takes 44-45 ms with it (computing the fields per
+    query took 227-444 ms). Each leg orders its
+    AND matches by how many terms their fields match before their body
+    rank. Not `setweight` inside `keyword_fts`: `ts_rank` of an AND query
+    on positionless identifier lexemes is ~1e-16, and filtering the
+    weighted lexemes out of a whole-file vector costs a pass over it per row.
+  - **Relaxation** (#455 part 2): a leg relaxes only when its AND query
+    matched fewer rows than it keeps (30, so it returned every match) and
+    the query has two terms or more, without websearch syntax. One query
+    counts, per term, the leg's rows whose fields match it (and, for the
+    code leg, whether any file matches it at all, through the GIN index).
+    The relaxed rows are those whose fields match the rarest term but that
+    do not match every term, ordered by the rarer terms their fields
+    match (one bit per term, the rarest highest; a ladder that drops the
+    least selective term first; among terms as rare a compound counts as
+    rarer, then the query's order), then whole identifier, then rank. They
+    come after every AND row of the leg, and in the fusion their rank
+    counts from 30, as if the AND list were full, so a relaxed row
+    contributes less than any AND row. Fields only, never bodies: a
+    question word anywhere in a long file is the evidence that made
+    #1014's regression, and relaxing over bodies cost the benchmark
+    (local runs of the bench policy: chapters tokens-to-gold 3,692 →
+    5,579, context-mode 25,578 → 29,807, gold lost), while over fields it
+    gained. A stop word is ignored; a term no row matches is dropped (it
+    feeds the trigram leg). `relaxed` is not reported in the answer: the
+    MCP `structuredContent` must equal the text (ADR-004 §2.1), so it
+    would cost reader tokens.
+  - **Trigram** (#455 part 2, `pg_trgm`, migration 0059): the code and
+    symbol legs' last resort, when the AND and relaxed queries found
+    nothing. A term (of 5 characters or more) that no row matches is
+    matched by word similarity (`<%`, threshold 0.6) against file paths
+    (GIN `repository_files_path_trgm_idx`) and symbol name paths (partial
+    GIN `blocks_symbol_name_trgm_idx`, `kind = 'symbol'`), never bodies;
+    a file also by its symbols' names. Ordered by similarity; its rows
+    count like relaxed rows in the fusion. So `parseFrontmater` finds
+    `parseFrontmatter`. Not run while other rows matched: run whenever the
+    leg was short of 30, look-alike names of a long question's unknown
+    words cost diagram-design 17 % tokens-to-gold (local run). Notes have
+    no trigram leg.
   - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
     `SearchResponse` = `{status, retrieval_mode, degraded, index?,
     results}`, served as is by REST and inside the budget envelope by MCP.
@@ -1660,9 +1718,31 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   advisory lock on the node (`hashtextextended('semantic_edges:<type>:<id>')`,
   taken by the statement that reads its scope; writes to the note go on)
   from reading its vectors to writing its rows, so two recomputes of one
-  node never leave the older vectors' rows; it locks the note row
-  (`FOR SHARE`, against a purge) only after the searches, so a long note's
-  recompute never holds off writes to it.
+  node never leave the older vectors' rows.
+  **Locking** (#1026, #1027): every vault and repository has a second
+  advisory lock (`semantic_edges:container:<id>`). A writer of lists takes
+  it shared, in id order, in one statement after its node locks, and holds
+  it to its commit: a recompute on every container of its scope and of its
+  rows' targets, in the statement that takes its node lock; a merge on the
+  containers of its lists, of their rows' targets and of the node, in the
+  statement that takes the lists' locks, after them. A writer's write
+  statement keeps only rows whose node and target are still live and in
+  each other's reach (`inReach`), read in its own snapshot, so a delete or
+  a vault move that committed while the writer waited for the locks is
+  seen; a reach that grew meanwhile (a vault restored or moved in) is
+  filled by that change's refreshes and queued recomputes. A delete
+  (`removeSemanticNodes`, a vault transfer) takes its one container's lock
+  exclusively before it removes rows or reads holders, so a writer in
+  flight commits first and its rows are there to remove, and a writer that
+  starts later finds the node gone. An embed's refresh takes its node's
+  container exclusively in one statement outside any transaction before it
+  reads any list (`awaitSearches`): a recompute in flight that read the
+  blocks before the embed committed writes its list first, so the refresh
+  sees it among the holders. No deadlock: a delete takes one container and
+  waits on no writer's lock; a writer takes the container locks after its
+  node locks and then only reads and writes rows whose ends are in them;
+  the refresh's exclusive lock is released at once. Edits to a note never
+  wait for its recompute.
   **The stored rows are a function of the content, not of the order it was
   embedded in** (#1007, ADR-004 §1.3): each node's rows are its true top-k.
   The search per query vector reads its 100 nearest blocks; when the far
@@ -1691,9 +1771,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   gigabytes for a long note). It enters when it has fewer than K rows, a
   K-th below the similarity, or a K-th of the same similarity whose
   target's tie key comes after the node's. The lists it enters are locked
-  in id order (up to 256 per transaction) and changed in one statement: the
-  new row in, the last row out; a list whose last row names a node that is
-  gone is recomputed instead. Measured on the chapters tree at 65bdb534
+  in id order (up to 256 per type per transaction), then the container
+  locks; the merge statement reads the node and each list again
+  (`inReach`): one trashed, purged or moved meanwhile enters no list. Each
+  list is changed in one statement: the new
+  row in, the last row out. A list whose last row names a node that is
+  gone, or that holds the node by then (a recompute that started after the
+  holders were read; dropping its last row for a row it has would leave
+  K-1 rows, #1027), is recomputed instead. Measured on the chapters tree at 65bdb534
   (1,187 files and 800 notes of one owner, fake embedder at threshold 0.2,
   K 8, the shared test Postgres), base → this, back to back: 54 → 39 ms per
   file of the first push (1 recompute and 7.1 lists merged into per file),
@@ -1709,21 +1794,25 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   of a full rebuild, row for row; with the HNSW plan a few differ (HNSW
   recall, not order). **A delete leaves the rows of the content without
   the node** (#1015): every delete path calls `removeSemanticNodes(tx,
-  type, ids)` in its own transaction (a note's trash and purge, the files
-  a sync removes, a repository delete through `deleteRepositoryRecord`
-  for REST and MCP, a vault purge), one statement that deletes the nodes'
-  rows and the rows naming them and queues the rebuild job of each other
-  node whose rows named one (the holders: about K per node on average,
-  each queued once, so a sync that removes 1,000 files queues one job
-  set); the edge worker runs them after the commit (`kickSemanticEdges`).
-  The enqueue leaves a pending job that has not started (it reads the
-  committed state) and runs again one that finished or started (a new id,
-  so the run in progress completes nothing). A note in the trash has no
-  rows and is in no list (its recompute writes none); a restore queues
-  its refresh with every embed key it has (`queueSemanticEdgeRestore`),
-  since its kept blocks give its embed no new vector, so it re-enters the
-  lists it belongs in as #1007's merge does for a new node. A vault
-  transfer (`transferVaultSemanticEdges`) deletes the vault's notes'
+  type, container, ids)` in its own transaction (a note's trash and purge,
+  the files a sync removes, a repository delete through
+  `deleteRepositoryRecord` for REST and MCP, a vault's trash and purge),
+  which takes the container's lock (above), then in one statement deletes
+  the nodes' rows and the rows naming them and queues the rebuild job of
+  each other node whose rows named one (the holders: about K per node on
+  average, each queued once, so a sync that removes 1,000 files queues one
+  job set); the edge worker runs them after the commit
+  (`kickSemanticEdges`). The enqueue leaves a pending job that has not
+  started (it reads the committed state) and runs again one that finished
+  or started (a new id, so the run in progress completes nothing). A note
+  in the trash, or in a vault in the trash (#1025), has no rows and is in
+  no list: it is in no node's reach and reaches none (its recompute writes
+  none, and a file's reach is the owner's live vaults). A note's restore
+  queues its refresh with every embed key it has
+  (`queueSemanticEdgeRestore`), since its kept blocks give its embed no new
+  vector, so it re-enters the lists it belongs in as #1007's merge does for
+  a new node; a vault's restore queues that of each of its live notes. A
+  vault transfer (`transferVaultSemanticEdges`) deletes the vault's notes'
   note↔code rows and queues the previous owner's files that held one, the
   vault's live notes and the new owner's files. Measured on the chapters
   tree at 6be9626c (1,246 files and 800 notes cut from its markdown, one
@@ -1731,9 +1820,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   base → this, the write and then its jobs: a sync removing 1 file 18 → 12
   ms, then 3 holders recomputed in 24 ms; one removing 100 files 16 → 18
   ms, then 359 holders in 2.6 s (7.2 ms each); trashing a note 14 → 12 ms,
-  then 2 holders in 14 ms. Trashing or restoring a vault recomputes
-  nothing (#1025); a recompute in flight while a node it holds is deleted
-  can still write that row (#1026).
+  then 2 holders in 14 ms.
   Neighbours come from the node's scope only (D10 on #930, #461): of its
   own type, its vault (a note) or its repository (a file), never another
   one, even of the same owner; of the other type, the owner's repositories
@@ -2200,7 +2287,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `read_note`, `read_file`, `browse_vault`, `browse_repository`,
   `list_vaults` and `list_repositories` descriptions: the last two lost
   "Account-scoped connections only.", which a pinned token never sees
-  because those tools are not listed for it) because the shared `budgetArgs` (`response.ts`) list
+  because those tools are not listed for it; still 7,970 characters with
+  #683's `session_id` on both reads, paid for by `browse_vault`'s answer
+  shape and default fields, `browse_repository`'s `{files}` and `path`
+  wording and a shorter `if_rev`, all said in the manuals or by the
+  parameters themselves; writer 25,540 and admin 51,431 characters, also
+  unchanged)
+  because the shared `budgetArgs` (`response.ts`) list
   `Default N` and `Next page`, check the budget's 256-25,000 range in a
   refinement instead of listing `minimum`/`maximum`, pinned ids say
   `omit when pinned`, and the read targets are explained once here
@@ -2254,6 +2347,67 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - `if_rev` is in the cursor fingerprint like any argument. Search and
     graph have no not-modified answer: that is the result cache's (#685).
   `test/mcp-read-if-rev.test.ts`.
+- **Session references** (#683, ADR-004 §2.1, §2.9, D7):
+  `read_note` and `read_file` take `session_id` (`session-reads.ts`
+  `SESSION_ARG`: 8-64 characters, checked in a refinement, described as
+  "Yours; repeats come as `same_as`"; the conventions manual says the
+  rest). Under it a passage the session already got is sent as a
+  reference. The transport stays stateless: the memory is in Postgres
+  (§5.11 **Session memory**), so it works across instances.
+  - Passages: each text section with lines (`read_note` `body`,
+    `read_file` `content`, each `targets` part) and the `outline` and
+    `symbols` lists. A text repeats when the session holds the same
+    document version (note `rev`, file content hash, without `~pending`)
+    with lines covering it, or the same text of the same document at any
+    version (sha256 of the lines, 128 bits); a list repeats when the
+    session holds the same list. A reference is used only when it is
+    shorter than the text it replaces.
+  - Shape: every session answer adds `call` (its number in the session)
+    to the head. A repeated text is `same_as: {call, loc, rev | hash}`:
+    the call that sent it, `path#La-Lb` in that call's numbering (the
+    path for a list) and that call's version. A part keeps its
+    `{target, lines}` with `same_as` in place of `text`; a body, content
+    or list is `{"same_as": …}` as the value of its key, and `read_note`
+    sends no body block then. `response.ts`: a section's `ref` is shown in
+    place of its content and counted as shown whole; the section keeps its
+    text, so cursor guards are unchanged.
+  - Only a first page refers: a cursor page sends what it shows in full
+    (and remembers it). A cursor issued after a reference carries the
+    referenced section indices (`r`, round 1 of #1031); `slots()` treats
+    them as finished (`start: -1`) and `compose` leaves them out, so a
+    later page neither announces (`next`) nor resends them. A reference
+    frees budget, so a session page can show more than the same call
+    without `session_id`: its `truncated` and cursor differ accordingly.
+    `session_id` is left out of the cursor fingerprint (`UNBOUND_ARGS`),
+    so a cursor continues with or without the session; continued without
+    it, a cursor that carries `r` still leaves those sections out (the one
+    exception to "without `session_id` every answer is in full": the agent
+    repeats the first call without `session_id` to get them). A cursor without
+    a reference has no `r`: the bytes of a no-session cursor are as before.
+  - What a page showed whole is remembered after rendering
+    (`Budgeted.rendered` gets `Seen`: per section the lines shown whole,
+    a line split at a page edge excluded, or whether a list was shown
+    whole at `full`).
+  - Without `session_id` nothing of this runs and every answer is the
+    same bytes as before #683: an agent whose context lost the text a
+    reference names re-reads without it. There is no `full` argument;
+    leaving the session out is the same at no tools/list cost.
+  - Why an argument and not the transport's `Mcp-Session-Id`: a
+    transport session lasts as long as the client's connection, not the
+    model's context (a client keeps one connection while it runs: Claude
+    Code's main agent and its subagents share it, and it outlives `/clear`
+    and compaction), so a reference could name a call the model never
+    saw. And it is not opt-in: Streamable HTTP requires a client to send
+    back the id an `initialize` answer issues on every later request, and
+    the TypeScript SDK's `StreamableHTTPClientTransport` (Claude Code, the
+    MCP Inspector) does, so every such client would get references
+    without asking. A header opt-in has the same lifetime problem, and
+    agents cannot set headers.
+  - Search and `find_symbols` snippets are not deduplicated yet (#1030).
+  `test/mcp-session-dedup.test.ts` (references, changed text, other
+  session, token and account, expiry, permission change, pages, caps, the
+  no-session bytes, and a scripted session on the repository's own files:
+  fewer tokens, the same answers once references are resolved).
 - **Cacheable prompt** (#681): what a token is sent before its first
   call opens every agent prompt, and providers bill a repeated prefix at
   a fraction of the price only if its bytes repeat. `initialize`,
@@ -3395,7 +3549,7 @@ first 5 by path listed).
 
 **Derived-artifact versions** (#453, migration 0033; `CHUNK_VERSION`
 #452, migrations 0035 and 0036). Three constants name what derives the index. `EXTRACTOR_VERSION` (`repositories/extraction.ts`,
-an integer, now 6; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
+an integer, now 7; 2 is the TSX grammar for `.tsx` and `.mts`/`.cts`
 support, #449/#451; 3 the **Symbol contract** kinds, `parent`, the
 top-level rule and the embed-budget order, #450; 4 re-exports, literal
 `import()`/`require()` and `import x = require()` as imports, #466, which
@@ -3403,7 +3557,8 @@ embeds nothing again; 5 Rust, Java, C, C++, C#, Kotlin, Ruby and PHP
 symbols and imports, Markdown/HTML heading sections and the relabelling of
 files whose label changed, #464, which embeds only the new symbol texts;
 sections are never embedded; 6 the identifier `keywords` of files and symbols,
-#455, which embeds nothing again): bump it with any change to the grammars and queries,
+#455, which embeds nothing again; 7 the code keyword leg's fields, `keyword_head`,
+#455 part 2, which embeds nothing again): bump it with any change to the grammars and queries,
 symbol kinds, the outlines (`outline.ts`), the labels, the minified-file
 rule, the embed-budget order or the stored identifier lexemes (the snippet cut and block texts are
 `CHUNK_VERSION`'s). `EMBEDDER_ID` (`search/embeddings.ts`): the model
@@ -3540,9 +3695,10 @@ itself.
 
 The rules every cache of an answer follows. No answer is cached yet: the
 search and graph result cache (#685, which also adds per-cache hit/miss
-metrics and the test that a cached answer is never served stale) and
-per-session de-duplication (#683) build on this contract, and none may
-cache without it. D7 on #930
+metrics and the test that a cached answer is never served stale) builds
+on this contract, and none may cache without it. Per-session
+de-duplication (#683, **Session memory** below) caches no answer; it
+remembers what a session was sent, under the same scoping rules. D7 on #930
 replaced the old promise of no cross-connection caching (§5.8) with this
 contract. Permission checks themselves stay live (§1): a cache never
 authorizes anything. The query-embedding cache (below) caches no answer,
@@ -3668,6 +3824,45 @@ compares `rev` or `hash` live after the access check and caches nothing.
 Tests: `cache-epochs.test.ts` (every write path bumps its own scope and no
 other; reads bump nothing) and `cache-key.test.ts` (key fields, refusals,
 real epochs around writes and reads).
+
+**Session memory** (#683, `cache/session.ts`, migration 0060; §5.8
+**Session references**). Not an answer cache: it stores which passages
+a `read_note` / `read_file` sent under an agent's `session_id` (content
+hash, document version, lines, the call), never text and never a
+permission. It follows the contract's scoping:
+- **Scope**: keyed by token (`mcp_connections` row, so one account) and
+  session id. Another session id, another token of the same account or
+  another account has its own memory and gets full text. Deleting the
+  token deletes its sessions (`ON DELETE CASCADE`).
+- **Live checks first**: a read opens its session only after `tool()`'s
+  token, profile and scope checks and the tool's own access check
+  passed; the memory decides how an answer the caller may see is sent,
+  never whether.
+- **Permission epoch**: each session call reads
+  `instance_state.permission_epoch` with the session row; when it moved
+  since the session's last call, everything the session held is
+  forgotten (`since` moves to this call), whatever changed and for whom.
+- **Content**: a reference names exactly what was sent (call, lines,
+  version), and a passage repeats only by the same version with covering
+  lines or by the same content hash, so a changed passage is always sent
+  in full. No index epoch is needed: the content is read live.
+- **Expiry and bounds**: `SESSION_IDLE_MINUTES` (30) after a session's
+  last call it is forgotten (the call numbers go on while the row lives);
+  any session call deletes the rows of sessions idle past it. A token
+  keeps at most `MAX_SESSIONS` (16; the least recently used are dropped),
+  a session at most `MAX_PASSAGES` (500; the oldest calls' dropped). A
+  row is ids, a 32-hex hash, a version and four integers, no text.
+- **Storage**: two UNLOGGED tables, `mcp_sessions` and
+  `mcp_session_passages` (not in the Drizzle model, not in backups): every
+  instance shares them, and a crash empties them, which only means full
+  answers. They hold no ranking and no derived artifact, so they need no
+  build key. Cost per session read: one statement before the answer
+  (count the call, prune, read what the session holds of the document)
+  and one after it (record what the page showed whole): on the local
+  test database, means of 200, 1.3 ms and 0.9 ms against a 0.26 ms
+  `SELECT 1` round trip (3.5 ms and 2.5 ms against 0.74 ms under load;
+  `mcp-session-dedup.test.ts` logs it). A read without `session_id`
+  runs neither.
 
 **Query-embedding cache** (`embeddings.ts` `QueryEmbeddingCache`, #684).
 Search embeds its query text through `embedQuery`; a repeated query does
