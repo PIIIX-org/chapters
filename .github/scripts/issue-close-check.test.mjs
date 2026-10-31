@@ -10,9 +10,12 @@ import {
   closingRefs,
   contentWords,
   defectEntriesFor,
+  isTransient,
   mentions,
   mergeGroupPr,
   proseLines,
+  refersTo,
+  retryDelay,
   titleIssueRefs,
 } from './issue-close-check.mjs'
 
@@ -296,6 +299,25 @@ describe('mergeGroupPr', () => {
   })
 })
 
+describe('retry', () => {
+  const h = (o = {}) => new Headers(o)
+  it('retries once on 5xx, 429 and the rate-limit 403, not on other 4xx', () => {
+    assert.equal(isTransient(502, h()), true)
+    assert.equal(isTransient(429, h()), true)
+    assert.equal(isTransient(403, h({ 'x-ratelimit-remaining': '0' })), true)
+    assert.equal(isTransient(403, h({ 'retry-after': '3' })), true)
+    assert.equal(isTransient(403, h({ 'x-ratelimit-remaining': '41' })), false)
+    assert.equal(isTransient(404, h()), false)
+    assert.equal(isTransient(422, h()), false)
+  })
+  it('waits retry-after (capped at 60 s), else 5 s', () => {
+    assert.equal(retryDelay(h({ 'retry-after': '3' })), 3)
+    assert.equal(retryDelay(h({ 'retry-after': '600' })), 60)
+    assert.equal(retryDelay(h({ 'retry-after': 'soon' })), 5)
+    assert.equal(retryDelay(h()), 5)
+  })
+})
+
 // --- check: the verdict --------------------------------------------------------
 
 describe('check', () => {
@@ -334,7 +356,7 @@ describe('check', () => {
     assert.match(r.comment, new RegExp(`Head: \`${SHA}\``))
   })
 
-  it('(a) fails when an item is not mentioned and asks the author to respond', () => {
+  it('(a) an unmentioned item is a warning and an author request, never a failure', () => {
     const body = 'Adds a CHANGELOG entry per promotion.\n\nCloses #710'
     const r = check({
       pr: pr(body),
@@ -342,7 +364,9 @@ describe('check', () => {
       defects: DEFECTS,
       repo: REPO,
     })
-    assert.equal(r.ok, false)
+    assert.equal(r.ok, true)
+    assert.deepEqual(r.issues[0].problems, [])
+    assert.equal(r.issues[0].unmentioned, 3)
     assert.deepEqual(
       r.issues[0].items.filter((i) => !i.mentioned).map((i) => i.text),
       [
@@ -351,15 +375,80 @@ describe('check', () => {
         'The promotion PR template links the entry.',
       ],
     )
+    assert.deepEqual(r.warnings, [
+      '3 acceptance items of #710 are not mentioned in the PR body (see the comment).',
+    ])
     assert.match(
-      r.issues[0].problems[0],
-      /3 acceptance items of #710 are not mentioned/,
+      r.title,
+      /3 acceptance items are not mentioned in the body \(a warning, not a failure\)/,
+    )
+    assert.ok(
+      r.comment.startsWith(`${COMMENT_MARKER}\n## Issue close check: passed`),
+    )
+    assert.match(
+      r.comment,
+      /:warning: 3 acceptance items not mentioned in the PR body/,
     )
     assert.match(
       r.comment,
       /\*\*not in the PR body\*\*: rollback notes for migrations/,
     )
-    assert.match(r.comment, /\*\*Author:\*\* edit the PR body/)
+    assert.match(r.comment, /\*\*Author:\*\* for each item marked/)
+    assert.match(r.comment, /not a gate: the check does not fail on it/)
+    // The warning is for the annotation only; the report lists it once, under the issue.
+    assert.equal(
+      (r.report.match(/not mentioned in the PR body/g) ?? []).length,
+      1,
+    )
+  })
+
+  it('neutralises @mentions copied from issue text so the comment pings nobody', () => {
+    const issue = {
+      ...ISSUE_PLAIN,
+      title: 'Ask @octocat about locks',
+      body: '- [ ] ping @octocat and @some-team/reviewers',
+    }
+    const r = check({
+      pr: pr('Closes #1044'),
+      issues: { 1044: issue },
+      defects: DEFECTS,
+      repo: REPO,
+    })
+    assert.doesNotMatch(r.comment, /@octocat/)
+    assert.doesNotMatch(r.comment, /@some-team/)
+    assert.match(r.comment, /@\u200Doctocat/)
+    assert.match(r.comment, /@\u200Dsome-team\/reviewers/)
+  })
+
+  it('a merged or closed PR is skipped: passes, no refs, comment left alone', () => {
+    for (const extra of [
+      { state: 'closed', merged: true },
+      { state: 'closed', merged: false },
+    ]) {
+      const r = check({
+        pr: pr('Closes #403', 'fix: x', extra),
+        issues: { 403: ISSUE_CLOSED },
+        defects: DEFECTS,
+        repo: REPO,
+      })
+      assert.equal(r.ok, true)
+      assert.equal(r.skipped, true)
+      assert.deepEqual(r.issues, [])
+      assert.equal(r.comment, undefined)
+      assert.match(
+        r.title,
+        extra.merged ? /#1050 is merged/ : /#1050 is closed/,
+      )
+    }
+    assert.equal(
+      check({
+        pr: pr('Closes #1044', 'x', { state: 'open', merged: false }),
+        issues: { 1044: ISSUE_PLAIN },
+        defects: DEFECTS,
+        repo: REPO,
+      }).skipped,
+      false,
+    )
   })
 
   it('(a) an issue without a checklist passes and says so', () => {
@@ -428,15 +517,11 @@ describe('check', () => {
       repo: REPO,
     })
     assert.equal(r.ok, false)
-    assert.match(
-      r.issues[0].problems[0],
-      /#403 is already closed \(completed\)/,
-    )
-    // A closed issue's items are still listed (they were never answered here).
-    assert.match(
-      r.issues[0].problems[1],
-      /1 acceptance item of #403 is not mentioned/,
-    )
+    assert.deepEqual(r.issues[0].problems, [
+      '#403 is already closed (completed): a merged PR cannot close it again. Reopen it or drop the closing keyword.',
+    ])
+    // A closed issue's items are still listed, as a warning.
+    assert.equal(r.issues[0].unmentioned, 1)
     assert.deepEqual(r.issues[1].problems, [
       '#1046 is a pull request, not an issue.',
     ])
@@ -450,7 +535,7 @@ describe('check', () => {
   it('(d) warns, and passes, when only the title names an issue', () => {
     const r = check({
       pr: pr(
-        '## Change\n\nRanks code first.\n\nRefs #457.',
+        '## Change\n\nRanks code first, see the plan note.',
         'fix: code ranks above docs (#457)',
       ),
       issues: {},
@@ -465,6 +550,29 @@ describe('check', () => {
     )
     assert.match(r.comment, /:warning: The title names #457/)
     assert.match(r.title, /see the warnings/)
+  })
+
+  it('(d) is quiet when the body refers to the issue on purpose', () => {
+    for (const body of [
+      'Refs #457.',
+      'refs: #457',
+      'Related to #457',
+      'part of PIIIX-org/chapters#457',
+      'See #457',
+    ]) {
+      const r = check({
+        pr: pr(body, 'fix: code ranks (#457)'),
+        issues: {},
+        defects: DEFECTS,
+        repo: REPO,
+      })
+      assert.deepEqual(r.warnings, [], body)
+      assert.equal(r.comment, null, body)
+    }
+    assert.equal(refersTo('Refs #457', 457), true)
+    assert.equal(refersTo('Refs #4570', 457), false)
+    assert.equal(refersTo('`refs #457`', 457), false)
+    assert.equal(refersTo('#457 is the plan', 457), false)
   })
 
   it('(d) does not warn when the body does close something', () => {

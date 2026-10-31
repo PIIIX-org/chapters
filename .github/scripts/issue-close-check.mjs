@@ -303,27 +303,60 @@ export function mergeGroupPr(headRef) {
   return m ? Number(m[1]) : null
 }
 
+/** A `@name` with a zero-width joiner after the `@`, so a comment never pings anyone an issue mentions. */
+const unping = (s) => s.replace(/@(?=[\w-])/g, '@\u200D')
+
 const cell = (s) =>
-  String(s ?? '')
-    .replace(/\|/g, '\\|')
-    .replace(/\s+/g, ' ')
-    .trim()
+  unping(
+    String(s ?? '')
+      .replace(/\|/g, '\\|')
+      .replace(/\s+/g, ' ')
+      .trim(),
+  )
+
+/**
+ * Whether a body refers to issue N on purpose without closing it
+ * (`refs #N`, `references #N`, `related to #N`, `part of #N`, `see #N`).
+ */
+export function refersTo(body, n) {
+  const text = proseLines(body).join('\n')
+  const re = new RegExp(
+    String.raw`\b(?:refs?|references?|related(?:\s+to)?|part\s+of|see)\s*:?\s+(?:[\w.-]+/[\w.-]+)?#${n}\b`,
+    'i',
+  )
+  return re.test(text)
+}
 
 /**
  * The verdict for a PR. `pr` is the API pull request (`number`, `title`,
- * `body`, `head.sha`, `html_url`); `issues` maps a same-repo issue number to
- * the API issue (`number`, `title`, `body`, `state`, `html_url`,
- * `pull_request` when it is a PR) or to null when it does not exist;
- * `defects` is the parsed known-defects file, or an Error when it could not
- * be read. Returns { ok, refs, issues: [{ number, title, state, problems,
- * items: [{ text, mentioned }], defects }], warnings, title, report,
- * comment }. `comment` is the sticky comment text, or null when the PR
- * closes nothing and nothing is to be said.
+ * `body`, `state`, `merged`, `head.sha`, `html_url`); `issues` maps a
+ * same-repo issue number to the API issue (`number`, `title`, `body`,
+ * `state`, `html_url`, `pull_request` when it is a PR) or to null when it
+ * does not exist; `defects` is the parsed known-defects file, or an Error
+ * when it could not be read. Returns { ok, skipped, refs, issues: [{ number,
+ * title, state, problems, unmentioned, items: [{ text, mentioned }],
+ * defects }], warnings, title, report, comment }. `comment` is the sticky
+ * comment text, null when the PR closes nothing and nothing is to be said,
+ * and undefined when the PR is closed (`skipped`: the comment is left as it
+ * is). Problems fail the check; warnings do not.
  */
 export function check({ pr, issues, defects, repo }) {
+  if (pr.state === 'closed' || pr.merged) {
+    return {
+      ok: true,
+      skipped: true,
+      refs: [],
+      issues: [],
+      warnings: [],
+      title: `PR #${pr.number} is ${pr.merged ? 'merged' : 'closed'}; nothing to check and the comment is left as it is.`,
+      report: '',
+      comment: undefined,
+    }
+  }
   const refs = closingRefs(pr.body, repo)
   const body = pr.body ?? ''
   const warnings = []
+  const itemWarnings = []
   const results = []
   const foreign = refs.filter((r) => !r.sameRepo)
   if (defects instanceof Error) {
@@ -335,6 +368,7 @@ export function check({ pr, issues, defects, repo }) {
   for (const ref of refs.filter((r) => r.sameRepo)) {
     const issue = issues[ref.number] ?? null
     const problems = []
+    let unmentioned = 0
     let items = []
     let entries = []
     if (!issue) {
@@ -351,10 +385,10 @@ export function check({ pr, issues, defects, repo }) {
         text,
         mentioned: mentions(body, text),
       }))
-      const missing = items.filter((i) => !i.mentioned)
-      if (missing.length) {
-        problems.push(
-          `${missing.length} acceptance item${missing.length === 1 ? '' : 's'} of #${ref.number} ${missing.length === 1 ? 'is' : 'are'} not mentioned in the PR body (listed below).`,
+      unmentioned = items.filter((i) => !i.mentioned).length
+      if (unmentioned) {
+        itemWarnings.push(
+          `${unmentioned} acceptance item${unmentioned === 1 ? '' : 's'} of #${ref.number} ${unmentioned === 1 ? 'is' : 'are'} not mentioned in the PR body (see the comment).`,
         )
       }
     }
@@ -376,16 +410,17 @@ export function check({ pr, issues, defects, repo }) {
         : 'missing',
       url: issue?.html_url ?? null,
       problems,
+      unmentioned,
       items,
       defects: entries,
     })
   }
 
   if (!refs.length) {
-    const named = titleIssueRefs(pr.title)
+    const named = titleIssueRefs(pr.title).filter((n) => !refersTo(body, n))
     if (named.length) {
       warnings.push(
-        `The title names ${named.map((n) => `#${n}`).join(', ')} but the body has no closing keyword (\`Closes #N\`, \`Fixes #N\`, \`Resolves #N\`): merging will close nothing. Add one, or leave it out on purpose.`,
+        `The title names ${named.map((n) => `#${n}`).join(', ')} but the body has no closing keyword (\`Closes #N\`, \`Fixes #N\`, \`Resolves #N\`): merging will close nothing. Add one, or say \`refs #N\` to leave it open on purpose.`,
       )
     }
   }
@@ -397,14 +432,18 @@ export function check({ pr, issues, defects, repo }) {
 
   const failing = results.filter((r) => r.problems.length)
   const ok = failing.length === 0
+  const skipped = false
   const closes = results.length
+  const missing = results.reduce((n, r) => n + r.unmentioned, 0)
   const title = !closes
     ? warnings.length
       ? 'The PR closes no issue of this repository; see the warnings.'
       : 'The PR closes no issue; nothing to check.'
-    : ok
-      ? `The PR closes ${closes} open issue${closes === 1 ? '' : 's'}; every acceptance item is mentioned in the body and no known-defect entry points at ${closes === 1 ? 'it' : 'them'}.`
-      : `${failing.length} of the ${closes} issue${closes === 1 ? '' : 's'} the PR closes ${failing.length === 1 ? 'has' : 'have'} a problem.`
+    : !ok
+      ? `${failing.length} of the ${closes} issue${closes === 1 ? '' : 's'} the PR closes ${failing.length === 1 ? 'has' : 'have'} a problem.`
+      : missing
+        ? `The PR closes ${closes} open issue${closes === 1 ? '' : 's'}; ${missing} acceptance item${missing === 1 ? ' is' : 's are'} not mentioned in the body (a warning, not a failure).`
+        : `The PR closes ${closes} open issue${closes === 1 ? '' : 's'}; every acceptance item is mentioned in the body and no known-defect entry points at ${closes === 1 ? 'it' : 'them'}.`
 
   const sections = []
   for (const r of results) {
@@ -413,6 +452,11 @@ export function check({ pr, issues, defects, repo }) {
       `### ${head}${r.title ? ` ${cell(r.title)}` : ''} (${r.state})`,
     ]
     for (const p of r.problems) lines.push(`- :x: ${p}`)
+    if (r.unmentioned) {
+      lines.push(
+        `- :warning: ${r.unmentioned} acceptance item${r.unmentioned === 1 ? '' : 's'} not mentioned in the PR body (listed below).`,
+      )
+    }
     if (r.items.length) {
       lines.push('', 'Acceptance items (`Done when`, unchecked `- [ ]`):', '')
       for (const i of r.items) {
@@ -443,9 +487,8 @@ export function check({ pr, issues, defects, repo }) {
     : ''
   const report = [sections.join('\n\n'), warnBlock].filter(Boolean).join('\n\n')
 
-  const unmentioned = results.some((r) => r.items.some((i) => !i.mentioned))
-  const authorNote = unmentioned
-    ? '**Author:** edit the PR body (the check re-runs on edit) so it says, for each item marked **not in the PR body**, how this PR meets it or why it does not; quoting the item counts. Then the `issue-close` check turns green.'
+  const authorNote = missing
+    ? '**Author:** for each item marked **not in the PR body**, say in the PR body (the check re-runs on edit) how this PR meets it, or why it does not; quoting the item counts. This is a request, not a gate: the check does not fail on it.'
     : ''
   const comment =
     closes || warnings.length
@@ -464,14 +507,23 @@ export function check({ pr, issues, defects, repo }) {
           .join('\n')
       : null
 
-  return { ok, refs, issues: results, warnings, title, report, comment }
+  return {
+    ok,
+    skipped,
+    refs,
+    issues: results,
+    warnings: [...itemWarnings, ...warnings],
+    title,
+    report,
+    comment,
+  }
 }
 
 // ---------------------------------------------------------------------------
 // Runner (GitHub Actions only)
 
 // The workflow runs the base commit's copy of this script when the base
-// has one (so a PR cannot edit the check it is judged by) and says which.
+// has one (so a PR's script edits do not judge the PR) and says which.
 const CHECKER =
   process.env.ISSUE_CLOSE_CHECKER === 'base'
     ? "Checker: the base commit's `.github/scripts/issue-close-check.mjs`."
@@ -494,21 +546,64 @@ function finish(ok, title, body, warnings = []) {
   process.exit(ok ? 0 : 1)
 }
 
-/** One GitHub API call -> the parsed JSON body (null on 404 when allowed). */
+/**
+ * Whether a response is worth one retry: a 5xx, a 429, or a 403 that is
+ * the rate limit (`x-ratelimit-remaining: 0` or a `retry-after` header).
+ */
+export function isTransient(status, headers) {
+  if (status >= 500 || status === 429) return true
+  return (
+    status === 403 &&
+    (headers.get('x-ratelimit-remaining') === '0' ||
+      headers.get('retry-after') !== null)
+  )
+}
+
+/** Seconds to wait before the retry: `retry-after` when given, else 5. */
+export function retryDelay(headers) {
+  const s = Number(headers.get('retry-after'))
+  return Number.isFinite(s) && s > 0 ? Math.min(s, 60) : 5
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * One GitHub API call -> the parsed JSON body (null on 404 when allowed).
+ * A network error or a transient response is retried once.
+ */
 async function api(path, { method = 'GET', body, allow404 = false } = {}) {
   const url = path.startsWith('https://')
     ? path
     : `${process.env.GITHUB_API_URL ?? 'https://api.github.com'}${path}`
-  const res = await fetch(url, {
-    method,
-    headers: {
-      authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
-      accept: 'application/vnd.github+json',
-      'x-github-api-version': '2022-11-28',
-      ...(body ? { 'content-type': 'application/json' } : {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  })
+  const once = () =>
+    fetch(url, {
+      method,
+      headers: {
+        authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+        accept: 'application/vnd.github+json',
+        'x-github-api-version': '2022-11-28',
+        ...(body ? { 'content-type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+  let res
+  try {
+    res = await once()
+  } catch (err) {
+    console.log(
+      `::notice::${method} ${url} failed (${err.message}); retrying once`,
+    )
+    await sleep(5000)
+    res = await once()
+  }
+  if (isTransient(res.status, res.headers)) {
+    const delay = retryDelay(res.headers)
+    console.log(
+      `::notice::${method} ${url}: ${res.status}; retrying once in ${delay}s`,
+    )
+    await sleep(delay * 1000)
+    res = await once()
+  }
   if (res.status === 404 && allow404) return null
   if (!res.ok)
     throw new Error(`${method} ${url}: ${res.status} ${await res.text()}`)
@@ -591,6 +686,18 @@ async function main() {
       'Not a pull_request or merge_group event; nothing to check.',
       '',
     )
+
+  // A body edit after the merge (or close) must not fail on the issues the
+  // merge closed, nor rewrite the comment: the workflow's `if` skips the job
+  // and this is the same guard for a hand-built event.
+  if (pr.state === 'closed' || pr.merged) {
+    const r = check({ pr, issues: {}, defects: {}, repo })
+    finish(
+      true,
+      r.title,
+      `Source: ${source}; PR [#${pr.number}](${pr.html_url}).`,
+    )
+  }
 
   const refs = closingRefs(pr.body, repo)
   const issues = {}
