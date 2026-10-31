@@ -97,13 +97,21 @@ async function api(path, auth) {
 
 /**
  * `{ [number]: { state, merged_at, closed_at } }` for each PR the records
- * name. One request at a time: a few dozen is all there ever is.
+ * name. One request at a time: a few dozen is all there ever is. A number
+ * the API will not return (not a PR, a transient error) is left out with a
+ * warning, so its records stay where they are and the rest still move;
+ * `get(path, auth)` is the request, replaceable in tests.
  */
-export async function fetchPulls(repo, numbers, auth) {
+export async function fetchPulls(repo, numbers, auth, get = api) {
   const out = {}
   for (const n of new Set(numbers)) {
-    const p = await api(`/repos/${repo}/pulls/${n}`, auth)
-    out[n] = { state: p.state, merged_at: p.merged_at, closed_at: p.closed_at }
+    try {
+      const p = await get(`/repos/${repo}/pulls/${n}`, auth)
+      out[n] = { state: p.state, merged_at: p.merged_at, closed_at: p.closed_at }
+    } catch (err) {
+      const text = `#${n}: not looked up, its records stay (${err?.message ?? err})`
+      console.warn(process.env.GITHUB_ACTIONS ? `::warning title=review-archive::${text}` : `warning: ${text}`)
+    }
   }
   return out
 }

@@ -6,8 +6,10 @@ name: Review archive
 # docs/reviews/archive/YYYY-MM/ (the month it was merged or closed). Verdict
 # comments link records by commit sha, so moved records stay reachable.
 #
-# Weekly (Mondays 02:30 UTC) and by hand (`gh workflow run review-archive.yml
-# --ref dev`). `dev` takes no direct push (ruleset 24421063 requires a PR,
+# Weekly (Sundays 03:00 UTC; not the 02:00 of state-md.yml: under strict
+# protection two bot PRs merged back to back cost an extra CI cycle) and by
+# hand (`gh workflow run review-archive.yml --ref dev`). `dev` takes no
+# direct push (ruleset 24421063 requires a PR,
 # no bypass), so like state-md.yml it force-pushes `bot/review-archive` (one
 # commit of renames on top of `dev`) and opens or updates a PR with the
 # STATE_MD_TOKEN secret (environment `state-md`, limited to `dev`; #635):
@@ -18,7 +20,7 @@ name: Review archive
 
 on:
   schedule:
-    - cron: '30 2 * * 1'
+    - cron: '0 3 * * 0'
   workflow_dispatch:
 
 concurrency:

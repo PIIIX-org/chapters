@@ -6,7 +6,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "prepare": "git rev-parse --is-inside-work-tree > /dev/null 2>&1 && git config core.hooksPath .githooks || exit 0",
+    "prepare": "sh .githooks/install.sh",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",

@@ -5,8 +5,8 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, it } from 'node:test'
-import { DAYS, apply, archiveDir, parseRecord, plan, records } from './review-archive.mjs'
+import { describe, it, mock } from 'node:test'
+import { DAYS, apply, archiveDir, fetchPulls, parseRecord, plan, records } from './review-archive.mjs'
 
 const NOW = new Date('2026-10-31T12:00:00Z')
 const day = (n) => new Date(NOW.getTime() - n * 86_400_000).toISOString()
@@ -81,6 +81,32 @@ describe('records and apply', () => {
       assert.deepEqual(records(dir), ['1046-dd2e1c9.md'])
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('fetchPulls', () => {
+  it('asks once per number, keeps the three fields, and skips a failed lookup with a warning', async () => {
+    const asked = []
+    const get = async (path) => {
+      asked.push(path)
+      if (path.endsWith('/999')) throw new Error('GET …/pulls/999: 404 Not Found')
+      return { state: 'closed', merged_at: '2026-10-20T00:00:00Z', closed_at: '2026-10-20T00:00:00Z', title: 'x' }
+    }
+    const warn = mock.method(console, 'warn', () => {})
+    try {
+      const pulls = await fetchPulls('o/r', [972, 999, 972, 1046], 'tok', get)
+      assert.deepEqual(asked, ['/repos/o/r/pulls/972', '/repos/o/r/pulls/999', '/repos/o/r/pulls/1046'])
+      assert.deepEqual(Object.keys(pulls), ['972', '1046'])
+      assert.deepEqual(pulls[972], { state: 'closed', merged_at: '2026-10-20T00:00:00Z', closed_at: '2026-10-20T00:00:00Z' })
+      assert.equal(warn.mock.callCount(), 1)
+      assert.match(warn.mock.calls[0].arguments[0], /#999: not looked up, its records stay \(.*404/)
+      // A record whose PR was not looked up stays put.
+      assert.deepEqual(plan(['999-abcdef0.md', '972-0238f11.md'], pulls, NOW), [
+        { name: '972-0238f11.md', number: 972, to: 'archive/2026-10' },
+      ])
+    } finally {
+      warn.mock.restore()
     }
   })
 })

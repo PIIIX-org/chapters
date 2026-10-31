@@ -1,32 +1,10 @@
 #!/bin/sh
-# Appends the agent attribution trailer to every commit message that has
-# no `Co-Authored-By:` trailer yet (docs/agents/github-workflow.md, change
-# cycle step 2; the `attribution` check fails PRs whose commits lack one).
-# Installed by the root `prepare` script: `git config core.hooksPath .githooks`.
-#
-# A human committing from the shared account turns it off for that clone:
-#   git config chapters.coauthor none
-# Another model or address: git config chapters.coauthor 'Name <email>'.
-#
-# Arguments: $1 message file, $2 source (message, template, merge, squash,
-# commit or empty). The trailer goes on every source: merges and amends are
-# checked like any other commit. `--if-exists doNothing` matches the key
-# case-insensitively, so a message that already names any co-author
-# (another model, say) is left as it is. An empty message (the editor is
-# about to open) gets the trailer two lines down, so the subject typed on
-# the first line stays its own paragraph and the trailer stays a trailer.
-
-set -e
-
-coauthor=$(git config --get chapters.coauthor || true)
-[ -z "$coauthor" ] && coauthor='Claude Opus <noreply@anthropic.com>'
-[ "$coauthor" = none ] && exit 0
-
-if [ -z "$(git stripspace --strip-comments < "$1")" ]; then
-  printf '\n\nCo-Authored-By: %s\n' "$coauthor" | cat - "$1" > "$1.coauthor" &&
-    mv "$1.coauthor" "$1"
-  exit 0
-fi
-
-git interpret-trailers --in-place --if-exists doNothing \
-  --trailer "Co-Authored-By: $coauthor" -- "$1"
+# `git revert` and `git cherry-pick` commit through the sequencer, which
+# runs this hook but never commit-msg (git 2.50). With source `message`
+# (no editor: `--no-edit`, or a message given in full with -m/-F/-C) the
+# message is final, so the trailer is added here; commit-msg then finds it
+# and adds nothing. Every other source (empty, template, merge, squash,
+# commit) is left to commit-msg, after the editor. Logic and opt-out:
+# .githooks/coauthor.
+[ "$2" = message ] || exit 0
+exec sh "$(git rev-parse --git-path hooks)/coauthor" "$1"
