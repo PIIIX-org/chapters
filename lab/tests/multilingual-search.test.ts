@@ -9,7 +9,8 @@
 // keywords): 10 Persian targets, 10 English targets, 4 mixed, 3 cross-
 // lingual, and 6 Arabic-script normalization pairs (ی/ي, ک/ك, ZWNJ, digits).
 // For every query: rank of the answer in (a) the hybrid REST search the UI
-// uses, (b) keyword-only (the exact FTS SQL of noteRows), (c) vector-only
+// uses, (b) keyword-only (the FTS match of noteRows' AND query, by its body
+// rank; #455's field order and relaxed rows are left out), (c) vector-only
 // (the exact KNN SQL, query embedded with the same model inside the app
 // container). hit@1/hit@5/MRR per group and retriever.
 import type { Check, LabTest } from '../lib/context.ts'
@@ -245,7 +246,8 @@ const test: LabTest = {
       for (const [i, q] of QUERIES.entries()) {
         const hybrid = await admin.get<{ results?: Array<{ path: string; resourceType: string }> }>(`/api/vaults/${vaultId}/search?q=${encodeURIComponent(q.q)}&limit=30`)
         const hybridPaths = Array.isArray(hybrid.json?.results) ? hybrid.json.results.filter((r) => r.resourceType === 'note').map((r) => r.path) : []
-        // noteRows(..., 'keyword') from search/search.ts (minus ts_headline and the path, id tie-break).
+        // The AND query of noteRows(..., 'keyword') from search/search.ts, by its body rank (minus ts_headline, the
+        // path, id tie-break, the field order and the relaxed rows of #455 part 2).
         const kw = await ctx.docker.psqlRows<{ path: string }>(
           `select path from notes where vault_id = '${vaultId}' and deleted_at is null and fts @@ websearch_to_tsquery('english', ${lit(q.q)}) order by ts_rank(fts, websearch_to_tsquery('english', ${lit(q.q)})) desc limit 30`,
         )

@@ -39,11 +39,14 @@ const require = createRequire(import.meta.url)
  * 6: identifier lexemes for the keyword channel (#455, search/identifiers.ts):
  * `repository_files.keyword_fts` and symbol blocks' `keywords` (migration 0052).
  * No block text changes, so no vector is embedded again.
- * 7: call, reference, import and test sites, stored as `code_edges` (#469,
+ * 7: the code keyword leg's fields (#455 part 2): `repository_files.keyword_head`,
+ * the path's and the symbols' name lexemes, also added to `keyword_fts`
+ * (migration 0059). No block text changes, so no vector is embedded again.
+ * 8: call, reference, import and test sites, stored as `code_edges` (#469,
  * code-edge-rules.ts, code-edges.ts). No block text changes, so no vector is
  * embedded again: the bump only fills the new table.
  */
-export const EXTRACTOR_VERSION = 7
+export const EXTRACTOR_VERSION = 8
 
 /**
  * What a symbol declares (#450; the contract more languages, #464, and the
