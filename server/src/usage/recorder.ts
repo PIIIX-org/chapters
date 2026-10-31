@@ -43,7 +43,7 @@ const PRUNE_EVERY_MS = 60 * 60 * 1_000
 /** The tools whose `query` is hashed, and their arguments kept as filters (numbers, booleans, enums only). */
 const SEARCH_FILTERS: Record<string, readonly string[]> = {
   search: ['everywhere', 'symbols', 'limit'],
-  find_symbols: ['kind', 'everywhere', 'limit'],
+  find_symbols: ['kind', 'everywhere', 'limit', 'refs', 'depth'],
 }
 /** The tools that read one note or one repository file. */
 const READS: Record<string, 'note' | 'file'> = { read_note: 'note', read_file: 'file' }

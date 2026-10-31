@@ -55,7 +55,7 @@ export const MAX_CODE_EDGES_PER_FILE = 5000
 export const CONTEXT_CHARS = 160
 
 /** A symbol block's bare name: its `inner_path` without the parent (the expression of `blocks_symbol_name_idx`). */
-const SYMBOL_NAME = sql.raw(`(CASE WHEN b.symbol_parent IS NULL THEN b.inner_path ELSE substr(b.inner_path, length(b.symbol_parent) + 2) END)`)
+export const SYMBOL_NAME = sql.raw(`(CASE WHEN b.symbol_parent IS NULL THEN b.inner_path ELSE substr(b.inner_path, length(b.symbol_parent) + 2) END)`)
 
 /**
  * Test files by convention: `*.test.*`, `*.spec.*`, `*_test.go`,

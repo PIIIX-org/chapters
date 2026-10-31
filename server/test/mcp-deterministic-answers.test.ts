@@ -121,6 +121,11 @@ const FILES: Array<{ path: string; content: string }> = [
     ].join('\n'),
   },
   { path: 'lib/util.py', content: 'def parse(manifest):\n    return manifest.split()\n' },
+  // Tests and a second caller, for the code questions (#470): `parse` and `upload` have several sites.
+  {
+    path: 'src/upload.test.ts',
+    content: "import { upload, parse } from './upload'\n\ntest('upload', () => {\n  upload('a')\n  parse('x')\n})\n",
+  },
   { path: 'README.md', content: '# determinism-repo\n\nUpload, retry and checksum chunks.\n' },
 ]
 
@@ -306,6 +311,14 @@ const QUESTIONS: Question[] = [
   },
   { name: 'find_symbols one name in three files', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse' }) },
   { name: 'find_symbols by meaning and kind', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'upload a chunk', kind: 'function' }) },
+  // The code questions (#470): a definition found by name, by path among several, by line; impact over two levels.
+  { name: 'find_symbols refs callers', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'checksum', refs: 'callers' }) },
+  { name: 'find_symbols refs references', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'upload', refs: 'references' }) },
+  { name: 'find_symbols refs tests', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'upload', refs: 'tests' }) },
+  { name: 'find_symbols refs impact', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'checksum', refs: 'impact', depth: 3 }) },
+  { name: 'find_symbols refs at', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'src/upload.ts:5', refs: 'at' }) },
+  { name: 'find_symbols refs candidates of a name defined three times', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse', refs: 'callers' }) },
+  { name: 'find_symbols refs one of three by path', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse', refs: 'references', path: 'src/upload.ts' }) },
   { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }) },
   { name: 'graph repository communities', tool: 'graph', args: (w) => ({ repositoryId: w.repoId }) },
   {

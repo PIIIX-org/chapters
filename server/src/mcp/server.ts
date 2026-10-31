@@ -130,9 +130,11 @@ import {
 import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
+import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
 import {
   DEFAULT_BUDGET,
   Page,
+  intRange,
   argsFingerprint,
   budgetArgs,
   compareCodeUnits,
@@ -2940,7 +2942,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Every accessible vault and repository (account tokens)'),
         symbols: z.boolean().optional().describe('Include code symbols'),
-        limit: z.number().int().min(1).max(100).optional().describe('Max results'),
+        limit: intRange('limit', 1, 100).optional().describe('Max results'),
       },
       budget: 'list',
     },
@@ -2978,22 +2980,32 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'reader',
       // The kinds are the `kind` enum (#450): naming them again in the description would cost reader tokens twice.
       description:
-        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets, without reading whole files.',
+        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets, without reading whole files. `refs`: the sites of the symbol `query` names.',
       inputSchema: {
         query: z.string().describe('Name, signature or meaning'),
         kind: z.enum(SYMBOL_KINDS).optional().describe('Symbol kind'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
-        limit: z.number().int().min(1).max(50).optional().describe('Max results'),
+        limit: intRange('limit', 1, 50).optional().describe('Max results'),
+        refs: z.enum(REFS).optional().describe('Sites of a symbol; at: `path:line`'),
+        path: z.string().optional().describe('File of the definition'),
+        depth: intRange('depth', 1, 3).optional().describe('impact levels; default 2'),
       },
       budget: 'list',
     },
     async (
-      args: { query: string; kind?: SymbolKind; limit?: number },
+      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs; path?: string; depth?: number },
       { repositoryId },
+      page,
     ) => {
+      refsArguments(args)
       // null: an account-scoped connection with no repositoryId, or `everywhere`.
       if (repositoryId) await requireRepositoryAccess(repositoryId)
+      if (args.refs !== undefined) {
+        if (!repositoryId) throw new McpToolError('INVALID_ARGUMENT', '`refs` reads one repository: pass `repositoryId`', { field: 'repositoryId' })
+        const answer = await refsAnswer(repositoryId, { ...args, refs: args.refs }, page)
+        return { ...answer, head: { ...answer.head, ...(await repositoryIndexedVersion(repositoryId)) } }
+      }
       const repoIds = repositoryId
         ? [repositoryId]
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
@@ -3048,18 +3060,19 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Query the knowledge graph of notes and code: one node per community by default, or `community`, `aggregate: "none"` or `neighborsOf` for nodes; `limit` keeps the first. Edges carry direction, relation, confidence and evidence (`path#La-Lb`); `edgeTypes` picks kinds.',
+        'Query the knowledge graph of notes and code: one node per community by default, or nodes with `community`, `aggregate: "none"` or `neighborsOf`; `limit` keeps the first. Edges carry direction, relation, confidence and evidence (`path#La-Lb`).',
       inputSchema: {
         vaultId: UUID_ARG.optional().describe('Vault graph'),
         repositoryId: UUID_ARG.optional().describe('Repository graph'),
-        types: z.array(z.string()).optional().describe('Only nodes of these types (note type, or code language)'),
+        types: z.array(z.string()).optional().describe('Keep these note types or code languages'),
         tags: z.array(z.string()).optional().describe('Only these tags'),
         aggregate: z.enum(['community', 'none']).optional().describe('Default "community"'),
-        community: z.number().int().optional().describe('Only this community\'s members'),
+        // `.int()` would list JS's safe-integer bounds, 55 characters of the reader budget (as budgetArgs).
+        community: z.number().refine(Number.isInteger, { error: 'community is an integer' }).optional().describe('Only this community\'s members'),
         neighborsOf: z.string().min(1).optional().describe('Node id, path or name'),
-        depth: z.number().int().min(1).max(3).optional().describe('Edges from neighborsOf; default 1'),
+        depth: intRange('depth', 1, 3).optional().describe('Edges from neighborsOf; default 1'),
         edgeTypes: z.array(z.enum(EDGE_KINDS)).min(1).optional().describe('Only these edge kinds'),
-        limit: z.number().int().min(1).max(1_000).optional().describe('First n nodes and their edges'),
+        limit: intRange('limit', 1, 1_000).optional().describe('First n nodes and their edges'),
       },
       budget: 'list',
     },
@@ -3167,7 +3180,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Find the shortest path between two notes, concepts or code files in the knowledge graph. Returns `{found, distance}`, the nodes in order and one edge row per step (direction, relation, confidence, evidence).',
+        'Find the shortest path between two notes, concepts or code files in the knowledge graph: `{found, distance}`, the nodes in order and one edge row per step.',
       inputSchema: {
         source: z.string().describe('Node id, path or name'),
         target: z.string().describe('Node id, path or name'),
