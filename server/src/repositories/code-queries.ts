@@ -183,8 +183,6 @@ export interface SymbolAt {
   /** The innermost symbol block around the line: null between symbols. */
   symbol: Definition | null
   sites: Array<Pick<CodeSite, 'kind' | 'confidence'> & { name: string; target: { path: string; symbol: string; line: number } | null }>
-  /** More sites on the line than `limit`. */
-  more: boolean
 }
 
 /** null when the repository has no such file. */
@@ -206,7 +204,7 @@ export async function symbolAt(repositoryId: string, path: string, line: number,
     LEFT JOIN blocks tb ON tb.owner_type = 'code' AND tb.owner_id = e.target_file_id AND tb.block_id = e.target_block_id
     WHERE e.source_file_id = ${file.id} AND e.line = ${line}
     ORDER BY e.col, e.kind
-    LIMIT ${page.limit + 1} OFFSET ${page.offset}`)) as unknown as Array<{
+    LIMIT ${page.limit} OFFSET ${page.offset}`)) as unknown as Array<{
     kind: CodeEdgeKind
     confidence: 'resolved' | 'textual'
     name: string
@@ -216,11 +214,10 @@ export async function symbolAt(repositoryId: string, path: string, line: number,
   }>
   return {
     symbol: symbol ?? null,
-    sites: sites.slice(0, page.limit).map(({ targetPath, targetSymbol, targetLine, ...site }) => ({
+    sites: sites.map(({ targetPath, targetSymbol, targetLine, ...site }) => ({
       ...site,
       target: targetPath !== null && targetSymbol !== null && targetLine !== null ? { path: targetPath, symbol: targetSymbol, line: targetLine } : null,
     })),
-    more: sites.length > page.limit,
   }
 }
 
