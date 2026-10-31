@@ -164,7 +164,9 @@ describe('a filtered vector leg is not starved by the rest of the instance (#462
     // 500 files of another repository (more than the leg's ef_search of 200) are all nearer the query than
     // the small repository's files, which share one word with it (distance 0.74, under the fake embedder's
     // gate of 0.8), so only the vector channel can find them. Through the HNSW index `small/a.md` was missing
-    // in some builds (#1035: no node linked to it); a scope this small is now read exactly.
+    // in some builds (#1035: no node linked to it); a scope this small is now read exactly. Extracting the 500
+    // files takes about 26 s at load 7 on 10 cores and passed 120 s at load 20-27 (6 of 100 local runs), hence
+    // the larger timeout.
     const big = await repository('big')
     const files = Array.from({ length: 500 }, (_, i) => ({ path: `big/f${i}.md`, content: `starve query words w${i}\n` }))
     await syncRepositoryFiles(big, files, files.map((f) => f.path))
@@ -174,7 +176,7 @@ describe('a filtered vector leg is not starved by the rest of the instance (#462
     const answer = await searchNotes({ vaultIds: [], repositoryIds: [small] }, 'starve query words', 20)
     expect(answer.retrieval_mode).toBe('hybrid')
     expect(answer.results.map((r) => r.path)).toEqual(['small/a.md', 'small/c.md'])
-  }, 120_000)
+  }, 300_000)
 })
 
 describe('a small scope is read exactly, not through the HNSW graph (#1035)', () => {
