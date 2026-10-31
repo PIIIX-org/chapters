@@ -2,6 +2,9 @@ name: CI
 
 on:
   pull_request:
+  # The merge queue's temporary commit (`gh-readonly-queue/dev/pr-<N>-<sha>`):
+  # `checks` is required, so it must report there too.
+  merge_group:
   push:
     branches: [dev, prod]
   # Re-runs checks on a ref by hand; on `prod` that also publishes once they
@@ -16,6 +19,7 @@ concurrency:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       db:
         image: pgvector/pgvector:pg17
@@ -45,6 +49,16 @@ jobs:
         run: pnpm lint
       - name: Test CI scripts
         run: node --test '.github/scripts/*.test.mjs'
+      # Migration order guard: every journal entry the PR adds must have a
+      # `when` newer than the newest on the CURRENT `dev` (fetched now, not
+      # the base the PR branched from), a tag/idx that match and its SQL
+      # file; otherwise drizzle skips it on databases that already ran
+      # dev's newest migration. Base: the PR base, or the queue base.
+      - name: Check migration order against current dev
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        run: node .github/scripts/migration-order-check.mjs --base "$BASE_SHA" --head HEAD
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
       # Premise benchmark metrics, policies, question files, production guard (#570);
       # agent trial grader, tool mapping, provider formats, loop caps, credential gate (#571);
       # session benchmark policy and session_id plumbing (#683).
@@ -54,8 +68,18 @@ jobs:
       # diffs (#663), the pinned git fixture restart-extraction syncs (#767).
       - name: Test lab helpers
         run: node --test 'lab/lib/*.test.ts'
+      # `collab-s3-perf` measures a wall-clock p95 and fails under suite load
+      # (#905): it is excluded here and run alone in the next step, in this
+      # same job so the required status name stays `checks`.
       - name: Test
-        run: pnpm test
+        run: pnpm test --exclude test/collab-s3-perf.test.ts
+        env:
+          DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
+          TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
+          ADMIN_DATABASE_URL: postgres://elara:elara@localhost:5432/elara
+          DATA_DIR: ${{ runner.temp }}/elara-test-data
+      - name: Test collab-s3-perf alone (#905)
+        run: pnpm -C server exec vitest run test/collab-s3-perf.test.ts --pool=forks --maxWorkers=1
         env:
           DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
