@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { and, eq, inArray, isNotNull } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import {
   notes,
@@ -16,7 +16,12 @@ import {
 import { config } from '../config.js'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { notify } from '../notifications/notify.js'
-import { kickSemanticEdges, removeSemanticNodes, transferVaultSemanticEdges } from '../search/semantic-edges.js'
+import {
+  kickSemanticEdges,
+  queueSemanticEdgeRestore,
+  removeSemanticNodes,
+  transferVaultSemanticEdges,
+} from '../search/semantic-edges.js'
 import { listAccessibleVaults, resolveAccess } from './permissions.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
 
@@ -44,10 +49,37 @@ export async function purgeVaultRecord(vaultId: string): Promise<void> {
   // it. The files that held one of its notes are queued (#1015).
   await db.transaction(async (tx) => {
     await tx.delete(vaults).where(eq(vaults.id, vaultId))
-    await removeSemanticNodes(tx, 'note', noteIds)
+    await removeSemanticNodes(tx, 'note', vaultId, noteIds)
   })
   kickSemanticEdges()
   await rm(join(config.dataDir, 'vaults', vaultId), { recursive: true, force: true })
+}
+
+/**
+ * Moves a vault to the trash (REST and MCP). Its notes leave every semantic list as a trashed note does
+ * (#1025): their rows and the rows naming them go in the same transaction, and the files that held one are
+ * queued (`removeSemanticNodes`).
+ */
+export async function trashVaultRecord(vaultId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.update(vaults).set({ deletedAt: new Date() }).where(eq(vaults.id, vaultId))
+    await removeSemanticNodes(tx, 'note', vaultId, sql`SELECT id FROM notes WHERE vault_id = ${vaultId}`)
+  })
+  kickSemanticEdges()
+}
+
+/**
+ * Restores a trashed vault (REST and MCP); its live notes re-enter the lists they belong in as a restored
+ * note does (#1025): one refresh each, queued in the same transaction (`queueSemanticEdgeRestore`).
+ */
+export async function restoreVaultRecord(vaultId: string): Promise<typeof vaults.$inferSelect | undefined> {
+  const restored = await db.transaction(async (tx) => {
+    const [row] = await tx.update(vaults).set({ deletedAt: null }).where(eq(vaults.id, vaultId)).returning()
+    await queueSemanticEdgeRestore(tx, sql`SELECT id FROM notes WHERE vault_id = ${vaultId} AND deleted_at IS NULL`)
+    return row
+  })
+  kickSemanticEdges()
+  return restored
 }
 
 export function vaultRoutes(app: FastifyInstance) {
@@ -327,10 +359,7 @@ export function vaultRoutes(app: FastifyInstance) {
     if (!(await requireOwner(req.user!.id, req.params.id))) {
       return reply.code(404).send({ error: 'not found' })
     }
-    await db
-      .update(vaults)
-      .set({ deletedAt: new Date() })
-      .where(eq(vaults.id, req.params.id))
+    await trashVaultRecord(req.params.id)
     return { status: 'trashed', id: req.params.id }
   })
 
@@ -370,11 +399,7 @@ export function vaultRoutes(app: FastifyInstance) {
     if (!vault.deletedAt) {
       return reply.code(409).send({ error: 'vault is not trashed' })
     }
-    const [restored] = await db
-      .update(vaults)
-      .set({ deletedAt: null })
-      .where(eq(vaults.id, req.params.id))
-      .returning()
+    const restored = await restoreVaultRecord(req.params.id)
     return { ...restored, access: 'owner' as const }
   })
 
