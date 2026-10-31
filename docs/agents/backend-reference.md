@@ -1516,8 +1516,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
     `SearchResponse` = `{status, retrieval_mode, degraded, index?,
     results}`, served as is by REST and inside the budget envelope by MCP.
-  - **Relevance gate** (#441): each vector leg takes its 60 nearest rows
-    (`ORDER BY distance, … LIMIT 60`, which the HNSW index serves) and keeps
+  - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
+    (`ORDER BY distance, … LIMIT 30`, which the HNSW index serves) and keeps
     those with cosine distance under `config.searchMaxDistance`
     (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
     default; 0.40 for bge-small, measured on the five benchmark corpora
@@ -1533,10 +1533,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     across legs. Exact means: a symbol name, a file path or basename (with its
     extension), or a note path or title equals the WHOLE query; or equals a
     query term that is itself identifier- or file-shaped (camelCase,
-    snake_case, dotted, `a::b`, or `path/file.ext`), by any spelling from
-    `identifiers.ts`. A plain word of a multi-word query never grants the
-    boost, so a one-word name hit cannot outrank rows that match every word
-    (the #1014 failure). A relaxed or trigram row (#455 part 2) never counts
+    snake_case, dotted, `a::b`, or `path/file.ext`) AND singled out by the
+    asker: written in backticks, or in a query of at most three words
+    (`SHORT_QUERY_WORDS`), by any spelling from `identifiers.ts`. A plain word
+    never grants the boost, and neither does an identifier merely mentioned in
+    a longer question (on the benchmark `SessionDB`, `SKILL.md` and
+    `run_command` named in passing pushed the symbol of that name above the
+    answer), so a name hit cannot outrank rows that match what the question
+    asks (the #1014 failure). A relaxed or trigram row (#455 part 2) never counts
     as exact. The boost is a pure function of the row, and `byScore`'s
     tie-breaks are unchanged.
     For code-shaped queries (#457: at least two independent code signals, or one
@@ -1567,8 +1571,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     failed count as failed items), read beside the query embedding; left
     out when all zero.
   - **HNSW settings** (#462): every vector leg (`blockLeg`: the note,
-    code file and symbol legs of `search` and `find_symbols`) runs in a
-    transaction that first calls `setHnswScan(tx, efSearch)`
+    code file and symbol legs of `search` and `find_symbols`) whose scope
+    is not read exactly (next bullet) runs in a transaction that first
+    calls `setHnswScan(tx, efSearch)`
     (`search/hnsw.ts`, the one helper for every HNSW query): it sets
     `hnsw.ef_search` (200 for search) and, when the installed pgvector is
     0.8.0 or later (`pg_extension.extversion`; an older one refuses the
@@ -1581,6 +1586,25 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     leg has its rows. Relaxed order can return rows slightly out of
     distance order: every leg re-sorts its cut. Semantic edges
     (`semantic-edges.ts`) call the same helper with `ef_search` 100.
+  - **Small scopes read exactly** (#1035): `blockLeg` first counts the
+    blocks (every kind) of the leg's vaults or repositories, stopping at
+    `EXACT_SCAN_BLOCKS` + 1 (2,000; an index-only scan of
+    `blocks_container_idx`). At or under 2,000 the leg orders by
+    `cosine_distance(embedding, q)`, the function `<=>` calls (same
+    values), which no index can serve: the planner reads the scope's blocks
+    and sorts them, so the leg has every row of the scope that ranks in its
+    cut. Over 2,000 it orders by `<=>` with the HNSW settings above. Why:
+    the HNSW graph can leave a row that no other node links to (links
+    depend on insert order and random node levels; a small repository
+    whose files were extracted between a big one's, #497's fair turns, lost
+    `small/a.md` in 2 of 12 runs of
+    `search-deterministic-vectors.test.ts`), and the iterative scan stops
+    after `hnsw.max_scan_tuples`; neither can return such a row. Measured
+    on 50,000 file blocks with the HNSW plan: a 20-block scope 88 → 3.2 ms
+    (the HNSW scan walked toward the 20,000-tuple budget for rows the
+    scope does not have), 2,000 blocks 17 → 5.8 ms, 5,000 blocks would be
+    7 → 26 ms (why the cap is 2,000); a scope over the cap pays the count
+    only (under 1 ms) and stays approximate.
   - **Total order** (#623): every cut ends in a key that is unique and,
     where it can be, the same on two instances with the same content (ids
     are random per instance). The note keyword leg `ORDER BY rank DESC, path
@@ -1592,13 +1616,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     the HNSW limit itself (an Incremental Sort over the index scan, which
     still serves it) and again after the gate; the note leg's 200-block cut
     by owner id (a join for the note's path there would cost a lookup per
-    block; its 60-note cut goes by path). The final sort: score descending, then
+    block; its 30-note cut goes by path). The final sort: score descending, then
     path by UTF-16 code unit (`compareCodeUnits`), then resource type
     (`code`, `note`, `symbol`: a note and a code file can share a path,
     and a file comes before its symbols), then a symbol's start line, then
     id, so equal scores never depend on
     row or `Map` insertion order. [INFERENCE] HNSW stays approximate and its
-    graph depends on insert order: which rows make a vector leg's 60 can
+    graph depends on insert order: which rows make a vector leg's 30 can
     still differ between instances when distances are close but not equal.
   - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
     search and graph, saved perspectives) bound the last change,
@@ -1632,7 +1656,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     filter applies inside each leg's SQL, before the leg's cut
     (`noteFilter`, `fileFilter`, `symbolFilter`), so a filtered search
     answers with the best matching rows, not what of the unfiltered best
-    60 per leg matches; nothing is filtered after the fusion. A hit
+    30 per leg matches; nothing is filtered after the fusion. A hit
     without the filtered attribute is dropped, and a leg none of whose
     rows can match runs no query: code has no tags, notes no language or
     kind, files no kind. `types` is what a hit's `type` shows: a note's
@@ -2308,7 +2332,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `read_note`, `read_file`, `browse_vault`, `browse_repository`,
   `list_vaults` and `list_repositories` descriptions: the last two lost
   "Account-scoped connections only.", which a pinned token never sees
-  because those tools are not listed for it) because the shared `budgetArgs` (`response.ts`) list
+  because those tools are not listed for it; still 7,970 characters with
+  #683's `session_id` on both reads, paid for by `browse_vault`'s answer
+  shape and default fields, `browse_repository`'s `{files}` and `path`
+  wording and a shorter `if_rev`, all said in the manuals or by the
+  parameters themselves; writer 25,540 and admin 51,431 characters, also
+  unchanged)
+  because the shared `budgetArgs` (`response.ts`) list
   `Default N` and `Next page`, check the budget's 256-25,000 range in a
   refinement instead of listing `minimum`/`maximum`, pinned ids say
   `omit when pinned`, and the read targets are explained once here
@@ -2362,6 +2392,67 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - `if_rev` is in the cursor fingerprint like any argument. Search and
     graph have no not-modified answer: that is the result cache's (#685).
   `test/mcp-read-if-rev.test.ts`.
+- **Session references** (#683, ADR-004 §2.1, §2.9, D7):
+  `read_note` and `read_file` take `session_id` (`session-reads.ts`
+  `SESSION_ARG`: 8-64 characters, checked in a refinement, described as
+  "Yours; repeats come as `same_as`"; the conventions manual says the
+  rest). Under it a passage the session already got is sent as a
+  reference. The transport stays stateless: the memory is in Postgres
+  (§5.11 **Session memory**), so it works across instances.
+  - Passages: each text section with lines (`read_note` `body`,
+    `read_file` `content`, each `targets` part) and the `outline` and
+    `symbols` lists. A text repeats when the session holds the same
+    document version (note `rev`, file content hash, without `~pending`)
+    with lines covering it, or the same text of the same document at any
+    version (sha256 of the lines, 128 bits); a list repeats when the
+    session holds the same list. A reference is used only when it is
+    shorter than the text it replaces.
+  - Shape: every session answer adds `call` (its number in the session)
+    to the head. A repeated text is `same_as: {call, loc, rev | hash}`:
+    the call that sent it, `path#La-Lb` in that call's numbering (the
+    path for a list) and that call's version. A part keeps its
+    `{target, lines}` with `same_as` in place of `text`; a body, content
+    or list is `{"same_as": …}` as the value of its key, and `read_note`
+    sends no body block then. `response.ts`: a section's `ref` is shown in
+    place of its content and counted as shown whole; the section keeps its
+    text, so cursor guards are unchanged.
+  - Only a first page refers: a cursor page sends what it shows in full
+    (and remembers it). A cursor issued after a reference carries the
+    referenced section indices (`r`, round 1 of #1031); `slots()` treats
+    them as finished (`start: -1`) and `compose` leaves them out, so a
+    later page neither announces (`next`) nor resends them. A reference
+    frees budget, so a session page can show more than the same call
+    without `session_id`: its `truncated` and cursor differ accordingly.
+    `session_id` is left out of the cursor fingerprint (`UNBOUND_ARGS`),
+    so a cursor continues with or without the session; continued without
+    it, a cursor that carries `r` still leaves those sections out (the one
+    exception to "without `session_id` every answer is in full": the agent
+    repeats the first call without `session_id` to get them). A cursor without
+    a reference has no `r`: the bytes of a no-session cursor are as before.
+  - What a page showed whole is remembered after rendering
+    (`Budgeted.rendered` gets `Seen`: per section the lines shown whole,
+    a line split at a page edge excluded, or whether a list was shown
+    whole at `full`).
+  - Without `session_id` nothing of this runs and every answer is the
+    same bytes as before #683: an agent whose context lost the text a
+    reference names re-reads without it. There is no `full` argument;
+    leaving the session out is the same at no tools/list cost.
+  - Why an argument and not the transport's `Mcp-Session-Id`: a
+    transport session lasts as long as the client's connection, not the
+    model's context (a client keeps one connection while it runs: Claude
+    Code's main agent and its subagents share it, and it outlives `/clear`
+    and compaction), so a reference could name a call the model never
+    saw. And it is not opt-in: Streamable HTTP requires a client to send
+    back the id an `initialize` answer issues on every later request, and
+    the TypeScript SDK's `StreamableHTTPClientTransport` (Claude Code, the
+    MCP Inspector) does, so every such client would get references
+    without asking. A header opt-in has the same lifetime problem, and
+    agents cannot set headers.
+  - Search and `find_symbols` snippets are not deduplicated yet (#1030).
+  `test/mcp-session-dedup.test.ts` (references, changed text, other
+  session, token and account, expiry, permission change, pages, caps, the
+  no-session bytes, and a scripted session on the repository's own files:
+  fewer tokens, the same answers once references are resolved).
 - **Cacheable prompt** (#681): what a token is sent before its first
   call opens every agent prompt, and providers bill a repeated prefix at
   a fraction of the price only if its bytes repeat. `initialize`,
@@ -3282,7 +3373,7 @@ that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same owner already has keeps that vector instead of being embedded again, so
 an edit to another symbol or section, a frontmatter edit, or a version bump that leaves a block's text
 alone, embeds nothing new for it. *Readers*: `search` note vector leg — the nearest 200 note blocks of the
-scoped vaults (`hnsw.ef_search` 200 and the iterative scan, #462; #967's distance gate on the best distance), then each live note's best block
+scoped vaults (`hnsw.ef_search` 200 and the iterative scan, #462; read exactly when the vaults hold at most 2,000 blocks, #1035; #967's distance gate on the best distance), then each live note's best block
 distance (filters applied to the note), one hit per note with the same
 `{…, snippet: left(body, 200)}` as before. A vault has about 12 times as
 many note blocks as notes; the partial `blocks_note_embedding_idx` keeps the
@@ -3292,7 +3383,7 @@ query after a restart is slower, 190–700 ms against 30–70 ms, while the
 larger index pages in); `search` code
 vector leg — the nearest `file` blocks of the scoped repositories
 (their own partial HNSW index `blocks_file_embedding_idx`, as the old
-file index held only files; `hnsw.ef_search` 200 and the iterative scan; #967's distance gate), one hit per file with the
+file index held only files; `hnsw.ef_search` 200 and the iterative scan; read exactly when the repositories hold at most 2,000 blocks, #1035; #967's distance gate), one hit per file with the
 same `{…, snippet: left(content, 200)}` as before. Measured alternatives:
 the ADR-004 best-block roll-up let symbol blocks of large files crowd the
 leg (chapters hit@5 0.9655 → 0.8966), and ranking a large file by its
@@ -3649,9 +3740,10 @@ itself.
 
 The rules every cache of an answer follows. No answer is cached yet: the
 search and graph result cache (#685, which also adds per-cache hit/miss
-metrics and the test that a cached answer is never served stale) and
-per-session de-duplication (#683) build on this contract, and none may
-cache without it. D7 on #930
+metrics and the test that a cached answer is never served stale) builds
+on this contract, and none may cache without it. Per-session
+de-duplication (#683, **Session memory** below) caches no answer; it
+remembers what a session was sent, under the same scoping rules. D7 on #930
 replaced the old promise of no cross-connection caching (§5.8) with this
 contract. Permission checks themselves stay live (§1): a cache never
 authorizes anything. The query-embedding cache (below) caches no answer,
@@ -3777,6 +3869,45 @@ compares `rev` or `hash` live after the access check and caches nothing.
 Tests: `cache-epochs.test.ts` (every write path bumps its own scope and no
 other; reads bump nothing) and `cache-key.test.ts` (key fields, refusals,
 real epochs around writes and reads).
+
+**Session memory** (#683, `cache/session.ts`, migration 0060; §5.8
+**Session references**). Not an answer cache: it stores which passages
+a `read_note` / `read_file` sent under an agent's `session_id` (content
+hash, document version, lines, the call), never text and never a
+permission. It follows the contract's scoping:
+- **Scope**: keyed by token (`mcp_connections` row, so one account) and
+  session id. Another session id, another token of the same account or
+  another account has its own memory and gets full text. Deleting the
+  token deletes its sessions (`ON DELETE CASCADE`).
+- **Live checks first**: a read opens its session only after `tool()`'s
+  token, profile and scope checks and the tool's own access check
+  passed; the memory decides how an answer the caller may see is sent,
+  never whether.
+- **Permission epoch**: each session call reads
+  `instance_state.permission_epoch` with the session row; when it moved
+  since the session's last call, everything the session held is
+  forgotten (`since` moves to this call), whatever changed and for whom.
+- **Content**: a reference names exactly what was sent (call, lines,
+  version), and a passage repeats only by the same version with covering
+  lines or by the same content hash, so a changed passage is always sent
+  in full. No index epoch is needed: the content is read live.
+- **Expiry and bounds**: `SESSION_IDLE_MINUTES` (30) after a session's
+  last call it is forgotten (the call numbers go on while the row lives);
+  any session call deletes the rows of sessions idle past it. A token
+  keeps at most `MAX_SESSIONS` (16; the least recently used are dropped),
+  a session at most `MAX_PASSAGES` (500; the oldest calls' dropped). A
+  row is ids, a 32-hex hash, a version and four integers, no text.
+- **Storage**: two UNLOGGED tables, `mcp_sessions` and
+  `mcp_session_passages` (not in the Drizzle model, not in backups): every
+  instance shares them, and a crash empties them, which only means full
+  answers. They hold no ranking and no derived artifact, so they need no
+  build key. Cost per session read: one statement before the answer
+  (count the call, prune, read what the session holds of the document)
+  and one after it (record what the page showed whole): on the local
+  test database, means of 200, 1.3 ms and 0.9 ms against a 0.26 ms
+  `SELECT 1` round trip (3.5 ms and 2.5 ms against 0.74 ms under load;
+  `mcp-session-dedup.test.ts` logs it). A read without `session_id`
+  runs neither.
 
 **Query-embedding cache** (`embeddings.ts` `QueryEmbeddingCache`, #684).
 Search embeds its query text through `embedQuery`; a repeated query does

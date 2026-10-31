@@ -430,14 +430,39 @@ const CODE_BOOST = 0.0008
 const BLOCK_CANDIDATES = 200
 
 /**
- * A vector leg over `blocks` (#462): its HNSW search widened to
- * `BLOCK_CANDIDATES` (the default 40 would cap it) and iterative where
- * pgvector has it (`setHnswScan`); each leg re-sorts its cut (`gated`).
+ * The most blocks, of every kind, a vector leg's containers may hold for the
+ * leg to read each of their vectors instead of its HNSW index (#1035).
+ * Measured on 50,000 file blocks, the code file leg with the HNSW plan of a
+ * big instance: a 20-block repository 88 ms (its scan walks up to
+ * `hnsw.max_scan_tuples` for rows the scope does not have) against 3.2 ms
+ * read exactly, 2,000 blocks 17 ms against 5.8 ms, 5,000 blocks 7 ms against
+ * 26 ms; a bigger scope pays only the count, under 1 ms.
  */
-async function blockLeg(query: SQL): Promise<unknown> {
+const EXACT_SCAN_BLOCKS = 2000
+
+/**
+ * A vector leg over the `blocks` of `containerIds` (#462, #1035): `query`
+ * orders by `distance(<embedding column>)`. When the containers hold at most
+ * `EXACT_SCAN_BLOCKS` blocks (a count that stops there), `distance` is
+ * pgvector's `cosine_distance()`, the function behind `<=>`, which no index
+ * serves: the planner reads the containers' blocks and sorts them, so every
+ * row of a small scope that ranks in the leg's cut is in it, whatever the
+ * rest of the instance holds. The HNSW index can't promise that: a row no
+ * node of its graph links to is never returned (the links depend on insert
+ * order and random levels), and its iterative scan stops after
+ * `hnsw.max_scan_tuples`. Otherwise `distance` is `<=>`, served by the HNSW
+ * index, its search widened to `BLOCK_CANDIDATES` (the default 40 would cap
+ * it) and iterative where pgvector has it (`setHnswScan`). Each leg re-sorts
+ * its cut (`gated`).
+ */
+async function blockLeg(containerIds: string[], vec: string, query: (distance: (embedding: SQL) => SQL) => SQL): Promise<unknown> {
   return db.transaction(async (tx) => {
+    const [scope] = (await tx.execute(sql`
+      SELECT count(*)::int AS blocks
+      FROM (SELECT 1 FROM blocks WHERE container_id = ANY(${uuidArray(containerIds)}) LIMIT ${EXACT_SCAN_BLOCKS + 1}) s`)) as unknown as Array<{ blocks: number }>
+    if (scope!.blocks <= EXACT_SCAN_BLOCKS) return tx.execute(query((embedding) => sql`cosine_distance(${embedding}, ${vec}::vector)`))
     await setHnswScan(tx, BLOCK_CANDIDATES)
-    return tx.execute(query)
+    return tx.execute(query((embedding) => sql`${embedding} <=> ${vec}::vector`))
   })
 }
 
@@ -479,8 +504,9 @@ interface SymbolRow {
 
 /**
  * The `CANDIDATES` nearest rows of `nearest` (a query ordered by `distance`
- * first, so the HNSW index serves it, then by the leg's tie-break), cut at the
- * relevance gate (#441) and re-sorted by distance then `ties`.
+ * first, so the HNSW index can serve it (`blockLeg`), then by the leg's
+ * tie-break), cut at the relevance gate (#441) and re-sorted by distance
+ * then `ties`.
  */
 function gated(nearest: SQL, ties: SQL = sql`path COLLATE "C", id`): SQL {
   return sql`
@@ -547,7 +573,7 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
   const rows =
     mode === 'keyword'
       ? await noteKeywordRows(vaultIds, query, filterSql)
-      : await blockLeg(
+      : await blockLeg(vaultIds, vec!, (distance) =>
           gated(sql`
             -- A note's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per note, as before
             -- blocks; #967's relevance gate applies to that best distance. Equal distances at the 200-block cut go by
@@ -555,10 +581,10 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
             -- cut below by path. Unfiltered, the cut has no join to notes, which would add a lookup per block; a
             -- filter (#454) joins them there, so it runs inside the (iterative, #462) scan, before the cut.
             WITH nearest AS (
-              SELECT owner_id, embedding <=> ${vec}::vector AS distance
+              SELECT owner_id, ${distance(sql`embedding`)} AS distance
               FROM blocks ${filter.length > 0 ? sql`JOIN notes ON notes.id = blocks.owner_id AND notes.deleted_at IS NULL ${filterSql}` : sql``}
               WHERE owner_type = 'note' AND container_id = ANY(${uuidArray(vaultIds)}) AND embedding IS NOT NULL
-              ORDER BY embedding <=> ${vec}::vector, owner_id
+              ORDER BY ${distance(sql`embedding`)}, owner_id
               LIMIT ${BLOCK_CANDIDATES}
             ), best AS (
               SELECT owner_id, min(distance) AS distance FROM nearest GROUP BY owner_id
@@ -652,19 +678,19 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
   const rows =
     mode === 'keyword'
       ? await codeKeywordRows(repositoryIds, query, filterSql)
-      : await blockLeg(
+      : await blockLeg(repositoryIds, vec!, (distance) =>
           gated(sql`
             -- A file's vector rank is its file block's (path and content, the old file vector): one row per file,
             -- as before blocks. The ADR-004 §2.5 best-block roll-up ranked chapters A6 and A13 out of the top 5 (bench
             -- run 40063746649, hit@5 0.9655 -> 0.8966), and the outline of a large file did A13 (run 40068837408,
             -- 0.931). #967's relevance gate applies to that block's distance.
             SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet,
-                   ${UPDATED_AT(sql`f.updated_at`)}, b.embedding <=> ${vec}::vector AS distance
+                   ${UPDATED_AT(sql`f.updated_at`)}, ${distance(sql`b.embedding`)} AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
             -- kind = 'file' alone (only code has file blocks): naming owner_type too would let the planner take the
             -- owner_type = 'code' index (migration 0036), whose post-filter is what the files-only index avoids.
             WHERE b.kind = 'file' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL ${filterSql}
-            ORDER BY b.embedding <=> ${vec}::vector, f.path COLLATE "C", f.id`),
+            ORDER BY ${distance(sql`b.embedding`)}, f.path COLLATE "C", f.id`),
         )
   return rows as unknown as Row[]
 }
@@ -735,14 +761,14 @@ async function symbolRows(
   const rows =
     mode === 'keyword'
       ? await symbolKeywordRows(repositoryIds, query, filterSql)
-      : await blockLeg(
+      : await blockLeg(repositoryIds, vec!, (distance) =>
           gated(sql`
-            SELECT ${SYMBOL_COLUMNS}, b.embedding <=> ${vec}::vector AS distance
+            SELECT ${SYMBOL_COLUMNS}, ${distance(sql`b.embedding`)} AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
             -- kind = 'symbol' alone, so the planner takes the symbols-only index (see codeRows).
             WHERE b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${filterSql}
               AND b.embedding IS NOT NULL
-            ORDER BY b.embedding <=> ${vec}::vector, f.path COLLATE "C", b.start_line, b.id`,
+            ORDER BY ${distance(sql`b.embedding`)}, f.path COLLATE "C", b.start_line, b.id`,
             sql`path COLLATE "C", start_line, id`,
           ),
         )
@@ -870,11 +896,17 @@ interface ExactContext {
   spelling: Set<string>
 }
 
+/** A query this short is an identifier lookup, not a question: its identifier-shaped words are what it asks for. */
+const SHORT_QUERY_WORDS = 3
+
 /**
  * What may count as an exact match (#456). A row is exact when its name, path
- * or title equals the WHOLE query, or equals a term that is itself an
- * identifier or file name. A plain word of a multi-word query never grants it:
- * one-word name hits must not outrank rows that match every word (#1014).
+ * or title equals the WHOLE query, or equals an identifier- or file-shaped
+ * term that the asker singled out: the term is in backticks, or the query is
+ * short (at most `SHORT_QUERY_WORDS` words). A plain word never grants it, and
+ * neither does an identifier merely mentioned inside a long question: a name
+ * hit must not outrank rows that match what the question asks (#1014; on the
+ * benchmark, `SessionDB` or `SKILL.md` in passing buried the answer).
  */
 function queryExactContext(query: string): ExactContext {
   const queryNorm = query.trim().toLowerCase()
@@ -882,12 +914,15 @@ function queryExactContext(query: string): ExactContext {
   const whole = new Set<string>([queryNorm])
   if (queryStripped.length > 0) whole.add(queryStripped)
 
+  const words = query.trim().split(/\s+/).filter(Boolean)
+  const quoted = new Set([...query.matchAll(/`([^`\s]+)`/g)].map((m) => m[1]!))
   const terms = new Set<string>()
   const termsLower = new Set<string>()
   const spelling = new Set<string>()
-  for (const raw of query.trim().split(/\s+/).filter(Boolean)) {
+  for (const raw of words) {
     const cleaned = raw.replace(/^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu, '')
     if (cleaned.length <= 1 || !isIdentifierShaped(cleaned)) continue
+    if (words.length > SHORT_QUERY_WORDS && !quoted.has(cleaned)) continue
     terms.add(cleaned)
     termsLower.add(cleaned.toLowerCase())
     const id = splitIdentifier(cleaned)
