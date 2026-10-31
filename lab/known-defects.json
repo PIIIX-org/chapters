@@ -1,11 +1,6 @@
 {
   "defects": [
     {
-      "test": "access-behaviour",
-      "check": "prompt note text: placed in a separate data block, not inside the instructions",
-      "issue": 556
-    },
-    {
       "test": "attachments",
       "check": "an attachment can be deleted at all (REST)",
       "issue": 561
