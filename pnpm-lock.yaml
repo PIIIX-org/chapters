@@ -21,7 +21,7 @@ overrides:
   lodash-es: '>=4.17.24'
   postcss: '>=8.5.23'
   nanoid: '>=3.3.18'
-  vitest: ^5.0.3
+  vitest: ^5.0.5
   '@tree-sitter-grammars/tree-sitter-kotlin>npm-check-updates': '-'
   tree-sitter-cpp>tree-sitter-c: '-'
 
@@ -184,7 +184,7 @@ importers:
         specifier: ^8.3.5
         version: 8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       vitest:
-        specifier: ^5.0.3
+        specifier: ^5.0.5
         version: 5.0.5(@types/node@26.6.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       vitest-axe:
         specifier: ^0.1.0
@@ -335,7 +335,7 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
       vitest:
-        specifier: ^5.0.3
+        specifier: ^5.0.5
         version: 5.0.5(@types/node@26.6.5)(happy-dom@21.0.4)(vite@8.3.5(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
 
 packages:
@@ -2185,7 +2185,7 @@ packages:
     engines: {node: '>=22', npm: '>=6', yarn: '>=1'}
     peerDependencies:
       '@testing-library/dom': '>=10 <11'
-      vitest: ^5.0.3
+      vitest: ^5.0.5
     peerDependenciesMeta:
       vitest:
         optional: true
@@ -4961,7 +4961,7 @@ packages:
   vitest-axe@0.1.0:
     resolution: {integrity: sha512-jvtXxeQPg8R/2ANTY8QicA5pvvdRP4F0FsVUAHANJ46YCDASie/cuhlSzu0DGcLmZvGBSBNsNuK3HqfaeknyvA==}
     peerDependencies:
-      vitest: ^5.0.3
+      vitest: ^5.0.5
 
   vitest@5.0.5:
     resolution: {integrity: sha512-cPODOMF8YnkiiYtDdHo6n4wWmBrOBBbOIYH2d33M4l3CdNn72h+qMmO6uXffUN6A5AZFXNND/d+krS9mgkXRfg==}

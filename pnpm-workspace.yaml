@@ -36,7 +36,7 @@ overrides:
   lodash-es: '>=4.17.24'
   postcss: '>=8.5.23'
   nanoid: '>=3.3.18'
-  vitest: ^5.0.3
+  vitest: ^5.0.5
   # Dependencies of grammar packages that only their native or grammar build
   # reads: a CLI (5.4 MB) and the C grammar C++'s grammar.js extends (a second
   # copy, 9 MB). Elara loads only each package's .wasm (#464).
