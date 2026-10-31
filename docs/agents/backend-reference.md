@@ -94,7 +94,7 @@ change moves.
 | AI access | `@modelcontextprotocol/sdk`, Streamable HTTP transport | official SDK, stateless-per-request transport (no server-side session state to leak across connections) |
 | Auth | `@node-rs/argon2` (passwords), `otpauth` (TOTP/MFA), Node `crypto` (session/reset tokens, SHA-256 hashed at rest) | |
 | Repository credentials | AES-256-GCM (Node `crypto`), `CREDENTIALS_ENCRYPTION_KEY` env var | reversible (unlike hashed tokens) — a stored git credential must be usable again on the next pull |
-| Git ingestion | `simple-git` | shallow clone (`--depth 1`) into a scratch temp dir per sync, discarded after reading |
+| Git ingestion | `simple-git` | depth-1 fetch into a persistent bare mirror per repository (`DATA_DIR/git-mirrors`), reading only changed blobs (#684) |
 | Local-path ingestion | `chokidar` | real-time filesystem watch |
 | Email | `nodemailer`, optional (falls back to an in-memory capture array if `SMTP_HOST` unset) | notifications work in dev/test with zero mail infra |
 | Validation | `zod` | MCP tool input schemas |
@@ -387,7 +387,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositoryShares` | owner/viewer grants, same shape as `vaultShares` |
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0052; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424) |
-| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0) |
+| `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0); `lookup_keys` (migration 0053, #1008, GIN-indexed) the `lookupKey` of every path the resolver tried, as `<repository id>:<key>`, null for rows written before 0053 until the boot backfill; a deleted target sets `resolved_target_file_id` to null (it deleted the row before 0053) |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
 
@@ -1467,6 +1467,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     Keyword rows
     always count. The gate cuts a suffix of a distance-ordered list, so the
     RRF ranks of the rows it keeps do not change.
+  - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a
+    repeated query text comes from the in-process query-embedding cache
+    (§5.11) without running the embedder.
   - **Degraded** (#458): a failed query embedding (`queryVector`) skips the
     vector legs (`keyword_only`, `degraded: {reason: 'embedder_failed'}`);
     a failed leg drops its whole channel (`vector_leg_failed` →
@@ -2720,9 +2723,10 @@ what's already indexed: unchanged content hashes are no-ops, changed/
 new files upsert, anything no longer present is **hard-deleted** (git
 is the history record, not Chapters).
 
-1. **git** (`git-sync.ts`) — a fresh shallow clone (`--depth 1`) into a
-   scratch temp dir on every sync, discarded after reading; no
-   persistent working copy. Triggered by a webhook
+1. **git** (`git-sync.ts`, `git-mirror.ts`, #684) — fetches into a
+   persistent bare, shallow mirror per repository
+   (`DATA_DIR/git-mirrors/<repositoryId>.git`); details under "Git
+   mirror" below. Triggered by a webhook
    (`git-webhook-routes.ts`, HMAC-SHA256-verified,
    `POST /repositories/:id/webhook`, unprefixed) or the polling fallback
    (`scheduler.ts`, every `POLL_INTERVAL_MS`, default 5 min).
@@ -2733,7 +2737,7 @@ is the history record, not Chapters).
    stale one or a failed sync is polled every tick. `lastSyncedAt` takes
    no part: every successful webhook sync ends after its delivery, so
    "synced since the last webhook" once disabled polling for good (#410).
-   An unchanged remote costs one `ls-remote`, not a clone.
+   An unchanged remote costs one `ls-remote`, not a fetch.
 2. **local_path** (`local-watch.ts`) — `chokidar`, debounced 300ms,
    real-time. The path must resolve under `LOCAL_REPOS_ROOT`, checked
    at repository-creation time.
@@ -2745,12 +2749,14 @@ is the history record, not Chapters).
    are, 40 or 64 lowercase hex (anything else is a 400); a push without
    it clears the stored commit. The answer is the `SyncResult` counts.
 
-**Which files are indexed** — git and local_path share one scan
-(`scanRepository` in `fs-scan.ts`); they differ only in what is listed
+**Which files are indexed** — git and local_path share one set of rules
+(`scanRepository` in `fs-scan.ts`; git applies them to the fetched tree in
+`scanMirrorTree`, `git-mirror.ts`); they differ only in what is listed
 (#465, owner decision D12 in #930):
-- **git** lists every file of the clone except `.git`. A clone holds only
-  tracked files, so everything in it is source: a committed `build/`,
-  `dist/` or `node_modules/` is indexed.
+- **git** lists every file of the fetched commit's tree except `.git`,
+  symlinks and submodules (what a clone's checkout held as files). The
+  tree holds only tracked files, so everything in it is source: a
+  committed `build/`, `dist/` or `node_modules/` is indexed.
 - **local_path** follows git's ignore rules, in the scan and in the
   watcher (`GitignoreRules`): `.git/info/exclude`, the root `.gitignore`
   and every nested `.gitignore`, the deepest decisive rule winning (a
@@ -2790,6 +2796,60 @@ the exception: the client chose to send the content as text, so
 `syncRepositoryFiles` strips NUL bytes and indexes the rest, with no
 per-file size check (the request body limit bounds it), and reports no
 skips.
+
+**Git mirror** (#684; #542: the `rea` upstream was re-cloned, 71 MB, every
+5 minutes). Each sync of a git repository:
+1. `git ls-remote --symref <url> HEAD` gives the default branch and its
+   commit. The same commit as `last_synced_commit` (and a skip report on
+   the row) ends the sync: no fetch, no read, no parse, no embed.
+2. Otherwise `git fetch --depth 1 --no-tags --no-write-fetch-head <url>
+   +refs/heads/<default>:refs/elara/head` into the mirror, under a
+   per-repository lock in the process (a poll and a webhook never fetch
+   into one mirror at once). Only objects the mirror lacks are sent: a
+   one-file commit on rea is a few KB instead of the whole tree. The URL,
+   with its credential, is passed on the command line each time and is
+   never stored in the mirror (no `origin`, no FETCH_HEAD). When
+   `ls-remote` failed, the remote's `HEAD` is fetched and `default_branch`
+   keeps its last value.
+3. `git ls-tree -r -l` of the new commit, with the scan rules above
+   (binary extension; size from the tree, so a file over 1 MiB is never
+   read; the 10,000-file cap in tree order). A path is read (one
+   `git cat-file --batch` for all of them) only when its blob SHA differs
+   from the one in the tree of the last synced commit, or when it has no
+   row (a NUL-byte binary, a file that left the cap). The rest stay in
+   `currentPaths` unread. Without a diff base (first sync, a mirror that
+   was removed, a commit gc dropped, a row synced before #465) every file
+   is read, and the `syncRepositoryFiles` content-hash skip still keeps
+   unchanged ones from being extracted or embedded again.
+4. The repository row is written (status, skip report, default branch).
+   Then `refs/elara/synced` is set to the new commit (the next diff base)
+   and `git gc --auto` runs. Both are best effort: a failure is logged and
+   the sync stays a success. Without the ref the next sync diffs against
+   `last_synced_commit` while the mirror holds it, and reads every file
+   once when it does not.
+A force-push or a default-branch switch needs no special case: the diff
+is between two trees, whatever their ancestry, and the old commit stays
+in the mirror (`refs/elara/synced`) until the sync that replaces it
+succeeds. Disk use: about one packed copy of the tree at its tip (rea:
+11 MB for 3,764 files), plus at most four fetches' worth of superseded
+objects. Each fetch is kept as one pack (`fetch.unpackLimit=1`), and with
+more than four (`gc.autoPackLimit=4`) gc repacks, dropping unreachable
+objects and stale shallow roots at once (`gc.pruneExpire=now`, in the
+foreground: `gc.autoDetach=false`). Deleting a repository (REST
+`DELETE /api/repositories/:id`, MCP `delete_repository`) removes its
+mirror in the background, after any sync still using it. A boot pass
+(`sweepGitMirrors`, before the server listens) removes mirrors whose row
+is gone, for example after a vault or user delete cascaded or a crash.
+A mirror that is no longer a bare repository (an interrupted init) is
+created again. A mirror has the remote's hash algorithm: `ls-remote`'s
+commit of 64 hex digits makes it SHA-256 (`git init
+--object-format=sha256`), 40 SHA-1, and a mirror whose
+`rev-parse --show-object-format` no longer matches (the URL now names a
+repository of the other algorithm) is created again, since git refuses a
+fetch across algorithms. When `ls-remote` failed, an existing mirror is
+kept and a new one is SHA-1. Partial clone (`--filter`) is not used:
+fetching a missing blob later would need the URL and its credential
+stored in the mirror.
 
 **Indexed version** (#471, owner decision D11 in #930, ADR-004 §2.9):
 every repository records the version of its stored file contents, so an
@@ -3209,20 +3269,39 @@ does not parse is ignored.
 
 Every other specifier (npm packages not in the repository, stdlib) is
 stored with no resolved target and produces no graph edge.
+
+An import row is a function of the repository's files and manifests, not
+of the order they arrived in (#1008, ADR-004 §1.3). The resolver only asks
+whether a path is a known file, so each row stores in `lookup_keys` the
+`lookupKey` of every path it asked about (a file name up to its first dot;
+an `index.*` or `mod.rs` file keys on its directory's name, so `foo`,
+`foo.ts` and `foo/index.ts` share `foo`; a Java/Kotlin suffix keys on its
+class name), each stored as `<repository id>:<key>`. Creating or deleting a file whose key is not among them cannot
+change the row. When a sync creates or deletes files, `syncRepositoryFiles`
+calls `scheduleImportReresolution` with their paths: before its next turn
+the extraction worker drops the repository's cached file list and
+re-resolves, with the same `resolveImportPath`, the rows whose
+`lookup_keys` share a key with those paths (the GIN index on `lookup_keys`
+finds them; the repository prefix keeps a key many repositories share,
+such as `index` or `util`, to this repository's rows, and no other row of
+the repository is read). So an import pushed
+before its target gains it, `./foo` moves from `foo/index.ts` to a `foo.ts`
+that arrives later, and a row whose target is deleted (the FK sets it to
+null) takes the next candidate or stays unresolved, as one push of the
+final files would give. When a sync creates, changes or deletes a
+manifest, the same request also re-resolves every non-relative import row,
+so a renamed package loses its old name's edges and the new name gains
+them without the importers changing.
 `backfillUnresolvedImports()` runs at boot and re-resolves, per repository
-with its context, every stored import row whose target is still null, in
-keyset pages of 1,000 rows with one UPDATE each, so repositories indexed
-before #398 or #466 gain their import edges without a re-sync (an
-unchanged file is re-extracted only when `EXTRACTOR_VERSION`,
-`EMBEDDER_ID` or `CHUNK_VERSION` changes, #453). When a sync creates,
-changes or deletes a manifest, `syncRepositoryFiles` calls
-`scheduleImportReresolution`: before its next turn the extraction worker
-drops the repository's cached context and re-resolves every non-relative
-import row the same way, so a renamed package loses its old name's edges
-and the new name gains them without the importers changing. That request
-is in memory: after a crash the boot backfill restores the targets gained,
-and a row whose target the change removed keeps that stale target until its file is
-extracted again. Wikilink rows without lines or a context are rewritten
+with its context, every stored import row whose target is still null or
+that has no `lookup_keys` yet, in keyset pages of 1,000 rows with one
+UPDATE each, so repositories indexed before #398 or #466 gain their import
+edges without a re-sync (an unchanged file is re-extracted only when
+`EXTRACTOR_VERSION`, `EMBEDDER_ID` or `CHUNK_VERSION` changes, #453). The
+re-resolution request is in memory: after a crash the boot backfill
+restores the targets gained and the rows a deletion left without one; a
+row whose target a created file or a manifest change replaced keeps the
+stale target until its file is extracted again. Wikilink rows without lines or a context are rewritten
 from their note's body by the `note_links` catch-up jobs (#472, see **Link
 catch-up** below), queued before `listen`.
 
@@ -3466,7 +3545,16 @@ per-session de-duplication (#683) build on this contract, and none may
 cache without it. D7 on #930
 replaced the old promise of no cross-connection caching (§5.8) with this
 contract. Permission checks themselves stay live (§1): a cache never
-authorizes anything.
+authorizes anything. The query-embedding cache (below) caches no answer,
+only a function of the query text, and so needs no epochs.
+
+**Every in-process cache keys by account** (#684). A hit answers faster
+than a miss, so an entry one account filled and another account hits tells
+the second that the first asked the same thing (a query-vector hit is
+about 3.8 ms faster than an embed). So every cache in the process keeps the
+asking account in its key, even one whose entries depend on nothing about
+the caller. Agents and tokens of one account share entries. A caller that
+has no account at hand computes and caches nothing.
 
 **Epochs** (migration 0041). Triggers bump them, so every writer is
 covered (MCP, REST, the collab relay, the workers, the CLIs) without a call
@@ -3580,6 +3668,41 @@ compares `rev` or `hash` live after the access check and caches nothing.
 Tests: `cache-epochs.test.ts` (every write path bumps its own scope and no
 other; reads bump nothing) and `cache-key.test.ts` (key fields, refusals,
 real epochs around writes and reads).
+
+**Query-embedding cache** (`embeddings.ts` `QueryEmbeddingCache`, #684).
+Search embeds its query text through `embedQuery`; a repeated query does
+not run the embedder again.
+- **Key**: sha256 of `EMBEDDER_ID` (model and embed-text version, read on
+  every call), the asking account and the normalised text
+  (`normalizeQueryText`: Unicode NFC, whitespace runs collapsed to one
+  space, trimmed; no case folding). The normalised text is also what is
+  embedded, so the key is exactly the input. A new model or embed-text
+  version misses every entry: a vector never outlives the embedder that
+  made it.
+- **Per account** (the rule above): `searchNotes` and `findSymbols` take
+  `accountId` in their options, and every caller (REST search routes, MCP
+  `search` and `find_symbols`, the MCP prompts) passes the account it
+  serves. Without one the query is embedded and not kept.
+- **No epochs**: a query vector depends on nothing but the model and the
+  text, not on any content or access. A hit is looked up after the call's
+  live checks, like any other step of search.
+- **Bounded**: an in-process LRU of 1,000 vectors
+  (`QUERY_EMBEDDING_CACHE_ENTRIES`, about 3 KB each, ~4 MB when full).
+  Concurrent identical queries share one embed. A failed embed is not
+  kept, so the next call tries again (and search answers from the keyword
+  channel meanwhile, #458). Every restart empties it.
+- **No Postgres tier**: measured on the PR (local bge-small, warm, Apple
+  silicon laptop), a repeated query embed took 3.8 ms (median of 20) and a
+  3 KB Postgres round trip 0.6–0.75 ms; a cache hit takes microseconds and
+  a repeated `searchNotes` went from 10.5 ms to 6.4 ms. A shared tier would
+  save about 3 ms per repeat, and only for repeats that land on another
+  instance, at the cost of a table and its cleanup. Each instance warms its
+  own.
+- Tests: `query-embedding-cache.test.ts` (a repeat makes zero embedder
+  calls, a new embedder id misses, eviction stays bounded, failures are not
+  kept, two accounts never share an entry, search caches per account and
+  nothing without one). `test/setup-jobs.ts` empties it before every test,
+  so an embedder mock sees every query.
 
 ### 5.12 Usage report (`server/src/usage/`, #678)
 
@@ -3799,11 +3922,11 @@ pnpm -C server test # vitest run — needs Postgres reachable at DATABASE_URL
   twice in one database, which only catches randomness inside the process.
   In the other database they must give the same bytes once that database's
   ids and the allowlisted time keys are masked. A new read tool, or a new
-  argument that changes an answer's shape, adds its questions there. The
-  answers that still differ across databases name their issue and are
-  `it.fails`, which goes red once the issue is fixed: graph order from ids
-  (#1006), semantic edges from embed order (#1007) and imports pushed before
-  their target (#1008).
+  argument that changes an answer's shape, adds its questions there. An
+  answer that still differs across databases names its issue and is
+  `it.fails`, which goes red once the issue is fixed; none does since graph
+  order from ids (#1006), semantic edges from embed order (#1007) and
+  imports pushed before their target (#1008) were fixed.
 - Live/e2e verification (booting a real server against a real database
   and exercising it over real HTTP) is a standing project discipline,
   not optional — several real bugs in this codebase (an extraction
@@ -4084,7 +4207,7 @@ moment a second instance runs against the same database**:
 | Embedding and extraction jobs | `jobs/durable.ts`, `search/embedding-queue.ts`, `repositories/extraction-queue.ts` | jobs are shared through the `jobs` table (claims use `FOR UPDATE SKIP LOCKED`), but a job that runs past its 60 s lease can be claimed and run by another instance too (`completeJob`/`failJob` do not check the lease holder), and the per-repository fairness state (`lastTurn`) is per process |
 | Permission-change bus | `sync/permission-events.ts` | an instance that didn't receive the in-process event never kicks its own live connections — a revoked user could keep a session open on a *different* instance |
 | MCP rate limiter | `mcp/rate-limit.ts` | a client can get up to N× the intended limit by landing requests across N instances behind a load balancer |
-| Git polling scheduler | `repositories/scheduler.ts` | multiple instances independently poll/clone the same repos on their own schedules |
+| Git polling scheduler | `repositories/scheduler.ts` | multiple instances independently poll and fetch the same repos on their own schedules, each into its own mirror under its own `DATA_DIR` |
 | Usage report flag and queue | `usage/recorder.ts` | the on/off flag is read at boot and set by the route of the instance that handled the toggle, so another instance keeps recording (or not) until it restarts; each instance queues and writes its own calls, which is correct |
 
 **Upgrade path, if this is ever actually needed**: Postgres

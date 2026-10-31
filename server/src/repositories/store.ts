@@ -96,6 +96,8 @@ export async function syncRepositoryFiles(
   const toExtract: string[] = []
   // A package.json, workspace or tsconfig change can change what any import of the repository resolves to (#466).
   let manifestChanged = false
+  // A path created or deleted can change what the imports that tried it resolve to (#1008).
+  const createdOrDeleted: string[] = []
 
   for (const file of changedOrNewFiles) {
     // Pushed content is text the client chose to send, so a stray NUL is
@@ -134,6 +136,7 @@ export async function syncRepositoryFiles(
         })
         .returning({ id: repositoryFiles.id })
       if (inserted) toExtract.push(inserted.id)
+      createdOrDeleted.push(file.path)
       result.created += 1
     }
     if (isResolutionManifest(file.path)) manifestChanged = true
@@ -159,6 +162,7 @@ export async function syncRepositoryFiles(
     kickSemanticEdges()
     result.deleted = toDelete.length
     if (toDelete.some((r) => isResolutionManifest(r.path))) manifestChanged = true
+    for (const r of toDelete) createdOrDeleted.push(r.path)
     // The delete also takes a batch file outside currentPaths.
     for (const path of hashByPath.keys()) if (!currentPathSet.has(path)) hashByPath.delete(path)
   }
@@ -171,7 +175,9 @@ export async function syncRepositoryFiles(
     })
     .where(eq(repositories.id, repositoryId))
 
-  if (manifestChanged) scheduleImportReresolution(repositoryId)
+  if (manifestChanged || createdOrDeleted.length > 0) {
+    scheduleImportReresolution(repositoryId, { manifests: manifestChanged, paths: createdOrDeleted })
+  }
 
   await enqueueExtractions(toExtract)
   checkCodeStaleness(repositoryId).catch(console.error)
