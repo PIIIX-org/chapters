@@ -62,7 +62,6 @@
   },
   "devDependencies": {
     "@hocuspocus/provider": "^4.7.1",
-    "@types/adm-zip": "^0.6.0",
     "@types/node": "^26.6.5",
     "@types/nodemailer": "^8.0.2",
     "@types/ws": "^8.18.2",
