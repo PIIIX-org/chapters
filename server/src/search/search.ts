@@ -5,7 +5,7 @@ import { textArray } from './block-rows.js'
 import { embedQuery } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
 import { setHnswScan } from './hnsw.js'
-import { MAX_KEYWORD_LENGTH, isPlainWord, keywordTerms, type Identifier } from './identifiers.js'
+import { MAX_KEYWORD_LENGTH, isPlainWord, keywordTerms, splitIdentifier, type Identifier } from './identifiers.js'
 import { extractionState } from '../repositories/extraction-queue.js'
 import { timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
@@ -415,6 +415,8 @@ const CANDIDATES = 30
  * tokens-to-gold +29 %).
  */
 const RRF_K = 60
+/** Exact and identifier matches always outrank fuzzy ones in fusion (#456). */
+const EXACT_BOOST = 1
 /**
  * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
  * that many rows, and each leg keeps only some kinds: file-level blocks, or
@@ -868,6 +870,100 @@ function byScore(a: Ranked, b: Ranked): number {
   )
 }
 
+/** A query token that is itself identifier- or file-shaped; plain words are not (#456). */
+function isIdentifierShaped(token: string): boolean {
+  return (
+    token.includes('_') ||
+    token.includes('::') ||
+    /[\p{Ll}\p{N}]\p{Lu}/u.test(token) ||
+    /[\p{L}\p{N}_]\.[\p{L}\p{N}_]/u.test(token) ||
+    (token.includes('/') && /\.[A-Za-z0-9]{1,8}$/.test(token))
+  )
+}
+
+interface ExactContext {
+  /** The whole query, trimmed and lowercased, plus the same without surrounding punctuation. */
+  whole: Set<string>
+  /** Identifier- or file-shaped terms as typed, and lowercased. */
+  terms: Set<string>
+  termsLower: Set<string>
+  /** Lowercased spellings (whole, joined, snake, kebab) of the identifier-shaped terms. */
+  spelling: Set<string>
+}
+
+/** A query this short is an identifier lookup, not a question: its identifier-shaped words are what it asks for. */
+const SHORT_QUERY_WORDS = 3
+
+/**
+ * What may count as an exact match (#456). A row is exact when its name, path
+ * or title equals the WHOLE query, or equals an identifier- or file-shaped
+ * term that the asker singled out: the term is in backticks, or the query is
+ * short (at most `SHORT_QUERY_WORDS` words). A plain word never grants it, and
+ * neither does an identifier merely mentioned inside a long question: a name
+ * hit must not outrank rows that match what the question asks (#1014; on the
+ * benchmark, `SessionDB` or `SKILL.md` in passing buried the answer).
+ */
+function queryExactContext(query: string): ExactContext {
+  const queryNorm = query.trim().toLowerCase()
+  const queryStripped = queryNorm.replace(/^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu, '').trim()
+  const whole = new Set<string>([queryNorm])
+  if (queryStripped.length > 0) whole.add(queryStripped)
+
+  const words = query.trim().split(/\s+/).filter(Boolean)
+  const quoted = new Set([...query.matchAll(/`([^`\s]+)`/g)].map((m) => m[1]!))
+  const terms = new Set<string>()
+  const termsLower = new Set<string>()
+  const spelling = new Set<string>()
+  for (const raw of words) {
+    const cleaned = raw.replace(/^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu, '')
+    if (cleaned.length <= 1 || !isIdentifierShaped(cleaned)) continue
+    if (words.length > SHORT_QUERY_WORDS && !quoted.has(cleaned)) continue
+    terms.add(cleaned)
+    termsLower.add(cleaned.toLowerCase())
+    const id = splitIdentifier(cleaned)
+    for (const s of [id.whole, id.parts.join(''), id.parts.join('_'), id.parts.join('-')]) {
+      if (s.length > 0) spelling.add(s.toLowerCase())
+    }
+  }
+  return { whole, terms, termsLower, spelling }
+}
+
+/** A symbol whose name equals the whole query, or an identifier term by any of its spellings (#456). */
+function isExactSymbol(name: string, parent: string | null | undefined, ctx: ExactContext): boolean {
+  const lower = name.toLowerCase()
+  if (lower.length <= 1) return false
+  if (ctx.whole.has(lower) || ctx.terms.has(name) || ctx.spelling.has(lower)) return true
+  if (parent) {
+    const full = `${parent}.${name}`
+    const fullLower = full.toLowerCase()
+    if (ctx.whole.has(fullLower) || ctx.terms.has(full) || ctx.spelling.has(fullLower)) return true
+  }
+  return false
+}
+
+/** A file whose path or basename (with its extension) equals the whole query or a file-shaped term (#456). */
+function isExactFile(path: string, ctx: ExactContext): boolean {
+  const lower = path.toLowerCase()
+  if (ctx.whole.has(lower) || ctx.termsLower.has(lower)) return true
+  const baseLower = (path.split('/').pop() ?? path).toLowerCase()
+  return ctx.whole.has(baseLower) || ctx.termsLower.has(baseLower)
+}
+
+/** Extracts the lowercased note title from frontmatter, if present and string-typed. */
+function noteTitle(frontmatter: unknown): string {
+  if (frontmatter && typeof frontmatter === 'object' && 'title' in frontmatter && typeof frontmatter.title === 'string') {
+    return frontmatter.title.trim().toLowerCase()
+  }
+  return ''
+}
+
+/** A note whose title or path equals the query (#456). */
+function isExactNote(path: string, frontmatter: unknown, ctx: ExactContext): boolean {
+  if (ctx.whole.has(path.trim().toLowerCase())) return true
+  const title = noteTitle(frontmatter)
+  return title !== '' && ctx.whole.has(title)
+}
+
 /** The answer to an empty query or an empty scope: nothing was searched. */
 const NOTHING: SearchResponse<never> = { status: 'no_match', retrieval_mode: 'none', degraded: false, results: [] }
 
@@ -897,6 +993,7 @@ export async function findSymbols(
     vec === null ? null : channel<[SymbolRow[]]>('vector', [symbolRows(repositoryIds, query, 'semantic', vec, filter)]),
   ])
 
+  const ctx = queryExactContext(query)
   const map = new Map<string, SymbolSearchResult>()
   const contribute = (rows: SymbolRow[], preferSnippet: boolean) => {
     rows.forEach((row, rank) => {
@@ -906,6 +1003,8 @@ export async function findSymbols(
         existing.score += contribution
         if (preferSnippet && row.snippet) existing.snippet = row.snippet
       } else {
+        // A relaxed or trigram row never counts as exact: it did not match every word (#455 part 2).
+        const exact = !row.relaxed && isExactSymbol(row.name, row.parent, ctx)
         map.set(row.id, {
           id: row.id,
           fileId: row.file_id,
@@ -917,7 +1016,7 @@ export async function findSymbols(
           startLine: row.start_line,
           endLine: row.end_line,
           snippet: row.snippet || null,
-          score: contribution,
+          score: contribution + (exact ? EXACT_BOOST : 0),
         })
       }
     })
@@ -967,6 +1066,7 @@ export async function searchNotes(
   ])
 
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
+  const ctx = queryExactContext(query)
   const merged = new Map<string, SearchResult>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
@@ -977,6 +1077,8 @@ export async function searchNotes(
         existing.score += contribution
         if (preferSnippet) existing.snippet = row.snippet
       } else {
+        const exact =
+          !row.relaxed && (resourceType === 'note' ? isExactNote(row.path, row.frontmatter, ctx) : isExactFile(row.path, ctx))
         merged.set(key, {
           resourceType,
           id: row.id,
@@ -987,7 +1089,7 @@ export async function searchNotes(
           language: resourceType === 'code' ? row.language : undefined,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution,
+          score: contribution + (exact ? EXACT_BOOST : 0),
         })
       }
     })
@@ -1002,6 +1104,7 @@ export async function searchNotes(
         existing.score += contribution
         if (preferSnippet && row.snippet) existing.snippet = row.snippet
       } else {
+        const exact = !row.relaxed && isExactSymbol(row.name, row.parent, ctx)
         merged.set(key, {
           resourceType: 'symbol',
           id: row.id,
@@ -1015,7 +1118,7 @@ export async function searchNotes(
           endLine: row.end_line,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution,
+          score: contribution + (exact ? EXACT_BOOST : 0),
         })
       }
     })
