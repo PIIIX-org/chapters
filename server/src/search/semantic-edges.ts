@@ -264,8 +264,23 @@ async function knn(client: DbOrTx, nodeType: SemanticNodeType, nodeId: string, s
   return [...(await nearest('note')), ...(await nearest('code'))].sort(byRank).slice(0, config.semanticK)
 }
 
-/** Times a recompute reads its scope again when the one it locked changed meanwhile (`recomputeSemanticEdges`). */
-const SCOPE_ATTEMPTS = 3
+/**
+ * Whether node `x` (SQL type and id columns) is live and in the reach (`nodeContext`) of node `nodeType`
+ * `nodeId`, read in the snapshot of the statement it is in: of the same type, in its vault or repository;
+ * of the other, in a vault or repository of its account. False when that node is not live. A writer's
+ * write statement reads it after its container locks, so it sees a delete or a move that committed while
+ * the writer waited for them (#1026).
+ */
+function inReach(nodeType: SemanticNodeType, nodeId: string, xType: SQL, xId: SQL): SQL {
+  // A live node as (container_id, owner_id): a note out of the trash in a vault out of the trash, or a file.
+  const live = (type: SQL, id: SQL) => sql`
+    SELECT n.vault_id AS container_id, v.owner_id FROM notes n JOIN vaults v ON v.id = n.vault_id
+    WHERE ${type} = 'note' AND n.id = ${id} AND n.deleted_at IS NULL AND v.deleted_at IS NULL
+    UNION ALL SELECT f.repository_id, r.owner_id FROM repository_files f JOIN repositories r ON r.id = f.repository_id
+    WHERE ${type} = 'code' AND f.id = ${id}`
+  return sql`EXISTS (SELECT 1 FROM (${live(sql`${nodeType}::semantic_node_type`, sql`${nodeId}::uuid`)}) me, (${live(xType, xId)}) t
+    WHERE CASE WHEN ${xType} = ${nodeType}::semantic_node_type THEN t.container_id = me.container_id ELSE t.owner_id = me.owner_id END)`
+}
 
 /**
  * Recomputes one node's semantic neighbours across both notes and code
@@ -284,21 +299,14 @@ const SCOPE_ATTEMPTS = 3
  * its reach (`nodeContext`), held to the commit as well: no node it may
  * find or holds is deleted meanwhile (#1026), and no embed in its reach
  * reads the lists before this one is written (#1027). That statement's
- * snapshot may predate the locks it waited for, so the scope is read again
- * under them; one that changed meanwhile (a vault created, restored or
- * moved) gets its locks too, up to SCOPE_ATTEMPTS reads.
+ * snapshot may predate a delete it waited for, so the write keeps only the
+ * rows of a node still live and targets still in its reach (`inReach`); a
+ * reach that grew meanwhile (a vault restored or moved in) is the change's
+ * to fill (its refreshes, its queued recomputes).
  */
 export async function recomputeSemanticEdges(nodeType: SemanticNodeType, nodeId: string): Promise<void> {
   await db.transaction(async (tx) => {
-    let locked = await nodeContext(tx, nodeType, nodeId, { lock: true })
-    let context: NodeContext | null = null
-    for (let attempt = 1; locked; attempt++) {
-      context = await nodeContext(tx, nodeType, nodeId)
-      if (!context || (context.scope.note === locked.scope.note && context.scope.code === locked.scope.code)) break
-      if (attempt === SCOPE_ATTEMPTS) throw new Error(`semantic edges of ${nodeType} ${nodeId}: its scope changed during each of ${SCOPE_ATTEMPTS} reads`)
-      await tx.execute(sql`SELECT ${lockShared(sql`SELECT unnest(${context.scope.note}::uuid[] || ${context.scope.code}::uuid[])`)}`)
-      locked = context
-    }
+    const context = await nodeContext(tx, nodeType, nodeId, { lock: true })
     if (!context) return
     // ponytail: tuned HNSW ef_search = 100 preserves 99.8% recall while avoiding full-table sequential scans on every note edit (DB-02).
     // The container filter applies inside the HNSW scan (#461): with the iterative scan (pgvector 0.8+;
@@ -321,7 +329,8 @@ export async function recomputeSemanticEdges(nodeType: SemanticNodeType, nodeId:
       WITH next AS (
         SELECT * FROM unnest(${`{${neighbors.map((n) => n.type).join(',')}}`}::semantic_node_type[],
           ${`{${neighbors.map((n) => n.id).join(',')}}`}::uuid[], ${`{${neighbors.map((n) => n.similarity).join(',')}}`}::float8[])
-          AS x(type, id, similarity)),
+          AS x(type, id, similarity)
+        WHERE ${inReach(nodeType, nodeId, sql`x.type`, sql`x.id`)}),
       dropped AS (
         DELETE FROM semantic_edges e WHERE e.node_a_type = ${nodeType} AND e.node_a_id = ${nodeId}
           AND NOT EXISTS (SELECT 1 FROM next WHERE next.type = e.node_b_type AND next.id = e.node_b_id))
@@ -471,10 +480,11 @@ const MERGE_CHUNK = 256
  * that holds `node` by now (a recompute that started after the holders were
  * read; dropping its last row would leave K-1, #1027).
  *
- * After the lists' locks it takes the container locks (`lockShared`) of
- * the lists, of their rows' targets and of `node`, then reads `node` again:
- * one trashed, purged or moved meanwhile enters no list, nor a list moved
- * out of its reach (#1026).
+ * With the lists' locks, in the same statement, it takes the container
+ * locks (`lockShared`) of the lists, of their rows' targets and of `node`;
+ * the merge statements read `node` and the lists again (`inReach`), so one
+ * trashed, purged or moved meanwhile enters no list, nor a list moved out
+ * of its reach (#1026).
  */
 async function mergeEntered(
   tx: DbOrTx,
@@ -485,13 +495,13 @@ async function mergeEntered(
   if (lists.length === 0) return []
   const rows = nodeRows(lists)
   // In one order (notes, then files, each by id), so two merges never wait on each other; a recompute holds one
-  // lock and waits on none of them. The container locks come after them, in a statement of their own.
+  // lock and waits on none of them. The container locks come after them (the CASE reads the lists' count first).
   await tx.execute(sql`
-    SELECT count(pg_advisory_xact_lock(hashtextextended('semantic_edges:' || x.type::text || ':' || x.id::text, 0)))
-    FROM (SELECT l.type, l.id FROM (${rows}) l ORDER BY l.type::text DESC, l.id) x`)
-  await tx.execute(sql`SELECT ${lockShared(sql`${containersOf(rows)} UNION ALL ${containersOf(targetsOf(rows))} UNION ALL ${containersOf(nodeRows([node]))}`)}`)
-  const context = await nodeContext(tx, node.type, node.id)
-  if (!context?.live) return []
+    WITH l AS MATERIALIZED (
+      SELECT count(pg_advisory_xact_lock(hashtextextended('semantic_edges:' || x.type::text || ':' || x.id::text, 0))) AS n
+      FROM (SELECT l.type, l.id FROM (${rows}) l ORDER BY l.type::text DESC, l.id) x)
+    SELECT CASE WHEN l.n >= 0 THEN ${lockShared(sql`${containersOf(rows)} UNION ALL ${containersOf(targetsOf(rows))} UNION ALL ${containersOf(nodeRows([node]))}`)} END
+    FROM l`)
   const recompute: string[] = []
   for (const ownerType of ['note', 'code'] as const) {
     const ids = lists.filter((l) => l.type === ownerType).map((l) => l.id)
@@ -501,8 +511,7 @@ async function mergeEntered(
       WITH ${newVectors(node, newKeys)},
       listed AS (
         SELECT c.id FROM unnest(${sorted}::uuid[]) AS c(id)
-        ${liveOwner(ownerType, sql`c.id`)}
-        WHERE ct.id = ANY(${context.scope[ownerType]}::uuid[])),
+        WHERE ${inReach(node.type, node.id, sql`${ownerType}::semantic_node_type`, sql`c.id`)}),
       held AS (
         SELECT l.id FROM listed l WHERE EXISTS (SELECT 1 FROM semantic_edges h
           WHERE h.node_a_type = ${ownerType} AND h.node_a_id = l.id AND h.node_b_type = ${node.type} AND h.node_b_id = ${node.id})),
@@ -547,12 +556,10 @@ async function mergeEntered(
  * waits for the writers in flight that hold its container's lock (`lockShared`: every recompute whose
  * reach includes the node). One that read the blocks before the commit may have missed the node; once it
  * committed, the refresh reads its list (its holders, `enteredBy`, `mergeEntered`). One that starts later
- * reads the new vectors. The exclusive lock lasts its own short transaction only.
+ * reads the new vectors. One statement outside any transaction: the exclusive lock ends with it.
  */
 async function awaitSearches(nodeType: SemanticNodeType, nodeId: string): Promise<void> {
-  await db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT pg_advisory_xact_lock(${containerLock(sql`c.id`)}) FROM (${containersOf(nodeRows([{ type: nodeType, id: nodeId }]))}) c(id)`)
-  })
+  await db.execute(sql`SELECT pg_advisory_xact_lock(${containerLock(sql`c.id`)}) FROM (${containersOf(nodeRows([{ type: nodeType, id: nodeId }]))}) c(id)`)
 }
 
 /**

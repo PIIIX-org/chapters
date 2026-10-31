@@ -1670,23 +1670,26 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   advisory lock (`semantic_edges:container:<id>`). A writer of lists takes
   it shared, in id order, in one statement after its node locks, and holds
   it to its commit: a recompute on every container of its scope and of its
-  rows' targets, in the statement that takes its node lock (that
-  statement's snapshot may predate the locks it waited for, so the scope is
-  read again under them; a scope that changed meanwhile gets its locks too,
-  up to 3 reads); a merge on the containers of its lists, of their rows'
-  targets and of the node, after the lists' locks. A delete
+  rows' targets, in the statement that takes its node lock; a merge on the
+  containers of its lists, of their rows' targets and of the node, in the
+  statement that takes the lists' locks, after them. A writer's write
+  statement keeps only rows whose node and target are still live and in
+  each other's reach (`inReach`), read in its own snapshot, so a delete or
+  a vault move that committed while the writer waited for the locks is
+  seen; a reach that grew meanwhile (a vault restored or moved in) is
+  filled by that change's refreshes and queued recomputes. A delete
   (`removeSemanticNodes`, a vault transfer) takes its one container's lock
   exclusively before it removes rows or reads holders, so a writer in
   flight commits first and its rows are there to remove, and a writer that
   starts later finds the node gone. An embed's refresh takes its node's
-  container exclusively in a short transaction of its own before it reads
-  any list (`awaitSearches`): a recompute in flight that read the blocks
-  before the embed committed writes its list first, so the refresh sees it
-  among the holders. No deadlock: a delete takes one container and waits
-  on no writer's lock; a writer takes the container locks after its node
-  locks and then only reads and writes rows whose ends are in them; the
-  refresh's exclusive lock is released at once. Edits to a note never wait
-  for its recompute.
+  container exclusively in one statement outside any transaction before it
+  reads any list (`awaitSearches`): a recompute in flight that read the
+  blocks before the embed committed writes its list first, so the refresh
+  sees it among the holders. No deadlock: a delete takes one container and
+  waits on no writer's lock; a writer takes the container locks after its
+  node locks and then only reads and writes rows whose ends are in them;
+  the refresh's exclusive lock is released at once. Edits to a note never
+  wait for its recompute.
   **The stored rows are a function of the content, not of the order it was
   embedded in** (#1007, ADR-004 §1.3): each node's rows are its true top-k.
   The search per query vector reads its 100 nearest blocks; when the far
@@ -1716,8 +1719,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   K-th below the similarity, or a K-th of the same similarity whose
   target's tie key comes after the node's. The lists it enters are locked
   in id order (up to 256 per type per transaction), then the container
-  locks, then the node is read again: one trashed, purged or moved
-  meanwhile enters no list. Each list is changed in one statement: the new
+  locks; the merge statement reads the node and each list again
+  (`inReach`): one trashed, purged or moved meanwhile enters no list. Each
+  list is changed in one statement: the new
   row in, the last row out. A list whose last row names a node that is
   gone, or that holds the node by then (a recompute that started after the
   holders were read; dropping its last row for a row it has would leave
