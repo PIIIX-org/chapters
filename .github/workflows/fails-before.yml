@@ -3,10 +3,12 @@ name: Fails before
 # Every fix PR must carry a test that fails without the fix (#575). For a PR
 # to `dev` titled `fix: ...` / `fix(scope): ...` (or `fix!:` /
 # `fix(scope)!:`), the `fails-before` job restores the base commit's source,
-# keeps the PR's test files and helpers, runs only the test files the PR adds
-# or changes, and passes only if at least one test fails there. Escape hatch:
-# label `no-fails-before` plus a `Fails-before: n/a because ...` line in the
-# PR body. Logic and messages: .github/scripts/fails-before.mjs; rules:
+# keeps the PR's test files and helpers, runs the whole test files the PR
+# adds or changes, and passes only if at least one test fails there and no
+# new test file passes entirely (a vacuous file; `// fails-before: exempt
+# <reason>` in the file allows it). Escape hatch: label `no-fails-before`
+# plus a `Fails-before: n/a because ...` line in the PR body. Logic and
+# messages: .github/scripts/fails-before.mjs; rules:
 # docs/agents/github-workflow.md.
 #
 # Separate from ci.yml so a title, body or label edit re-evaluates this
@@ -16,6 +18,13 @@ name: Fails before
 # required on both branches (#574) and a required check whose workflow never
 # starts would wait forever. A skipped job counts as passing. Every fix that
 # a promotion carries already passed this check on its PR to `dev`.
+#
+# On `merge_group` (the queue's temporary commit) the job forwards the PR's
+# own result: it resolves the PR from the queue branch name and re-applies
+# the conclusion of the latest `fails-before` run on the PR head
+# (.github/scripts/merge-group-forward.mjs), so the required check reports
+# on the queue commit without re-judging a title and labels that did not
+# change.
 
 on:
   pull_request:
@@ -30,18 +39,24 @@ on:
         unlabeled,
         ready_for_review,
       ]
+  merge_group:
+    branches: [dev]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  # The merge-group step reads the PR and its check runs.
+  pull-requests: read
+  checks: read
 
 jobs:
   fails-before:
-    if: github.base_ref == 'dev'
+    if: github.base_ref == 'dev' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
@@ -59,6 +74,7 @@ jobs:
       # judged by; until the base has one, run the PR's copy (the summary says
       # which).
       - name: Run the PR's changed tests against the base commit
+        if: github.event_name == 'pull_request'
         run: |
           checker=.github/scripts/fails-before.mjs
           if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
@@ -66,4 +82,21 @@ jobs:
             FAILS_BEFORE_CHECKER=base node "$RUNNER_TEMP/fails-before.mjs"
           else
             FAILS_BEFORE_CHECKER=pr node "$checker"
+          fi
+      # Queue commit: HEAD^1 is the queue base (dev, or the entry ahead), so
+      # the same rule gives the base's copy of the forwarder; HEAD^2 is the
+      # PR head the queue merged, which must still be the PR's live head.
+      - name: Forward the PR's fails-before result to the queue commit
+        if: github.event_name == 'merge_group'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MERGE_GROUP_CHECK: fails-before
+        run: |
+          export MERGE_GROUP_PR_HEAD="$(git rev-parse --verify --quiet HEAD^2 || true)"
+          checker=.github/scripts/merge-group-forward.mjs
+          if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
+            git show "HEAD^1:$checker" > "$RUNNER_TEMP/merge-group-forward.mjs"
+            MERGE_GROUP_CHECKER=base node "$RUNNER_TEMP/merge-group-forward.mjs"
+          else
+            MERGE_GROUP_CHECKER=pr node "$checker"
           fi

@@ -1,7 +1,10 @@
 // Fails-before check for fix PRs (#575). Runs the test files a fix PR adds
-// or changes against the base commit's source and requires at least one of
-// them to fail there: a regression test that also passes without the fix
-// does not show the fix does anything. See docs/agents/github-workflow.md.
+// or changes (whole files, not named tests) against the base commit's
+// source and requires at least one of them to fail there: a regression test
+// that also passes without the fix does not show the fix does anything. A
+// NEW test file that passes entirely on base is vacuous and fails the check
+// unless it carries `// fails-before: exempt <reason>` (parseExempt). See
+// docs/agents/github-workflow.md.
 //
 // Plain Node, no dependencies: it runs before `pnpm install`, from the PR
 // checkout (the workflow runs the base commit's copy of this file when there
@@ -59,6 +62,23 @@ export function isTestSide(path) {
 /** A file vitest runs. */
 export function isTestFile(path) {
   return isTestSide(path) && /\.test\.tsx?$/.test(path)
+}
+
+/**
+ * The reason from a `// fails-before: exempt <reason>` comment in a test
+ * file, or null. The marker lets a NEW test file pass entirely on the base
+ * commit (otherwise a new file that passes without the fix is vacuous and
+ * fails the check); the reason needs at least MIN_JUSTIFICATION characters.
+ */
+export function parseExempt(source) {
+  const m = /^[ \t]*\/\/[ \t]*fails-before:[ \t]*exempt[ \t]+(\S.*)$/im.exec(
+    source ?? '',
+  )
+  if (!m) return null
+  const reason = m[1].trim()
+  return reason.length >= MIN_JUSTIFICATION && !/^<[^>]*>$/.test(reason)
+    ? reason
+    : null
 }
 
 /** `git diff --name-status --no-renames -z` output -> [{status, path}]. */
@@ -202,13 +222,33 @@ export function classifyFile(result, exports = []) {
   }
 }
 
+/** Outcomes of new test files that pass entirely on base without an exempt marker. */
+export function vacuousFiles(outcomes) {
+  return Object.entries(outcomes)
+    .filter(([, o]) => o.added && o.kind === 'passed' && !o.exempt)
+    .map(([path]) => path)
+}
+
 /**
  * Per-file outcomes + the job verdict. `outcomes` maps repo path ->
  * classifyFile() result, or { kind: 'not-run', message } when vitest
- * produced no result for the file.
+ * produced no result for the file, plus `added` (the PR adds the file) and
+ * `exempt` (its `// fails-before: exempt <reason>` reason, or null).
  */
 export function verdict(outcomes) {
   const all = Object.values(outcomes)
+  const vacuous = vacuousFiles(outcomes)
+  if (vacuous.length > 0) {
+    return {
+      ok: false,
+      reason:
+        `New test file${vacuous.length > 1 ? 's' : ''} ${vacuous.map((p) => `\`${p}\``).join(', ')} ` +
+        `pass${vacuous.length > 1 ? '' : 'es'} entirely on the base commit: a new file whose every test passes ` +
+        'without the fix is vacuous. Make at least one of its tests fail on base, or mark the file ' +
+        'with a `// fails-before: exempt <reason>` comment if it legitimately cannot (for example a ' +
+        'characterisation test the fix must keep passing).',
+    }
+  }
   if (all.some((o) => o.kind === 'failed')) {
     return {
       ok: true,
@@ -269,6 +309,14 @@ export function summaryTable(outcomes) {
       )
     } else if (o.kind === 'not-run') {
       rows.push(`| \`${path}\` | ⚠️ not run | ${cell(o.message)} |`)
+    } else if (o.added && o.exempt) {
+      rows.push(
+        `| \`${path}\` | ✅ passed (${o.count}), new file, exempt | \`// fails-before: exempt\`: ${cell(o.exempt)} |`,
+      )
+    } else if (o.added) {
+      rows.push(
+        `| \`${path}\` | ❌ new file passes entirely (${o.count}) | vacuous: every test passes without the fix; add a failing one or a \`// fails-before: exempt <reason>\` comment |`,
+      )
     } else {
       rows.push(
         `| \`${path}\` | ✅ passed (${o.count}) | all tests pass without the fix |`,
@@ -579,8 +627,23 @@ function main() {
   probes.forEach((p, i) => {
     added[p.test] = addedExports(baseProbes[i], headProbes[i])
   })
+  // A file the PR adds must not pass entirely on base (vacuous) unless it
+  // carries a `// fails-before: exempt <reason>` comment. The test files
+  // are read from the worktree, which holds the PR's copy of each.
+  const newFiles = new Set(
+    testSide.filter((c) => c.status === 'A').map((c) => c.path),
+  )
   for (const [f, r] of Object.entries(outcomes)) {
-    if (r.kind !== 'not-run') outcomes[f] = classifyFile(r, added[f] ?? [])
+    const o = r.kind !== 'not-run' ? classifyFile(r, added[f] ?? []) : r
+    o.added = newFiles.has(f)
+    o.exempt = o.added ? parseExempt(readFileSync(join(wt, f), 'utf8')) : null
+    outcomes[f] = o
+  }
+  for (const [f, o] of Object.entries(outcomes)) {
+    if (o.exempt)
+      console.log(
+        `::notice file=${f},title=Fails-before exempt file::${o.exempt}`,
+      )
   }
 
   const v = verdict(outcomes)
@@ -591,8 +654,8 @@ function main() {
   finish(
     v.ok,
     v.reason,
-    `Base commit \`${baseSha.slice(0, 12)}\`. Each changed test file was run there; ` +
-      `a test that fails on base is what this check wants.\n\n` +
+    `Base commit \`${baseSha.slice(0, 12)}\`. Each changed test file was run there in full; ` +
+      `a test that fails on base is what this check wants, and a new file that passes entirely is vacuous.\n\n` +
       `${summaryTable(outcomes)}${restored}`,
   )
 }

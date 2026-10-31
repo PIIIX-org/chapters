@@ -10,11 +10,13 @@ import {
   isTestFile,
   isTestSide,
   MISSING_BINDING,
+  parseExempt,
   parseJustification,
   parseNameStatus,
   probeSource,
   relativeImports,
   summaryTable,
+  vacuousFiles,
   verdict,
 } from './fails-before.mjs'
 
@@ -284,6 +286,57 @@ describe('verdict', () => {
   it('passes when any test fails on base', () => {
     assert.equal(verdict({ a: failed, b: passed, c: loadError }).ok, true)
   })
+  it('fails when a new file passes entirely on base, even beside a failing file', () => {
+    const v = verdict({
+      'server/test/old.test.ts': failed,
+      'server/test/new.test.ts': { ...passed, added: true, exempt: null },
+    })
+    assert.equal(v.ok, false)
+    assert.match(
+      v.reason,
+      /New test file `server\/test\/new\.test\.ts` passes entirely on the base commit/,
+    )
+    assert.match(v.reason, /fails-before: exempt <reason>/)
+    assert.deepEqual(
+      vacuousFiles({
+        'server/test/new.test.ts': { ...passed, added: true, exempt: null },
+        'server/test/old.test.ts': { ...passed, added: false, exempt: null },
+      }),
+      ['server/test/new.test.ts'],
+    )
+  })
+  it('lets an exempt new file pass entirely when another file fails', () => {
+    const v = verdict({
+      'server/test/old.test.ts': failed,
+      'server/test/new.test.ts': {
+        ...passed,
+        added: true,
+        exempt: 'characterisation of the kept behaviour',
+      },
+    })
+    assert.equal(v.ok, true)
+  })
+  it('still fails when the exempt new file is the only one and passes', () => {
+    const v = verdict({
+      'server/test/new.test.ts': {
+        ...passed,
+        added: true,
+        exempt: 'characterisation of the kept behaviour',
+      },
+    })
+    assert.equal(v.ok, false)
+    assert.match(v.reason, /Every changed test passes on the base commit/)
+  })
+  it('names several vacuous files', () => {
+    const v = verdict({
+      'a.test.ts': { ...passed, added: true, exempt: null },
+      'b.test.ts': { ...passed, added: true, exempt: null },
+    })
+    assert.match(
+      v.reason,
+      /New test files `a\.test\.ts`, `b\.test\.ts` pass entirely/,
+    )
+  })
   it('fails when everything passes on base', () => {
     const v = verdict({ a: passed })
     assert.equal(v.ok, false)
@@ -320,6 +373,68 @@ describe('verdict', () => {
     assert.match(
       t,
       /c\.test\.ts` \| ⚠️ failed on a missing export \(not counted\) \| imports exports the base lacks: `newFn` from `\.\.\/src\/x\.js`/,
+    )
+  })
+  it('marks new files that pass as vacuous or exempt', () => {
+    const t = summaryTable({
+      'server/test/new.test.ts': { ...passed, added: true, exempt: null },
+      'server/test/kept.test.ts': {
+        ...passed,
+        added: true,
+        exempt: 'pins the behaviour the fix keeps',
+      },
+      'server/test/old.test.ts': { ...passed, added: false, exempt: null },
+    })
+    assert.match(
+      t,
+      /new\.test\.ts` \| ❌ new file passes entirely \(3\) \| vacuous/,
+    )
+    assert.match(
+      t,
+      /kept\.test\.ts` \| ✅ passed \(3\), new file, exempt \| `\/\/ fails-before: exempt`: pins the behaviour the fix keeps/,
+    )
+    assert.match(
+      t,
+      /old\.test\.ts` \| ✅ passed \(3\) \| all tests pass without the fix/,
+    )
+  })
+})
+
+describe('parseExempt', () => {
+  it('reads the marker with its reason', () => {
+    assert.equal(
+      parseExempt(
+        "import x from 'y'\n// fails-before: exempt characterisation of behaviour the fix keeps\n",
+      ),
+      'characterisation of behaviour the fix keeps',
+    )
+    assert.equal(
+      parseExempt('  //fails-before:exempt   indented, no spaces  '),
+      'indented, no spaces',
+    )
+    assert.equal(
+      parseExempt('// Fails-Before: EXEMPT case does not matter'),
+      'case does not matter',
+    )
+  })
+  it('rejects a missing, short or placeholder reason, and non-comment text', () => {
+    assert.equal(parseExempt(''), null)
+    assert.equal(parseExempt(null), null)
+    assert.equal(parseExempt('// fails-before: exempt'), null)
+    assert.equal(parseExempt('// fails-before: exempt short'), null)
+    assert.equal(
+      parseExempt('// fails-before: exempt <reason goes here>'),
+      null,
+    )
+    assert.equal(
+      parseExempt(
+        "const s = '// fails-before: exempt inside a string literal'",
+      ),
+      null,
+    )
+    assert.equal(
+      parseExempt('/* fails-before: exempt block comments do not count */'),
+      null,
     )
   })
 })
