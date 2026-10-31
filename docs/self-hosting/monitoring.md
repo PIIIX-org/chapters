@@ -57,6 +57,19 @@ Anyone else gets `401` (or `403` for a signed-in non-admin). `/health` does not 
 }
 ```
 
+### Prometheus: `GET /api/admin/metrics`
+
+The same store in the Prometheus text format, under the same access rule (token or admin session), for a scraper. Beyond the totals above it carries what `/api/admin/monitoring` does not: process RSS and heap, event-loop lag (p50/p99/max over the last 15 s), the pending background jobs per kind with the age of the oldest, and duration histograms of each search leg and of each file extraction stage (extract, embed, write). Every metric, its labels and the alert it is meant for are listed in `docs/agents/backend-reference.md` (§8, Error reports and metrics). A scrape job:
+
+```yaml
+scrape_configs:
+  - job_name: elara
+    metrics_path: /api/admin/metrics
+    authorization: { credentials: '<ELARA_MONITORING_TOKEN>' }
+    static_configs: [{ targets: ['elara.example.com:443'] }]
+    scheme: https
+```
+
 ## Alerts
 
 [`.github/scripts/uptime-monitor.mjs`](../../.github/scripts/uptime-monitor.mjs) (plain Node 24, no dependencies) reads `/health` and, when `ELARA_MONITORING_TOKEN` is set in its environment and `/health` is up, the endpoint above. It alerts on:
