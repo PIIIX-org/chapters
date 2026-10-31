@@ -292,8 +292,12 @@ const CANDIDATES = RRF_WINDOW
 const RRF_K = 60
 /** Exact and identifier matches always outrank fuzzy ones in fusion (#456). */
 const EXACT_BOOST = 1
-/** Bounded boost for code hits over docs/plans on code-shaped queries (#457). */
-const CODE_BOOST = 0.0008
+/**
+ * Bounded boost for code hits over docs/plans on code-shaped queries (#457).
+ * Default 0 (measurement-only) so architectural docs/ADRs are never buried on
+ * rationale questions; configurable via the CODE_BOOST environment variable.
+ */
+const CODE_BOOST = Number(process.env.CODE_BOOST ?? 0)
 /**
  * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
  * that many rows, and each leg keeps only some kinds: file-level blocks, or
@@ -901,8 +905,9 @@ export async function searchNotes(
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
   const ctx = queryExactContext(query)
   const codeShaped = isCodeShaped(query)
+  const boostAmount = Number(process.env.CODE_BOOST ?? CODE_BOOST) || 0
   const codeBoost = (resourceType: ResourceType, path: string): number =>
-    codeShaped && !isDocHit(resourceType, path) ? CODE_BOOST : 0
+    codeShaped && !isDocHit(resourceType, path) ? boostAmount : 0
   const merged = new Map<string, SearchResult>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.slice(0, RRF_WINDOW).forEach((row, rank) => {
@@ -953,12 +958,11 @@ export async function searchNotes(
           endLine: row.end_line,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution + (exact ? EXACT_BOOST : 0) + (codeShaped ? CODE_BOOST : 0),
+          score: contribution + (exact ? EXACT_BOOST : 0) + (codeShaped ? boostAmount : 0),
         })
       }
     })
   }
-
 
   if (vector) {
     contribute('note', vector[0], false)

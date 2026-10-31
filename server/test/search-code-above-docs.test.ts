@@ -15,18 +15,27 @@ let repoId: string
 
 afterEach(() => {
   vi.restoreAllMocks()
+  delete process.env.CODE_BOOST
 })
 
 beforeAll(async () => {
   const user = await createActiveUser()
-  const [r] = await db.insert(repositories).values({ name: 'code-above-docs-repo', ownerId: user.id, ingestionMethod: 'agent_push' }).returning()
+  const [r] = await db
+    .insert(repositories)
+    .values({
+      name: 'code-above-docs-repo',
+      ownerId: user.id,
+      ingestionMethod: 'agent_push',
+    })
+    .returning()
   repoId = r!.id
 
   const files = [
     // 1. Code file implementing parseConfig
     {
       path: 'src/config/parser.ts',
-      content: 'export function parseConfig(input: string): Record<string, string> {\n  return {}\n}\n',
+      content:
+        'export function parseConfig(input: string): Record<string, string> {\n  return {}\n}\n',
     },
     // 2. Documentation file mentioning function parseConfig multiple times, giving it higher density
     // On base, docs/architecture/config-guide.md beats src/config/parser.ts (0.03278 vs 0.03225)
@@ -38,26 +47,37 @@ beforeAll(async () => {
     // 3. Overview doc for prose query test
     {
       path: 'docs/overview.md',
-      content: '# Overview\n\nSystem overview documentation and architecture.\n',
+      content:
+        '# Overview\n\nSystem overview documentation and architecture.\n',
     },
   ]
 
-  await syncRepositoryFiles(repoId, files, files.map((f) => f.path))
+  await syncRepositoryFiles(
+    repoId,
+    files,
+    files.map((f) => f.path),
+  )
   await flushExtraction()
 }, 180_000)
 
 describe('code ranks above docs for code-shaped queries (#457)', () => {
-  it('code-shaped query ranks code above docs for otherwise-comparable hits', async () => {
+  it('code-shaped query ranks code above docs when CODE_BOOST is active', async () => {
+    process.env.CODE_BOOST = '0.0008'
     // Code-shaped query using keyword 'function' and identifier 'parseConfig':
-    // On base without #457: docs/architecture/config-guide.md has higher keyword density and sorts
+    // docs/architecture/config-guide.md has higher keyword density and sorts
     // first alphabetically, scoring 0.03278 vs 0.03225 for src/config/parser.ts.
-    // With #457: query is code-shaped, so src/config/parser.ts receives CODE_BOOST and ranks first.
-    const res = await searchNotes({ vaultIds: [], repositoryIds: [repoId] }, 'function parseConfig', 10)
+    // With CODE_BOOST active on code-shaped queries, src/config/parser.ts receives boost and ranks first.
+    const res = await searchNotes(
+      { vaultIds: [], repositoryIds: [repoId] },
+      'function parseConfig',
+      10,
+    )
     expect(res.results.length).toBeGreaterThan(0)
     expect(res.results[0]!.path).toBe('src/config/parser.ts')
   })
 
-  it('doc question that mentions an identifier still lets the doc win', async () => {
+  it('doc question that mentions an identifier still lets the doc win even with CODE_BOOST active', async () => {
+    process.env.CODE_BOOST = '0.0008'
     // Query is asking for documentation: 'architecture and deployment guide for parseConfig'
     // docs/architecture/config-guide.md is the real answer and matches many more query words
     const res = await searchNotes(
@@ -71,7 +91,11 @@ describe('code ranks above docs for code-shaped queries (#457)', () => {
   })
 
   it('prose query without code features leaves ranking untouched', async () => {
-    const res = await searchNotes({ vaultIds: [], repositoryIds: [repoId] }, 'System overview documentation', 10)
+    const res = await searchNotes(
+      { vaultIds: [], repositoryIds: [repoId] },
+      'System overview documentation',
+      10,
+    )
     expect(res.results.length).toBeGreaterThan(0)
     expect(res.results[0]!.path).toBe('docs/overview.md')
   })
@@ -84,8 +108,12 @@ describe('code ranks above docs for code-shaped queries (#457)', () => {
     expect(isCodeShaped('How do you compile to WebAssembly')).toBe(false)
     expect(isCodeShaped('Where are the issues on GitHub')).toBe(false)
     expect(isCodeShaped('REST and GraphQL APIs overview')).toBe(false)
-    expect(isCodeShaped('Why does the codebase forbid unwrap() in shipped code')).toBe(false)
-    expect(isCodeShaped('Which semantic pattern routes to the visual type')).toBe(false)
+    expect(
+      isCodeShaped('Why does the codebase forbid unwrap() in shipped code'),
+    ).toBe(false)
+    expect(
+      isCodeShaped('Which semantic pattern routes to the visual type'),
+    ).toBe(false)
     expect(isCodeShaped('How to export the diagram to SVG')).toBe(false)
     expect(
       isCodeShaped(
