@@ -5,7 +5,7 @@ import { textArray } from './block-rows.js'
 import { embedQuery } from './embeddings.js'
 import { embeddingState } from './embedding-queue.js'
 import { setHnswScan } from './hnsw.js'
-import { MAX_KEYWORD_LENGTH, isPlainWord, keywordTerms, type Identifier } from './identifiers.js'
+import { MAX_KEYWORD_LENGTH, isPlainWord, keywordTerms, splitIdentifier, type Identifier } from './identifiers.js'
 import { extractionState } from '../repositories/extraction-queue.js'
 import { timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
@@ -282,8 +282,16 @@ export interface SearchResponse<H> {
   results: H[]
 }
 
-const CANDIDATES = 30
+/**
+ * The fixed candidate window per leg merged by Reciprocal Rank Fusion (#456).
+ * 60 candidates per leg ensures exact and identifier matches down the tail of
+ * each leg reach fusion, while keeping fusion bounded and deterministic.
+ */
+const RRF_WINDOW = 60
+const CANDIDATES = RRF_WINDOW
 const RRF_K = 60
+/** Exact and identifier matches always outrank fuzzy ones in fusion (#456). */
+const EXACT_BOOST = 1
 /**
  * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
  * that many rows, and each leg keeps only some kinds: file-level blocks, or
@@ -591,6 +599,81 @@ function byScore(a: Ranked, b: Ranked): number {
   )
 }
 
+interface ExactContext {
+  termSet: Set<string>
+  termSetLower: Set<string>
+  spellingSet: Set<string>
+  queryNorm: string
+  queryStripped: string
+}
+
+/** Extracts query terms and identifier spelling sets for cheap exact-match checks in fusion (#456). */
+function queryExactContext(query: string): ExactContext {
+  const rawTokens = query.trim().split(/\s+/).filter(Boolean)
+  const termSet = new Set<string>()
+  const termSetLower = new Set<string>()
+  const spellingSet = new Set<string>()
+
+  for (const raw of rawTokens) {
+    termSet.add(raw)
+    termSetLower.add(raw.toLowerCase())
+    const cleaned = raw.replace(/^[^\p{L}\p{N}_$]+|[^\p{L}\p{N}_$]+$/gu, '')
+    if (cleaned.length > 0) {
+      termSet.add(cleaned)
+      termSetLower.add(cleaned.toLowerCase())
+      const id = splitIdentifier(cleaned)
+      for (const s of [id.whole, id.parts.join(''), id.parts.join('_'), id.parts.join('-')]) {
+        if (s.length > 0) spellingSet.add(s)
+      }
+    }
+    const idRaw = splitIdentifier(raw)
+    for (const s of [idRaw.whole, idRaw.parts.join(''), idRaw.parts.join('_'), idRaw.parts.join('-')]) {
+      if (s.length > 0) spellingSet.add(s)
+    }
+  }
+
+  const queryNorm = query.trim().toLowerCase()
+  const queryStripped = queryNorm.replace(/^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu, '').trim()
+  return { termSet, termSetLower, spellingSet, queryNorm, queryStripped }
+}
+
+/** A symbol whose name equals a query term, case-sensitively or by spelling set from identifiers.ts (#456). */
+function isExactSymbol(name: string, parent: string | null | undefined, ctx: ExactContext): boolean {
+  if (ctx.termSet.has(name)) return true
+  const lower = name.toLowerCase()
+  if (ctx.spellingSet.has(lower)) return true
+  if (parent) {
+    const fullName = `${parent}.${name}`
+    if (ctx.termSet.has(fullName) || ctx.spellingSet.has(fullName.toLowerCase())) return true
+  }
+  return false
+}
+
+/** A file whose path or basename equals a term (#456). */
+function isExactFile(path: string, ctx: ExactContext): boolean {
+  if (ctx.termSet.has(path) || ctx.termSetLower.has(path.toLowerCase())) return true
+  const base = path.split('/').pop() ?? path
+  if (ctx.termSet.has(base) || ctx.termSetLower.has(base.toLowerCase())) return true
+  return false
+}
+
+/** Extracts the lowercased note title from frontmatter, if present and string-typed. */
+function noteTitle(frontmatter: unknown): string {
+  if (frontmatter && typeof frontmatter === 'object' && 'title' in frontmatter && typeof frontmatter.title === 'string') {
+    return frontmatter.title.trim().toLowerCase()
+  }
+  return ''
+}
+
+/** A note whose title or path equals the query (#456). */
+function isExactNote(path: string, frontmatter: unknown, ctx: ExactContext): boolean {
+  const pathNorm = path.trim().toLowerCase()
+  if (pathNorm === ctx.queryNorm || (ctx.queryStripped.length > 0 && pathNorm === ctx.queryStripped)) return true
+  const title = noteTitle(frontmatter)
+  if (title !== '' && (title === ctx.queryNorm || (ctx.queryStripped.length > 0 && title === ctx.queryStripped))) return true
+  return false
+}
+
 /** The answer to an empty query or an empty scope: nothing was searched. */
 const NOTHING: SearchResponse<never> = { status: 'no_match', retrieval_mode: 'none', degraded: false, results: [] }
 
@@ -620,15 +703,17 @@ export async function findSymbols(
     vec === null ? null : channel<[SymbolRow[]]>('vector', [symbolRows(repositoryIds, query, 'semantic', vec, filter)]),
   ])
 
+  const ctx = queryExactContext(query)
   const map = new Map<string, SymbolSearchResult>()
   const contribute = (rows: SymbolRow[], preferSnippet: boolean) => {
-    rows.forEach((row, rank) => {
+    rows.slice(0, RRF_WINDOW).forEach((row, rank) => {
       const contribution = 1 / (RRF_K + rank + 1)
       const existing = map.get(row.id)
       if (existing) {
         existing.score += contribution
         if (preferSnippet && row.snippet) existing.snippet = row.snippet
       } else {
+        const exact = isExactSymbol(row.name, row.parent, ctx)
         map.set(row.id, {
           id: row.id,
           fileId: row.file_id,
@@ -640,7 +725,7 @@ export async function findSymbols(
           startLine: row.start_line,
           endLine: row.end_line,
           snippet: row.snippet || null,
-          score: contribution,
+          score: contribution + (exact ? EXACT_BOOST : 0),
         })
       }
     })
@@ -690,9 +775,10 @@ export async function searchNotes(
   ])
 
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
+  const ctx = queryExactContext(query)
   const merged = new Map<string, SearchResult>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
-    rows.forEach((row, rank) => {
+    rows.slice(0, RRF_WINDOW).forEach((row, rank) => {
       const key = `${resourceType}:${row.id}`
       const contribution = 1 / (RRF_K + rank + 1)
       const existing = merged.get(key)
@@ -700,6 +786,7 @@ export async function searchNotes(
         existing.score += contribution
         if (preferSnippet) existing.snippet = row.snippet
       } else {
+        const exact = resourceType === 'note' ? isExactNote(row.path, row.frontmatter, ctx) : isExactFile(row.path, ctx)
         merged.set(key, {
           resourceType,
           id: row.id,
@@ -710,14 +797,14 @@ export async function searchNotes(
           language: resourceType === 'code' ? row.language : undefined,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution,
+          score: contribution + (exact ? EXACT_BOOST : 0),
         })
       }
     })
   }
 
   const contributeSymbols = (rows: SymbolRow[], preferSnippet: boolean): void => {
-    rows.forEach((row, rank) => {
+    rows.slice(0, RRF_WINDOW).forEach((row, rank) => {
       const key = `symbol:${row.id}`
       const contribution = 1 / (RRF_K + rank + 1)
       const existing = merged.get(key)
@@ -725,6 +812,7 @@ export async function searchNotes(
         existing.score += contribution
         if (preferSnippet && row.snippet) existing.snippet = row.snippet
       } else {
+        const exact = isExactSymbol(row.name, row.parent, ctx)
         merged.set(key, {
           resourceType: 'symbol',
           id: row.id,
@@ -738,7 +826,7 @@ export async function searchNotes(
           endLine: row.end_line,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution,
+          score: contribution + (exact ? EXACT_BOOST : 0),
         })
       }
     })

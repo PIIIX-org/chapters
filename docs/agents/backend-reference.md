@@ -1458,8 +1458,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **Answer** (#441, #442, #458; ADR-004 §2.3): both return
     `SearchResponse` = `{status, retrieval_mode, degraded, index?,
     results}`, served as is by REST and inside the budget envelope by MCP.
-  - **Relevance gate** (#441): each vector leg takes its 30 nearest rows
-    (`ORDER BY distance, … LIMIT 30`, which the HNSW index serves) and keeps
+  - **Relevance gate** (#441): each vector leg takes its 60 nearest rows
+    (`ORDER BY distance, … LIMIT 60`, which the HNSW index serves) and keeps
     those with cosine distance under `config.searchMaxDistance`
     (`SEARCH_MAX_DISTANCE`, in (0, 2), else a boot warning and the
     default; 0.40 for bge-small, measured on the five benchmark corpora
@@ -1467,6 +1467,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     Keyword rows
     always count. The gate cuts a suffix of a distance-ordered list, so the
     RRF ranks of the rows it keeps do not change.
+  - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
+    merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a
+    fixed window of 60 candidates per leg (`RRF_WINDOW = 60`, widened from 30).
+    Exact and identifier matches always outrank fuzzy-only hits across legs: an
+    exact match receives `EXACT_BOOST = 1`, guaranteeing that exact symbol
+    matches (by name or spelling set from `identifiers.ts`), exact file matches
+    (by path or basename), and exact note matches (by path or frontmatter title)
+    outrank all fuzzy-only vector or snippet hits, while preserving RRF ordering
+    among exact matches and among fuzzy matches.
   - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a
     repeated query text comes from the in-process query-embedding cache
     (§5.11) without running the embedder.
@@ -1513,13 +1522,13 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     the HNSW limit itself (an Incremental Sort over the index scan, which
     still serves it) and again after the gate; the note leg's 200-block cut
     by owner id (a join for the note's path there would cost a lookup per
-    block; its 30-note cut goes by path). The final sort: score descending, then
+    block; its 60-note cut goes by path). The final sort: score descending, then
     path by UTF-16 code unit (`compareCodeUnits`), then resource type
     (`code`, `note`, `symbol`: a note and a code file can share a path,
     and a file comes before its symbols), then a symbol's start line, then
     id, so equal scores never depend on
     row or `Map` insertion order. [INFERENCE] HNSW stays approximate and its
-    graph depends on insert order: which rows make a vector leg's 30 can
+    graph depends on insert order: which rows make a vector leg's 60 can
     still differ between instances when distances are close but not equal.
   - **Recency** (#446, owner decision D9 on #930): `since`/`until` (REST
     search and graph, saved perspectives) bound the last change,
@@ -1553,7 +1562,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     filter applies inside each leg's SQL, before the leg's cut
     (`noteFilter`, `fileFilter`, `symbolFilter`), so a filtered search
     answers with the best matching rows, not what of the unfiltered best
-    30 per leg matches; nothing is filtered after the fusion. A hit
+    60 per leg matches; nothing is filtered after the fusion. A hit
     without the filtered attribute is dropped, and a leg none of whose
     rows can match runs no query: code has no tags, notes no language or
     kind, files no kind. `types` is what a hit's `type` shows: a note's
