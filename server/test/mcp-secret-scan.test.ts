@@ -541,6 +541,7 @@ const readSteps: Step[] = [
   { tool: 'list_team_members', args: () => ({ teamId: fx.teamId }) },
   { tool: 'lookup_user', args: () => ({ email: fx.viewerEmail }) },
   { tool: 'list_notifications', args: () => ({}), contains: 'was shared with you' },
+  { tool: 'usage_report', args: () => ({}), contains: '"scope":"account"' },
   {
     tool: 'search',
     args: () => ({ query: 'credentials', vaultId: fx.vaultId }),

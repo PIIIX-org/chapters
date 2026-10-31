@@ -172,7 +172,7 @@ container and one Postgres **per customer** — it is satisfied by construction,
 and the upgrade path below is not needed for the hosted product. It still
 matters for a self-hoster who tries to run two replicas.
 
-Five subsystems hold state in process memory, not in Postgres or any shared
+Six subsystems hold state in process memory, not in Postgres or any shared
 store. None are broken for a single instance (the intended deployment target),
 but **every one silently misbehaves the moment a second instance runs against
 the same database**, whether for horizontal scale or just redundancy:
@@ -196,6 +196,9 @@ the same database**, whether for horizontal scale or just redundancy:
   one database (every store invariant is a Postgres lock, and the file
   projector serialises each path with an advisory lock), but editors on
   different processes only see each other's typing after a reload.
+- `usage/recorder.ts` — the usage report's on/off flag (#678), read at boot
+  and set by the toggle route: another process keeps its own until it
+  restarts.
 
 **Upgrade path, if this is ever needed**: Postgres `LISTEN`/`NOTIFY` or
 Redis pub/sub for the permission-event bus; the `jobs` table (already
@@ -204,4 +207,4 @@ used by the embedding and extraction queues since #494, claims with
 or Redis with atomic increment. None of this is built — don't assume
 it exists. Each site above already carries its own `ponytail:` comment
 naming this same upgrade path; this section exists so the constraint is
-visible in one place instead of five.
+visible in one place instead of six.
