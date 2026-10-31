@@ -127,6 +127,20 @@ export function symbolKeywords(innerPath: string): string[] {
   return [...out]
 }
 
+/**
+ * A file's field lexemes (#455 part 2): those of its path (`pathLexemes`) and of each of its symbols' name paths
+ * (`symbolKeywords`), capped like `fileKeywords`. Stored as `repository_files.keyword_head`, the fields the code
+ * keyword leg ranks above the body: a term in a file's path or in a name it declares counts before one in its text.
+ */
+export function fieldKeywords(path: string, symbolInnerPaths: readonly string[]): string[] {
+  const out = new Set<string>()
+  pathLexemes(path, out)
+  for (const innerPath of symbolInnerPaths) {
+    for (const id of identifiers(innerPath)) if (!addAll(out, id.lexemes)) return [...out]
+  }
+  return [...out]
+}
+
 /** A whitespace-separated query term: `text` as typed, and the identifiers in it. */
 export interface KeywordTerm {
   text: string
