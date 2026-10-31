@@ -1,44 +1,37 @@
 // #1015 (ADR-004 §1.3, #1007): after a delete the stored semantic edges are those of an instance that never had
 // the node. Each case builds world A, which has the node and then loses it (a purge, a trash, a file gone in a
-// sync, a repository or vault deleted, a vault transferred), and world B, built without it; each world's stored
-// rows, named by their ends' container and path, must be the same rows with the same similarities, as in
+// sync, a repository or vault deleted or trashed, a vault transferred), and world B, built without it; each world's
+// stored rows, named by their ends' container and path, must be the same rows with the same similarities, as in
 // `semantic-edges-order.test.ts`. A node that held the removed one has its (K+1)-th neighbour in B.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
-import { createNote, purgeNote, restoreNote, softDeleteNote } from '../src/notes/store.js'
+import { notes } from '../src/db/schema.js'
+import { purgeNote, restoreNote, softDeleteNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
-import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { flushEmbeddings } from '../src/search/embedding-queue.js'
-import { runSemanticEdgeRebuild } from '../src/search/semantic-edges.js'
+import { recomputeSemanticEdges } from '../src/search/semantic-edges.js'
 import { purgeVaultRecord } from '../src/vaults/routes.js'
-import { config } from '../src/config.js'
-import { createActiveUser, loginCookie } from './helpers.js'
-
-const K = config.semanticK
-const CORE = 'upload chunk checksum retry resume manifest'
-/** `count` words only this node has: the more, the farther it is from the hub. */
-const own = (prefix: string, count: number) => Array.from({ length: count }, (_, j) => `${prefix}w${j}`).join(' ')
-
-/** The hub and K + 1 notes near it, each farther than the one before: the hub's list is full and has a (K+1)-th. */
-const NOTES: Array<{ path: string; body: string }> = [
-  { path: 'notes/hub', body: `${CORE}\n` },
-  ...Array.from({ length: K + 1 }, (_, i) => ({ path: `notes/n${i + 1}`, body: `${CORE} ${own(`n${i + 1}`, i + 1)}\n` })),
-]
-/** K + 2 files of the same vocabulary (a comment), so notes and files hold each other. */
-const FILES: Array<{ path: string; content: string }> = Array.from({ length: K + 2 }, (_, i) => ({
-  path: `src/f${i + 1}.ts`,
-  content: `// ${CORE} ${own(`f${i + 1}`, i + 1)}\n`,
-}))
-/** Among the hub's K nearest, each held by notes and files. */
-const VICTIM_NOTE = 'notes/n2'
-const VICTIM_FILE = 'src/f2.ts'
+import { loginCookie } from './helpers.js'
+import {
+  FILES,
+  K,
+  VICTIM_FILE,
+  VICTIM_NOTE,
+  addRepository,
+  addVault,
+  cleanup,
+  fileIds,
+  noteId,
+  owner,
+  rowsTouching,
+  settle,
+  storedRows,
+  world,
+} from './semantic-edges-world.js'
 
 let app: FastifyInstance
-const userIds: string[] = []
 
 beforeAll(async () => {
   app = await buildApp()
@@ -46,91 +39,9 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  if (userIds.length > 0) {
-    await db.delete(vaults).where(inArray(vaults.ownerId, userIds))
-    await db.delete(repositories).where(inArray(repositories.ownerId, userIds))
-  }
+  await cleanup()
   await app.close()
 })
-
-async function owner() {
-  const user = await createActiveUser()
-  userIds.push(user.id)
-  return user
-}
-
-// Each container is embedded before the next is added: a note embedding while a file is extracted can leave a
-// list that a recompute changes (#1027), which is not what these tests compare.
-async function addVault(ownerId: string, without: string[] = []): Promise<string> {
-  const [vault] = await db.insert(vaults).values({ name: 'deletes-vault', ownerId }).returning({ id: vaults.id })
-  for (const n of NOTES) if (!without.includes(n.path)) await createNote(vault!.id, n)
-  await settle()
-  return vault!.id
-}
-
-async function addRepository(ownerId: string, name: string, without: string[] = []): Promise<string> {
-  const [repo] = await db.insert(repositories).values({ name, ownerId, ingestionMethod: 'agent_push' }).returning({ id: repositories.id })
-  const files = FILES.filter((f) => !without.includes(f.path))
-  await syncRepositoryFiles(repo!.id, files, files.map((f) => f.path))
-  await settle()
-  return repo!.id
-}
-
-/** Every pending embed, extraction and semantic-edge job, run. */
-async function settle(): Promise<void> {
-  await flushExtraction()
-  await flushEmbeddings()
-  await runSemanticEdgeRebuild()
-}
-
-/**
- * Every stored row whose source is in these containers, as `type:container/path → type:container/path similarity`,
- * sorted; a target that no longer exists is `gone`. A note in the trash is named like a live one: its rows count.
- */
-async function storedRows(containerIds: string[]): Promise<string[]> {
-  const rows = (await db.execute(sql`
-    WITH node AS (
-      SELECT 'note'::semantic_node_type AS type, n.id, n.path, v.name AS container, n.vault_id AS container_id
-      FROM notes n JOIN vaults v ON v.id = n.vault_id
-      UNION ALL SELECT 'code'::semantic_node_type, f.id, f.path, r.name, f.repository_id
-      FROM repository_files f JOIN repositories r ON r.id = f.repository_id)
-    SELECT a.type || ':' || a.container || '/' || a.path AS source,
-      coalesce(b.type || ':' || b.container || '/' || b.path, 'gone') AS target, e.similarity
-    FROM semantic_edges e
-    JOIN node a ON a.type = e.node_a_type AND a.id = e.node_a_id
-    LEFT JOIN node b ON b.type = e.node_b_type AND b.id = e.node_b_id
-    WHERE a.container_id = ANY(${`{${containerIds.join(',')}}`}::uuid[])`)) as unknown as Array<{
-    source: string
-    target: string
-    similarity: number
-  }>
-  return rows.map((r) => `${r.source} → ${r.target} ${r.similarity}`).sort()
-}
-
-/** Rows naming any of `ids` at either end (rows of nodes outside every container too). */
-async function rowsTouching(ids: string[]): Promise<number> {
-  const rows = (await db.execute(sql`
-    SELECT 1 FROM semantic_edges WHERE node_a_id = ANY(${`{${ids.join(',')}}`}::uuid[]) OR node_b_id = ANY(${`{${ids.join(',')}}`}::uuid[])`)) as unknown as unknown[]
-  return rows.length
-}
-
-async function noteId(vaultId: string, path: string): Promise<string> {
-  const [row] = await db.select({ id: notes.id }).from(notes).where(and(eq(notes.vaultId, vaultId), eq(notes.path, path)))
-  return row!.id
-}
-
-async function fileIds(repositoryId: string): Promise<string[]> {
-  return (await db.select({ id: repositoryFiles.id }).from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repositoryId))).map((r) => r.id)
-}
-
-/** A vault and a repository of one owner, all embedded. */
-async function world(without: string[] = []): Promise<{ vaultId: string; repositoryId: string }> {
-  const user = await owner()
-  const vaultId = await addVault(user.id, without)
-  const repositoryId = await addRepository(user.id, 'deletes-repo', without)
-  await settle()
-  return { vaultId, repositoryId }
-}
 
 describe('a delete leaves the stored semantic edges of a world that never had the node (#1015)', () => {
   let full: string[]
@@ -220,6 +131,47 @@ describe('a delete leaves the stored semantic edges of a world that never had th
     await settle()
     expect(await storedRows([a.repositoryId])).toEqual(await storedRows([b]))
     expect(await rowsTouching(ids)).toBe(0)
+  }, 120_000)
+
+  /** A vault and a repository of one owner, all embedded, with the owner's session. */
+  async function ownedWorld(): Promise<{ vaultId: string; repositoryId: string; cookie: string }> {
+    const user = await owner()
+    const vaultId = await addVault(user.id)
+    const repositoryId = await addRepository(user.id, 'deletes-repo')
+    await settle()
+    return { vaultId, repositoryId, cookie: await loginCookie(app, user.email) }
+  }
+
+  /** Recomputes every node of these containers, as a rebuild (`pnpm reindex`) would. */
+  async function recomputeAll(vaultId: string, repositoryId: string): Promise<void> {
+    for (const n of await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId))) await recomputeSemanticEdges('note', n.id)
+    for (const id of await fileIds(repositoryId)) await recomputeSemanticEdges('code', id)
+  }
+
+  it('a vault trashed (#1025): its notes keep no rows and are in no list, as in a world without the vault', async () => {
+    const a = await ownedWorld()
+    const ids = (await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, a.vaultId))).map((r) => r.id)
+    expect((await app.inject({ method: 'DELETE', url: `/api/vaults/${a.vaultId}`, headers: { cookie: a.cookie } })).statusCode).toBe(200)
+    await settle()
+    const other = await owner()
+    const rowsB = await storedRows([await addRepository(other.id, 'deletes-repo')])
+    expect(await storedRows([a.repositoryId])).toEqual(rowsB)
+    expect(await rowsTouching(ids)).toBe(0)
+    // The reach is symmetric: once every node is recomputed, the notes still reach no file and no file reaches them.
+    await recomputeAll(a.vaultId, a.repositoryId)
+    expect(await storedRows([a.repositoryId])).toEqual(rowsB)
+    expect(await rowsTouching(ids)).toBe(0)
+  }, 120_000)
+
+  it('a vault restored (#1025): the rows of a world that never trashed it, after its nodes were recomputed in the trash', async () => {
+    const a = await ownedWorld()
+    expect((await app.inject({ method: 'DELETE', url: `/api/vaults/${a.vaultId}`, headers: { cookie: a.cookie } })).statusCode).toBe(200)
+    await settle()
+    await recomputeAll(a.vaultId, a.repositoryId)
+    const res = await app.inject({ method: 'POST', url: `/api/vaults/${a.vaultId}/restore`, headers: { cookie: a.cookie } })
+    expect(res.statusCode).toBe(200)
+    await settle()
+    expect(await storedRows([a.vaultId, a.repositoryId])).toEqual(full)
   }, 120_000)
 
   it("a vault transferred: the rows of a world where the new owner always had it (#999's scope)", async () => {

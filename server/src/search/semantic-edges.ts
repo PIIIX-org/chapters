@@ -56,11 +56,12 @@ function queryVectors(ownerType: SemanticNodeType, ids: SQL): SQL {
 
 /**
  * The live owners of type `ownerType`, joined as `o` on `ownerId` (an SQL column), with their vault or
- * repository as `ct`: their tie key (path, then container name; #1007).
+ * repository as `ct`: their tie key (path, then container name; #1007). A note is live while it and its
+ * vault are out of the trash (#1025).
  */
 function liveOwner(ownerType: SemanticNodeType, ownerId: SQL): SQL {
   return ownerType === 'note'
-    ? sql`JOIN notes o ON o.id = ${ownerId} AND o.deleted_at IS NULL JOIN vaults ct ON ct.id = o.vault_id`
+    ? sql`JOIN notes o ON o.id = ${ownerId} AND o.deleted_at IS NULL JOIN vaults ct ON ct.id = o.vault_id AND ct.deleted_at IS NULL`
     : sql`JOIN repository_files o ON o.id = ${ownerId} JOIN repositories ct ON ct.id = o.repository_id`
 }
 
@@ -140,6 +141,51 @@ async function exactNearestOwners(
   throw new Error('unreachable: a scan without a window is exact')
 }
 
+/** The advisory lock key of the semantic edges of a vault or repository `id` (an SQL uuid; #1026, #1027). */
+function containerLock(id: SQL): SQL {
+  return sql`hashtextextended('semantic_edges:container:' || ${id}::text, 0)`
+}
+
+/**
+ * Shared locks on the containers `ids` (a query of one uuid column; nulls skipped), in id order: an SQL
+ * expression, so one statement takes them. A writer of lists (a recompute, a merge) holds them on every
+ * container its rows end in, from before its reads to its commit; a delete (`lockContainerForDelete`)
+ * and an embed's refresh (`awaitSearches`) take one container's exclusively. A delete takes one
+ * container and waits on no writer's lock, and a writer takes them after its node locks and then only
+ * reads and writes rows whose ends are in them, so a delete never holds a row a writer waits for.
+ */
+function lockShared(ids: SQL): SQL {
+  return sql`(SELECT count(pg_advisory_xact_lock_shared(${containerLock(sql`c.id`)}))
+    FROM (SELECT DISTINCT c.id FROM (${ids}) c(id) WHERE c.id IS NOT NULL ORDER BY c.id) c)`
+}
+
+/**
+ * Inside a delete's transaction, before it removes rows or reads holders (#1026): the exclusive lock of
+ * vault or repository `containerId`. It waits for the writers in flight whose rows may end there
+ * (`lockShared`), so their rows are there to remove; a writer that starts later finds the node gone.
+ */
+async function lockContainerForDelete(tx: DbOrTx, containerId: string): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${containerLock(sql`${containerId}::uuid`)})`)
+}
+
+/** `nodes` as the rows of a query (`type`, `id`). */
+function nodeRows(nodes: ReadonlyArray<{ type: SemanticNodeType; id: string }>): SQL {
+  return sql`SELECT * FROM unnest(${`{${nodes.map((n) => n.type).join(',')}}`}::semantic_node_type[],
+    ${`{${nodes.map((n) => n.id).join(',')}}`}::uuid[]) AS x(type, id)`
+}
+
+/** The vault or repository ids of the nodes `nodes` (a query of `type`, `id` rows) that exist, as one column. */
+function containersOf(nodes: SQL): SQL {
+  return sql`SELECT n.vault_id FROM (${nodes}) x JOIN notes n ON n.id = x.id WHERE x.type = 'note'
+    UNION ALL SELECT f.repository_id FROM (${nodes}) x JOIN repository_files f ON f.id = x.id WHERE x.type = 'code'`
+}
+
+/** The targets (`type`, `id`) of the stored rows of the lists `lists` (a query of `type`, `id` rows). */
+function targetsOf(lists: SQL): SQL {
+  return sql`SELECT e.node_b_type AS type, e.node_b_id AS id FROM (${lists}) l
+    JOIN semantic_edges e ON e.node_a_type = l.type AND e.node_a_id = l.id`
+}
+
 /** What `nodeContext` reads of a node. */
 interface NodeContext {
   /** Where its neighbours may come from, as uuid[] literals per owner type. */
@@ -147,7 +193,7 @@ interface NodeContext {
   /** Its tie key (`byRank`). */
   path: string
   container: string
-  /** False for a note in the trash. */
+  /** False for a note in the trash or in a vault in the trash (#1025). */
   live: boolean
   /** `type:id` of the live nodes whose rows name it (with `holders`). */
   holders: string[]
@@ -157,8 +203,10 @@ interface NodeContext {
  * A node's context, in one statement: where its neighbours may come from (D10, #461): of its own type only
  * its vault or repository (not another one of the same owner), of the other type the owner's repositories
  * or live vaults; its tie key; and with `holders` the live nodes whose rows name it. The relation is
- * symmetric: a node is in the reach of exactly the nodes in its own reach. With `lock`, the statement also
- * takes the node's advisory lock for the transaction (`recomputeSemanticEdges`). Null when the node is gone.
+ * symmetric: a node is in the reach of exactly the nodes in its own reach, and a note in a vault in the
+ * trash is in none, as a note in the trash (#1025). With `lock`, the statement also takes the node's
+ * advisory lock for the transaction and then the shared locks (`lockShared`) of its scope's containers and
+ * of its rows' targets' (`recomputeSemanticEdges`). Null when the node is gone.
  */
 async function nodeContext(
   client: DbOrTx,
@@ -166,21 +214,29 @@ async function nodeContext(
   nodeId: string,
   options: { lock?: boolean; holders?: boolean } = {},
 ): Promise<NodeContext | null> {
+  const own = nodeType === 'note' ? sql`n.vault_id` : sql`f.repository_id`
+  const other =
+    nodeType === 'note'
+      ? sql`ARRAY(SELECT r.id FROM repositories r WHERE r.owner_id = v.owner_id ORDER BY r.id)`
+      : sql`ARRAY(SELECT v.id FROM vaults v WHERE v.owner_id = r.owner_id AND v.deleted_at IS NULL ORDER BY v.id)`
   const lock = options.lock ? sql`(SELECT pg_advisory_xact_lock(hashtextextended(${`semantic_edges:${nodeType}:${nodeId}`}, 0))) l CROSS JOIN` : sql``
+  const containers = options.lock
+    ? lockShared(sql`SELECT ${own} UNION ALL SELECT unnest(${other})
+        UNION ALL ${containersOf(targetsOf(nodeRows([{ type: nodeType, id: nodeId }])))}`)
+    : sql`0`
   const holders = options.holders
     ? sql`ARRAY(SELECT e.node_a_type || ':' || e.node_a_id FROM semantic_edges e
         WHERE e.node_b_type = ${nodeType} AND e.node_b_id = ${nodeId}
-          AND (e.node_a_type = 'code' OR EXISTS (SELECT 1 FROM notes h WHERE h.id = e.node_a_id AND h.deleted_at IS NULL)))`
+          AND (e.node_a_type = 'code' OR EXISTS (SELECT 1 FROM notes h JOIN vaults hv ON hv.id = h.vault_id
+            WHERE h.id = e.node_a_id AND h.deleted_at IS NULL AND hv.deleted_at IS NULL)))`
     : sql`ARRAY[]::text[]`
   const [row] = (await client.execute(
     nodeType === 'note'
-      ? sql`SELECT ARRAY[n.vault_id]::text AS note,
-          ARRAY(SELECT r.id FROM repositories r WHERE r.owner_id = v.owner_id ORDER BY r.id)::text AS code,
-          n.path, v.name AS container, n.deleted_at IS NULL AS live, ${holders} AS holders
+      ? sql`SELECT ARRAY[${own}]::text AS note, ${other}::text AS code,
+          n.path, v.name AS container, n.deleted_at IS NULL AND v.deleted_at IS NULL AS live, ${holders} AS holders, ${containers} AS locked
           FROM ${lock} notes n JOIN vaults v ON v.id = n.vault_id WHERE n.id = ${nodeId}`
-      : sql`SELECT ARRAY[f.repository_id]::text AS code,
-          ARRAY(SELECT v.id FROM vaults v WHERE v.owner_id = r.owner_id AND v.deleted_at IS NULL ORDER BY v.id)::text AS note,
-          f.path, r.name AS container, true AS live, ${holders} AS holders
+      : sql`SELECT ARRAY[${own}]::text AS code, ${other}::text AS note,
+          f.path, r.name AS container, true AS live, ${holders} AS holders, ${containers} AS locked
           FROM ${lock} repository_files f JOIN repositories r ON r.id = f.repository_id WHERE f.id = ${nodeId}`,
   )) as unknown as Array<Record<SemanticNodeType, string> & Omit<NodeContext, 'scope'>>
   return row ? { scope: { note: row.note, code: row.code }, path: row.path, container: row.container, live: row.live, holders: row.holders } : null
@@ -209,17 +265,44 @@ async function knn(client: DbOrTx, nodeType: SemanticNodeType, nodeId: string, s
 }
 
 /**
+ * Whether node `x` (SQL type and id columns) is live and in the reach (`nodeContext`) of node `nodeType`
+ * `nodeId`, read in the snapshot of the statement it is in: of the same type, in its vault or repository;
+ * of the other, in a vault or repository of its account. False when that node is not live. A writer's
+ * write statement reads it after its container locks, so it sees a delete or a move that committed while
+ * the writer waited for them (#1026).
+ */
+function inReach(nodeType: SemanticNodeType, nodeId: string, xType: SQL, xId: SQL): SQL {
+  // A live node as (container_id, owner_id): a note out of the trash in a vault out of the trash, or a file.
+  const live = (type: SQL, id: SQL) => sql`
+    SELECT n.vault_id AS container_id, v.owner_id FROM notes n JOIN vaults v ON v.id = n.vault_id
+    WHERE ${type} = 'note' AND n.id = ${id} AND n.deleted_at IS NULL AND v.deleted_at IS NULL
+    UNION ALL SELECT f.repository_id, r.owner_id FROM repository_files f JOIN repositories r ON r.id = f.repository_id
+    WHERE ${type} = 'code' AND f.id = ${id}`
+  return sql`EXISTS (SELECT 1 FROM (${live(sql`${nodeType}::semantic_node_type`, sql`${nodeId}::uuid`)}) me, (${live(xType, xId)}) t
+    WHERE CASE WHEN ${xType} = ${nodeType}::semantic_node_type THEN t.container_id = me.container_id ELSE t.owner_id = me.owner_id END)`
+}
+
+/**
  * Recomputes one node's semantic neighbours across both notes and code
  * (spec 9: one shared embedding space, semantic edges span both content
  * types) from its stored blocks, and stores the strong ones as the rows it
  * owns. A neighbour's similarity is that of its best block to the best of
  * the node's query vectors (`queryVectors`; ADR-004 §2.5). A note in the
- * trash has none: its rows are deleted (#1015).
+ * trash, or in a vault in the trash, has none: its rows are deleted (#1015,
+ * #1025).
  *
  * One transaction holds a lock on the node's id (an advisory lock: writes to
  * the note go on) from reading its vectors to writing its rows, so two
  * recomputes of one node (its own embed and another node's, see
- * `refreshSemanticEdges`) never leave the rows of the older vectors.
+ * `refreshSemanticEdges`) never leave the rows of the older vectors. The
+ * statement that takes it also takes the shared locks of the containers in
+ * its reach (`nodeContext`), held to the commit as well: no node it may
+ * find or holds is deleted meanwhile (#1026), and no embed in its reach
+ * reads the lists before this one is written (#1027). That statement's
+ * snapshot may predate a delete it waited for, so the write keeps only the
+ * rows of a node still live and targets still in its reach (`inReach`); a
+ * reach that grew meanwhile (a vault restored or moved in) is the change's
+ * to fill (its refreshes, its queued recomputes).
  */
 export async function recomputeSemanticEdges(nodeType: SemanticNodeType, nodeId: string): Promise<void> {
   await db.transaction(async (tx) => {
@@ -236,26 +319,18 @@ export async function recomputeSemanticEdges(nodeType: SemanticNodeType, nodeId:
       neighbors = (await knn(tx, nodeType, nodeId, context.scope)).filter((n) => n.similarity >= config.semanticThreshold)
     }
 
-    // A note purged or trashed while it was embedded keeps no edges: the row is locked (FOR SHARE) for the rest
-    // of the transaction, after the searches (a long note's searches never hold off writes to it, #452), so a
-    // delete either waits for it and then removes the edges, or ran first and nothing is written. A restore
-    // meanwhile queued the note's own refresh (`queueSemanticEdgeRestore`).
-    if (nodeType === 'note') {
-      const [row] = (await tx.execute(sql`SELECT deleted_at IS NULL AS live FROM notes WHERE id = ${nodeId} FOR SHARE`)) as unknown as Array<{
-        live: boolean
-      }>
-      if (!row || row.live !== context.live) return
-    }
-
-    // Only this node's OWN edges, in one statement: the rows it no longer has go, the others are written. kNN is
-    // asymmetric — B can hold A in its top-k while A does not hold B — so deleting by either side would wipe an
-    // edge B owns (#91); B's rows are B's recompute's to write. The similarities go as the doubles they are
-    // (JavaScript writes the shortest text that reads back as the same double).
+    // A node trashed or purged during the searches keeps no edges and is in no list: its delete waits for this
+    // commit (the container lock), then removes them. A restore meanwhile queued the note's own refresh
+    // (`queueSemanticEdgeRestore`). Only this node's OWN edges, in one statement: the rows it no longer has go, the
+    // others are written. kNN is asymmetric — B can hold A in its top-k while A does not hold B — so deleting by
+    // either side would wipe an edge B owns (#91); B's rows are B's recompute's to write. The similarities go as
+    // the doubles they are (JavaScript writes the shortest text that reads back as the same double).
     await tx.execute(sql`
       WITH next AS (
         SELECT * FROM unnest(${`{${neighbors.map((n) => n.type).join(',')}}`}::semantic_node_type[],
           ${`{${neighbors.map((n) => n.id).join(',')}}`}::uuid[], ${`{${neighbors.map((n) => n.similarity).join(',')}}`}::float8[])
-          AS x(type, id, similarity)),
+          AS x(type, id, similarity)
+        WHERE ${inReach(nodeType, nodeId, sql`x.type`, sql`x.id`)}),
       dropped AS (
         DELETE FROM semantic_edges e WHERE e.node_a_type = ${nodeType} AND e.node_a_id = ${nodeId}
           AND NOT EXISTS (SELECT 1 FROM next WHERE next.type = e.node_b_type AND next.id = e.node_b_id))
@@ -375,10 +450,10 @@ async function enteredBy(client: DbOrTx, node: ChangedNode, newKeys: readonly st
   return kept.map((r) => r.id)
 }
 
-/** The path and container name of row `row`'s target (alias), none when the target is gone or in the trash. */
+/** The path and container name of row `row`'s target (alias), none when the target is gone, or in the trash or a vault in the trash. */
 function targetKey(row: SQL): SQL {
   return sql`SELECT n.path, v.name AS container FROM notes n JOIN vaults v ON v.id = n.vault_id
-      WHERE ${row}.node_b_type = 'note' AND n.id = ${row}.node_b_id AND n.deleted_at IS NULL
+      WHERE ${row}.node_b_type = 'note' AND n.id = ${row}.node_b_id AND n.deleted_at IS NULL AND v.deleted_at IS NULL
     UNION ALL SELECT f.path, r.name FROM repository_files f JOIN repositories r ON r.id = f.repository_id
       WHERE ${row}.node_b_type = 'code' AND f.id = ${row}.node_b_id`
 }
@@ -388,62 +463,103 @@ function tieKey(node: ChangedNode): SQL {
   return sql`(${node.path}::text COLLATE "C", ${node.type}::text COLLATE "C", ${node.container}::text COLLATE "C", ${node.id}::uuid)`
 }
 
-/** Lists merged per transaction: one advisory lock each, well inside the shared lock table. */
+/** Lists merged per transaction and type: one advisory lock each, well inside the shared lock table. */
 const MERGE_CHUNK = 256
 
 /**
- * Merges `node` into the top-k of the nodes `ids` of type `ownerType` it
- * entered (`enteredBy`; none of them holds it), inside `tx`, under each one's
- * lock, in one statement (#1007). Each list is the true top-k of the content
- * (`exactNearestOwners`), and the new vectors change no other neighbour's
- * similarity, so the new list is the old one plus `node` less its last row,
- * when `node` ranks before that row by `byRank`: a similarity above it, or an
- * equal one and a tie key (path, type, container name, id) before its
- * target's (checked again under the lock). A list whose last row names a
- * node that is gone is left to a recompute: the node after it is unknown
- * here. Returns those ids.
+ * Merges `node` into the top-k of the nodes `lists` it entered (`enteredBy`;
+ * none of them held it when the refresh read its holders), inside `tx`,
+ * under each one's lock, in one statement per type (#1007). Each list is the
+ * true top-k of the content (`exactNearestOwners`), and the new vectors
+ * change no other neighbour's similarity, so the new list is the old one
+ * plus `node` less its last row, when `node` ranks before that row by
+ * `byRank`: a similarity above it, or an equal one and a tie key (path,
+ * type, container name, id) before its target's (checked again under the
+ * lock). Left to a recompute, returned as `type:id`: a list whose last row
+ * names a node that is gone (the node after it is unknown here), and one
+ * that holds `node` by now (a recompute that started after the holders were
+ * read; dropping its last row would leave K-1, #1027).
+ *
+ * With the lists' locks, in the same statement, it takes the container
+ * locks (`lockShared`) of the lists, of their rows' targets and of `node`;
+ * the merge statements read `node` and the lists again (`inReach`), so one
+ * trashed, purged or moved meanwhile enters no list, nor a list moved out
+ * of its reach (#1026).
  */
-async function mergeEntered(tx: DbOrTx, node: ChangedNode, newKeys: readonly string[], ownerType: SemanticNodeType, ids: readonly string[]): Promise<string[]> {
-  if (ids.length === 0) return []
-  const sorted = `{${[...ids].sort().join(',')}}`
+async function mergeEntered(
+  tx: DbOrTx,
+  node: ChangedNode,
+  newKeys: readonly string[],
+  lists: ReadonlyArray<{ type: SemanticNodeType; id: string }>,
+): Promise<string[]> {
+  if (lists.length === 0) return []
+  const rows = nodeRows(lists)
   // In one order (notes, then files, each by id), so two merges never wait on each other; a recompute holds one
-  // lock and waits on none.
+  // lock and waits on none of them. The container locks come after them (the CASE reads the lists' count first).
   await tx.execute(sql`
-    SELECT count(pg_advisory_xact_lock(hashtextextended('semantic_edges:' || ${ownerType}::text || ':' || x.id::text, 0)))
-    FROM (SELECT id FROM unnest(${sorted}::uuid[]) AS u(id) ORDER BY id) x`)
-  const stale = (await tx.execute(sql`
-    WITH ${newVectors(node, newKeys)},
-    cand AS (
-      SELECT c.id, d.similarity, s.n, s.kth
-      FROM unnest(${sorted}::uuid[]) AS c(id)
-      ${liveOwner(ownerType, sql`c.id`)}
-      ${similarityTo(ownerType)}
-      WHERE d.similarity >= ${config.semanticThreshold} AND (s.n < ${config.semanticK} OR d.similarity >= s.kth)),
-    ranked AS (
-      SELECT cand.*, w.type AS w_type, w.id AS w_id, coalesce(w.gone, false) AS gone, w.path AS w_path, w.container AS w_container
-      FROM cand
-      LEFT JOIN LATERAL (
-        SELECT t.node_b_type AS type, t.node_b_id AS id, k.path IS NULL AS gone, k.path, k.container
-        FROM semantic_edges t
-        LEFT JOIN LATERAL (${targetKey(sql`t`)}) k ON true
-        WHERE cand.n >= ${config.semanticK} AND t.node_a_type = ${ownerType} AND t.node_a_id = cand.id AND t.similarity = cand.kth
-        ORDER BY k.path IS NULL DESC, k.path COLLATE "C" DESC, t.node_b_type::text COLLATE "C" DESC, k.container COLLATE "C" DESC, t.node_b_id DESC
-        LIMIT 1
-      ) w ON true),
-    entering AS (
-      SELECT * FROM ranked
-      WHERE n < ${config.semanticK}
-        OR (NOT gone AND (similarity > kth
-          OR (similarity = kth AND ${tieKey(node)} < (w_path COLLATE "C", w_type::text COLLATE "C", w_container COLLATE "C", w_id))))),
-    dropped AS (
-      DELETE FROM semantic_edges e USING entering x
-      WHERE x.n >= ${config.semanticK} AND e.node_a_type = ${ownerType} AND e.node_a_id = x.id AND e.node_b_type = x.w_type AND e.node_b_id = x.w_id),
-    added AS (
-      INSERT INTO semantic_edges (node_a_type, node_a_id, node_b_type, node_b_id, similarity)
-      SELECT ${ownerType}::semantic_node_type, x.id, ${node.type}::semantic_node_type, ${node.id}::uuid, x.similarity FROM entering x
-      ON CONFLICT (node_a_type, node_a_id, node_b_type, node_b_id) DO UPDATE SET similarity = excluded.similarity)
-    SELECT id FROM ranked WHERE n >= ${config.semanticK} AND gone`)) as unknown as Array<{ id: string }>
-  return stale.map((r) => r.id)
+    WITH l AS MATERIALIZED (
+      SELECT count(pg_advisory_xact_lock(hashtextextended('semantic_edges:' || x.type::text || ':' || x.id::text, 0))) AS n
+      FROM (SELECT l.type, l.id FROM (${rows}) l ORDER BY l.type::text DESC, l.id) x)
+    SELECT CASE WHEN l.n >= 0 THEN ${lockShared(sql`${containersOf(rows)} UNION ALL ${containersOf(targetsOf(rows))} UNION ALL ${containersOf(nodeRows([node]))}`)} END
+    FROM l`)
+  const recompute: string[] = []
+  for (const ownerType of ['note', 'code'] as const) {
+    const ids = lists.filter((l) => l.type === ownerType).map((l) => l.id)
+    if (ids.length === 0) continue
+    const sorted = `{${ids.sort().join(',')}}`
+    const stale = (await tx.execute(sql`
+      WITH ${newVectors(node, newKeys)},
+      listed AS (
+        SELECT c.id FROM unnest(${sorted}::uuid[]) AS c(id)
+        WHERE ${inReach(node.type, node.id, sql`${ownerType}::semantic_node_type`, sql`c.id`)}),
+      held AS (
+        SELECT l.id FROM listed l WHERE EXISTS (SELECT 1 FROM semantic_edges h
+          WHERE h.node_a_type = ${ownerType} AND h.node_a_id = l.id AND h.node_b_type = ${node.type} AND h.node_b_id = ${node.id})),
+      cand AS (
+        SELECT c.id, d.similarity, s.n, s.kth
+        FROM listed c
+        ${similarityTo(ownerType)}
+        WHERE c.id NOT IN (SELECT id FROM held)
+          AND d.similarity >= ${config.semanticThreshold} AND (s.n < ${config.semanticK} OR d.similarity >= s.kth)),
+      ranked AS (
+        SELECT cand.*, w.type AS w_type, w.id AS w_id, coalesce(w.gone, false) AS gone, w.path AS w_path, w.container AS w_container
+        FROM cand
+        LEFT JOIN LATERAL (
+          SELECT t.node_b_type AS type, t.node_b_id AS id, k.path IS NULL AS gone, k.path, k.container
+          FROM semantic_edges t
+          LEFT JOIN LATERAL (${targetKey(sql`t`)}) k ON true
+          WHERE cand.n >= ${config.semanticK} AND t.node_a_type = ${ownerType} AND t.node_a_id = cand.id AND t.similarity = cand.kth
+          ORDER BY k.path IS NULL DESC, k.path COLLATE "C" DESC, t.node_b_type::text COLLATE "C" DESC, k.container COLLATE "C" DESC, t.node_b_id DESC
+          LIMIT 1
+        ) w ON true),
+      entering AS (
+        SELECT * FROM ranked
+        WHERE n < ${config.semanticK}
+          OR (NOT gone AND (similarity > kth
+            OR (similarity = kth AND ${tieKey(node)} < (w_path COLLATE "C", w_type::text COLLATE "C", w_container COLLATE "C", w_id))))),
+      dropped AS (
+        DELETE FROM semantic_edges e USING entering x
+        WHERE x.n >= ${config.semanticK} AND e.node_a_type = ${ownerType} AND e.node_a_id = x.id AND e.node_b_type = x.w_type AND e.node_b_id = x.w_id),
+      added AS (
+        INSERT INTO semantic_edges (node_a_type, node_a_id, node_b_type, node_b_id, similarity)
+        SELECT ${ownerType}::semantic_node_type, x.id, ${node.type}::semantic_node_type, ${node.id}::uuid, x.similarity FROM entering x
+        ON CONFLICT (node_a_type, node_a_id, node_b_type, node_b_id) DO UPDATE SET similarity = excluded.similarity)
+      SELECT id FROM ranked WHERE n >= ${config.semanticK} AND gone
+      UNION ALL SELECT id FROM held`)) as unknown as Array<{ id: string }>
+    for (const r of stale) recompute.push(`${ownerType}:${r.id}`)
+  }
+  return recompute
+}
+
+/**
+ * After an embed committed node `nodeType` `nodeId`'s new vectors, before its refresh reads a list (#1027):
+ * waits for the writers in flight that hold its container's lock (`lockShared`: every recompute whose
+ * reach includes the node). One that read the blocks before the commit may have missed the node; once it
+ * committed, the refresh reads its list (its holders, `enteredBy`, `mergeEntered`). One that starts later
+ * reads the new vectors. One statement outside any transaction: the exclusive lock ends with it.
+ */
+async function awaitSearches(nodeType: SemanticNodeType, nodeId: string): Promise<void> {
+  await db.execute(sql`SELECT pg_advisory_xact_lock(${containerLock(sql`c.id`)}) FROM (${containersOf(nodeRows([{ type: nodeType, id: nodeId }]))}) c(id)`)
 }
 
 /**
@@ -455,31 +571,32 @@ async function mergeEntered(tx: DbOrTx, node: ChangedNode, newKeys: readonly str
  * (`enteredBy`, `mergeEntered`: one statement for up to MERGE_CHUNK of them,
  * e.g. nodes of one content, in the transaction that found them). Each
  * recompute reads the stored blocks, so the order of the steps does not
- * matter. Measured in the PR for #1007.
+ * matter; the lists are read once the recomputes in flight that may have
+ * missed the new vectors wrote theirs (`awaitSearches`, #1027). Measured in
+ * the PR for #1007.
  */
 export async function refreshSemanticEdges(nodeType: SemanticNodeType, nodeId: string, newKeys: readonly string[]): Promise<void> {
   await recomputeSemanticEdges(nodeType, nodeId)
-  const later: Array<[SemanticNodeType, string[]]> = []
+  await awaitSearches(nodeType, nodeId)
+  const later: Array<Array<{ type: SemanticNodeType; id: string }>> = []
   const { node, holders, stale } = await db.transaction(async (tx): Promise<{ node: ChangedNode | null; holders: string[]; stale: string[] }> => {
     const context = await nodeContext(tx, nodeType, nodeId, { holders: true })
     if (!context) return { node: null, holders: [], stale: [] }
     const held = new Set(context.holders)
-    const stale: string[] = []
     const node: ChangedNode = { type: nodeType, id: nodeId, path: context.path, container: context.container }
+    const first: Array<{ type: SemanticNodeType; id: string }> = []
     if (context.live && newKeys.length > 0) {
       await setHnswScan(tx, 100)
       for (const type of ['note', 'code'] as const) {
         if (context.scope[type] === '{}') continue
-        const entered = (await enteredBy(tx, node, newKeys, type, context.scope[type])).filter((id) => !held.has(`${type}:${id}`))
-        for (const id of await mergeEntered(tx, node, newKeys, type, entered.slice(0, MERGE_CHUNK))) stale.push(`${type}:${id}`)
-        for (let i = MERGE_CHUNK; i < entered.length; i += MERGE_CHUNK) later.push([type, entered.slice(i, i + MERGE_CHUNK)])
+        const entered = (await enteredBy(tx, node, newKeys, type, context.scope[type])).filter((id) => !held.has(`${type}:${id}`)).map((id) => ({ type, id }))
+        first.push(...entered.slice(0, MERGE_CHUNK))
+        for (let i = MERGE_CHUNK; i < entered.length; i += MERGE_CHUNK) later.push(entered.slice(i, i + MERGE_CHUNK))
       }
     }
-    return { node, holders: context.holders, stale }
+    return { node, holders: context.holders, stale: await mergeEntered(tx, node, newKeys, first) }
   })
-  for (const [type, chunk] of later) {
-    for (const id of await db.transaction((tx) => mergeEntered(tx, node!, newKeys, type, chunk))) stale.push(`${type}:${id}`)
-  }
+  for (const chunk of later) stale.push(...(await db.transaction((tx) => mergeEntered(tx, node!, newKeys, chunk))))
   for (const key of [...new Set([...holders, ...stale])].sort()) {
     const [type, id] = key.split(':') as [SemanticNodeType, string]
     if (type !== nodeType || id !== nodeId) await recomputeSemanticEdges(type, id)
@@ -507,17 +624,20 @@ function recomputeJobs(nodes: SQL): SQL {
 }
 
 /**
- * Inside the transaction of a delete (#1015): removes the rows of the nodes `ids` of type `nodeType` (a list,
- * or a query of one `id` column) and every row naming one of them (semantic_edges has no foreign key, #92),
- * and queues the rebuild job of each other node whose rows named one: its list lost that row, and in a world
- * that never had the node it holds its next neighbour instead. Once the jobs ran (`kickSemanticEdges` after
- * the commit), the stored edges are those of the content without the nodes. A node that held several of them
- * is queued once (a sync that removes 1,000 files queues one job set); every node holds at most K, so the
- * holders of a node are about K on average. Returns the jobs queued.
+ * Inside the transaction of a delete (#1015): removes the rows of the nodes `ids` of type `nodeType` in vault
+ * or repository `containerId` (a list, or a query of one `id` column) and every row naming one of them
+ * (semantic_edges has no foreign key, #92), and queues the rebuild job of each other node whose rows named
+ * one: its list lost that row, and in a world that never had the node it holds its next neighbour instead.
+ * Once the jobs ran (`kickSemanticEdges` after the commit), the stored edges are those of the content
+ * without the nodes. A node that held several of them is queued once (a sync that removes 1,000 files
+ * queues one job set); every node holds at most K, so the holders of a node are about K on average. It
+ * first takes the container's lock (`lockContainerForDelete`, #1026), so a writer in flight wrote its
+ * rows naming them before they are read here. Returns the jobs queued.
  */
-export async function removeSemanticNodes(tx: DbOrTx, nodeType: SemanticNodeType, ids: readonly string[] | SQL): Promise<number> {
+export async function removeSemanticNodes(tx: DbOrTx, nodeType: SemanticNodeType, containerId: string, ids: readonly string[] | SQL): Promise<number> {
   if (Array.isArray(ids) && ids.length === 0) return 0
   const gone = Array.isArray(ids) ? sql`SELECT unnest(${`{${ids.join(',')}}`}::uuid[]) AS id` : (ids as SQL)
+  await lockContainerForDelete(tx, containerId)
   const queued = (await tx.execute(sql`
     WITH gone AS MATERIALIZED (SELECT DISTINCT g.id FROM (${gone}) g),
     own AS (DELETE FROM semantic_edges e USING gone WHERE e.node_a_type = ${nodeType} AND e.node_a_id = gone.id),
@@ -534,9 +654,11 @@ export async function removeSemanticNodes(tx: DbOrTx, nodeType: SemanticNodeType
  * rows, both directions, joined the previous owner's repositories, so they go, and the nodes whose lists
  * change are queued (`recomputeJobs`): the previous owner's files that held one of its notes, every live note
  * of the vault (the new owner's files may enter its list) and every file of the new owner (its notes may
- * enter theirs). Note→note rows stay: the vault is the same. Returns the jobs queued.
+ * enter theirs). Note→note rows stay: the vault is the same. Under the vault's lock, as a delete (#1026).
+ * Returns the jobs queued.
  */
 export async function transferVaultSemanticEdges(tx: DbOrTx, vaultId: string): Promise<number> {
+  await lockContainerForDelete(tx, vaultId)
   const queued = (await tx.execute(sql`
     WITH dropped AS (
       DELETE FROM semantic_edges e USING notes n WHERE n.vault_id = ${vaultId}
@@ -552,18 +674,21 @@ export async function transferVaultSemanticEdges(tx: DbOrTx, vaultId: string): P
 }
 
 /**
- * Inside a restore's transaction (#1015): the note left every list when it was trashed, and its blocks are
- * kept, so its embed finds no new vector. Queues its refresh as if every vector were new
+ * Inside a restore's transaction (#1015): a note left every list when it was trashed (or its vault was,
+ * #1025), and its blocks are kept, so its embed finds no new vector. Queues the refresh of each of the
+ * notes `noteIds` (a list, or a query of one `id` column) as if every vector were new
  * (`refreshSemanticEdges` with all its embed keys: its own top-k, then the lists it enters), for the edge
  * worker (`kickSemanticEdges` after the commit). A note without vectors queues none: its embed does.
  */
-export async function queueSemanticEdgeRestore(tx: DbOrTx, noteId: string): Promise<void> {
+export async function queueSemanticEdgeRestore(tx: DbOrTx, noteIds: readonly string[] | SQL): Promise<void> {
+  const restored = Array.isArray(noteIds) ? sql`SELECT unnest(${`{${noteIds.join(',')}}`}::uuid[]) AS id` : (noteIds as SQL)
   await tx.execute(sql`
     INSERT INTO jobs (kind, payload, priority)
-    SELECT ${SEMANTIC_EDGES_JOB}, jsonb_build_object('nodeType', 'note', 'nodeId', ${noteId}::text,
+    SELECT ${SEMANTIC_EDGES_JOB}, jsonb_build_object('nodeType', 'note', 'nodeId', b.owner_id::text,
       'newKeys', jsonb_agg(DISTINCT b.embed_key ORDER BY b.embed_key)), ${JOB_PRIORITY.write}::smallint
-    FROM blocks b WHERE b.owner_type = 'note' AND b.owner_id = ${noteId} AND b.embedding IS NOT NULL
-    HAVING count(*) > 0`)
+    FROM blocks b WHERE b.owner_type = 'note' AND b.owner_id IN (${restored}) AND b.embedding IS NOT NULL
+    GROUP BY b.owner_id
+    ORDER BY b.owner_id`)
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   bigserial,
   boolean,
   customType,
+  date,
   doublePrecision,
   foreignKey,
   index,
@@ -12,6 +13,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  real,
   smallint,
   text,
   timestamp,
@@ -697,9 +699,9 @@ export const semanticNodeType = pgEnum('semantic_node_type', ['note', 'code'])
  * The rows are the true top-k of the content whatever the order it was
  * embedded in (#1007, search/semantic-edges.ts), and after a delete, those of
  * the content without the node (#1015: `removeSemanticNodes`; a note in the
- * trash has none). `similarity` holds the double the search computed
- * (migration 0050; `real` before), so an embed compares its own similarity
- * with a list's last row exactly.
+ * trash, or in a vault in the trash, has none, #1025). `similarity` holds
+ * the double the search computed (migration 0050; `real` before), so an
+ * embed compares its own similarity with a list's last row exactly.
  */
 export const semanticEdges = pgTable(
   'semantic_edges',
@@ -978,4 +980,71 @@ export const repositorySyncTokens = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
   },
   (t) => [index('repository_sync_tokens_repo_idx').on(t.repositoryId)],
+)
+
+/**
+ * The opt-in usage report (#678, migration 0058, server/src/usage/): one row
+ * per MCP tool call while `instance_state.usage_report_enabled` is on (that
+ * column and `usage_salt` stay out of this model, so a backup carries
+ * neither). Ids and numbers only: `token` and `session` are salted hashes,
+ * a search keeps a salted hash of its normalised query with its length,
+ * script and non-text filters, hits and reads are note / repository file
+ * ids. Kept 7 days, then rolled up into `usage_daily` (30 days). Neither
+ * table is in a backup.
+ */
+export const usageEvents = pgTable(
+  'usage_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    session: text('session'),
+    /** The tool, or `client_event` for an event the client reported. */
+    tool: text('tool').notNull(),
+    profile: mcpProfile('profile').notNull(),
+    vaultId: uuid('vault_id'),
+    repositoryId: uuid('repository_id'),
+    /** `ok`; a search status with no result (`no_match`, `index_building`, `unavailable`); an error envelope code; a client event's name. */
+    outcome: text('outcome').notNull(),
+    responseTokens: integer('response_tokens').notNull(),
+    latencyMs: real('latency_ms').notNull(),
+    retrievalMode: text('retrieval_mode'),
+    degraded: text('degraded'),
+    queryHash: text('query_hash'),
+    queryLength: integer('query_length'),
+    queryLang: text('query_lang'),
+    filters: jsonb('filters'),
+    hitIds: uuid('hit_ids').array(),
+    targetId: uuid('target_id'),
+  },
+  (t) => [
+    index('usage_events_account_at').on(t.accountId, t.at),
+    index('usage_events_at').on(t.at),
+    index('usage_events_target').on(t.targetId).where(sql`target_id IS NOT NULL`),
+  ],
+)
+
+/** `usage_events` past 7 days, per UTC day, account, tool and profile (#678); kept 30 days. */
+export const usageDaily = pgTable(
+  'usage_daily',
+  {
+    day: date('day').notNull(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tool: text('tool').notNull(),
+    profile: mcpProfile('profile').notNull(),
+    calls: integer('calls').notNull(),
+    responseTokens: bigint('response_tokens', { mode: 'number' }).notNull(),
+    latencyMs: doublePrecision('latency_ms').notNull(),
+    errors: integer('errors').notNull(),
+    zeroResults: integer('zero_results').notNull(),
+  },
+  (t) => [
+    primaryKey({ name: 'usage_daily_pkey', columns: [t.day, t.accountId, t.tool, t.profile] }),
+    index('usage_daily_account_day').on(t.accountId, t.day),
+  ],
 )
