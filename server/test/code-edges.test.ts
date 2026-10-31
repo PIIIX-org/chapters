@@ -405,15 +405,20 @@ describe('code edges after a sequence of pushes (#469)', () => {
     expect(await edgesOf(repo)).toEqual(expected)
   })
 
-  // #1008: an import row resolves only to a file present when its importer is extracted; a target pushed later
-  // leaves it unresolved, so the edges through it fall back to the name. #1023 re-resolves the import rows.
-  it.fails('equal them when an importer is pushed before its target (#1008)', async () => {
+  // An import row whose target is pushed later, or deleted, re-resolves (#1008, #1023), and the edges through it with it.
+  it('equal them when an importer is pushed before its target, and after the target is deleted and pushed again', async () => {
     const expected = await edgesOf(await repoWith('edges-late-a', TS))
+    expect(expected.length).toBeGreaterThan(0)
     const repo = await makeRepo('edges-late-b')
     const { 'src/store.ts': store, ...rest } = TS
     await push(repo, rest)
     await push(repo, { ...rest, 'src/store.ts': store! })
-    expect(expected.length).toBeGreaterThan(0)
+    expect(await edgesOf(repo)).toEqual(expected)
+
+    await push(repo, rest)
+    const without = await edgesOf(repo)
+    expect(without.find((e) => e.path === 'src/app.ts' && e.kind === 'import' && e.name === 'open')).toMatchObject({ confidence: 'textual', target: null })
+    await push(repo, TS)
     expect(await edgesOf(repo)).toEqual(expected)
   })
 })

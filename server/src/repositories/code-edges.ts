@@ -28,7 +28,8 @@
  * Incremental: re-extracting a file replaces its rows (`replaceFileEdges`);
  * a file's change of definitions (added or removed symbol blocks, or the
  * file deleted) re-resolves the rows of the repository that can name them
- * (`reresolveAfterChange`), and an import row whose target changed
+ * (`reresolveAfterChange`), and an import row whose target changed (by
+ * #1023's lookup keys after a sync, a manifest change or the boot backfill)
  * re-resolves its source file's rows (`reresolveFiles`). Steps 2-5 read only
  * blocks and import rows, so the table is the one a single push of the same
  * files builds whenever the import rows are. Every write takes the
