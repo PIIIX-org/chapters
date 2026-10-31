@@ -1476,6 +1476,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     (by path or basename), and exact note matches (by path or frontmatter title)
     outrank all fuzzy-only vector or snippet hits, while preserving RRF ordering
     among exact matches and among fuzzy matches.
+    For code-shaped queries (queries matching syntactic features such as
+    identifiers, code file extensions, path separators, or declaration
+    keywords like `function`, `class`, `method`), code hits receive a bounded
+    boost `CODE_BOOST = 0.0008` (about 3 RRF positions) over documentation/plans
+    (`resourceType: 'note'`, or repository files with doc extensions or under
+    `docs/`, `plans/`). The boost is small enough that documentation that is
+    the genuine answer to a doc question still wins, while pure prose queries
+    remain untouched (#457).
   - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a
     repeated query text comes from the in-process query-embedding cache
     (§5.11) without running the embedder.

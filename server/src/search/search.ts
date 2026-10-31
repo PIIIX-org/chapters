@@ -292,6 +292,8 @@ const CANDIDATES = RRF_WINDOW
 const RRF_K = 60
 /** Exact and identifier matches always outrank fuzzy ones in fusion (#456). */
 const EXACT_BOOST = 1
+/** Bounded boost for code hits over docs/plans on code-shaped queries (#457). */
+const CODE_BOOST = 0.0008
 /**
  * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
  * that many rows, and each leg keeps only some kinds: file-level blocks, or
@@ -674,6 +676,50 @@ function isExactNote(path: string, frontmatter: unknown, ctx: ExactContext): boo
   return false
 }
 
+const CODE_KEYWORDS: Record<string, true> = {
+  function: true, class: true, method: true, interface: true, struct: true, enum: true, trait: true, impl: true,
+  type: true, const: true, let: true, var: true, def: true, fn: true, func: true, val: true,
+  import: true, export: true, package: true, namespace: true, module: true, async: true, await: true,
+  return: true, extends: true, implements: true,
+}
+
+const CODE_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|cpp|cc|cxx|h|hpp|rb|php|cs|swift|kt|scala|sh|bash|sql|json|ya?ml|toml)\b/i
+const PATH_SEPARATOR = /[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+/
+const CAMEL_OR_PASCAL = /(?:\p{Ll}\p{Lu}|\p{Lu}{2,}\p{Ll})/u
+const SNAKE_CASE = /[a-zA-Z0-9]+_[a-zA-Z0-9_]+/
+const SCOPE_OR_DOLLAR = /::|\$|\(\)/
+
+/**
+ * Classifies whether a query is code-shaped (#457) based on explicit syntactic
+ * features (identifiers, extensions, path separators, declaration keywords).
+ * Pure prose queries remain untouched.
+ */
+export function isCodeShaped(query: string): boolean {
+  const tokens = query.trim().split(/\s+/).filter(Boolean)
+  for (const token of tokens) {
+    const cleaned = token.replace(/^[^\p{L}\p{N}_$]+|[^\p{L}\p{N}_$]+$/gu, '').toLowerCase()
+    if (cleaned in CODE_KEYWORDS) return true
+    if (CODE_EXTENSIONS.test(token)) return true
+    if (PATH_SEPARATOR.test(token)) return true
+    if (CAMEL_OR_PASCAL.test(token)) return true
+    if (SNAKE_CASE.test(token)) return true
+    if (SCOPE_OR_DOLLAR.test(token)) return true
+  }
+  return false
+}
+
+/** Whether a hit represents documentation/prose rather than executable source code (#457). */
+function isDocHit(resourceType: ResourceType, path: string): boolean {
+  if (resourceType === 'note') return true
+  if (resourceType === 'symbol') return false
+  const lower = path.toLowerCase()
+  if (/\.(?:md|markdown|rst|txt|adoc|org)$/i.test(lower)) return true
+  if (/^(?:docs?|plans?|wiki|specs?)\//i.test(lower)) return true
+  const base = lower.split('/').pop() ?? lower
+  if (/^(?:readme|changelog|contributing|license|notice)(?:\..+)?$/i.test(base)) return true
+  return false
+}
+
 /** The answer to an empty query or an empty scope: nothing was searched. */
 const NOTHING: SearchResponse<never> = { status: 'no_match', retrieval_mode: 'none', degraded: false, results: [] }
 
@@ -725,7 +771,7 @@ export async function findSymbols(
           startLine: row.start_line,
           endLine: row.end_line,
           snippet: row.snippet || null,
-          score: contribution + (exact ? EXACT_BOOST : 0),
+          score: contribution + (exact ? EXACT_BOOST : 0) + (isCodeShaped(query) ? CODE_BOOST : 0),
         })
       }
     })
@@ -776,6 +822,9 @@ export async function searchNotes(
 
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
   const ctx = queryExactContext(query)
+  const codeShaped = isCodeShaped(query)
+  const codeBoost = (resourceType: ResourceType, path: string): number =>
+    codeShaped && !isDocHit(resourceType, path) ? CODE_BOOST : 0
   const merged = new Map<string, SearchResult>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.slice(0, RRF_WINDOW).forEach((row, rank) => {
@@ -797,7 +846,7 @@ export async function searchNotes(
           language: resourceType === 'code' ? row.language : undefined,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution + (exact ? EXACT_BOOST : 0),
+          score: contribution + (exact ? EXACT_BOOST : 0) + codeBoost(resourceType, row.path),
         })
       }
     })
@@ -826,11 +875,12 @@ export async function searchNotes(
           endLine: row.end_line,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution + (exact ? EXACT_BOOST : 0),
+          score: contribution + (exact ? EXACT_BOOST : 0) + (codeShaped ? CODE_BOOST : 0),
         })
       }
     })
   }
+
 
   if (vector) {
     contribute('note', vector[0], false)
