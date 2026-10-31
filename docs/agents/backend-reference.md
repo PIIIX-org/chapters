@@ -1465,7 +1465,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     the file that declares it. It counts while `extracted_hash =
     content_hash` and `extractor_version >= 7`, else the file has no
     fields (and ranks as before). A note's fields are its path's words and
-    its frontmatter `title`, computed at query time. Each leg orders its
+    its frontmatter `title`: `notes.field_fts`, generated and stored like
+    `fts` (migration 0059), GIN `notes_field_fts_idx` (computed per query,
+    an 11-term question's ladder took 762 ms on 20,000 notes). Each leg orders its
     AND matches by how many terms their fields match before their body
     rank. Not `setweight` inside `keyword_fts`: `ts_rank` of an AND query
     on positionless identifier lexemes is ~1e-16, and filtering the
