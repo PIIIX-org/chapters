@@ -24,15 +24,26 @@ afterEach(() => {
 
 beforeAll(async () => {
   const user = await createActiveUser()
-  const [r] = await db.insert(repositories).values({ name: 'fusion-exact-repo', ownerId: user.id, ingestionMethod: 'agent_push' }).returning()
+  const [r] = await db
+    .insert(repositories)
+    .values({
+      name: 'fusion-exact-repo',
+      ownerId: user.id,
+      ingestionMethod: 'agent_push',
+    })
+    .returning()
   repoId = r!.id
-  const [v] = await db.insert(vaults).values({ name: 'fusion-exact-vault', ownerId: user.id }).returning()
+  const [v] = await db
+    .insert(vaults)
+    .values({ name: 'fusion-exact-vault', ownerId: user.id })
+    .returning()
   vaultId = v!.id
 
   // 1. Fuzzy file with semantic content that will match query vectors
   const fuzzyFile = {
     path: 'src/fuzzy/semantic-heavy.ts',
-    content: '// semantic concept neural network vector embedding index search\nexport function generalWorker(): void {}\n',
+    content:
+      '// semantic concept neural network vector embedding index search\nexport function generalWorker(): void {}\n',
   }
 
   // Exact symbol file: function alphaHandler
@@ -57,7 +68,8 @@ beforeAll(async () => {
   // Noise file for exact file test: more keyword repetitions, so it wins keyword rank 0
   const fileNoise = {
     path: 'src/aaa/noise_config.ts',
-    content: '// config-parser.ts config-parser.ts config-parser.ts config-parser.ts\nexport const x = 1\n',
+    content:
+      '// config-parser.ts config-parser.ts config-parser.ts config-parser.ts\nexport const x = 1\n',
   }
 
   // 25 noise files with symbols named target_symbol_00..24:
@@ -80,12 +92,39 @@ beforeAll(async () => {
   // Generic basename file 'src/index.ts'
   const indexFile = {
     path: 'src/index.ts',
-    content: '// application index entry point\nexport const indexVersion = 1\n',
+    content:
+      '// application index entry point\nexport const indexVersion = 1\n',
   }
+
+  // One-word names that each equal a single plain term of a multi-word query, and the
+  // identifier that matches all three words (#456 review: the one-word hits must not win).
+  const queueFile = {
+    path: 'src/rq/queue.ts',
+    content: 'export function queue(): void {}\n',
+  }
+  const retryFile = {
+    path: 'src/rq/retry.ts',
+    content: 'export function retry(): void {}\n',
+  }
+  const allWordsFile = {
+    path: 'src/rq/request-queue-retry.ts',
+    content: 'export function requestQueueRetry(): void {}\n',
+  }
+  const rqFiles = [queueFile, retryFile, allWordsFile]
 
   await syncRepositoryFiles(
     repoId,
-    [fuzzyFile, exactSymbolFile, noiseSymbolFile, exactFile, fileNoise, ...noiseFiles, exactCamelSymbolFile, indexFile],
+    [
+      fuzzyFile,
+      exactSymbolFile,
+      noiseSymbolFile,
+      exactFile,
+      fileNoise,
+      ...noiseFiles,
+      exactCamelSymbolFile,
+      indexFile,
+      ...rqFiles,
+    ],
     [
       fuzzyFile.path,
       exactSymbolFile.path,
@@ -95,6 +134,7 @@ beforeAll(async () => {
       ...noiseFiles.map((f) => f.path),
       exactCamelSymbolFile.path,
       indexFile.path,
+      ...rqFiles.map((f) => f.path),
     ],
   )
   await flushExtraction()
@@ -124,7 +164,9 @@ beforeAll(async () => {
     JOIN repository_files f ON f.id = b.owner_id
     WHERE f.repository_id = ${repoId} AND f.path = 'src/fuzzy/semantic-heavy.ts' AND b.kind = 'file'
   `)) as unknown as [{ embedding: string }]
-  const oppVec = JSON.stringify(JSON.parse(fuzzyBlock.embedding).map((v: number) => -v))
+  const oppVec = JSON.stringify(
+    JSON.parse(fuzzyBlock.embedding).map((v: number) => -v),
+  )
 
   await db.execute(sql`
     UPDATE blocks SET embedding = ${oppVec}::vector
@@ -146,7 +188,9 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     `)) as unknown as [{ embedding: string }]
     const fuzzyVec = JSON.parse(fuzzyBlock.embedding)
 
-    vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => texts.map(() => fuzzyVec))
+    vi.spyOn(embedder, 'embed').mockImplementation(async (texts) =>
+      texts.map(() => fuzzyVec),
+    )
 
     // Query 'alpha_handler':
     // On base: fuzzyFile is vector rank 0 (score 1/61 ≈ 0.01639).
@@ -154,7 +198,13 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     // exact symbol alphaHandler is keyword rank 1 (score 1/62 ≈ 0.01613).
     // On base: fuzzyFile or noise beats alphaHandler.
     // With fix: alphaHandler matches by spelling set, gets exact boost, and comes first.
-    const res = await searchNotes({ vaultIds: [], repositoryIds: [repoId] }, 'alpha_handler', 10, {}, { includeSymbols: true })
+    const res = await searchNotes(
+      { vaultIds: [], repositoryIds: [repoId] },
+      'alpha_handler',
+      10,
+      {},
+      { includeSymbols: true },
+    )
     expect(res.results.length).toBeGreaterThan(0)
     expect(res.results[0]!.resourceType).toBe('symbol')
     expect(res.results[0]!.symbolName).toBe('alphaHandler')
@@ -168,7 +218,9 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     `)) as unknown as [{ embedding: string }]
     const fuzzyVec = JSON.parse(fuzzyBlock.embedding)
 
-    vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => texts.map(() => fuzzyVec))
+    vi.spyOn(embedder, 'embed').mockImplementation(async (texts) =>
+      texts.map(() => fuzzyVec),
+    )
 
     // Query 'config-parser.ts':
     // On base: fuzzyFile is vector rank 0 (score 1/61 ≈ 0.01639).
@@ -176,7 +228,11 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     // exactFile sits at keyword rank 1 (score 1/62 ≈ 0.01613).
     // On base: 1/61 > 1/62, so fuzzyFile outranks exactFile!
     // With fix: exactFile matches basename 'config-parser.ts', gets exact boost, and comes first.
-    const res = await searchNotes({ vaultIds: [], repositoryIds: [repoId] }, 'config-parser.ts', 10)
+    const res = await searchNotes(
+      { vaultIds: [], repositoryIds: [repoId] },
+      'config-parser.ts',
+      10,
+    )
     expect(res.results.length).toBeGreaterThan(0)
     expect(res.results[0]!.resourceType).toBe('code')
     expect(res.results[0]!.path).toBe('src/utils/config-parser.ts')
@@ -190,7 +246,9 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     `)) as unknown as [{ embedding: string }]
     const fuzzyVec = JSON.parse(fuzzyBlock.embedding)
 
-    vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => texts.map(() => fuzzyVec))
+    vi.spyOn(embedder, 'embed').mockImplementation(async (texts) =>
+      texts.map(() => fuzzyVec),
+    )
 
     // Query 'notes/exact-target':
     // On base: notes/fuzzy-doc is vector rank 0 (score 1/61 ≈ 0.01639).
@@ -198,7 +256,11 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     // notes/exact-target is at keyword rank 1 (score 1/62 ≈ 0.01613).
     // On base: 1/61 > 1/62, so fuzzy-doc outranks exact-target!
     // With fix: notes/exact-target matches path exactly, gets exact boost, and comes first.
-    const res = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, 'notes/exact-target', 10)
+    const res = await searchNotes(
+      { vaultIds: [vaultId], repositoryIds: [] },
+      'notes/exact-target',
+      10,
+    )
     expect(res.results.length).toBeGreaterThan(0)
     expect(res.results[0]!.resourceType).toBe('note')
     expect(res.results[0]!.path).toBe('notes/exact-target')
@@ -213,7 +275,9 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     `)) as unknown as [{ embedding: string }]
     const fuzzyVec = JSON.parse(fuzzyBlock.embedding)
 
-    vi.spyOn(embedder, 'embed').mockImplementation(async (texts) => texts.map(() => fuzzyVec))
+    vi.spyOn(embedder, 'embed').mockImplementation(async (texts) =>
+      texts.map(() => fuzzyVec),
+    )
 
     // Query 'target_symbol':
     // In keyword leg of findSymbols:
@@ -228,16 +292,67 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     expect(res.results[0]!.name).toBe('targetSymbol')
   })
 
-  it('common stopwords and generic basenames in multi-word queries do not trigger exact boost', async () => {
-    // Multi-word question containing the word 'index': 'where is the index entry'
-    // The word 'index' is a generic base stem; 'where', 'is', 'the' are stopwords.
-    // src/index.ts must NOT receive EXACT_BOOST (it was not explicitly queried by full filename 'index.ts').
-    const res = await searchNotes({ vaultIds: [], repositoryIds: [repoId] }, 'where is the index entry', 10)
-    expect(res.results.length).toBeGreaterThan(0)
-    const indexHit = res.results.find((r) => r.path === 'src/index.ts')
-    if (indexHit) {
-      // Without EXACT_BOOST = 1, its score remains in the normal RRF range (< 0.1)
-      expect(indexHit.score).toBeLessThan(0.1)
+  it('a one-word name equal to a single term does not outrank the identifier that matches every word', async () => {
+    // `queue` and `retry` each equal ONE plain word of the query; requestQueueRetry matches all three.
+    const res = await findSymbols([repoId], 'request queue retry', {
+      limit: 10,
+    })
+    const names = res.results.map((r) => r.name)
+    expect(names).toContain('requestQueueRetry')
+    for (const oneWord of ['queue', 'retry']) {
+      if (names.includes(oneWord)) {
+        expect(names.indexOf('requestQueueRetry')).toBeLessThan(
+          names.indexOf(oneWord),
+        )
+      }
     }
+    for (const r of res.results) expect(r.score).toBeLessThan(0.1)
+  })
+
+  it('the same holds through searchNotes: an unrelated one-word file does not jump ahead', async () => {
+    const res = await searchNotes(
+      { vaultIds: [], repositoryIds: [repoId] },
+      'request queue retry',
+      10,
+      {},
+      { includeSymbols: true },
+    )
+    expect(res.results.length).toBeGreaterThan(0)
+    for (const r of res.results) expect(r.score).toBeLessThan(0.1)
+    const paths = res.results.map((r) => r.path)
+    const best = paths.indexOf('src/rq/request-queue-retry.ts')
+    expect(best).toBeGreaterThanOrEqual(0)
+    for (const other of ['src/rq/queue.ts', 'src/rq/retry.ts']) {
+      if (paths.includes(other)) expect(best).toBeLessThan(paths.indexOf(other))
+    }
+  })
+
+  it('a single-word query still matches a symbol named exactly that word', async () => {
+    const res = await findSymbols([repoId], 'retry', { limit: 5 })
+    expect(res.results[0]!.name).toBe('retry')
+  })
+
+  it('a generic file stem inside a multi-word question grants no boost', async () => {
+    // src/index.ts holds every word of this question, so it is a keyword hit, but `index` is only a plain word here.
+    const res = await searchNotes(
+      { vaultIds: [], repositoryIds: [repoId] },
+      'application index entry point',
+      10,
+    )
+    const indexHit = res.results.find((r) => r.path === 'src/index.ts')
+    expect(indexHit).toBeDefined()
+    expect(indexHit!.score).toBeLessThan(0.1)
+  })
+
+  it('a relaxed row never counts as exact, even when its name is an identifier term of the query (#455 part 2)', async () => {
+    // No file holds `zzznomatchword`, so the AND query is empty and `requestQueueRetry` can only arrive as a
+    // relaxed row (its name matches the rarest term). The embedder fails so no vector leg returns it as a
+    // non-relaxed row; it must rank by its fusion rank and not take EXACT_BOOST.
+    vi.spyOn(embedder, 'embed').mockRejectedValue(new Error('embedder down'))
+    const res = await findSymbols([repoId], 'requestQueueRetry zzznomatchword', { limit: 10 })
+    expect(res.retrieval_mode).toBe('keyword_only')
+    const hit = res.results.find((r) => r.name === 'requestQueueRetry')
+    expect(hit).toBeDefined()
+    expect(hit!.score).toBeLessThan(0.1)
   })
 })

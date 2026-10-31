@@ -49,6 +49,25 @@ function spellings(id: Identifier): SQL {
 }
 
 /**
+ * One term of a keyword leg's query (#455 part 2), what the relaxation ladder (`ladder`) and the trigram leg
+ * (`similarity`) work with when the leg's AND query matches too little.
+ */
+interface Term {
+  /** The term's query in its leg; the leg's AND query is all of them. */
+  query: SQL
+  /** It holds a compound (`parseFrontmatter`, `mcp.server.ts`): among terms as rare, kept before a plain word. */
+  compound: boolean
+  /**
+   * What the trigram leg matches, should the term match nothing: its identifiers' wholes (a typo'd identifier, or a
+   * plain word), `MIN_SIMILAR_LENGTH` characters or more. The leg runs only when nothing else matched.
+   */
+  spelled: string[]
+}
+
+/** A shorter term is not matched by trigram similarity: a short word is similar to too many names. */
+const MIN_SIMILAR_LENGTH = 5
+
+/**
  * The code and symbol keyword legs' query (#455): `match` is every query
  * term, each as its English query (stemmed, as before) or as its
  * identifiers (search/identifiers.ts): a plain word unstemmed, so
@@ -64,28 +83,50 @@ function spellings(id: Identifier): SQL {
  * ranked those above the file that defines the name (the benchmark
  * regression of #1014: `HopperRequestQueue` in a question matched guides
  * with hopper, request and queue in them). `whole` is any compound's whole
- * lexeme: a leg ranks those matches first. A query with
- * `websearch_to_tsquery` syntax keeps the English query and has no `whole`.
+ * lexeme: a leg ranks those matches first. `terms` are the terms one by one
+ * (a repeated term once). A query with `websearch_to_tsquery` syntax keeps
+ * the English query and has no `whole` and no `terms`: it is not relaxed.
  */
-function keywordQuery(query: string, leg: 'code' | 'symbol'): { match: SQL; whole: SQL | null } {
-  const terms = keywordTerms(query)
-  if (terms === null) return { match: english(query), whole: null }
+function keywordQuery(query: string, leg: 'code' | 'symbol'): { match: SQL; whole: SQL | null; terms: Term[] | null } {
+  const typed = keywordTerms(query)
+  if (typed === null) return { match: english(query), whole: null, terms: null }
   const wholes = new Set<string>()
-  const match = allOf(
-    terms.map(({ text, identifiers }) => {
-      if (identifiers.every(isPlainWord)) {
-        if (leg === 'code' && identifiers.length > 1) return english(text)
-        return word(text, allOf(identifiers.map((id) => lexeme(id.whole))))
-      }
-      const alternatives = identifiers.map((id) => {
-        if (isPlainWord(id)) return word(id.whole, lexeme(id.whole))
-        if (id.whole.length <= MAX_KEYWORD_LENGTH) wholes.add(id.whole)
-        return leg === 'code' ? spellings(id) : sql`(${lexeme(id.whole)}) || (${allOf(id.parts.map((p) => word(p, lexeme(p))))})`
-      })
-      return sql`(${english(text)}) || (${allOf(alternatives)})`
-    }),
-  )
-  return { match, whole: wholes.size === 0 ? null : sql.join([...wholes].map(lexeme), sql` || `) }
+  const seen = new Set<string>()
+  const terms: Term[] = []
+  for (const { text, identifiers } of typed) {
+    if (seen.has(text.toLowerCase())) continue
+    seen.add(text.toLowerCase())
+    const compound = !identifiers.every(isPlainWord)
+    const spelled = identifiers.map((id) => id.whole).filter((w) => w.length >= MIN_SIMILAR_LENGTH && w.length <= MAX_KEYWORD_LENGTH)
+    terms.push({ query: termQuery(text, identifiers, leg, wholes), compound, spelled })
+  }
+  return {
+    match: allOf(terms.map((t) => t.query)),
+    whole: wholes.size === 0 ? null : sql.join([...wholes].map(lexeme), sql` || `),
+    terms,
+  }
+}
+
+/** One term's query in `leg` (`keywordQuery`); adds the whole lexemes of its compounds to `wholes`. */
+function termQuery(text: string, identifiers: Identifier[], leg: 'code' | 'symbol', wholes: Set<string>): SQL {
+  if (identifiers.every(isPlainWord)) {
+    if (leg === 'code' && identifiers.length > 1) return english(text)
+    return word(text, allOf(identifiers.map((id) => lexeme(id.whole))))
+  }
+  const alternatives = identifiers.map((id) => {
+    if (isPlainWord(id)) return word(id.whole, lexeme(id.whole))
+    if (id.whole.length <= MAX_KEYWORD_LENGTH) wholes.add(id.whole)
+    return leg === 'code' ? spellings(id) : sql`(${lexeme(id.whole)}) || (${allOf(id.parts.map((p) => word(p, lexeme(p))))})`
+  })
+  return sql`(${english(text)}) || (${allOf(alternatives)})`
+}
+
+/** The note leg's terms (#455 part 2): each whitespace-separated term's English query; null for websearch syntax. */
+function noteTerms(query: string): Term[] | null {
+  const typed = keywordTerms(query)
+  if (typed === null) return null
+  const texts = [...new Map(typed.map(({ text }) => [text.toLowerCase(), text])).values()]
+  return texts.map((text) => ({ query: english(text), compound: false, spelled: [] }))
 }
 
 /**
@@ -97,6 +138,90 @@ function keywordQuery(query: string, leg: 'code' | 'symbol'): { match: SQL; whol
 const CODE_DOCUMENT = sql.raw(
   `(CASE WHEN keyword_fts IS NOT NULL AND extracted_hash = content_hash AND extractor_version >= 6 THEN keyword_fts ELSE fts END)`,
 )
+
+/**
+ * A code file's fields (#455 part 2, migration 0059): `keyword_head`, its path's and its symbols' name lexemes,
+ * while it is of the current content and was written by an extractor that has it (7); else none.
+ */
+const CODE_FIELDS = sql.raw(`(CASE WHEN extracted_hash = content_hash AND extractor_version >= 7 THEN keyword_head END)`)
+
+/** A note's fields (#455 part 2): its path's words and its frontmatter title, English; generated (migration 0059). */
+const NOTE_FIELDS = sql.raw(`notes.field_fts`)
+
+/**
+ * How many of the terms a row's `fields` match (#455 part 2): a leg orders its matches by it before their body
+ * rank, so a term in a path, a note title or a declared name counts above the same term in a body. A query
+ * without terms (websearch syntax) counts its whole `match` once.
+ */
+function fieldHits(fields: SQL, terms: Term[] | null, match: SQL): SQL {
+  return sql.join(
+    (terms ?? [{ query: match }]).map(({ query }) => sql`coalesce((${fields} @@ (${query}))::int, 0)`),
+    sql` + `,
+  )
+}
+
+/** Terms the ladder keeps at most, the rarest: a row's ladder rank is a bit per term. */
+const MAX_LADDER = 30
+
+/** A leg's terms sorted for the relaxation ladder: `live`, rarest first; `missing`, those that match nothing. */
+interface Ladder {
+  live: Term[]
+  missing: Term[]
+}
+
+/**
+ * The ladder of `terms` over a leg's rows (#455 part 2): each term's document frequency in the `fields` of the
+ * rows of `scope` (`FROM ... WHERE ...`, the leg's own, filters included), counted in one pass (fields are
+ * small, and have no index). A stop word (an empty query) is in neither list. Among terms as rare a compound
+ * comes first, then the query's order. `missing` are the terms no row's `doc` matches (an `EXISTS` through the
+ * document's index), the trigram leg's input; `doc` null: the fields are the whole document (a symbol's name).
+ */
+async function ladder(scope: SQL, fields: SQL, doc: SQL | null, terms: Term[]): Promise<Ladder> {
+  const columns = terms.map(({ query }, i) => {
+    const exists = doc ? sql`, EXISTS (SELECT 1 ${scope} AND ${doc} @@ (${query})) AS ${sql.raw(`e${i}`)}` : sql``
+    return sql`numnode(${query}) AS ${sql.raw(`n${i}`)}, count(*) FILTER (WHERE scoped.fields @@ (${query}))::int AS ${sql.raw(`d${i}`)}${exists}`
+  })
+  // The fields once per row (`OFFSET 0`: not inlined into every term's FILTER).
+  const [row] = (await db.execute(
+    sql`SELECT ${sql.join(columns, sql`, `)} FROM (SELECT ${fields} AS fields ${scope} OFFSET 0) scoped`,
+  )) as unknown as Array<Record<string, number | boolean>>
+  const counted = terms
+    .map((term, i) => ({ term, i, nodes: row![`n${i}`] as number, count: row![`d${i}`] as number, found: doc ? (row![`e${i}`] as boolean) : row![`d${i}`] !== 0 }))
+    .filter(({ nodes }) => nodes > 0)
+  return {
+    live: counted
+      .filter(({ count }) => count > 0)
+      .sort((a, b) => a.count - b.count || Number(b.term.compound) - Number(a.term.compound) || a.i - b.i)
+      .slice(0, MAX_LADDER)
+      .map(({ term }) => term),
+    missing: counted.filter(({ found }) => !found).map(({ term }) => term),
+  }
+}
+
+/**
+ * A relaxed row's place on the ladder (#455 part 2): one bit per live term, the rarest the highest, so rows
+ * that match the rarer terms come first, and among them those that match more.
+ */
+function ladderRank(fields: SQL, live: Term[]): SQL {
+  return sql.join(
+    live.map(({ query }, i) => sql`CASE WHEN ${fields} @@ (${query}) THEN ${2 ** (live.length - 1 - i)}::bigint ELSE 0 END`),
+    sql` + `,
+  )
+}
+
+/** Any of `terms`' queries. */
+const anyOf = (terms: Term[]): SQL => sql.join(terms.map(({ query }) => sql`(${query})`), sql` || `)
+
+/** `strings`' trigram word similarity to `column` (pg_trgm), the best of them; `<%` is the index's operator. */
+function similarity(strings: string[], column: SQL): { matches: SQL; best: SQL } {
+  return {
+    matches: sql`(${sql.join(strings.map((s) => sql`${s} <% ${column}`), sql` OR `)})`,
+    best: sql`greatest(${sql.join(strings.map((s) => sql`word_similarity(${s}, ${column})`), sql`, `)})`,
+  }
+}
+
+/** The trigram leg's strings (#455 part 2): the spellings of the terms that matched nothing. */
+const similarStrings = (missing: Term[]): string[] => [...new Set(missing.flatMap((t) => t.spelled))]
 
 /**
  * What a search keeps (#454). Every filter applies inside each leg's SQL,
@@ -282,22 +407,21 @@ export interface SearchResponse<H> {
   results: H[]
 }
 
+const CANDIDATES = 30
 /**
- * The fixed candidate window per leg merged by Reciprocal Rank Fusion (#456).
- * 60 candidates per leg ensures exact and identifier matches down the tail of
- * each leg reach fusion, while keeping fusion bounded and deterministic.
+ * RRF's k. A keyword leg's relaxed and trigram rows (#455 part 2) rank as if after a full AND list: rank
+ * `CANDIDATES + i`, so each contributes less than any row its leg's AND query matched (with their full rank,
+ * relaxed rows that only a keyword leg found took the top of the fusion; local bench runs, diagram-design
+ * tokens-to-gold +29 %).
  */
-const RRF_WINDOW = 60
-const CANDIDATES = RRF_WINDOW
 const RRF_K = 60
 /** Exact and identifier matches always outrank fuzzy ones in fusion (#456). */
 const EXACT_BOOST = 1
 /**
- * Bounded boost for code hits over docs/plans on code-shaped queries (#457).
- * Default 0 (measurement-only) so architectural docs/ADRs are never buried on
- * rationale questions; configurable via the CODE_BOOST environment variable.
+ * The boost a code hit gets over docs and plans on a code-shaped query (#457): about 3 RRF positions near the top
+ * of a leg, far below `EXACT_BOOST`, so a doc that genuinely answers the question still wins.
  */
-const CODE_BOOST = Number(process.env.CODE_BOOST ?? 0)
+const CODE_BOOST = 0.0008
 /**
  * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
  * that many rows, and each leg keeps only some kinds: file-level blocks, or
@@ -333,6 +457,8 @@ interface Row {
   language?: string | null
   snippet: string
   updated_at: string
+  /** A relaxed or trigram row of a keyword leg (#455 part 2): its fusion rank counts from `CANDIDATES`. */
+  relaxed?: true
 }
 
 interface SymbolRow {
@@ -347,6 +473,8 @@ interface SymbolRow {
   end_line: number
   snippet: string
   updated_at: string
+  /** A relaxed or trigram row of a keyword leg (#455 part 2): its fusion rank counts from `CANDIDATES`. */
+  relaxed?: true
 }
 
 /**
@@ -361,30 +489,64 @@ function gated(nearest: SQL, ties: SQL = sql`path COLLATE "C", id`): SQL {
     ORDER BY distance, ${ties}`
 }
 
+/**
+ * Whether a keyword leg looks past its AND rows (#455 part 2): it matched fewer than it keeps (`CANDIDATES`, so
+ * it returned every match), and the query has terms (no websearch syntax) to drop, or one term that matched
+ * nothing, for the trigram leg.
+ */
+const looksFurther = (rows: number, terms: Term[] | null): terms is Term[] =>
+  rows < CANDIDATES && terms !== null && (terms.length > 1 || rows === 0)
+
+/**
+ * The note keyword leg: the English query of the whole query (every word), its matches ordered by how many terms
+ * their title and path hold (#455 part 2), then by rank; then, when it matched fewer than `CANDIDATES`, the
+ * relaxed rows (`ladder`): those whose title or path match its rarest term but that do not match every term, by
+ * the rarer terms they match.
+ */
+async function noteKeywordRows(vaultIds: string[], query: string, filterSql: SQL): Promise<Row[]> {
+  const scope = sql`FROM notes WHERE vault_id = ANY(${uuidArray(vaultIds)}) AND deleted_at IS NULL ${filterSql}`
+  const match = english(query)
+  const terms = noteTerms(query)
+  const field = fieldHits(NOTE_FIELDS, terms, match)
+  // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 rows instead of whole table (DB-12, DB-14).
+  const rows = (await db.execute(sql`
+    WITH top_notes AS (
+      SELECT id, vault_id AS container_id, path, type, frontmatter, body, ${UPDATED_AT(sql`updated_at`)},
+             ${field} AS field, ts_rank(fts, ${match}) AS rank
+      ${scope} AND fts @@ ${match}
+      ORDER BY field DESC, rank DESC, path COLLATE "C", id
+      LIMIT ${CANDIDATES}
+    )
+    SELECT id, container_id, path, type, frontmatter, updated_at,
+           ts_headline('english', body, ${match}, 'MaxWords=30, MinWords=10') AS snippet
+    FROM top_notes
+    ORDER BY field DESC, rank DESC, path COLLATE "C", id
+  `)) as unknown as Row[]
+  if (!looksFurther(rows.length, terms) || terms.length === 1) return rows
+  const { live } = await ladder(scope, NOTE_FIELDS, null, terms)
+  if (live.length === 0) return rows
+  const relaxed = (await db.execute(sql`
+    WITH top_notes AS (
+      SELECT id, vault_id AS container_id, path, type, frontmatter, body, ${UPDATED_AT(sql`updated_at`)},
+             ${ladderRank(NOTE_FIELDS, live)} AS ladder, ts_rank(fts, ${anyOf(live)}, 1) AS rank
+      ${scope} AND ${NOTE_FIELDS} @@ (${live[0]!.query}) AND NOT (fts @@ ${match})
+      ORDER BY ladder DESC, rank DESC, path COLLATE "C", id
+      LIMIT ${CANDIDATES - rows.length}
+    )
+    SELECT id, container_id, path, type, frontmatter, updated_at,
+           ts_headline('english', body, ${anyOf(live)}, 'MaxWords=30, MinWords=10') AS snippet
+    FROM top_notes
+    ORDER BY ladder DESC, rank DESC, path COLLATE "C", id
+  `)) as unknown as Row[]
+  return [...rows, ...relaxed.map((r) => ({ ...r, relaxed: true as const }))]
+}
+
 async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'semantic', vec: string | undefined, filter: LegFilter): Promise<Row[]> {
   if (vaultIds.length === 0 || filter === null) return []
   const filterSql = clauses(filter)
-  // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 rows instead of whole table (DB-12, DB-14).
   const rows =
     mode === 'keyword'
-      ? await db.execute(sql`
-          WITH top_notes AS (
-            SELECT id, vault_id AS container_id, path, type, frontmatter, body, ${UPDATED_AT(sql`updated_at`)},
-                   ts_rank(fts, websearch_to_tsquery('english', ${query})) AS rank
-            FROM notes
-            WHERE vault_id = ANY(${uuidArray(vaultIds)})
-              AND deleted_at IS NULL
-              AND fts @@ websearch_to_tsquery('english', ${query})
-              ${filterSql}
-            ORDER BY rank DESC, path COLLATE "C", id
-            LIMIT ${CANDIDATES}
-          )
-          SELECT id, container_id, path, type, frontmatter, updated_at,
-                 ts_headline('english', body, websearch_to_tsquery('english', ${query}),
-                             'MaxWords=30, MinWords=10') AS snippet
-          FROM top_notes
-          ORDER BY rank DESC, path COLLATE "C", id
-        `)
+      ? await noteKeywordRows(vaultIds, query, filterSql)
       : await blockLeg(
           gated(sql`
             -- A note's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per note, as before
@@ -410,36 +572,86 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
   return rows as unknown as Row[]
 }
 
+/**
+ * The code keyword leg (#455). Its AND query (`keywordQuery`): the whole identifier first, then how many terms
+ * the file's fields hold (its path, the names it declares; #455 part 2), then the English match by its rank (the
+ * order before identifiers), then what only the identifier keywords match (parts of a name, a path segment), by
+ * their rank. When that matched fewer than `CANDIDATES` (#455 part 2): the relaxed rows (`ladder`), those whose
+ * fields match the rarest term but that do not match every term, by the rarer terms their fields match; when
+ * nothing matched, the files whose path or symbol names are similar (pg_trgm) to a term no file matches (a
+ * typo'd identifier). A row the English query does not match gets the vector leg's snippet: its headline would
+ * highlight nothing and parse the whole file (about 20 ms a file on rea's larger files).
+ */
+async function codeKeywordRows(repositoryIds: string[], query: string, filterSql: SQL): Promise<Row[]> {
+  const repos = uuidArray(repositoryIds)
+  const keyword = keywordQuery(query, 'code')
+  const scope = sql`FROM repository_files f WHERE repository_id = ANY(${repos}) ${filterSql}`
+  const whole = keyword.whole ? sql`${CODE_DOCUMENT} @@ (${keyword.whole})` : sql`false`
+  const field = fieldHits(CODE_FIELDS, keyword.terms, keyword.match)
+  // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 files (DB-12).
+  const rows = (await db.execute(sql`
+    WITH top_code AS (
+      SELECT id, repository_id AS container_id, path, language, content, ${UPDATED_AT(sql`updated_at`)},
+             ${whole} AS whole, ${field} AS field,
+             CASE WHEN fts @@ ${english(query)} THEN ts_rank(fts, ${english(query)}) END AS rank,
+             ts_rank(${CODE_DOCUMENT}, ${keyword.match}) AS keyword_rank
+      ${scope} AND ${CODE_DOCUMENT} @@ (${keyword.match})
+      ORDER BY whole DESC, field DESC, rank DESC NULLS LAST, keyword_rank DESC, path COLLATE "C", id
+      LIMIT ${CANDIDATES}
+    )
+    SELECT id, container_id, path, language, updated_at,
+           CASE WHEN rank IS NULL THEN left(content, 200)
+             ELSE ts_headline('english', content, ${english(query)}, 'MaxWords=30, MinWords=10') END AS snippet
+    FROM top_code
+    ORDER BY whole DESC, field DESC, rank DESC NULLS LAST, keyword_rank DESC, path COLLATE "C", id
+  `)) as unknown as Row[]
+  if (!looksFurther(rows.length, keyword.terms)) return rows
+  const { live, missing } = await ladder(scope, CODE_FIELDS, CODE_DOCUMENT, keyword.terms)
+  const relaxed =
+    live.length === 0 || keyword.terms.length === 1
+      ? []
+      : ((await db.execute(sql`
+          WITH top_code AS (
+            SELECT id, repository_id AS container_id, path, language, content, ${UPDATED_AT(sql`updated_at`)},
+                   ${ladderRank(CODE_FIELDS, live)} AS ladder, ${whole} AS whole,
+                   ts_rank(${CODE_DOCUMENT}, ${anyOf(live)}, 1) AS keyword_rank
+            ${scope} AND ${CODE_FIELDS} @@ (${live[0]!.query}) AND NOT (${CODE_DOCUMENT} @@ (${keyword.match}))
+            ORDER BY ladder DESC, whole DESC, keyword_rank DESC, path COLLATE "C", id
+            LIMIT ${CANDIDATES - rows.length}
+          )
+          SELECT id, container_id, path, language, updated_at, left(content, 200) AS snippet
+          FROM top_code
+          ORDER BY ladder DESC, whole DESC, keyword_rank DESC, path COLLATE "C", id
+        `)) as unknown as Row[])
+  const found = [...rows, ...relaxed.map((r) => ({ ...r, relaxed: true as const }))]
+  const strings = similarStrings(missing)
+  if (found.length > 0 || strings.length === 0) return found
+  const byPath = similarity(strings, sql`f.path`)
+  const byName = similarity(strings, sql`b.inner_path`)
+  const similar = (await db.execute(sql`
+    WITH hits AS (
+      SELECT f.id, ${byPath.best} AS similarity ${scope} AND ${byPath.matches}
+      UNION ALL
+      SELECT b.owner_id, ${byName.best}
+      FROM blocks b JOIN repository_files f ON f.id = b.owner_id
+      WHERE b.kind = 'symbol' AND b.container_id = ANY(${repos}) AND ${byName.matches} ${filterSql}
+    ), best AS (
+      SELECT id, max(similarity) AS similarity FROM hits GROUP BY id
+    )
+    SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS snippet, ${UPDATED_AT(sql`f.updated_at`)}
+    FROM best JOIN repository_files f ON f.id = best.id
+    ORDER BY best.similarity DESC, f.path COLLATE "C", f.id
+    LIMIT ${CANDIDATES}
+  `)) as unknown as Row[]
+  return similar.map((r) => ({ ...r, relaxed: true as const }))
+}
+
 async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' | 'semantic', vec: string | undefined, filter: LegFilter): Promise<Row[]> {
   if (repositoryIds.length === 0 || filter === null) return []
   const filterSql = clauses(filter)
-  const keyword = keywordQuery(query, 'code')
-  // ponytail: CTE wraps candidate search so ts_headline only runs on top 30 files (DB-12).
   const rows =
     mode === 'keyword'
-      ? await db.execute(sql`
-          -- #455: the whole identifier first, then the English match by its rank
-          -- (the order before identifiers), then what only the identifier keywords match (parts of a name, a path
-          -- segment), by their rank. A row the English query does not match gets the vector leg's snippet: its
-          -- headline would highlight nothing and parse the whole file (about 20 ms a file on rea's larger files).
-          WITH top_code AS (
-            SELECT id, repository_id AS container_id, path, language, content, ${UPDATED_AT(sql`updated_at`)},
-                   ${keyword.whole ? sql`${CODE_DOCUMENT} @@ (${keyword.whole})` : sql`false`} AS whole,
-                   CASE WHEN fts @@ ${english(query)} THEN ts_rank(fts, ${english(query)}) END AS rank,
-                   ts_rank(${CODE_DOCUMENT}, ${keyword.match}) AS keyword_rank
-            FROM repository_files f
-            WHERE repository_id = ANY(${uuidArray(repositoryIds)})
-              AND ${CODE_DOCUMENT} @@ (${keyword.match})
-              ${filterSql}
-            ORDER BY whole DESC, rank DESC NULLS LAST, keyword_rank DESC, path COLLATE "C", id
-            LIMIT ${CANDIDATES}
-          )
-          SELECT id, container_id, path, language, updated_at,
-                 CASE WHEN rank IS NULL THEN left(content, 200)
-                   ELSE ts_headline('english', content, ${english(query)}, 'MaxWords=30, MinWords=10') END AS snippet
-          FROM top_code
-          ORDER BY whole DESC, rank DESC NULLS LAST, keyword_rank DESC, path COLLATE "C", id
-        `)
+      ? await codeKeywordRows(repositoryIds, query, filterSql)
       : await blockLeg(
           gated(sql`
             -- A file's vector rank is its file block's (path and content, the old file vector): one row per file,
@@ -457,6 +669,59 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
   return rows as unknown as Row[]
 }
 
+/**
+ * The symbol keyword leg: by name, by Class.name (inner_path), or by snippet, as the symbol table was matched
+ * before blocks; or by the identifier keywords of its inner_path (#455), ranked after those, the whole identifier
+ * before its parts. When that matched fewer than `CANDIDATES` (#455 part 2): the relaxed rows (`ladder`, a
+ * symbol's name is its fields); when nothing matched, the symbols whose name path is similar (pg_trgm) to a term
+ * no symbol matches, as in `codeKeywordRows`.
+ */
+async function symbolKeywordRows(repositoryIds: string[], query: string, filterSql: SQL): Promise<SymbolRow[]> {
+  const repos = uuidArray(repositoryIds)
+  const pattern = `%${query}%`
+  const keyword = keywordQuery(query, 'symbol')
+  const contains = sql`(b.inner_path ILIKE ${pattern} OR (b.snippet IS NOT NULL AND b.snippet ILIKE ${pattern}))`
+  const scope = sql`FROM blocks b JOIN repository_files f ON f.id = b.owner_id
+    WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${filterSql}`
+  const rows = (await db.execute(sql`
+    SELECT ${SYMBOL_COLUMNS}
+    ${scope} AND (${contains} OR b.keywords @@ (${keyword.match}))
+    ORDER BY
+      CASE
+        WHEN lower(${SYMBOL_NAME}) = lower(${query}) OR lower(b.inner_path) = lower(${query}) THEN 1
+        WHEN lower(${SYMBOL_NAME}) LIKE lower(${`${query}%`}) THEN 2
+        WHEN ${contains} THEN 3
+        ${keyword.whole ? sql`WHEN b.keywords @@ (${keyword.whole}) THEN 4` : sql``}
+        ELSE 5
+      END,
+      f.path COLLATE "C", b.start_line, b.id
+    LIMIT ${CANDIDATES}
+  `)) as unknown as SymbolRow[]
+  if (!looksFurther(rows.length, keyword.terms)) return rows
+  const { live, missing } = await ladder(scope, sql`b.keywords`, null, keyword.terms)
+  const relaxed =
+    live.length === 0 || keyword.terms.length === 1
+      ? []
+      : ((await db.execute(sql`
+          SELECT ${SYMBOL_COLUMNS}
+          ${scope} AND b.keywords @@ (${live[0]!.query}) AND NOT ${contains} AND NOT (b.keywords @@ (${keyword.match}))
+          ORDER BY ${ladderRank(sql`b.keywords`, live)} DESC,
+            ${keyword.whole ? sql`b.keywords @@ (${keyword.whole}) DESC,` : sql``} f.path COLLATE "C", b.start_line, b.id
+          LIMIT ${CANDIDATES - rows.length}
+        `)) as unknown as SymbolRow[])
+  const found = [...rows, ...relaxed.map((r) => ({ ...r, relaxed: true as const }))]
+  const strings = similarStrings(missing)
+  if (found.length > 0 || strings.length === 0) return found
+  const byName = similarity(strings, sql`b.inner_path`)
+  const similar = (await db.execute(sql`
+    SELECT ${SYMBOL_COLUMNS}
+    ${scope} AND ${byName.matches}
+    ORDER BY ${byName.best} DESC, f.path COLLATE "C", b.start_line, b.id
+    LIMIT ${CANDIDATES}
+  `)) as unknown as SymbolRow[]
+  return similar.map((r) => ({ ...r, relaxed: true as const }))
+}
+
 async function symbolRows(
   repositoryIds: string[],
   query: string,
@@ -467,30 +732,9 @@ async function symbolRows(
   if (repositoryIds.length === 0 || filter === null) return []
   const repos = uuidArray(repositoryIds)
   const filterSql = clauses(filter)
-  const pattern = `%${query}%`
-  const keyword = keywordQuery(query, 'symbol')
-  const contains = sql`(b.inner_path ILIKE ${pattern} OR (b.snippet IS NOT NULL AND b.snippet ILIKE ${pattern}))`
   const rows =
     mode === 'keyword'
-      ? await db.execute(sql`
-          -- By name, by Class.name (inner_path), or by snippet, as the symbol table was matched before blocks; or
-          -- by the identifier keywords of its inner_path and file path (#455), ranked after those, the whole
-          -- identifier before its parts.
-          SELECT ${SYMBOL_COLUMNS}
-          FROM blocks b JOIN repository_files f ON f.id = b.owner_id
-          WHERE b.owner_type = 'code' AND b.kind = 'symbol' AND b.container_id = ANY(${repos}) ${filterSql}
-            AND (${contains} OR b.keywords @@ (${keyword.match}))
-          ORDER BY
-            CASE
-              WHEN lower(${SYMBOL_NAME}) = lower(${query}) OR lower(b.inner_path) = lower(${query}) THEN 1
-              WHEN lower(${SYMBOL_NAME}) LIKE lower(${`${query}%`}) THEN 2
-              WHEN ${contains} THEN 3
-              ${keyword.whole ? sql`WHEN b.keywords @@ (${keyword.whole}) THEN 4` : sql``}
-              ELSE 5
-            END,
-            f.path COLLATE "C", b.start_line, b.id
-          LIMIT ${CANDIDATES}
-        `)
+      ? await symbolKeywordRows(repositoryIds, query, filterSql)
       : await blockLeg(
           gated(sql`
             SELECT ${SYMBOL_COLUMNS}, b.embedding <=> ${vec}::vector AS distance
@@ -605,111 +849,74 @@ function byScore(a: Ranked, b: Ranked): number {
   )
 }
 
-const STOP_WORDS: Record<string, true> = {
-  a: true, about: true, above: true, after: true, again: true, against: true, all: true,
-  am: true, an: true, and: true, any: true, are: true, as: true, at: true,
-  be: true, because: true, been: true, before: true, being: true, below: true, between: true, both: true, but: true, by: true,
-  can: true, could: true, did: true, do: true, does: true, doing: true, down: true, during: true,
-  each: true, few: true, for: true, from: true, further: true,
-  had: true, has: true, have: true, having: true, he: true, her: true, here: true, hers: true, herself: true,
-  him: true, himself: true, his: true, how: true,
-  i: true, if: true, in: true, into: true, is: true, it: true, its: true, itself: true,
-  just: true, me: true, more: true, most: true, my: true, myself: true,
-  no: true, nor: true, not: true, now: true, of: true, off: true, on: true, once: true, only: true, or: true, other: true, our: true, ours: true, ourselves: true, out: true, over: true, own: true,
-  same: true, she: true, should: true, so: true, some: true, such: true,
-  than: true, that: true, the: true, their: true, theirs: true, them: true, themselves: true, then: true, there: true, these: true, they: true, this: true, those: true, through: true, to: true, too: true,
-  under: true, until: true, up: true, very: true,
-  was: true, we: true, were: true, what: true, when: true, where: true, which: true, while: true, who: true, whom: true, why: true, with: true,
-  you: true, your: true, yours: true, yourself: true, yourselves: true,
-}
-
-/** Common file stems that appear as generic vocabulary in multi-word questions (#456). */
-const GENERIC_BASE_STEMS: Record<string, true> = {
-  index: true,
-  main: true,
-  app: true,
-  readme: true,
-  license: true,
-  changelog: true,
-  types: true,
-  utils: true,
-  util: true,
-  helpers: true,
-  helper: true,
-  common: true,
+/** A query token that is itself identifier- or file-shaped; plain words are not (#456). */
+function isIdentifierShaped(token: string): boolean {
+  return (
+    token.includes('_') ||
+    token.includes('::') ||
+    /[\p{Ll}\p{N}]\p{Lu}/u.test(token) ||
+    /[\p{L}\p{N}_]\.[\p{L}\p{N}_]/u.test(token) ||
+    (token.includes('/') && /\.[A-Za-z0-9]{1,8}$/.test(token))
+  )
 }
 
 interface ExactContext {
-  multiWord: boolean
-  termSet: Set<string>
-  termSetLower: Set<string>
-  spellingSet: Set<string>
-  queryNorm: string
-  queryStripped: string
+  /** The whole query, trimmed and lowercased, plus the same without surrounding punctuation. */
+  whole: Set<string>
+  /** Identifier- or file-shaped terms as typed, and lowercased. */
+  terms: Set<string>
+  termsLower: Set<string>
+  /** Lowercased spellings (whole, joined, snake, kebab) of the identifier-shaped terms. */
+  spelling: Set<string>
 }
 
-/** Extracts non-stopword query terms and identifier spelling sets for cheap exact-match checks in fusion (#456). */
+/**
+ * What may count as an exact match (#456). A row is exact when its name, path
+ * or title equals the WHOLE query, or equals a term that is itself an
+ * identifier or file name. A plain word of a multi-word query never grants it:
+ * one-word name hits must not outrank rows that match every word (#1014).
+ */
 function queryExactContext(query: string): ExactContext {
-  const rawTokens = query.trim().split(/\s+/).filter(Boolean)
-  const multiWord = rawTokens.length >= 2
-  const termSet = new Set<string>()
-  const termSetLower = new Set<string>()
-  const spellingSet = new Set<string>()
-
-  for (const raw of rawTokens) {
-    const rawLower = raw.toLowerCase()
-    const cleaned = raw.replace(/^[^\p{L}\p{N}_$]+|[^\p{L}\p{N}_$]+$/gu, '')
-    const cleanedLower = cleaned.toLowerCase()
-
-    // Common stopwords never grant exact-match priority.
-    if (cleanedLower in STOP_WORDS || cleanedLower.length <= 1) continue
-
-    termSet.add(raw)
-    termSetLower.add(rawLower)
-    if (cleaned.length > 0) {
-      termSet.add(cleaned)
-      termSetLower.add(cleanedLower)
-      const id = splitIdentifier(cleaned)
-      for (const s of [id.whole, id.parts.join(''), id.parts.join('_'), id.parts.join('-')]) {
-        if (s.length > 0 && !(s in STOP_WORDS)) spellingSet.add(s)
-      }
-    }
-    const idRaw = splitIdentifier(raw)
-    for (const s of [idRaw.whole, idRaw.parts.join(''), idRaw.parts.join('_'), idRaw.parts.join('-')]) {
-      if (s.length > 0 && !(s in STOP_WORDS)) spellingSet.add(s)
-    }
-  }
-
   const queryNorm = query.trim().toLowerCase()
   const queryStripped = queryNorm.replace(/^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu, '').trim()
-  return { multiWord, termSet, termSetLower, spellingSet, queryNorm, queryStripped }
+  const whole = new Set<string>([queryNorm])
+  if (queryStripped.length > 0) whole.add(queryStripped)
+
+  const terms = new Set<string>()
+  const termsLower = new Set<string>()
+  const spelling = new Set<string>()
+  for (const raw of query.trim().split(/\s+/).filter(Boolean)) {
+    const cleaned = raw.replace(/^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu, '')
+    if (cleaned.length <= 1 || !isIdentifierShaped(cleaned)) continue
+    terms.add(cleaned)
+    termsLower.add(cleaned.toLowerCase())
+    const id = splitIdentifier(cleaned)
+    for (const s of [id.whole, id.parts.join(''), id.parts.join('_'), id.parts.join('-')]) {
+      if (s.length > 0) spelling.add(s.toLowerCase())
+    }
+  }
+  return { whole, terms, termsLower, spelling }
 }
 
-/** A symbol whose name equals a query term, case-sensitively or by spelling set from identifiers.ts (#456). */
+/** A symbol whose name equals the whole query, or an identifier term by any of its spellings (#456). */
 function isExactSymbol(name: string, parent: string | null | undefined, ctx: ExactContext): boolean {
   const lower = name.toLowerCase()
-  if (lower in STOP_WORDS || lower.length <= 1) return false
-  if (ctx.termSet.has(name)) return true
-  if (ctx.spellingSet.has(lower)) return true
+  if (lower.length <= 1) return false
+  if (ctx.whole.has(lower) || ctx.terms.has(name) || ctx.spelling.has(lower)) return true
   if (parent) {
-    const fullName = `${parent}.${name}`
-    if (ctx.termSet.has(fullName) || ctx.spellingSet.has(fullName.toLowerCase())) return true
+    const full = `${parent}.${name}`
+    const fullLower = full.toLowerCase()
+    if (ctx.whole.has(fullLower) || ctx.terms.has(full) || ctx.spelling.has(fullLower)) return true
   }
   return false
 }
 
-/** A file whose path or basename equals a term (#456). */
+/** A file whose path or basename (with its extension) equals the whole query or a file-shaped term (#456). */
 function isExactFile(path: string, ctx: ExactContext): boolean {
   const lower = path.toLowerCase()
-  if (ctx.termSet.has(path) || ctx.termSetLower.has(lower)) return true
-  const base = path.split('/').pop() ?? path
-  const baseLower = base.toLowerCase()
-  if (ctx.termSet.has(base) || ctx.termSetLower.has(baseLower)) return true
-  // In multi-word questions, a generic stem (like index in index.ts) does not match unless typed with extension.
-  const stem = baseLower.replace(/(.)\.[^.]*$/, '$1')
-  if (ctx.multiWord && stem in GENERIC_BASE_STEMS) return false
-  if (ctx.termSetLower.has(stem)) return true
-  return false
+  if (ctx.whole.has(lower) || ctx.termsLower.has(lower)) return true
+  const baseLower = (path.split('/').pop() ?? path).toLowerCase()
+  return ctx.whole.has(baseLower) || ctx.termsLower.has(baseLower)
 }
 
 /** Extracts the lowercased note title from frontmatter, if present and string-typed. */
@@ -722,11 +929,9 @@ function noteTitle(frontmatter: unknown): string {
 
 /** A note whose title or path equals the query (#456). */
 function isExactNote(path: string, frontmatter: unknown, ctx: ExactContext): boolean {
-  const pathNorm = path.trim().toLowerCase()
-  if (pathNorm === ctx.queryNorm || (ctx.queryStripped.length > 0 && pathNorm === ctx.queryStripped)) return true
+  if (ctx.whole.has(path.trim().toLowerCase())) return true
   const title = noteTitle(frontmatter)
-  if (title !== '' && (title === ctx.queryNorm || (ctx.queryStripped.length > 0 && title === ctx.queryStripped))) return true
-  return false
+  return title !== '' && ctx.whole.has(title)
 }
 
 const PROSE_TERMS: Record<string, true> = {
@@ -834,14 +1039,15 @@ export async function findSymbols(
   const ctx = queryExactContext(query)
   const map = new Map<string, SymbolSearchResult>()
   const contribute = (rows: SymbolRow[], preferSnippet: boolean) => {
-    rows.slice(0, RRF_WINDOW).forEach((row, rank) => {
-      const contribution = 1 / (RRF_K + rank + 1)
+    rows.forEach((row, rank) => {
+      const contribution = 1 / (RRF_K + rank + (row.relaxed ? CANDIDATES : 0) + 1)
       const existing = map.get(row.id)
       if (existing) {
         existing.score += contribution
         if (preferSnippet && row.snippet) existing.snippet = row.snippet
       } else {
-        const exact = isExactSymbol(row.name, row.parent, ctx)
+        // A relaxed or trigram row never counts as exact: it did not match every word (#455 part 2).
+        const exact = !row.relaxed && isExactSymbol(row.name, row.parent, ctx)
         map.set(row.id, {
           id: row.id,
           fileId: row.file_id,
@@ -905,20 +1111,18 @@ export async function searchNotes(
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
   const ctx = queryExactContext(query)
   const codeShaped = isCodeShaped(query)
-  const boostAmount = Number(process.env.CODE_BOOST ?? CODE_BOOST) || 0
-  const codeBoost = (resourceType: ResourceType, path: string): number =>
-    codeShaped && !isDocHit(resourceType, path) ? boostAmount : 0
   const merged = new Map<string, SearchResult>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
-    rows.slice(0, RRF_WINDOW).forEach((row, rank) => {
+    rows.forEach((row, rank) => {
       const key = `${resourceType}:${row.id}`
-      const contribution = 1 / (RRF_K + rank + 1)
+      const contribution = 1 / (RRF_K + rank + (row.relaxed ? CANDIDATES : 0) + 1)
       const existing = merged.get(key)
       if (existing) {
         existing.score += contribution
         if (preferSnippet) existing.snippet = row.snippet
       } else {
-        const exact = resourceType === 'note' ? isExactNote(row.path, row.frontmatter, ctx) : isExactFile(row.path, ctx)
+        const exact =
+          !row.relaxed && (resourceType === 'note' ? isExactNote(row.path, row.frontmatter, ctx) : isExactFile(row.path, ctx))
         merged.set(key, {
           resourceType,
           id: row.id,
@@ -929,22 +1133,23 @@ export async function searchNotes(
           language: resourceType === 'code' ? row.language : undefined,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution + (exact ? EXACT_BOOST : 0) + codeBoost(resourceType, row.path),
+          score:
+            contribution + (exact ? EXACT_BOOST : 0) + (codeShaped && !isDocHit(resourceType, row.path) ? CODE_BOOST : 0),
         })
       }
     })
   }
 
   const contributeSymbols = (rows: SymbolRow[], preferSnippet: boolean): void => {
-    rows.slice(0, RRF_WINDOW).forEach((row, rank) => {
+    rows.forEach((row, rank) => {
       const key = `symbol:${row.id}`
-      const contribution = 1 / (RRF_K + rank + 1)
+      const contribution = 1 / (RRF_K + rank + (row.relaxed ? CANDIDATES : 0) + 1)
       const existing = merged.get(key)
       if (existing) {
         existing.score += contribution
         if (preferSnippet && row.snippet) existing.snippet = row.snippet
       } else {
-        const exact = isExactSymbol(row.name, row.parent, ctx)
+        const exact = !row.relaxed && isExactSymbol(row.name, row.parent, ctx)
         merged.set(key, {
           resourceType: 'symbol',
           id: row.id,
@@ -958,7 +1163,7 @@ export async function searchNotes(
           endLine: row.end_line,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution + (exact ? EXACT_BOOST : 0) + (codeShaped ? boostAmount : 0),
+          score: contribution + (exact ? EXACT_BOOST : 0) + (codeShaped ? CODE_BOOST : 0),
         })
       }
     })

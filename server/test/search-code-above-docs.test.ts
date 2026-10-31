@@ -15,7 +15,6 @@ let repoId: string
 
 afterEach(() => {
   vi.restoreAllMocks()
-  delete process.env.CODE_BOOST
 })
 
 beforeAll(async () => {
@@ -61,8 +60,7 @@ beforeAll(async () => {
 }, 180_000)
 
 describe('code ranks above docs for code-shaped queries (#457)', () => {
-  it('code-shaped query ranks code above docs when CODE_BOOST is active', async () => {
-    process.env.CODE_BOOST = '0.0008'
+  it('a code-shaped query ranks code above docs by default', async () => {
     // Code-shaped query using keyword 'function' and identifier 'parseConfig':
     // docs/architecture/config-guide.md has higher keyword density and sorts
     // first alphabetically, scoring 0.03278 vs 0.03225 for src/config/parser.ts.
@@ -76,8 +74,7 @@ describe('code ranks above docs for code-shaped queries (#457)', () => {
     expect(res.results[0]!.path).toBe('src/config/parser.ts')
   })
 
-  it('doc question that mentions an identifier still lets the doc win even with CODE_BOOST active', async () => {
-    process.env.CODE_BOOST = '0.0008'
+  it('a doc question that mentions an identifier still lets the doc win', async () => {
     // Query is asking for documentation: 'architecture and deployment guide for parseConfig'
     // docs/architecture/config-guide.md is the real answer and matches many more query words
     const res = await searchNotes(
