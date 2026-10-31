@@ -339,10 +339,17 @@
       "breakpoints": true
     },
     {
-      "idx": 56,
+      "idx": 58,
       "version": "7",
-      "when": 1793400000000,
-      "tag": "0056_mcp_sessions",
+      "when": 1793500000000,
+      "tag": "0058_usage_report",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1793600000000,
+      "tag": "0060_mcp_sessions",
       "breakpoints": true
     }
   ]

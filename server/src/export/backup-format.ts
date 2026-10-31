@@ -83,7 +83,8 @@ export interface BackupTable {
  * `write_idempotency` (MCP write answers kept 24 h for retries, #477),
  * `note_reads` (each MCP connection's last read of a note, kept 24 h, #408),
  * `index_epochs` (cache-key epochs, #680: derived; the restore's own writes bump them),
- * `mcp_sessions` and `mcp_session_passages` (what an MCP session was sent, kept 30 min idle, #683).
+ * `mcp_sessions` and `mcp_session_passages` (what an MCP session was sent, kept 30 min idle, #683),
+ * `usage_events` and `usage_daily` (the opt-in usage report, #678: kept 30 days at most).
  */
 export const BACKUP_TABLES: BackupTable[] = [
   { name: 'users', table: users, unique: [{ columns: ['email'] }], legacyKey: 'users' },

@@ -27,7 +27,7 @@ Elara is a team knowledge base and codebase mapping platform built on four found
    - `semantic`: nearest neighbours by embedding similarity.
    - Louvain communities are computed on every call. `find_graph_path` finds the shortest path (breadth-first). Saved graph perspectives are stored for the UI; the `graph` tool cannot apply them. There is no PageRank or centrality score.
 3. **Synced Code Repositories**: Read-only ingestion of git repositories (clone with polling or webhook), a local path under the server's repos root, or agent push. Files are indexed with Tree-sitter for TypeScript (`.ts`, `.tsx`, `.mts`, `.cts`; all labelled `typescript`), JavaScript (`.js`, `.jsx`, `.mjs`, `.cjs`), Python, Go, Rust, Java, C, C++, C#, Kotlin, Ruby and PHP (imports, and module-level functions including arrow-function consts, classes, interfaces, types, enums, namespaces and exported consts, plus class methods with their class), and embedded for semantic search (`find_symbols`). Markdown and HTML files get heading outline blocks (not symbols, not searched yet); Swift files are labelled but not parsed yet.
-4. **MCP Server & Prompts**: A stateless, permission-scoped MCP server over Streamable HTTP (`POST /mcp` or `POST /elara/mcp`; there is no stdio transport) with **60 tools** and **20 prompts**.
+4. **MCP Server & Prompts**: A stateless, permission-scoped MCP server over Streamable HTTP (`POST /mcp` or `POST /elara/mcp`; there is no stdio transport) with **61 tools** and **20 prompts**.
 
 ---
 
@@ -204,9 +204,9 @@ Exports a vault zip archive or single note markdown file.
 
 ---
 
-## Elara MCP Tool Reference (60 Tools)
+## Elara MCP Tool Reference (61 Tools)
 
-Elara exposes 60 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Its **profile** (`reader` < `writer` < `admin`) is the tool set it lists and may call: `reader` has `list_vaults`, `list_repositories`, `browse_vault`, `browse_repository`, `search`, `read_note`, `read_file`, `find_symbols`, `graph` and `find_graph_path`; `writer` adds `create_note`, `edit_note` and `append_note`; `admin` has every tool. API tokens minted without a profile, and every token minted before profiles, are `admin`; the Settings and vault forms start at the profile matching the access level. Through the API, account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A pinned token never gets more than its user's permission on the pin: with a read-only vault share the token is `read` (asking for more is refused). The Settings and vault forms start at `write`, or at `read` for a read-only vault member. `tools/list` shows a token only the tools it can call (allow-list, access level, profile, scope; on a pinned token also the user's current permission on the pin, so owner-only tools such as `list_vault_shares` appear only to the owner, and tools that need edit access such as `list_trash` or `note_history` only to an editor). A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, `<tool> needs the writer profile; this connection has the reader profile ...`); ask the user for a token with that capability or profile instead of retrying.
+Elara exposes 61 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Its **profile** (`reader` < `writer` < `admin`) is the tool set it lists and may call: `reader` has `list_vaults`, `list_repositories`, `browse_vault`, `browse_repository`, `search`, `read_note`, `read_file`, `find_symbols`, `graph` and `find_graph_path`; `writer` adds `create_note`, `edit_note` and `append_note`; `admin` has every tool. API tokens minted without a profile, and every token minted before profiles, are `admin`; the Settings and vault forms start at the profile matching the access level. Through the API, account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A pinned token never gets more than its user's permission on the pin: with a read-only vault share the token is `read` (asking for more is refused). The Settings and vault forms start at `write`, or at `read` for a read-only vault member. `tools/list` shows a token only the tools it can call (allow-list, access level, profile, scope; on a pinned token also the user's current permission on the pin, so owner-only tools such as `list_vault_shares` appear only to the owner, and tools that need edit access such as `list_trash` or `note_history` only to an editor). A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, `<tool> needs the writer profile; this connection has the reader profile ...`); ask the user for a token with that capability or profile instead of retrying.
 
 ### 1. Vault Management (14 tools)
 | Tool | Scope | Capability | Description |
@@ -288,13 +288,14 @@ Elara exposes 60 tools across 7 functional domains. **Capability** is the token 
 | `delete_team` | Account | `admin` | Delete a team. |
 | `lookup_user` | Account | `read` | Look up an active user by exact email address. |
 
-### 7. Export & Notifications (4 tools)
+### 7. Export, Notifications & Usage (5 tools)
 | Tool | Scope | Capability | Description |
 | :--- | :--- | :--- | :--- |
 | `export_vault` | Vault/Account | `read` | Export an entire vault as a zip archive. |
 | `export_note` | Vault/Account | `read` | Export a single note as raw serialized markdown. |
 | `list_notifications` | Account | `read` | List in-app notifications and activity feed. |
 | `mark_notification_read` | Account | `write` | Mark a notification as read. |
+| `usage_report` | Account | `read` | The opt-in usage report (admin profile only): calls and tokens per tool and session, zero-result and unread-hit searches, never-read notes; no note or query text. |
 
 ---
 

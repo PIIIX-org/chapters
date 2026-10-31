@@ -90,6 +90,7 @@ const CASES: Record<string, ScopeCase> = {
   lookup_user: { kind: 'account', args: (fx) => ({ email: fx.memberEmail }) },
   list_notifications: { kind: 'account' },
   mark_notification_read: { kind: 'account', args: () => ({ notificationId: randomUUID() }) },
+  usage_report: { kind: 'account' },
 
   // one vault
   browse_vault: { kind: 'vault', args: () => ({ recursive: true }), finds: { vault: ['docs/probe'] } },

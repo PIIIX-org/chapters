@@ -6,7 +6,7 @@ import { db } from '../db/client.js'
  * Session memory (#683, ADR-004 §2.9 D7; backend-reference.md §5.11,
  * "Session memory"): which passages an MCP read sent under an agent's
  * `session_id`, so a later read in the same session answers a repeat with a
- * reference (mcp/session-reads.ts). Kept in Postgres (migration 0056, the
+ * reference (mcp/session-reads.ts). Kept in Postgres (migration 0060, the
  * unlogged `mcp_sessions` and `mcp_session_passages`), so every server
  * instance shares it and the transport stays stateless; a crash empties it,
  * which only means full answers.

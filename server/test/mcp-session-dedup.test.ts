@@ -9,7 +9,7 @@
 // with lines covering it, or the same text of the document at any version; a
 // changed passage is sent in full, as is one whose reference would be longer.
 //
-// The memory is per token and session id (`mcp_sessions`, migration 0056):
+// The memory is per token and session id (`mcp_sessions`, migration 0060):
 // another session id, another token of the same account and another account
 // get full text. It expires after SESSION_IDLE_MINUTES without a call, and a
 // permission change (instance_state.permission_epoch, #680) voids it. Without

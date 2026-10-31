@@ -13,6 +13,8 @@
     "doctor": "tsx src/scripts/doctor.ts",
     "rows-from-files": "tsx src/scripts/rows-from-files.ts",
     "profile-graph": "tsx src/scripts/profile-graph.ts",
+    "profile-usage": "tsx src/scripts/profile-usage.ts",
+    "profile-usage-report": "tsx src/scripts/profile-usage-report.ts",
     "restore-backup": "tsx src/scripts/restore-backup.ts",
     "migrate-store": "tsx src/scripts/migrate-store.ts",
     "store-export-legacy": "tsx src/scripts/store-export-legacy.ts"

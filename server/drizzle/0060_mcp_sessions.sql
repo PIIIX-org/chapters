@@ -13,7 +13,7 @@
 -- a few hundred rows of fixed width, bounded by session.ts (sessions per token, passages per
 -- session), and expires after SESSION_IDLE_MINUTES. Deleting the token deletes its rows. Not in
 -- the Drizzle model (only session.ts reads them, in SQL), nor in backups.
--- Numbered 0056 @ 1793400000000, the slot reserved for #683 on #930 (0052 landed; 0053/0054 are #1023 and #469).
+-- Numbered 0060 @ 1793600000000: after 0058 (#678) and 0059 (#1037), so it applies after both on every instance.
 CREATE UNLOGGED TABLE "mcp_sessions" (
 	"connection_id" uuid NOT NULL,
 	"session_id" text NOT NULL,
