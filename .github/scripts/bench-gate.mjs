@@ -3,8 +3,11 @@
 // on separate lab instances) into their per-metric median, compares that
 // with the committed baseline benchmarks/baseline.json, and fails the job
 // when
-//   1. an instance wrote no results, a selected suite has no results, or the
-//      instances disagree on a suite's fingerprint (harness failure);
+//   0. an instance's results.json is missing: the job stops right there with
+//      the artifact's name (the bench job failed, timed out or was
+//      cancelled), before any evaluation;
+//   1. a selected suite has no results, or the instances disagree on a
+//      suite's fingerprint (harness failure);
 //   2. regression: Elara's hit@5 or mean tokens-to-gold is worse than the
 //      reference by more than TOLERANCE. On a pull request the reference is
 //      the BASE commit's baseline;
@@ -21,8 +24,12 @@
 //   5. stale baseline: the run does not match the PR's baseline within the
 //      tolerance in either direction (an improvement must be recorded in the
 //      same PR), the fingerprint or the index outcome differs, or a selected
-//      suite has no entry.
-// It writes the delta table to the job summary and to <out>/gate.md.
+//      suite has no entry;
+//   6. golds lost, with --require-golds (the workflow passes it when the PR
+//      touches search, MCP or the benchmark and every suite runs): a suite
+//      reaches fewer golds (goldReached) than the reference. No tolerance.
+// It writes a per-suite overview (tokens-to-gold, golds, hit@5, MRR) and the
+// delta tables to the job summary and to <out>/gate.md.
 //
 // Tolerances: measured noise plus a margin (benchmarks/README.md, "Noise").
 // They live here, not in the baseline, and on pull requests the workflow
@@ -34,7 +41,7 @@
 // Plain Node, no dependencies, one file (it is copied alone to a temp dir).
 //
 //   node .github/scripts/bench-gate.mjs --results a/results.json,b/results.json,c/results.json \
-//     [--baseline benchmarks/baseline.json] [--base-baseline <file>] [--pr <pulls API JSON>] [--out bench-results]
+//     [--baseline benchmarks/baseline.json] [--base-baseline <file>] [--pr <pulls API JSON>] [--require-golds] [--out bench-results]
 //   node .github/scripts/bench-gate.mjs --write-baseline a/results.json,b/results.json,c/results.json [--baseline benchmarks/baseline.json]
 //   node .github/scripts/bench-gate.mjs --compare a/results.json b/results.json
 
@@ -193,13 +200,15 @@ export function overrideReason(pr, override) {
 /**
  * The verdict. `results` = combined instances (combine()), `baseline` = the
  * PR's (or the branch's) baseline file, `baseBaseline` = the base commit's
- * on a pull request (null otherwise), `pr` = { labels, body } on a pull request.
+ * on a pull request (null otherwise), `pr` = { labels, body } on a pull
+ * request, `requireGolds` = every suite must reach at least the reference's
+ * goldReached (no tolerance).
  */
-export function evaluate({ results, baseline, baseBaseline = null, pr = null }) {
+export function evaluate({ results, baseline, baseBaseline = null, pr = null, requireGolds = false }) {
   const failures = []
   const notes = []
   const suites = []
-  if (!results) return { ok: false, failures: ['no benchmark results (harness failure: see the bench jobs)'], notes, suites }
+  if (!results) return { ok: false, failures: ['no benchmark results (harness failure: see the bench jobs)'], notes, suites, requireGolds }
   for (const name of results.selected) {
     const run = results.suites[name]
     if (!run) {
@@ -246,6 +255,14 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null }) 
         failures.push(`${name}: stale baseline, Elara ${metric} is ${vsOwn} than benchmarks/baseline.json (${own.elara[metric]} -> ${cur}); record this run with --write-baseline in this PR`)
       }
     }
+    // Golds are a floor, not a tolerance: a suite that loses one fails (--require-golds).
+    if (requireGolds) {
+      const cur = run.aggregate.elara.goldReached
+      const was = ref.elara.goldReached
+      const lost = cur === null || cur === undefined || cur < was
+      row.verdicts.goldReached = lost ? 'regression' : 'ok'
+      if (lost) failures.push(`${name}: golds lost, Elara goldReached ${was} -> ${cur ?? '-'} of ${run.questions} (${refLabel}; every suite must reach at least as many golds as the reference)`)
+    }
     // The recorded bar may only go up unless an owner says otherwise.
     if (base && base.fingerprint === own.fingerprint) {
       const lowered = GATED.filter((m) => (LOWER_IS_BETTER.has(m) ? own.elara[m] > base.elara[m] : own.elara[m] < base.elara[m]))
@@ -257,7 +274,7 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null }) 
       }
     }
   }
-  return { ok: failures.length === 0, failures, notes, suites }
+  return { ok: failures.length === 0, failures, notes, suites, requireGolds }
 }
 
 function describeTolerance(metric, questions) {
@@ -292,12 +309,53 @@ export function questionChanges(entry, run) {
   return out
 }
 
+/** The artifact an instance's results file belongs to (`bench-results-<n>`), or the path. */
+const artifactOf = (file) => /bench-results-\d+/.exec(file)?.[0] ?? file
+
+/**
+ * The gate's verdict when an instance's results.json is missing: the job
+ * stops here, before combining or evaluating anything, and names the
+ * artifact so the reader goes straight to that bench job.
+ */
+export function missingReport(missing) {
+  const names = missing.map(artifactOf)
+  return [
+    '# Premise benchmark gate',
+    '',
+    '**Fail.**',
+    '',
+    `Missing results: ${names.join(', ')}. The bench job of that instance failed, timed out or was cancelled before it uploaded results.json: open its log. Nothing was evaluated; the gate needs all instances.`,
+    '',
+    ...missing.map((f) => `- ${artifactOf(f)}: no ${f}`),
+    '',
+  ].join('\n')
+}
+
+/** One row per suite: the four numbers a reviewer reads first, reference -> run. */
+export function overview(report) {
+  const pair = (ref, cur) => (ref === undefined || ref === null ? fmt(cur) : `${fmt(ref)} -> ${fmt(cur)}`)
+  const md = ['| suite | questions | tokens-to-gold | golds | hit@5 | MRR | gate |', '|---|---|---|---|---|---|---|']
+  for (const row of report.suites) {
+    const { run } = row
+    const ref = (row.ref ?? row.own)?.elara ?? {}
+    const cur = run.aggregate.elara
+    const verdicts = Object.entries(row.verdicts)
+    const bad = verdicts.filter(([, v]) => v !== 'ok').map(([m, v]) => `${m}: ${v}`)
+    const gate = row.own ? (bad.length ? bad.join(', ') : 'ok') : 'no baseline entry'
+    md.push(
+      `| ${row.name} | ${run.questions} | ${pair(ref.tokensToGold, cur.tokensToGold)} | ${pair(ref.goldReached, cur.goldReached)} | ${pair(ref.hit5, cur.hit5)} | ${pair(ref.mrr, cur.mrr)} | ${gate} |`,
+    )
+  }
+  return md
+}
+
 export function render(report, results) {
   const md = ['# Premise benchmark gate', '']
   md.push(report.ok ? '**Pass.**' : '**Fail.**', '')
   if (results) md.push(`Run ${results.runUrls.join(', ') || '(local)'}, commit ${results.commit ?? '(local)'}, suites ${results.selected.join(', ')}; median of ${results.instances} instances.`, '')
   if (report.failures.length) md.push('Failures:', '', ...report.failures.map((f) => `- ${f}`), '')
   if (report.notes.length) md.push(...report.notes.map((n) => `- ${n}`), '')
+  if (report.suites.length) md.push(...overview(report), '')
   for (const row of report.suites) {
     const { run, own, base } = row
     md.push(`## ${row.name}: ${run.questions} questions`, '')
@@ -317,7 +375,7 @@ export function render(report, results) {
     if (changes.length) md.push(`<details><summary>${changes.length} questions changed (Elara)</summary>`, '', ...changes.map((c) => `- ${c}`), '', '</details>', '')
   }
   md.push(
-    `Gated: Elara ${GATED.join(', ')}, median of the instances. Tolerance: hit@5 ${TOLERANCE.hit5Questions} questions per suite, tokens-to-gold ${TOLERANCE.tokensRelative * 100} %. A miss costs ${results?.missCost?.tokens ?? '?'} tokens and ${results?.missCost?.calls ?? '?'} calls. Method: benchmarks/README.md.`,
+    `Gated: Elara ${GATED.join(', ')}, median of the instances. Tolerance: hit@5 ${TOLERANCE.hit5Questions} questions per suite, tokens-to-gold ${TOLERANCE.tokensRelative * 100} %.${report.requireGolds ? ' Golds: every suite must reach at least the reference\u2019s goldReached (--require-golds).' : ''} A miss costs ${results?.missCost?.tokens ?? '?'} tokens and ${results?.missCost?.calls ?? '?'} calls. Method: benchmarks/README.md.`,
   )
   return md.join('\n')
 }
@@ -369,24 +427,36 @@ function main() {
     console.log(`wrote ${baselineFile} (${Object.keys(list[0].suites).join(', ')}; median of ${list.length})`)
     return
   }
+  const out = opt('--out', 'bench-results')
+  const publish = (markdown) => {
+    console.log(markdown)
+    mkdirSync(out, { recursive: true })
+    writeFileSync(join(out, 'gate.md'), markdown)
+    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`)
+  }
+  if (missing.length) {
+    publish(missingReport(missing))
+    console.log(`::error title=bench-gate: missing results::${missing.map(artifactOf).join(', ')} missing: that bench instance failed, timed out or was cancelled`)
+    process.exitCode = 1
+    return
+  }
   let results = null
   let report
   try {
-    results = missing.length ? null : combine(list)
+    results = combine(list)
     const prJson = readJson(opt('--pr'))
     const pr = prJson ? { labels: (prJson.labels ?? []).map((l) => l.name ?? l), body: prJson.body ?? '' } : null
-    report = evaluate({ results, baseline: readJson(baselineFile), baseBaseline: readJson(opt('--base-baseline')), pr })
+    report = evaluate({
+      results,
+      baseline: readJson(baselineFile),
+      baseBaseline: readJson(opt('--base-baseline')),
+      pr,
+      requireGolds: args.includes('--require-golds'),
+    })
   } catch (err) {
     report = { ok: false, failures: [String(err.message ?? err)], notes: [], suites: [] }
   }
-  if (missing.length) report.failures.unshift(`no results from ${missing.join(', ')} (that instance's bench job failed: see its log)`)
-  report.ok = report.failures.length === 0
-  const markdown = render(report, results)
-  console.log(markdown)
-  const out = opt('--out', 'bench-results')
-  mkdirSync(out, { recursive: true })
-  writeFileSync(join(out, 'gate.md'), markdown)
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${markdown}\n`)
+  publish(render(report, results))
   process.exitCode = report.ok ? 0 : 1
 }
 

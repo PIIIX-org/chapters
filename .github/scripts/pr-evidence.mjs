@@ -2,9 +2,15 @@
 // links at least one run or artifact of this repo, and a claim ("all tests
 // pass", "476/476", "0 errors", "verified", "100%", ...) must sit in a
 // sentence, bullet or table row that links the evidence behind it: a GitHub
-// Actions run, PR, issue, commit or file of this repo. CLAIMS below is the
+// Actions run or artifact, PR, issue, commit or file of this repo (a review
+// record `docs/reviews/*.md` at a commit is a file). CLAIMS below is the
 // one list of claim patterns. Template: .github/pull_request_template.md;
 // rules: docs/agents/github-workflow.md.
+//
+// Runs on pull_request events and, for the merge queue, on merge_group
+// events: there the PR is the one the queue branch names
+// (gh-readonly-queue/<base>/pr-<N>-<sha>), read from the API, so the queue's
+// temporary commit gets the same verdict as the PR.
 //
 // Plain Node, no dependencies, one file: the workflow copies the base
 // commit's version of this file alone to a temp dir when there is one, so it
@@ -206,14 +212,34 @@ export function placeholders(text) {
 
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-/** A full URL to an Actions run, PR, issue, commit or file of `repo`. */
+/**
+ * A full URL to evidence in `repo`: a GitHub Actions run (any page of it,
+ * its artifacts `actions/runs/<id>/artifacts/<id>` included), an artifact's
+ * API URL, a PR, an issue, a commit, or a file or directory at a ref
+ * (`blob/`, `tree/`, for example a review record
+ * `blob/<sha>/docs/reviews/<pr>-<sha>.md`, or its raw.githubusercontent.com
+ * URL).
+ */
 export function hasEvidenceUrl(text, repo) {
+  const r = escapeRe(repo)
   const re = new RegExp(
-    String.raw`https?://(?:www\.)?github\.com/${escapeRe(repo)}/` +
-      String.raw`(?:actions/runs/\d|pull/\d|issues/\d|commit/[0-9a-f]{7,40}\b|blob/[^\s<>)]|tree/[^\s<>)])`,
+    String.raw`https?://(?:(?:www\.)?github\.com/${r}/` +
+      String.raw`(?:actions/runs/\d|actions/artifacts/\d|pull/\d|issues/\d|commit/[0-9a-f]{7,40}\b|blob/[^\s<>)]|tree/[^\s<>)])` +
+      String.raw`|api\.github\.com/repos/${r}/actions/(?:runs/\d|artifacts/\d)` +
+      String.raw`|raw\.githubusercontent\.com/${r}/[^\s<>)]+/[^\s<>)])`,
     'i',
   )
   return re.test(text)
+}
+
+/**
+ * The PR number a merge-queue branch was made for:
+ * `refs/heads/gh-readonly-queue/<base>/pr-<N>-<base sha>` (the sha is the
+ * base the queue built on, not the PR head). null for any other ref.
+ */
+export function mergeGroupPr(headRef) {
+  const m = /(?:^|\/)gh-readonly-queue\/.+\/pr-(\d+)-[0-9a-f]{7,40}$/.exec(headRef ?? '')
+  return m ? Number(m[1]) : null
 }
 
 /**
@@ -412,7 +438,8 @@ export function check(pr, repo) {
   } else if (ev.state === 'no-link') {
     parts.push(
       'The Evidence section links nothing. It needs at least one full URL to a GitHub ' +
-        `Actions run, PR, issue, commit or file of \`${repo}\` (\`#N\` does not count here): ` +
+        `Actions run or artifact, PR, issue, commit or file of \`${repo}\` (a review record ` +
+        'under `docs/reviews/` at a commit counts; `#N` does not count here): ' +
         `${what}. Before CI has run, link the issue or the head commit; editing the body ` +
         're-runs this check once the run link is added.',
     )
@@ -426,8 +453,8 @@ export function check(pr, repo) {
   if (claims.length > 0) {
     parts.push(
       `${claims.length} sentence(s), bullet(s) or row(s) make a claim with no link to a ` +
-        `GitHub Actions run, PR, issue (\`#N\` counts), commit or file of \`${repo}\`. Link the ` +
-        'run or artifact in the same sentence, bullet (or a sub-bullet of it) or row, or ' +
+        `GitHub Actions run or artifact, PR, issue (\`#N\` counts), commit or file of \`${repo}\`. Link the ` +
+        'run, artifact or review record in the same sentence, bullet (or a sub-bullet of it) or row, or ' +
         'reword it. A word quoted in backticks is not a claim.\n\n' +
         '| Claim | Text |\n| --- | --- |\n' +
         claims
@@ -479,23 +506,41 @@ function finish(ok, title, body) {
   process.exit(ok ? 0 : 1)
 }
 
-function main() {
+/**
+ * The PR under check: the event's on pull_request events; on merge_group
+ * events (the merge queue's temporary commit) the PR the queue branch names,
+ * read from the API, so the queue commit carries this check's result too.
+ */
+async function prOf(event, repo) {
+  if (event.pull_request) return { pr: event.pull_request, from: 'the event' }
+  const number = mergeGroupPr(event.merge_group?.head_ref)
+  if (!number) return { pr: null }
+  const res = await fetch(`${process.env.GITHUB_API_URL ?? 'https://api.github.com'}/repos/${repo}/pulls/${number}`, {
+    headers: {
+      authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+      accept: 'application/vnd.github+json',
+      'x-github-api-version': '2022-11-28',
+    },
+  })
+  if (!res.ok) throw new Error(`GET /repos/${repo}/pulls/${number}: ${res.status} ${await res.text()}`)
+  return { pr: await res.json(), from: `merge group \`${event.merge_group.head_ref}\` (PR #${number})` }
+}
+
+async function main() {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
-  const pr = event.pull_request
-  if (!pr) finish(true, 'Not a pull_request event; nothing to check.', '')
   const repo = event.repository?.full_name ?? process.env.GITHUB_REPOSITORY
+  const { pr, from } = await prOf(event, repo)
+  if (!pr) finish(true, 'Not a pull_request or merge_group event; nothing to check.', '')
   const r = check(pr, repo)
-  finish(r.ok, r.title, r.report)
+  finish(r.ok, r.title, from === 'the event' ? r.report : [r.report, `PR #${pr.number} resolved from ${from}.`].filter(Boolean).join('\n\n'))
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  try {
-    main()
-  } catch (err) {
+  main().catch((err) => {
     finish(
       false,
       'The check could not run.',
       `\`\`\`\n${err?.stack ?? err}\n\`\`\``,
     )
-  }
+  })
 }

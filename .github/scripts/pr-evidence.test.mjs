@@ -12,6 +12,7 @@ import {
   hasEvidenceLink,
   hasEvidenceUrl,
   isRevert,
+  mergeGroupPr,
   parseBody,
   placeholders,
   proseUnits,
@@ -271,6 +272,13 @@ describe('hasEvidenceUrl / hasEvidenceLink', () => {
       'https://github.com/piiix-org/CHAPTERS/commit/5e25516abcdef',
       'https://github.com/PIIIX-org/chapters/blob/dev/docs/agents/STATE.md',
       'https://github.com/PIIIX-org/chapters/tree/dev/server/test',
+      // Review records at a commit, and Actions artifacts (UI and API URLs).
+      'https://github.com/PIIIX-org/chapters/blob/c5d1d1b7b2ed4e92a6da5d5a12cdc709da5097ab/docs/reviews/1011-a6fe0b6.md',
+      'https://raw.githubusercontent.com/PIIIX-org/chapters/c5d1d1b7b2ed4e92a6da5d5a12cdc709da5097ab/docs/reviews/1011-a6fe0b6.md',
+      'https://github.com/PIIIX-org/chapters/actions/runs/41189703249/artifacts/4812233991',
+      'https://github.com/PIIIX-org/chapters/actions/artifacts/4812233991',
+      'https://api.github.com/repos/PIIIX-org/chapters/actions/artifacts/4812233991/zip',
+      'https://api.github.com/repos/PIIIX-org/chapters/actions/runs/41189703249',
     ]) {
       assert.ok(hasEvidenceUrl(`see [it](${url}).`, REPO), url)
     }
@@ -285,7 +293,10 @@ describe('hasEvidenceUrl / hasEvidenceLink', () => {
       'https://github.com/other/chapters/issues/1#issuecomment-2',
       'https://github.com/PIIIX-org/chapters/commit/xyz',
       'https://example.com/PIIIX-org/chapters/pull/1',
-      'https://chapters.piiix.org/',
+      'https://raw.githubusercontent.com/other/chapters/dev/docs/reviews/1.md',
+      'https://raw.githubusercontent.com/PIIIX-org/chapters/dev',
+      'https://api.github.com/repos/PIIIX-org/chapters/pulls/1',
+      'docs/reviews/1011-a6fe0b6.md',
       'other/chapters#12',
       '&#39;',
     ]) {
@@ -297,6 +308,20 @@ describe('hasEvidenceUrl / hasEvidenceLink', () => {
     assert.ok(hasEvidenceLink('(#591)', REPO))
     assert.ok(hasEvidenceLink('PIIIX-org/chapters#591', REPO))
     assert.ok(!hasEvidenceUrl('carries #591', REPO))
+  })
+})
+
+describe('mergeGroupPr', () => {
+  it('reads the PR number of a merge-queue branch', () => {
+    assert.equal(mergeGroupPr('refs/heads/gh-readonly-queue/dev/pr-1050-36b98a7c1e2d3f4a5b6c7d8e9f0a1b2c3d4e5f60'), 1050)
+    assert.equal(mergeGroupPr('gh-readonly-queue/dev/pr-7-d49b561'), 7)
+    assert.equal(mergeGroupPr('refs/heads/gh-readonly-queue/lab/x/pr-12-0123456789abcdef0123456789abcdef01234567'), 12)
+  })
+  it('is null for anything else', () => {
+    assert.equal(mergeGroupPr('refs/heads/fix/pr-12-abcdef0'), null)
+    assert.equal(mergeGroupPr('refs/heads/gh-readonly-queue/dev/pr-12'), null)
+    assert.equal(mergeGroupPr(''), null)
+    assert.equal(mergeGroupPr(undefined), null)
   })
 })
 

@@ -123,7 +123,9 @@ Every bench run is **three instances** (three `bench` jobs, three lab
 instances of the same build); `bench-gate` takes the per-metric median of
 the three and compares it with [`baseline.json`](baseline.json)
 (`.github/scripts/bench-gate.mjs`), and prints the delta table in the job
-summary. Gated: the Elara agent's `hit5` and `tokensToGold`, per suite.
+summary. Gated: the Elara agent's `hit5` and `tokensToGold`, per suite,
+plus `goldReached` as a floor when every suite runs for a search, MCP or
+benchmark change (below).
 
 - **Regression** (red): `hit5` drops by more than 1 question of the suite,
   or `tokensToGold` rises by more than 10 %. On a pull request the reference
@@ -144,6 +146,20 @@ summary. Gated: the Elara agent's `hit5` and `tokensToGold`, per suite.
 - **Stale baseline** (red): the run differs from the PR's `baseline.json`
   by more than the tolerance in either direction (an improvement must be
   recorded in the same PR), or its fingerprint or index outcome differs.
+- **Golds lost** (red, `--require-golds`; the workflow passes it on PRs to
+  `dev` that touch `server/src/search/**`, `server/src/mcp/**` or the
+  benchmark, where every suite runs): a suite's `goldReached` is below the
+  base baseline's. No tolerance: a question whose gold stops being reached
+  is a lost answer, whatever hit@5 does.
+- **Missing instance** (red, at once): a `bench-results-<n>` artifact has
+  no `results.json` (that instance failed, timed out or was cancelled). The
+  gate stops before evaluating anything and names the artifact; the
+  `bench` matrix is fail-fast, so one lost instance cancels the others
+  instead of the gate waiting for them.
+
+The job summary opens with one row per suite (tokens-to-gold, golds,
+hit@5, MRR, reference -> run, verdict), then the full delta table of each
+suite.
 
 Labels and the PR body are read when the gate runs: after adding an
 override, re-run the `bench-gate` job. The gate and its tolerances come
@@ -161,8 +177,13 @@ after).
 
 | tier | when | suites |
 |---|---|---|
-| chapters | PRs to `dev` that touch `server/src/{search,mcp,repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, `benchmarks/`, the lab plumbing it uses, the workflow or the gate | `chapters` |
-| all | nightly on `dev`, every PR to `prod` (promotion), by hand | all five |
+| all | PRs to `dev` that touch `server/src/search/`, `server/src/mcp/` or `benchmarks/` (markdown excepted): the gate also requires every suite's golds; nightly on `dev`, every PR to `prod` (promotion), by hand | all five |
+| chapters | PRs to `dev` that touch `server/src/{repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, the lab plumbing it uses, the workflow, the plan or the gate | `chapters` |
+
+The path rules are `.github/scripts/lab-plan.mjs` (unit tests next to it).
+Budgets: `bench` jobs have 45 min for `chapters` (4 to 10 measured) and
+240 for `all` (80 to 170 measured; embedding throughput differs between
+runners), `bench-gate` 15.
 
 `bench-gate` is a required status check on `dev` and `prod` (#574); it is
 skipped, which passes, when no suite applies.
