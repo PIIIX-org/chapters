@@ -21,6 +21,7 @@ import { scheduleRevisionCompaction } from './notes/revision-compaction.js'
 import { COMPACT_REVISIONS_JOB } from './notes/store-tx.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
+import { pruneUsage } from './usage/recorder.js'
 
 // ADR-003 §5.1/§9: the shared instance lock on a reserved connection, held
 // from before migrations until exit. Refused (exit 2) while
@@ -86,6 +87,8 @@ try {
   if (unfilled > 0) console.log(`wikilink catch-up: ${unfilled} notes with link rows to fill`)
   // Long revision histories stored whole (#501): queued in the background, never awaited by boot.
   scheduleRevisionCompaction()
+  // The usage report's retention (#678), also while it is off: rows past it go even if no call is recorded again.
+  void pruneUsage().catch((err: unknown) => console.error('usage report prune failed:', err instanceof Error ? err.name : err))
   startJobPolling()
   const reconciled = await reconcileOrphanedSyncs()
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)

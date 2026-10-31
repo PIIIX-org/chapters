@@ -146,6 +146,8 @@ import {
   type Budgeted,
   type Ladder,
 } from './response.js'
+import { withUsage, type UsageProbe } from '../usage/recorder.js'
+import { UsageReportTimeout, usageReport } from '../usage/report.js'
 
 const UUID_PATTERN = z.regexes.uuid()
 /**
@@ -851,7 +853,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     if (def.inputSchema && Object.hasOwn(def.inputSchema, 'everywhere')) everywhereTools.add(name)
     inputSchemaOf.set(name, inputSchema)
     const config = { description: def.description, inputSchema, annotations, ...(def.outputSchema ? { outputSchema: def.outputSchema } : {}) }
-    registerTool(name, config, async (raw: unknown) => {
+    // The opt-in usage report (#678, usage/recorder.ts) is told what the call resolved and answered; while it is off, nothing.
+    registerTool(name, config, withUsage(auth, name, async (raw: unknown, usage: UsageProbe) => {
       try {
         requireCapability(name, def.capability, profile)
         // The SDK has already parsed the arguments with `inputSchema`, the shape A describes.
@@ -863,13 +866,16 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
               repositoryId: typeof args.repositoryId === 'string' ? args.repositoryId : undefined,
             }
         const scoped = await resolve(name, ids, args.everywhere === true)
+        usage.scoped = scoped
         if (!budget) {
           const result = await handler(args, scoped, NO_PAGE)
+          usage.answer = result
           return answered(JSON.stringify(result))
         }
         const fingerprint = argsFingerprint(args, scoped)
         const at = typeof args.cursor === 'string' ? decodeCursor(args.cursor, name, fingerprint) : null
         const answer = (await handler(args, scoped, new Page(at))) as Budgeted
+        usage.answer = answer
         const budgetTokens = typeof args.budget_tokens === 'number' ? args.budget_tokens : DEFAULT_BUDGET[budget]
         const { text, blocks, truncated } = render(answer, { tool: name, fingerprint, budget: budgetTokens, at })
         await answer.rendered?.(truncated)
@@ -879,7 +885,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         toolErrors.add(result)
         return result
       }
-    })
+    }))
   }
 
   // =========================================================================
@@ -2857,6 +2863,27 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         .returning()
       if (!updated) throw new McpToolError('NOT_FOUND', 'notification not found')
       return updated
+    },
+  )
+
+  // The opt-in usage report (#678, usage/report.ts): admin profile only, so the reader and writer lists do not grow.
+  tool(
+    'usage_report',
+    {
+      scope: 'account',
+      capability: 'read',
+      description:
+        "Your account's opt-in usage report: calls and tokens per tool and session, searches with no result or unread hits, notes never read. `scope: 'instance'` gives instance admins aggregates.",
+      inputSchema: { scope: z.enum(['account', 'instance']).optional().describe('instance: all accounts, aggregates only') },
+    },
+    async (args: { scope?: 'account' | 'instance' }) => {
+      if (args.scope === 'instance' && !isInstanceAdmin(auth.user.role)) throw new McpToolError('PERMISSION_REQUIRED', 'instance admin required')
+      try {
+        return await usageReport(args.scope === 'instance' ? { kind: 'instance' } : { kind: 'account', accountId: auth.user.id })
+      } catch (err) {
+        // Past its statement timeout: BUSY, retryable.
+        throw err instanceof UsageReportTimeout ? new McpToolError('BUSY', err.message) : err
+      }
     },
   )
 
