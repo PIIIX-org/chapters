@@ -318,9 +318,12 @@ it runs the PR's, and the summary says which. The job:
    the fix must keep passing, a helper exercised only by other files)
    carries a line comment `// fails-before: exempt <reason>` anywhere in
    the file, with at least 10 characters of reason; the summary shows the
-   reason and the job prints it as a notice. The marker only lifts the
-   vacuous rule: a PR whose only changed file is an exempt new file still
-   needs a failing test somewhere, or the label below.
+   reason and the job prints it as a notice. The diff is taken with
+   `--no-renames`, so a test file the PR moves or renames counts as added
+   at its new path and falls under this rule too (it needs a failing test
+   or the marker). The marker only lifts the vacuous rule: a PR whose only
+   changed file is an exempt new file still needs a failing test
+   somewhere, or the label below.
 
 The job summary lists every changed test file with its result on base
 (the failing test names and first error line, the load error, or the
@@ -338,11 +341,14 @@ example asserting on source text) still counts, so reviewers read the
 failing test names in the summary. On a merge-queue commit (`merge_group`
 event, branch `gh-readonly-queue/dev/pr-<N>-<sha>`) the job does not
 re-run the tests: `.github/scripts/merge-group-forward.mjs` (the base
-commit's copy when it has one) resolves PR `<N>`, reads the latest
-`fails-before` check run on the PR head and re-applies its conclusion
-(success, skipped or neutral pass; anything else, a run still in progress
-or no run fails, with a link), so the queue inherits the PR's verdict
-without re-judging a title and labels that did not change. Unit tests:
+commit's copy when it has one) resolves PR `<N>`, refuses unless the PR's
+live head is the commit the queue merged (the queue commit's second
+parent, `HEAD^2`), waits up to 3 minutes for the latest `fails-before`
+check run on that head to complete (a body or label edit right after
+enqueue re-runs it) and re-applies its conclusion (success, skipped or
+neutral pass; anything else, a run still unfinished after the wait, or no
+run fails, with a link), so the queue inherits the PR's verdict without
+re-judging a title and labels that did not change. Unit tests:
 `.github/scripts/merge-group-forward.test.mjs`, run by `checks`.
 
 **PR evidence** (`.github/workflows/pr-evidence.yml`, job `pr-evidence`,

@@ -3,9 +3,10 @@
 // is older than the newest one already on `dev` is skipped on every database
 // that already ran `dev`'s newest. That happens when a branch generates a
 // migration, then another migration merges to `dev` first. This script
-// compares the journal entries a PR adds (head journal minus base journal)
-// with the journal on the CURRENT `dev`, fetched when the check runs rather
-// than the base the PR was branched from, and fails when:
+// compares the journal entries a PR adds (head journal minus base journal,
+// minus entries identical to dev's: a merge of dev or a dev->prod promotion
+// adds nothing) with the journal on the CURRENT `dev`, fetched when the
+// check runs rather than the base the PR was branched from, and fails when:
 //
 // - an added entry's `when` is not strictly greater than the newest `when`
 //   on `dev`, its `idx` is not greater than the largest `idx` on `dev`, or
@@ -93,7 +94,17 @@ export function check({ base, head, dev, fileExists }) {
     }
   }
 
-  const added = entries(head).filter((e) => !baseByKey.has(entryKey(e)))
+  // An entry the base lacks but dev already has, byte for byte (idx, when,
+  // tag), is dev's own: the PR merged dev, or is a dev->prod promotion. It
+  // is not an addition of this PR.
+  const devByKey = new Map(entries(dev).map((e) => [entryKey(e), e]))
+  const sameAsDev = (e) => {
+    const d = devByKey.get(entryKey(e))
+    return !!d && d.idx === e.idx && d.when === e.when && d.tag === e.tag
+  }
+  const added = entries(head).filter(
+    (e) => !baseByKey.has(entryKey(e)) && !sameAsDev(e),
+  )
   const devNewest = newest(dev)
   const devTags = new Set(entries(dev).map((e) => e.tag))
 

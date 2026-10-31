@@ -53,9 +53,12 @@ jobs:
       # `when` newer than the newest on the CURRENT `dev` (fetched now, not
       # the base the PR branched from), a tag/idx that match and its SQL
       # file; otherwise drizzle skips it on databases that already ran
-      # dev's newest migration. Base: the PR base, or the queue base.
+      # dev's newest migration. Base: the PR base, or the queue base. Only
+      # for PRs to `dev` and the `dev` queue: a dev->prod promotion carries
+      # dev's own entries, which are not additions (the script also treats
+      # entries identical to dev's as not added).
       - name: Check migration order against current dev
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        if: github.base_ref == 'dev' || github.event_name == 'merge_group'
         run: node .github/scripts/migration-order-check.mjs --base "$BASE_SHA" --head HEAD
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}

@@ -84,13 +84,15 @@ jobs:
             FAILS_BEFORE_CHECKER=pr node "$checker"
           fi
       # Queue commit: HEAD^1 is the queue base (dev, or the entry ahead), so
-      # the same rule gives the base's copy of the forwarder.
+      # the same rule gives the base's copy of the forwarder; HEAD^2 is the
+      # PR head the queue merged, which must still be the PR's live head.
       - name: Forward the PR's fails-before result to the queue commit
         if: github.event_name == 'merge_group'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           MERGE_GROUP_CHECK: fails-before
         run: |
+          export MERGE_GROUP_PR_HEAD="$(git rev-parse --verify --quiet HEAD^2 || true)"
           checker=.github/scripts/merge-group-forward.mjs
           if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
             git show "HEAD^1:$checker" > "$RUNNER_TEMP/merge-group-forward.mjs"

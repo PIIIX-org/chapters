@@ -211,6 +211,44 @@ describe('check: existing entries and order', () => {
     assert.equal(r.ok, true, messages(r).join('\n'))
     assert.equal(r.added.length, 1)
   })
+
+  it('passes a dev->prod promotion: entries identical to dev are not additions', () => {
+    // prod is three migrations behind; the promotion PR's head is dev itself.
+    const prod = journal(entry(0, 1000))
+    const r = check({
+      base: prod,
+      head: DEV,
+      dev: DEV,
+      fileExists: () => false,
+    })
+    assert.equal(r.ok, true, messages(r).join('\n'))
+    assert.deepEqual(r.added, [])
+  })
+
+  it("judges only the PR's own entry after it merged dev", () => {
+    const base = journal(entry(0, 1000))
+    const head = journal(...DEV.entries, entry(3, 4000))
+    const r = check({ base, head, dev: DEV, fileExists: allFiles })
+    assert.equal(r.ok, true, messages(r).join('\n'))
+    assert.deepEqual(
+      r.added.map((e) => e.tag),
+      ['0003_tag3'],
+    )
+  })
+
+  it('still flags an entry that shares a tag with dev but differs', () => {
+    const base = journal(entry(0, 1000))
+    const head = journal(
+      entry(0, 1000),
+      entry(1, 2000),
+      entry(2, 2999, '0002_tag2'),
+    )
+    const r = check({ base, head, dev: DEV, fileExists: allFiles })
+    assert.equal(r.ok, false)
+    assert.ok(
+      messages(r).some((m) => m.includes('`0002_tag2` already exists on dev')),
+    )
+  })
 })
 
 describe('summaryMarkdown', () => {
