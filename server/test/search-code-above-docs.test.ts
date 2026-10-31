@@ -126,4 +126,9 @@ describe('code ranks above docs for code-shaped queries (#457)', () => {
     expect(isCodeShaped('def parse_frontmatter')).toBe(true)
     expect(isCodeShaped('crates/engine/src/guard.rs')).toBe(true)
   })
+
+  it('a capitalised product name such as Node.js is not a file signal', () => {
+    expect(isCodeShaped('install Node.js on macOS')).toBe(false)
+    expect(isCodeShaped('where is server.js started')).toBe(true)
+  })
 })

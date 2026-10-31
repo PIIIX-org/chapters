@@ -1546,8 +1546,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     For code-shaped queries (#457: at least two independent code signals, or one
     strong one, such as a `file.ext` token; never a plain English word), code
     hits receive a bounded boost `CODE_BOOST = 0.0008` (about 3 RRF positions)
-    over documentation and plans (`resourceType: 'note'`, or repository files
-    with doc extensions or under a `docs`, `plans`, `wiki` or `specs` folder at
+    over documentation, plans and data (`resourceType: 'note'`, or repository files
+    with doc or data extensions, `.json`, `.yml`, `.toml` among them, README-type
+    names, or under a `docs`, `plans`, `wiki` or `specs` folder at
     any depth). Prose queries are untouched, and a doc that genuinely answers
     the question still wins.
   - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a

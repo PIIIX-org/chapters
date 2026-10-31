@@ -1006,7 +1006,8 @@ export function isCodeShaped(query: string): boolean {
 
     if (cleanedLower in PROSE_TERMS || tokenLower in PROSE_TERMS) continue
 
-    if (CODE_EXTENSIONS.test(cleaned)) {
+    // A capitalised `Node.js`, `Vue.js` or `Next.js` is a product name, not a file.
+    if (CODE_EXTENSIONS.test(cleaned) && !/^\p{Lu}[\p{Ll}\p{N}]*\.js$/u.test(cleaned)) {
       strongSignal = true
       signals += 2
       continue
@@ -1035,7 +1036,8 @@ function isDocHit(resourceType: ResourceType, path: string): boolean {
   if (resourceType === 'note') return true
   if (resourceType === 'symbol') return false
   const lower = path.toLowerCase()
-  if (/\.(?:md|markdown|mdx|rst|txt|adoc|org)$/i.test(lower)) return true
+  // Prose, and data or configuration: a config file is not the code an identifier question looks for.
+  if (/\.(?:md|markdown|mdx|rst|txt|adoc|org|json|jsonc|ya?ml|toml|ini|lock|csv)$/i.test(lower)) return true
   if (/(?:^|\/)(?:docs?|plans?|wiki|specs?)(?:\/|$)/i.test(lower)) return true
   const base = lower.split('/').pop() ?? lower
   if (/^(?:readme|changelog|contributing|license|notice)(?:\..+)?$/i.test(base)) return true
