@@ -8,7 +8,7 @@
 -- The table starts empty: EXTRACTOR_VERSION 7 makes boot catch-up re-extract every file, which fills it.
 -- `blocks_symbol_name_idx` finds a repository's symbol blocks by bare name (`inner_path` without its parent):
 -- resolution looks names up there. `repository_files.edge_note` says when a file's edges were capped.
--- Numbered 0054 with a `when` (1793300000000) above every migration before it (reserved on #930).
+-- Numbered 0061 with a `when` (1793650000000) above every migration before it, after dev's 0058 and the reserved 0059 (#1037) and 0060 (#1031); reserved on #930.
 CREATE TABLE "code_edges" (
 	"source_file_id" uuid NOT NULL REFERENCES "repository_files"("id") ON DELETE CASCADE,
 	"line" integer NOT NULL,

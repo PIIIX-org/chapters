@@ -5,6 +5,7 @@ import {
   boolean,
   check,
   customType,
+  date,
   doublePrecision,
   foreignKey,
   index,
@@ -13,6 +14,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  real,
   smallint,
   text,
   timestamp,
@@ -908,7 +910,7 @@ export const repositoryFileImports = pgTable(
 )
 
 /**
- * Symbol-level code edges (#469, ADR-004 §2.8, migration 0054), beside the
+ * Symbol-level code edges (#469, ADR-004 §2.8, migration 0061), beside the
  * file-level `repository_file_imports`: one row per call, reference or
  * imported name a file writes (repositories/code-edges.ts), and one `test`
  * row per name a test file uses. A row is its site (`line`, `col`: 1-based,
@@ -1018,7 +1020,7 @@ export const blocks = pgTable(
     unique('blocks_owner_block').on(t.ownerType, t.ownerId, t.blockId),
     // The unique index also serves (owner_type, owner_id) lookups.
     index('blocks_container_idx').on(t.containerId),
-    // A repository's symbol blocks by bare name, for code edge resolution (#469, migration 0054; code-edges.ts `SYMBOL_NAME`).
+    // A repository's symbol blocks by bare name, for code edge resolution (#469, migration 0061; code-edges.ts `SYMBOL_NAME`).
     index('blocks_symbol_name_idx')
       .on(t.containerId, sql`(CASE WHEN symbol_parent IS NULL THEN inner_path ELSE substr(inner_path, length(symbol_parent) + 2) END)`)
       .where(sql`owner_type = 'code' AND kind = 'symbol'`),
@@ -1041,4 +1043,71 @@ export const repositorySyncTokens = pgTable(
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
   },
   (t) => [index('repository_sync_tokens_repo_idx').on(t.repositoryId)],
+)
+
+/**
+ * The opt-in usage report (#678, migration 0058, server/src/usage/): one row
+ * per MCP tool call while `instance_state.usage_report_enabled` is on (that
+ * column and `usage_salt` stay out of this model, so a backup carries
+ * neither). Ids and numbers only: `token` and `session` are salted hashes,
+ * a search keeps a salted hash of its normalised query with its length,
+ * script and non-text filters, hits and reads are note / repository file
+ * ids. Kept 7 days, then rolled up into `usage_daily` (30 days). Neither
+ * table is in a backup.
+ */
+export const usageEvents = pgTable(
+  'usage_events',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    session: text('session'),
+    /** The tool, or `client_event` for an event the client reported. */
+    tool: text('tool').notNull(),
+    profile: mcpProfile('profile').notNull(),
+    vaultId: uuid('vault_id'),
+    repositoryId: uuid('repository_id'),
+    /** `ok`; a search status with no result (`no_match`, `index_building`, `unavailable`); an error envelope code; a client event's name. */
+    outcome: text('outcome').notNull(),
+    responseTokens: integer('response_tokens').notNull(),
+    latencyMs: real('latency_ms').notNull(),
+    retrievalMode: text('retrieval_mode'),
+    degraded: text('degraded'),
+    queryHash: text('query_hash'),
+    queryLength: integer('query_length'),
+    queryLang: text('query_lang'),
+    filters: jsonb('filters'),
+    hitIds: uuid('hit_ids').array(),
+    targetId: uuid('target_id'),
+  },
+  (t) => [
+    index('usage_events_account_at').on(t.accountId, t.at),
+    index('usage_events_at').on(t.at),
+    index('usage_events_target').on(t.targetId).where(sql`target_id IS NOT NULL`),
+  ],
+)
+
+/** `usage_events` past 7 days, per UTC day, account, tool and profile (#678); kept 30 days. */
+export const usageDaily = pgTable(
+  'usage_daily',
+  {
+    day: date('day').notNull(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tool: text('tool').notNull(),
+    profile: mcpProfile('profile').notNull(),
+    calls: integer('calls').notNull(),
+    responseTokens: bigint('response_tokens', { mode: 'number' }).notNull(),
+    latencyMs: doublePrecision('latency_ms').notNull(),
+    errors: integer('errors').notNull(),
+    zeroResults: integer('zero_results').notNull(),
+  },
+  (t) => [
+    primaryKey({ name: 'usage_daily_pkey', columns: [t.day, t.accountId, t.tool, t.profile] }),
+    index('usage_daily_account_day').on(t.accountId, t.day),
+  ],
 )

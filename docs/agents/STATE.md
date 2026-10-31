@@ -5,15 +5,15 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 <!-- state:generated:start -->
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #920 Promote: phase 2 step B (prod ← d3b210e: ADR-003 S2a-2/S2b/S3/S6, compaction, whole-body… (merged 2026-10-23, `d3b210e`).
-- **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) success; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 51/94, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/35, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 0/46, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/47.
-- **Open issues**: [203](https://github.com/PIIIX-org/chapters/issues): P0 27, P1 93, P2 64, no priority 19; `bug` 62, `security` 12, `decision` 3, `deferred` 3.
+- **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/6, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 52/94, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/35, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 1/46, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/47.
+- **Open issues**: [203](https://github.com/PIIIX-org/chapters/issues): P0 27, P1 92, P2 63, no priority 21; `bug` 62, `security` 12, `decision` 3, `deferred` 3.
 - **Owner actions** (label `owner`):
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
   - #930 [phase 3] Design review and owner sign-off: ADR-004 response contract (before wave 2) (P0)
   - #664 Production deploys on the push to prod, before CI publishes the gated image (#590 is… (P1)
   - #636 Production uptime
-- **In progress: [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4)** (42 open, owner actions excluded):
+- **In progress: [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4)** (41 open, owner actions excluded):
   - #414 [fix 11] Search hits return {path#Lx-Ly, block id, heading path, approx tokens, snippet… (P0)
   - #415 [fix 12] Group hits by note, at most 3 passages per note (P0)
   - #417 [fix 14] read_file and read_note without a range return an outline with line spans, not… (P0)
@@ -26,7 +26,7 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #455 [fix 53] Keyword channel: split camelCase and snake_case, add a trigram index, weight… (P0)
   - #456 [fix 54] Fuse keyword and vector with RRF over a fixed window; exact and identifier… (P0)
   - #468 [fix 66] grep over notes and code: regex, path glob, repo, ref, context lines, same line… (P0)
-  - … and 30 more: https://github.com/PIIIX-org/chapters/milestone/4
+  - … and 29 more: https://github.com/PIIIX-org/chapters/milestone/4
 - **Open bugs** (label `bug`):
   - #713 [ui] Landing page says "No notes" to a user with notes (P1)
   - #714 [ui] Floating top bar collides with page controls; status pill duplicated (DEF-02, DEF-08… (P1)

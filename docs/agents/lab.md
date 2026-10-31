@@ -47,7 +47,12 @@ server cannot write (the PUT still answers 200, ADR-003) and a failing git
 sync each produce a `jobs` alert, with no note text or secret in them; #705),
 `uptime-monitor` (`.github/scripts/uptime-monitor.mjs` against the
 instance through a graceful restart, a SIGKILL, a stop and a start; #583),
-`zz-fix-minified-bundle`.
+`zz-fix-minified-bundle`, and the usage report pair (#678): `aa-usage-report-on`
+(first: off on a fresh instance, a member is refused, the admin turns it on)
+and `zzz-usage-report` (last: the run's report, numbers per tool, session and
+search, never-read notes, a client-reported fallback; no stored row holds note
+or query text; accounts separated; off again writes nothing; its summary is the
+report's).
 Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
 (Playwright/Chromium), `collab-s2b` (ADR-003 §11 S2b scenarios: rename and
 a new note at the old path, a pre-S2b tab across the upgrade, a re-seeded
