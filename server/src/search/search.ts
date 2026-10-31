@@ -58,9 +58,8 @@ interface Term {
   /** It holds a compound (`parseFrontmatter`, `mcp.server.ts`): among terms as rare, kept before a plain word. */
   compound: boolean
   /**
-   * What the trigram leg matches, should the term match nothing: its compounds' wholes (a typo'd identifier), and
-   * in a one-term query its plain words too; `MIN_SIMILAR_LENGTH` characters or more. A word of a longer query
-   * that no file holds is a word the corpus does not use, and its look-alike paths and names are noise.
+   * What the trigram leg matches, should the term match nothing: its identifiers' wholes (a typo'd identifier, or a
+   * plain word), `MIN_SIMILAR_LENGTH` characters or more. The leg runs only when nothing else matched.
    */
   spelled: string[]
 }
@@ -180,9 +179,13 @@ interface Ladder {
 async function ladder(scope: SQL, fields: SQL, doc: SQL | null, terms: Term[]): Promise<Ladder> {
   const columns = terms.map(({ query }, i) => {
     const exists = doc ? sql`, EXISTS (SELECT 1 ${scope} AND ${doc} @@ (${query})) AS ${sql.raw(`e${i}`)}` : sql``
-    return sql`numnode(${query}) AS ${sql.raw(`n${i}`)}, count(*) FILTER (WHERE ${fields} @@ (${query}))::int AS ${sql.raw(`d${i}`)}${exists}`
+    return sql`numnode(${query}) AS ${sql.raw(`n${i}`)}, count(*) FILTER (WHERE scoped.fields @@ (${query}))::int AS ${sql.raw(`d${i}`)}${exists}`
   })
-  const [row] = (await db.execute(sql`SELECT ${sql.join(columns, sql`, `)} ${scope}`)) as unknown as Array<Record<string, number | boolean>>
+  // The fields once per row (`OFFSET 0` keeps the planner from inlining them into every term's FILTER): a note's
+  // are computed at query time, and per term they cost 762 ms on a 20,000-note vault (review of #1037).
+  const [row] = (await db.execute(
+    sql`SELECT ${sql.join(columns, sql`, `)} FROM (SELECT ${fields} AS fields ${scope} OFFSET 0) scoped`,
+  )) as unknown as Array<Record<string, number | boolean>>
   const counted = terms
     .map((term, i) => ({ term, i, nodes: row![`n${i}`] as number, count: row![`d${i}`] as number, found: doc ? (row![`e${i}`] as boolean) : row![`d${i}`] !== 0 }))
     .filter(({ nodes }) => nodes > 0)
@@ -516,11 +519,16 @@ async function noteKeywordRows(vaultIds: string[], query: string, filterSql: SQL
   if (!looksFurther(rows.length, terms) || terms.length === 1) return rows
   const { live } = await ladder(scope, NOTE_FIELDS, null, terms)
   if (live.length === 0) return rows
+  // The fields once per note (MATERIALIZED), then the notes they let in; see `ladder`.
   const relaxed = (await db.execute(sql`
-    WITH top_notes AS (
-      SELECT id, vault_id AS container_id, path, type, frontmatter, body, ${UPDATED_AT(sql`updated_at`)},
-             ${ladderRank(NOTE_FIELDS, live)} AS ladder, ts_rank(fts, ${anyOf(live)}, 1) AS rank
-      ${scope} AND ${NOTE_FIELDS} @@ (${live[0]!.query}) AND NOT (fts @@ ${match})
+    WITH scoped AS MATERIALIZED (
+      SELECT id, ${NOTE_FIELDS} AS fields ${scope}
+    ), top_notes AS (
+      SELECT notes.id, notes.vault_id AS container_id, notes.path, notes.type, notes.frontmatter, notes.body,
+             ${UPDATED_AT(sql`notes.updated_at`)}, ${ladderRank(sql`scoped.fields`, live)} AS ladder,
+             ts_rank(notes.fts, ${anyOf(live)}, 1) AS rank
+      FROM scoped JOIN notes ON notes.id = scoped.id
+      WHERE scoped.fields @@ (${live[0]!.query}) AND NOT (notes.fts @@ ${match})
       ORDER BY ladder DESC, rank DESC, path COLLATE "C", id
       LIMIT ${CANDIDATES - rows.length}
     )
