@@ -105,7 +105,8 @@ function failStatements(match: (text: string) => boolean) {
   const execute = failingOn(db.execute.bind(db))
   return vi.spyOn(db, 'execute').mockImplementation(execute)
 }
-const vectorLeg = (text: string) => text.includes('<=>')
+/** A vector leg orders by `<=>`, or by `cosine_distance()` when its scope is small enough to read exactly (#1035). */
+const vectorLeg = (text: string) => text.includes('<=>') || text.includes('cosine_distance(')
 const keywordLeg = (text: string) => text.includes('websearch_to_tsquery') || text.includes('ILIKE')
 
 beforeAll(async () => {
