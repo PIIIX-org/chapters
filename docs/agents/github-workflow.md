@@ -403,6 +403,51 @@ fails (the API lists no more). Unit tests:
 required check: it reports on every PR, and making it required is an
 owner decision (add `attribution` to both branches' required checks).
 
+**Issue close check** (`.github/workflows/issue-close-check.yml`, job
+`issue-close`, script `.github/scripts/issue-close-check.mjs`) runs on
+every PR to `dev` when it is opened, pushed, reopened or edited, and on
+`merge_group` for `dev` (the PR is resolved from the queue branch
+`gh-readonly-queue/dev/pr-<N>-<sha>` and checked the same way, so the
+queue's commit gets a result, not a skip). Like pr-evidence it runs the
+base commit's copy of the script when the base has one. For every issue
+the body closes (`Closes`/`Fixes`/`Resolves` `#N`, `owner/repo#N` or the
+issue URL, in any case; not inside code or HTML comments; issues of other
+repositories are only mentioned), it:
+
+1. reads the issue's **acceptance items**: the text of a `Done when` line
+   (`**Done when:** ...`) and the list right after it, the list items or
+   paragraphs of a `Done when` heading of any level, and every unchecked
+   `- [ ]` item anywhere (checked `- [x]` items are done already). It
+   keeps **one sticky PR comment** (first line `<!-- issue-close-check -->`,
+   updated in place only when its text changes, never duplicated) that
+   lists each item as `mentioned` or **not in the PR body**. An item is
+   mentioned when the body (comments and code fences aside) contains its
+   text, or at least two thirds of its content words (4+ letters, not
+   stop words), so quoting the item always counts. **An unmentioned item
+   fails the check** until the author edits the body to say how the PR
+   meets it or why it does not; the edit re-runs the check. The comment
+   says which items and what to do. An issue with no items passes and the
+   comment says so.
+2. fails when `lab/known-defects.json` (as it would merge) still has an
+   entry whose `issue` is `N`: the lab gate turns red once `N` is closed
+   (`lab.md`, rule 5), so the fix removes the entry in the same PR.
+3. fails when `#N` is already closed (reopen it, or drop the keyword), is
+   a pull request, or does not exist.
+4. warns (and passes) when the body has no closing keyword but the title
+   names an issue number (`fix: ... (#457)`): merging closes nothing,
+   which may be intended (`refs #457`).
+
+A PR that closes nothing and names no issue in its title passes with
+nothing posted; if an earlier body version had left a comment, it is
+updated to say there is nothing to check. The job summary carries the
+same report, the source event and what happened to the comment; when the
+comment cannot be written (a fork PR's read-only token) the summary shows
+its text instead and the verdict stands. Unit tests with fixtures for
+each rule: `.github/scripts/issue-close-check.test.mjs`, run by `checks`.
+It is **not** a required check: making it one is an owner decision (add
+`issue-close` to `dev`'s required checks; it reports on `merge_group` so
+the merge queue can require it).
+
 **STATE.md** (`.github/workflows/state-md.yml`, #582). The block of
 `docs/agents/STATE.md` between `<!-- state:generated:start -->` and
 `<!-- state:generated:end -->` is built from GitHub data by

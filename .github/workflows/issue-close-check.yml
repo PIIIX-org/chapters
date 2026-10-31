@@ -1,0 +1,63 @@
+name: Issue close check
+
+# For every issue a PR closes (`Closes #N`, `Fixes #N`, `Resolves #N` in
+# the body), the `issue-close` job reads the issue's acceptance items (a
+# `Done when` section or line, unchecked `- [ ]` items) and keeps ONE sticky
+# PR comment listing each item and whether the PR body mentions it; an item
+# the body does not mention needs an author response in the body (the check
+# re-runs on edit) and fails the check until then. It also fails when
+# `lab/known-defects.json` still has an entry for #N (lab.md, rule 5), when
+# #N is already closed, is a PR or does not exist, and warns (passes) when
+# the body has no closing keyword but the title names an issue number.
+# Logic and messages: .github/scripts/issue-close-check.mjs; rules:
+# docs/agents/github-workflow.md (CI, Issue close check).
+#
+# On `merge_group` the PR is resolved from the queue branch
+# (`gh-readonly-queue/<base>/pr-<N>-<sha>`) and the same check runs on it,
+# so the queue's commit gets a result instead of a skip.
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, synchronize, reopened, edited]
+  merge_group:
+    branches: [dev]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+jobs:
+  issue-close:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # HEAD is GitHub's merge of the PR into its base (or the merge
+          # queue's temporary merge commit); HEAD^1 (the base) must be in the
+          # clone. The checkout's lab/known-defects.json is what would land.
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # Run the base's copy of the checker so a PR cannot edit the check it
+      # is judged by; until the base has one, run the PR's copy (the summary
+      # says which). The copy runs alone from $RUNNER_TEMP, so the script
+      # must stay a single file with no sibling imports.
+      - name: Check the issues the PR closes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          checker=.github/scripts/issue-close-check.mjs
+          if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
+            git show "HEAD^1:$checker" > "$RUNNER_TEMP/issue-close-check.mjs"
+            ISSUE_CLOSE_CHECKER=base node "$RUNNER_TEMP/issue-close-check.mjs"
+          else
+            ISSUE_CLOSE_CHECKER=pr node "$checker"
+          fi
