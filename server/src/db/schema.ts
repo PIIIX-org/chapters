@@ -879,15 +879,25 @@ export const repositoryFileImports = pgTable(
       .notNull()
       .references(() => repositoryFiles.id, { onDelete: 'cascade' }),
     targetPath: text('target_path').notNull(),
+    /** A deleted target leaves the row unresolved until the sync's re-resolution finds the next candidate (#1008, migration 0053). */
     resolvedTargetFileId: uuid('resolved_target_file_id').references(() => repositoryFiles.id, {
-      onDelete: 'cascade',
+      onDelete: 'set null',
     }),
     /** The line of the import's specifier (1-based); null for rows extracted before 0031 (#453 re-extracts them). */
     line: integer('line'),
+    /**
+     * The `lookupKey` of every path the resolver tried for this row, each as
+     * `<repository id>:<key>`, sorted (#1008, migration 0053): a sync that
+     * creates or deletes a path with one of these keys re-resolves the row;
+     * the prefix keeps the GIN probe of a common key (`index`) to one
+     * repository. Null until computed (rows from before 0053: the boot backfill).
+     */
+    lookupKeys: text('lookup_keys').array(),
   },
   (t) => [
     primaryKey({ columns: [t.sourceFileId, t.targetPath] }),
     index('repository_file_imports_resolved_idx').on(t.resolvedTargetFileId),
+    index('repository_file_imports_lookup_keys_idx').using('gin', t.lookupKeys),
   ],
 )
 

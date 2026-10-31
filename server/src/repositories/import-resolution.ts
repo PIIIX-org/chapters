@@ -76,6 +76,38 @@ const join = (dir: string, path: string): string => posix.normalize(posix.join(d
 const isUnder = (dir: string, path: string): boolean => dir === '' || path.startsWith(`${dir}/`)
 
 /**
+ * The key an import row is found by when a file is created or deleted
+ * (#1008, `repository_file_imports.lookup_keys`): a path's file name up to
+ * its first dot, or for an `index.*` or `mod.rs` its directory's name, so
+ * the candidates of one specifier (`foo`, `foo.ts`, `foo/index.ts`) share
+ * one key.
+ */
+export function lookupKey(path: string): string {
+  const slash = path.lastIndexOf('/')
+  let name = path.slice(slash + 1)
+  if (name.startsWith('index.') || name === 'mod.rs') name = posix.basename(path.slice(0, Math.max(slash, 0)))
+  const dot = name.indexOf('.', 1)
+  return dot === -1 ? name : name.slice(0, dot)
+}
+
+/**
+ * The repository's files as the resolver asks about them: `keys`, when
+ * given, collects the `lookupKey` of every path it asks about. A resolution
+ * depends on nothing else but the context, so creating or deleting a file
+ * whose key is not among them leaves it as it is (#1008).
+ */
+interface Files {
+  paths: ReadonlySet<string>
+  keys: Set<string> | undefined
+}
+
+/** Whether `path` is a known file; its key is recorded. */
+function has(files: Files, path: string): boolean {
+  files.keys?.add(lookupKey(path))
+  return files.paths.has(path)
+}
+
+/**
  * Best-effort resolution of a raw import specifier to a file that
  * actually exists in this repository (spec 9: "relative and common
  * alias patterns", not exhaustive module-resolution semantics). Rust, Java,
@@ -93,17 +125,20 @@ const isUnder = (dir: string, path: string): boolean => dir === '' || path.start
  * - a workspace package by its package.json `name`, and its subpaths.
  * The context (all but relative specifiers and `@/`) applies to JS/TS
  * importers only. Anything else (npm packages, stdlib) never resolves.
+ * `keys` collects the `lookupKey` of every path tried (`Files`).
  */
 export function resolveImportPath(
   sourcePath: string,
   rawSpecifier: string,
   knownPaths: ReadonlySet<string>,
   context: ResolutionContext = EMPTY_CONTEXT,
+  keys?: Set<string>,
 ): string | null {
-  const own = resolveByLanguage(sourcePath, rawSpecifier, knownPaths)
+  const files: Files = { paths: knownPaths, keys }
+  const own = resolveByLanguage(sourcePath, rawSpecifier, files)
   if (own !== undefined) return own
   const specifier = rawSpecifier.replace(QUERY_OR_HASH, '')
-  if (specifier.startsWith('.')) return resolveFile(join(dirOf(sourcePath), specifier), knownPaths)
+  if (specifier.startsWith('.')) return resolveFile(join(dirOf(sourcePath), specifier), files)
   // Manifests describe JavaScript module resolution: a Python or Go import never uses them.
   if (!JS_SOURCE.test(sourcePath)) context = EMPTY_CONTEXT
 
@@ -112,27 +147,27 @@ export function resolveImportPath(
   if (alias) {
     // As tsc: a matching pattern rules out the `@/` convention and `baseUrl`, but not a package (node_modules).
     for (const target of alias.value) {
-      const resolved = resolveFile(target.replaceAll('*', alias.capture), knownPaths)
+      const resolved = resolveFile(target.replaceAll('*', alias.capture), files)
       if (resolved) return resolved
     }
-    return resolvePackage(context, specifier, knownPaths)
+    return resolvePackage(context, specifier, files)
   }
-  if (specifier.startsWith('#')) return resolveSubpathImport(context, sourcePath, specifier, knownPaths)
+  if (specifier.startsWith('#')) return resolveSubpathImport(context, sourcePath, specifier, files)
   if (specifier.startsWith('@/')) {
     const segments = sourcePath.split('/')
     const srcIndex = segments.indexOf('src')
     if (srcIndex === -1) return null
-    return resolveFile(join(segments.slice(0, srcIndex + 1).join('/'), specifier.slice(2)), knownPaths)
+    return resolveFile(join(segments.slice(0, srcIndex + 1).join('/'), specifier.slice(2)), files)
   }
   if (aliases?.baseUrl != null) {
-    const resolved = resolveFile(join(aliases.baseUrl, specifier), knownPaths)
+    const resolved = resolveFile(join(aliases.baseUrl, specifier), files)
     if (resolved) return resolved
   }
-  return resolvePackage(context, specifier, knownPaths)
+  return resolvePackage(context, specifier, files)
 }
 
 /** `base` itself, with an extension, or its directory's index, as a known file. */
-function resolveFile(base: string, knownPaths: ReadonlySet<string>): string | null {
+function resolveFile(base: string, files: Files): string | null {
   const ext = posix.extname(base)
   const stem = base.slice(0, base.length - ext.length)
   const candidates = [
@@ -141,11 +176,11 @@ function resolveFile(base: string, knownPaths: ReadonlySet<string>): string | nu
     ...CANDIDATE_EXTENSIONS.map((e) => base + e),
     ...CANDIDATE_EXTENSIONS.map((e) => posix.join(base, 'index' + e)),
   ]
-  return candidates.find((c) => knownPaths.has(c)) ?? null
+  return candidates.find((c) => has(files, c)) ?? null
 }
 
 /** The first of `candidates` that is a known file. */
-const known = (knownPaths: ReadonlySet<string>, ...candidates: string[]): string | null => candidates.find((c) => knownPaths.has(c)) ?? null
+const known = (files: Files, ...candidates: string[]): string | null => candidates.find((c) => has(files, c)) ?? null
 
 /**
  * The imports of #464's languages, by the importing file's language;
@@ -159,27 +194,27 @@ const known = (knownPaths: ReadonlySet<string>, ...candidates: string[]): string
  * - C/C++ `#include "x.h"`, Ruby `require_relative 'x'` (`.rb` optional),
  *   PHP `require 'x.php'`: relative to the importing file only.
  */
-function resolveByLanguage(sourcePath: string, specifier: string, knownPaths: ReadonlySet<string>): string | null | undefined {
+function resolveByLanguage(sourcePath: string, specifier: string, files: Files): string | null | undefined {
   switch (detectLanguage(sourcePath)) {
     case 'rust':
-      return resolveRustPath(sourcePath, specifier, knownPaths)
+      return resolveRustPath(sourcePath, specifier, files)
     case 'java':
     case 'kotlin':
-      return resolveJvmImport(specifier, knownPaths)
+      return resolveJvmImport(specifier, files)
     case 'c':
     case 'cpp':
     case 'php':
-      return known(knownPaths, join(dirOf(sourcePath), specifier))
+      return known(files, join(dirOf(sourcePath), specifier))
     case 'ruby': {
       const path = join(dirOf(sourcePath), specifier)
-      return known(knownPaths, path, `${path}.rb`)
+      return known(files, path, `${path}.rb`)
     }
     default:
       return undefined
   }
 }
 
-function resolveRustPath(sourcePath: string, specifier: string, knownPaths: ReadonlySet<string>): string | null {
+function resolveRustPath(sourcePath: string, specifier: string, files: Files): string | null {
   const segments = specifier.split('::')
   // Where the current module's submodules are: `src/a/b.rs` has them in `src/a/b/`, `mod.rs`/`lib.rs`/`main.rs` beside it.
   const stem = posix.basename(sourcePath, '.rs')
@@ -200,7 +235,7 @@ function resolveRustPath(sourcePath: string, specifier: string, knownPaths: Read
   }
   for (let n = segments.length; n >= 1; n--) {
     const module = join(base, segments.slice(0, n).join('/'))
-    const found = known(knownPaths, `${module}.rs`, `${module}/mod.rs`)
+    const found = known(files, `${module}.rs`, `${module}/mod.rs`)
     if (found) return found
   }
   return null
@@ -209,12 +244,12 @@ function resolveRustPath(sourcePath: string, specifier: string, knownPaths: Read
 /** Each repository's Java/Kotlin files by every path suffix of two or more segments without the extension (`index/Entry`, `example/index/Entry`, ...). */
 const jvmIndexes = new WeakMap<ReadonlySet<string>, Map<string, string>>()
 
-function resolveJvmImport(specifier: string, knownPaths: ReadonlySet<string>): string | null {
+function resolveJvmImport(specifier: string, files: Files): string | null {
   if (specifier.endsWith('*')) return null
-  let index = jvmIndexes.get(knownPaths)
+  let index = jvmIndexes.get(files.paths)
   if (!index) {
     index = new Map()
-    for (const path of [...knownPaths].sort()) {
+    for (const path of [...files.paths].sort()) {
       const match = /\.(?:java|kts?)$/.exec(path)
       if (!match) continue
       const parts = path.slice(0, match.index).split('/')
@@ -223,11 +258,14 @@ function resolveJvmImport(specifier: string, knownPaths: ReadonlySet<string>): s
         if (!index.has(suffix)) index.set(suffix, path)
       }
     }
-    jvmIndexes.set(knownPaths, index)
+    jvmIndexes.set(files.paths, index)
   }
   const segments = specifier.split('.')
   for (let n = segments.length; n >= 2; n--) {
-    const found = index.get(segments.slice(0, n).join('/'))
+    const suffix = segments.slice(0, n).join('/')
+    // Every file whose path ends in `suffix` plus an extension has this key.
+    files.keys?.add(lookupKey(`${suffix}.java`))
+    const found = index.get(suffix)
     if (found) return found
   }
   return null
@@ -283,13 +321,13 @@ function exportsTargets(exports: unknown, subpath: string): string[] {
  * as its source next to it; a build output (`dist/`, `build/`, `lib/`,
  * `out/`) that is not in the repository as the same path under `src/`.
  */
-function resolvePackageTarget(dir: string, target: string, knownPaths: ReadonlySet<string>): string | null {
+function resolvePackageTarget(dir: string, target: string, files: Files): string | null {
   const path = join(dir, target)
   const stem = path.replace(/\.d\.[cm]?ts$/, '')
-  const resolved = resolveFile(path, knownPaths) ?? (stem !== path ? resolveFile(stem, knownPaths) : null)
+  const resolved = resolveFile(path, files) ?? (stem !== path ? resolveFile(stem, files) : null)
   if (resolved || !isUnder(dir, stem)) return resolved
   const [first, ...rest] = stem.slice(dir === '' ? 0 : dir.length + 1).split('/')
-  return BUILD_DIRS.has(first!) && rest.length > 0 ? resolveFile(join(dir, ['src', ...rest].join('/')), knownPaths) : null
+  return BUILD_DIRS.has(first!) && rest.length > 0 ? resolveFile(join(dir, ['src', ...rest].join('/')), files) : null
 }
 
 /**
@@ -298,7 +336,7 @@ function resolvePackageTarget(dir: string, target: string, knownPaths: ReadonlyS
  * by `exports['./a/b']` (patterns included), then `a/b` and `src/a/b` in the
  * package. Not a workspace package's name: null.
  */
-function resolvePackage(context: ResolutionContext, specifier: string, knownPaths: ReadonlySet<string>): string | null {
+function resolvePackage(context: ResolutionContext, specifier: string, files: Files): string | null {
   const segments = specifier.split('/')
   const nameLength = specifier.startsWith('@') ? 2 : 1
   const pkg = context.packages.get(segments.slice(0, nameLength).join('/'))
@@ -315,26 +353,21 @@ function resolvePackage(context: ResolutionContext, specifier: string, knownPath
         ]
       : [...exportsTargets(manifest.exports, `./${subpath}`), subpath, `src/${subpath}`]
   for (const target of targets) {
-    const resolved = resolvePackageTarget(dir, target, knownPaths)
+    const resolved = resolvePackageTarget(dir, target, files)
     if (resolved) return resolved
   }
   return null
 }
 
 /** `#x` by the `imports` of the package.json nearest the importing file (Node subpath imports). */
-function resolveSubpathImport(
-  context: ResolutionContext,
-  sourcePath: string,
-  specifier: string,
-  knownPaths: ReadonlySet<string>,
-): string | null {
+function resolveSubpathImport(context: ResolutionContext, sourcePath: string, specifier: string, files: Files): string | null {
   for (let dir = dirOf(sourcePath); ; dir = dirOf(dir)) {
     const manifest = context.manifests.get(dir)
     if (manifest) {
       const match = isRecord(manifest.imports) ? matchPattern(Object.entries(manifest.imports), specifier) : null
       for (const target of match ? conditionTargets(match.value) : []) {
         if (!target.startsWith('./')) continue
-        const resolved = resolvePackageTarget(dir, target.replaceAll('*', match!.capture), knownPaths)
+        const resolved = resolvePackageTarget(dir, target.replaceAll('*', match!.capture), files)
         if (resolved) return resolved
       }
       return null
