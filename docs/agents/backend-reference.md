@@ -2291,7 +2291,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     frees budget, so a session page can show more than the same call
     without `session_id`: its `truncated` and cursor differ accordingly.
     `session_id` is left out of the cursor fingerprint (`UNBOUND_ARGS`),
-    so a cursor continues with or without the session. A cursor without
+    so a cursor continues with or without the session; continued without
+    it, a cursor that carries `r` still leaves those sections out (the one
+    exception to "without `session_id` every answer is in full": the agent
+    repeats the first call without `session_id` to get them). A cursor without
     a reference has no `r`: the bytes of a no-session cursor are as before.
   - What a page showed whole is remembered after rendering
     (`Budgeted.rendered` gets `Seen`: per section the lines shown whole,

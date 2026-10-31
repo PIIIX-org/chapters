@@ -189,8 +189,9 @@ overrides and how to regenerate the baseline: `benchmarks/README.md`.
 The `bench-session` jobs (#683) run only on a dispatch with
 `-f bench_session=plain|session` (`-f bench_session_suites=…`, default
 all): `benchmarks/session/run.ts`, a re-reading scripted agent on the same
-suites, without and (with `session`) then with a `session_id`, on three
-instances. Not a gate, and outside the premise fingerprint; method and
+suites, without a `session_id` and (with `session`) then with one per
+question and one per suite, on three instances (up to 6 hours each). Not a
+gate, and outside the premise fingerprint; method and
 commands: `benchmarks/README.md` (Session benchmark).
 
 ## The agent trial (`agent-trial.yml`)

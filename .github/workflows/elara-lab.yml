@@ -63,9 +63,9 @@ on:
         options: [none, chapters, all]
         default: none
       bench_session:
-        description: 'Session benchmark (#683, benchmarks/session/run.ts): none, plain (no session_id), or session (plain, then with session_id)'
+        description: 'Session benchmark (#683, benchmarks/session/run.ts): none; plain (no session_id); question / suite (plain, then a session per question / per suite); session (plain, then both)'
         type: choice
-        options: [none, plain, session]
+        options: [none, plain, question, suite, session]
         default: none
       bench_session_suites:
         description: 'Session benchmark suites (comma list or all)'
@@ -357,13 +357,14 @@ jobs:
   # #683: the session benchmark (benchmarks/session/run.ts), by hand only:
   #   gh workflow run elara-lab.yml --ref <branch> -f tier=none -f bench=none -f bench_session=session
   # A re-reading scripted agent on the premise suites; `session` runs it
-  # without and then with a `session_id` on the same instance. Three
+  # without a `session_id`, with a new one per question, and with one per
+  # suite, on the same instance (about 3 hours for all suites). Three
   # instances, like the bench job. Not a gate: the premise benchmark and its
   # fingerprint do not depend on it.
   bench-session:
     if: github.event_name == 'workflow_dispatch' && inputs.bench_session != 'none'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -387,9 +388,10 @@ jobs:
         env:
           BENCH_SUITES: ${{ inputs.bench_session_suites || 'all' }}
           BENCH_INSTANCE: ${{ matrix.instance }}
-          SESSION_FLAG: ${{ inputs.bench_session == 'session' && '--session' || '' }}
+          # plain: no session pass; question / suite: that scope; session: both.
+          SCOPE: ${{ inputs.bench_session == 'session' && 'both' || inputs.bench_session != 'plain' && inputs.bench_session || '' }}
         run: |
-          bun benchmarks/session/run.ts $SESSION_FLAG
+          bun benchmarks/session/run.ts ${SCOPE:+--session-scope=$SCOPE}
           cat bench-session-results/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect compose logs

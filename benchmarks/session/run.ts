@@ -1,20 +1,22 @@
 // Session benchmark runner (#683): what per-session de-duplication saves an
 // agent that re-reads, on the premise benchmark's suites and questions.
 //
-//   BENCH_SUITES=all bun benchmarks/session/run.ts [--session]
+//   BENCH_SUITES=all bun benchmarks/session/run.ts [--session-scope=question|suite|both | --session]
 //
 // Opt-in only (elara-lab.yml `bench_session`); the premise benchmark
 // (benchmarks/run.ts) and its fingerprint are untouched: this entry lives
 // outside the files its HARNESS hash covers. Same lab instance, guard,
 // checkouts and indexing as benchmarks/run.ts, then the re-reading policy
 // (./policy.ts) on every question of a suite, in suite order:
-//   plain    without `session_id` (the only mode a server before #683 takes)
-//   session  with --session, after the plain pass on the same instance: one
-//            fixed `session_id` per suite on every read_file, so the session
-//            spans the suite's questions. Every session answer, its
-//            references expanded, is compared with the plain answer of the
-//            same call (`answers` in the results): the saving is only
-//            reported for equal answers.
+//   plain     without `session_id` (the only mode a server before #683 takes)
+//   question  with scope question or both, after the plain pass on the same instance: a
+//             new `session_id` per question on every read_file, so only
+//             re-reads within one question can be references (an agent that
+//             starts each task in a new context)
+//   suite     with scope suite or both, after those: one `session_id` per suite, so
+//             the session spans the suite's questions (one long context)
+// Every session answer, its references expanded, is compared with the plain
+// answer of the same call (`answers` in the results).
 // Writes bench-session-results/results.json and summary.md.
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -31,9 +33,13 @@ import { fileReader } from '../lib/ripgrep.ts'
 import { comparable, expandAnswer, FILES, FOCUS, runReread, sessionTools, shownRanges, type Answer, type RereadRun } from './policy.ts'
 
 const SEARCH_LIMIT = 10
-const SESSION = process.argv.includes('--session')
-const MODES = SESSION ? (['plain', 'session'] as const) : (['plain'] as const)
-type Mode = (typeof MODES)[number]
+/** `--session-scope question|suite|both` (`--session` is both): the session passes that follow the plain one. */
+const SCOPE_ARG = process.argv.find((a) => a.startsWith('--session-scope='))?.slice('--session-scope='.length) ?? (process.argv.includes('--session') ? 'both' : 'none')
+const SCOPES = { none: [], question: ['question'], suite: ['suite'], both: ['question', 'suite'] } as const
+if (!(SCOPE_ARG in SCOPES)) throw new Error(`--session-scope is question, suite or both; got ${JSON.stringify(SCOPE_ARG)}`)
+type Mode = 'plain' | 'question' | 'suite'
+const MODES: readonly Mode[] = ['plain', ...SCOPES[SCOPE_ARG as keyof typeof SCOPES]]
+const SESSION = MODES.length > 1
 
 /** This harness and the premise one it builds on (tests excluded), so runs of two commits show they measured alike. */
 const HARNESS = createHash('sha256')
@@ -162,10 +168,12 @@ interface Mismatch {
  * room, so a page can end a line earlier), `differ` otherwise; `unaligned`
  * when the two passes made other calls.
  */
-function compareModes(plain: Answer[][], session: Answer[][]) {
+function compareModes(plain: Answer[][], session: Answer[][], sessionPerQuestion: boolean) {
   const sent = new Map<number, unknown>()
   const result = { calls: 0, equal: 0, references: 0, more: [] as Mismatch[], less: [] as Mismatch[], differ: [] as Mismatch[], unaligned: 0 }
   for (const [qi, answers] of session.entries()) {
+    // A new session numbers its calls from 1.
+    if (sessionPerQuestion) sent.clear()
     for (const [ci, answer] of answers.entries()) {
       result.calls++
       const json = answer.tool === 'read_file' ? parseJson(answer.text) : undefined
@@ -224,7 +232,7 @@ const miss = missCost(CAPS)
 const compared: string[] = []
 const results: Record<string, unknown> = {}
 const md: string[] = [
-  `# Session benchmark (${SESSION ? 'plain, then session' : 'plain'})`,
+  `# Session benchmark (${MODES.join(', ')})`,
   '',
   `Commit ${process.env.GITHUB_SHA ?? '(local)'}; run ${process.env.GITHUB_RUN_ID ?? '-'}; harness ${HARNESS}; ${new Date().toISOString()}`,
   '',
@@ -235,16 +243,17 @@ for (const p of prepared) {
   const { s } = p
   const byMode = {} as Record<Mode, { aggregate: Aggregate; tokensTotal: number; perQuestion: unknown[]; answers: Answer[][] }>
   for (const mode of MODES) {
-    const sessionId = mode === 'session' ? ctx.uniq(`bench-${s.suite}`) : null
-    const tools = sessionTools(call, p.repoId, SEARCH_LIMIT, sessionId)
-    // What the session holds, shared by the suite's questions (empty without a session).
+    const tools = mode === 'suite' ? sessionTools(call, p.repoId, SEARCH_LIMIT, ctx.uniq(`bench-${s.suite}`)) : null
+    // What the session holds, shared by the suite's questions in `suite` mode (empty without a session).
     const context = new Map<number, unknown>()
     const outcomes: QuestionOutcome[] = []
     const perQuestion: unknown[] = []
     const answers: Answer[][] = []
     for (const q of s.questions) {
       const gold = q.gold.map(parseGold)
-      const run = await runReread(q.question, gold, tools, CAPS, context)
+      if (mode === 'question') context.clear()
+      const sessionId = mode === 'question' ? ctx.uniq(`bench-${s.suite}-${q.id}`) : null
+      const run = await runReread(q.question, gold, tools ?? sessionTools(call, p.repoId, SEARCH_LIMIT, sessionId), CAPS, context)
       const { outcome: o, row } = outcome(gold, judgments(q), run)
       outcomes.push(o)
       perQuestion.push({ id: q.id, ...row })
@@ -255,7 +264,9 @@ for (const p of prepared) {
     byMode[mode] = { aggregate: agg, tokensTotal: outcomes.reduce((n, o) => n + o.tokens, 0), perQuestion, answers }
     md.push(`| ${s.suite} | ${mode} | ${byMode[mode].tokensTotal} | ${agg.tokensToGold} | ${agg.goldReached} of ${agg.questions} |`)
   }
-  const answers = SESSION ? compareModes(byMode.plain.answers, byMode.session!.answers) : null
+  const answers = SESSION
+    ? Object.fromEntries(MODES.filter((m) => m !== 'plain').map((m) => [m, compareModes(byMode.plain.answers, byMode[m].answers, m === 'question')]))
+    : null
   results[s.suite] = {
     fingerprint: fingerprint(s, CONFIG),
     repo: s.repo,
@@ -264,8 +275,8 @@ for (const p of prepared) {
     ...Object.fromEntries(MODES.map((m) => [m, { aggregate: byMode[m].aggregate, tokensTotal: byMode[m].tokensTotal, perQuestion: byMode[m].perQuestion }])),
     ...(answers ? { answers } : {}),
   }
-  if (answers) {
-    const line = `${s.suite}: ${answers.equal} of ${answers.calls} session answers equal the plain ones once expanded, ${answers.more.length} show more lines, ${answers.less.length} fewer, ${answers.differ.length} differ otherwise, ${answers.unaligned} unaligned; ${answers.references} carry references.`
+  for (const [mode, a] of Object.entries(answers ?? {})) {
+    const line = `${s.suite} (${mode} sessions): ${a.equal} of ${a.calls} session answers equal the plain ones once expanded, ${a.more.length} show more lines, ${a.less.length} fewer, ${a.differ.length} differ otherwise, ${a.unaligned} unaligned; ${a.references} carry references.`
     ctx.log(line)
     compared.push(line)
   }

@@ -312,19 +312,27 @@ search's symbol hits fall in (else the entries whose names hold a word of
 the question), then those entries again with the section before and after
 each. A file without such an entry is read whole (first page). No oracle
 stop: every question runs the whole script under the premise caps, and
-tokens-to-gold is booked on the way. The questions of a suite run in order
-in one session, so a later question that opens a file an earlier one read
-gets references (every suite has 15 or more questions sharing a file).
+tokens-to-gold is booked on the way.
 
 - `bench_session=plain`: no `session_id` (the only mode a server before
   #683 takes; use it on the base side).
-- `bench_session=session`: the plain pass, then the same policy with one
-  `session_id` per suite on every `read_file`, on the same instance. A
-  referenced outline reads as the outline its call sent, so both passes make
-  the same calls. Each session answer, its references expanded to the text
-  they name, is compared with the plain answer of the same call (`answers`
-  in `results.json`: `equal`; `more` or `less` when one shows every line the
-  other does and more, kept with both texts; `differ`; `unaligned`).
+- `bench_session=session` (`--session-scope=both`; `question` or `suite`
+  run one scope): on the same instance, the plain pass, then the
+  same policy with a `session_id` on every `read_file`, per scope:
+  - `question`: a new session per question (an agent that starts each task
+    in a new context, as the skill says to): only re-reads within one
+    question can be references;
+  - `suite`: one session for all the questions of a suite, in order (one
+    long context): a later question that opens a file an earlier one read
+    gets references too (every suite has 15 or more questions sharing a
+    file).
+
+  A referenced outline reads as the outline its call sent, so every pass
+  makes the same calls. Each session answer, its references expanded to the
+  text they name, is compared with the plain answer of the same call
+  (`answers` in `results.json`, per mode: `equal`; `more` or `less` when one
+  shows every line the other does and more, kept with both texts; `differ`;
+  `unaligned`).
 
 ```sh
 gh workflow run elara-lab.yml -R PIIIX-org/chapters --ref <branch> -f tier=none -f bench=none -f bench_session=session   # -f bench_session_suites=chapters
