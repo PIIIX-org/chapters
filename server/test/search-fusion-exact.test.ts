@@ -178,6 +178,19 @@ beforeAll(async () => {
   `)
 }, 180_000)
 
+/** Makes the query embedder answer with the stored vector of the symbol `name`, so that symbol leads the vector leg. */
+async function queryLike(name: string): Promise<void> {
+  const [row] = (await db.execute(sql`
+    SELECT b.embedding::text FROM blocks b
+    JOIN repository_files f ON f.id = b.owner_id
+    WHERE f.repository_id = ${repoId} AND b.kind = 'symbol' AND b.inner_path = ${name}
+  `)) as unknown as [{ embedding: string }]
+  const vec = JSON.parse(row.embedding)
+  vi.spyOn(embedder, 'embed').mockImplementation(async (texts) =>
+    texts.map(() => vec),
+  )
+}
+
 describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () => {
   it('exact symbol match outranks a vector-only fuzzy hit', async () => {
     // Vector query returns fuzzy file at rank 0
@@ -349,10 +362,41 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     // relaxed row (its name matches the rarest term). The embedder fails so no vector leg returns it as a
     // non-relaxed row; it must rank by its fusion rank and not take EXACT_BOOST.
     vi.spyOn(embedder, 'embed').mockRejectedValue(new Error('embedder down'))
-    const res = await findSymbols([repoId], 'requestQueueRetry zzznomatchword', { limit: 10 })
+    const res = await findSymbols(
+      [repoId],
+      'requestQueueRetry zzznomatchword',
+      { limit: 10 },
+    )
     expect(res.retrieval_mode).toBe('keyword_only')
     const hit = res.results.find((r) => r.name === 'requestQueueRetry')
     expect(hit).toBeDefined()
     expect(hit!.score).toBeLessThan(0.1)
+  })
+
+  it('an identifier mentioned in passing inside a long question grants no boost', async () => {
+    // `alphaHandler` is identifier-shaped and the vector leg returns it first, but the question is about the
+    // pipeline (benchmark: `SessionDB` or `SKILL.md` named in passing buried the answer under the symbol of
+    // that name).
+    await queryLike('alphaHandler')
+    const res = await findSymbols(
+      [repoId],
+      'how does the alphaHandler fit into the request pipeline',
+      { limit: 10 },
+    )
+    const hit = res.results.find((r) => r.name === 'alphaHandler')
+    expect(hit).toBeDefined()
+    expect(hit!.score).toBeLessThan(0.1)
+  })
+
+  it('an identifier in backticks inside a long question counts: the asker singled it out', async () => {
+    await queryLike('alphaHandler')
+    const res = await findSymbols(
+      [repoId],
+      'how does the `alphaHandler` fit into the request pipeline',
+      { limit: 10 },
+    )
+    const hit = res.results.find((r) => r.name === 'alphaHandler')
+    expect(hit).toBeDefined()
+    expect(hit!.score).toBeGreaterThan(1)
   })
 })

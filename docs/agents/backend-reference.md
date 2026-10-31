@@ -1533,10 +1533,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     across legs. Exact means: a symbol name, a file path or basename (with its
     extension), or a note path or title equals the WHOLE query; or equals a
     query term that is itself identifier- or file-shaped (camelCase,
-    snake_case, dotted, `a::b`, or `path/file.ext`), by any spelling from
-    `identifiers.ts`. A plain word of a multi-word query never grants the
-    boost, so a one-word name hit cannot outrank rows that match every word
-    (the #1014 failure). A relaxed or trigram row (#455 part 2) never counts
+    snake_case, dotted, `a::b`, or `path/file.ext`) AND singled out by the
+    asker: written in backticks, or in a query of at most three words
+    (`SHORT_QUERY_WORDS`), by any spelling from `identifiers.ts`. A plain word
+    never grants the boost, and neither does an identifier merely mentioned in
+    a longer question (on the benchmark `SessionDB`, `SKILL.md` and
+    `run_command` named in passing pushed the symbol of that name above the
+    answer), so a name hit cannot outrank rows that match what the question
+    asks (the #1014 failure). A relaxed or trigram row (#455 part 2) never counts
     as exact. The boost is a pure function of the row, and `byScore`'s
     tie-breaks are unchanged.
   - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a

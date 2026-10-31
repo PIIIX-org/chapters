@@ -865,11 +865,17 @@ interface ExactContext {
   spelling: Set<string>
 }
 
+/** A query this short is an identifier lookup, not a question: its identifier-shaped words are what it asks for. */
+const SHORT_QUERY_WORDS = 3
+
 /**
  * What may count as an exact match (#456). A row is exact when its name, path
- * or title equals the WHOLE query, or equals a term that is itself an
- * identifier or file name. A plain word of a multi-word query never grants it:
- * one-word name hits must not outrank rows that match every word (#1014).
+ * or title equals the WHOLE query, or equals an identifier- or file-shaped
+ * term that the asker singled out: the term is in backticks, or the query is
+ * short (at most `SHORT_QUERY_WORDS` words). A plain word never grants it, and
+ * neither does an identifier merely mentioned inside a long question: a name
+ * hit must not outrank rows that match what the question asks (#1014; on the
+ * benchmark, `SessionDB` or `SKILL.md` in passing buried the answer).
  */
 function queryExactContext(query: string): ExactContext {
   const queryNorm = query.trim().toLowerCase()
@@ -877,12 +883,15 @@ function queryExactContext(query: string): ExactContext {
   const whole = new Set<string>([queryNorm])
   if (queryStripped.length > 0) whole.add(queryStripped)
 
+  const words = query.trim().split(/\s+/).filter(Boolean)
+  const quoted = new Set([...query.matchAll(/`([^`\s]+)`/g)].map((m) => m[1]!))
   const terms = new Set<string>()
   const termsLower = new Set<string>()
   const spelling = new Set<string>()
-  for (const raw of query.trim().split(/\s+/).filter(Boolean)) {
+  for (const raw of words) {
     const cleaned = raw.replace(/^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu, '')
     if (cleaned.length <= 1 || !isIdentifierShaped(cleaned)) continue
+    if (words.length > SHORT_QUERY_WORDS && !quoted.has(cleaned)) continue
     terms.add(cleaned)
     termsLower.add(cleaned.toLowerCase())
     const id = splitIdentifier(cleaned)
