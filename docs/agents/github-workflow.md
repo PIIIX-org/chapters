@@ -822,18 +822,23 @@ not testing) and compares the process identity it reports (`bootId`,
 
 ## Branch protection and the review gate
 
-Two layers of rules apply to `dev` and `prod`, and both must pass:
+Rules apply to `dev` and `prod` in layers, and all must pass:
 
 - **Classic branch protection** on each branch: `enforce_admins: true`
-  (admins cannot bypass it), `strict: true` (the PR must be up to date with
-  its base), and the required status checks in the table below (#574).
+  (admins cannot bypass it), the required status checks in the table below
+  (#574), and `strict` — `true` on `prod` (the PR must be up to date with
+  its base), `false` on `dev`, where the merge queue tests every PR on the
+  current tip instead (2026-11-01).
 - **Repository ruleset 24421063, "Require CI green before merge"**
   (`gh api repos/PIIIX-org/chapters/rulesets/24421063`). It targets `dev`,
   `prod` and `main` and has no bypass actors
   (`current_user_can_bypass: never`). Rules:
   - `pull_request`: changes go through a PR, 0 approvals,
     `dismiss_stale_reviews_on_push`, all three merge methods allowed.
-  - `required_status_checks`: `checks` (integration 15368), strict.
+  - `required_status_checks`: `checks` (integration 15368), not strict
+    (since 2026-11-01, for the merge queue).
+- **Repository ruleset 26310472, "dev merge queue"**, on `dev` only: a
+  `merge_queue` rule with the settings under **Merge queue settings**.
 
   `gh api repos/PIIIX-org/chapters/rules/branches/<branch>` lists the
   ruleset rules in force on a branch. #574 does not change the ruleset.
@@ -904,13 +909,31 @@ rebase queue, fails closed), and sets the status on the queue commit, so
 queued is picked up by re-running the newest **Review verdict** run of the
 queue commit.
 
-**Merge queue settings.** The merge method is **merge commit**: the
-verdict check needs the PR head as the queue commit's second parent and
-fails closed otherwise. The maximum group size is **1**: `lab-plan` and
-`review-verdict` resolve only the PR named in the queue branch, so a
-grouped commit would carry other PRs' changes unplanned and unreviewed.
-The status-check timeout is **at least 240 minutes**, the `bench` job's
-all-suite budget.
+**Merge queue settings** (ruleset 26310472, enabled 2026-11-01). The merge
+method is **merge commit**: the verdict check needs the PR head as the
+queue commit's second parent and fails closed otherwise. The maximum group
+size is **1** (`max_entries_to_build` and `max_entries_to_merge` 1,
+grouping `ALLGREEN`): `lab-plan` and `review-verdict` resolve only the PR
+named in the queue branch, so a grouped commit would carry other PRs'
+changes unplanned and unreviewed. The status-check timeout is **300
+minutes**, above the `bench` job's 240-minute all-suite budget.
+
+**Landing a PR on `dev`.** Once the PR's own checks are green and its
+`VERDICT: MERGE` is posted, add it to the queue; there is no "Update
+branch" step, because the queue builds `dev` + the PR and runs every
+required check on that commit (`merge_group`). Auto-merge is off for the
+repository, so `gh pr merge` refuses on a queued branch ("Auto merge is not
+allowed"); enqueue directly:
+
+```sh
+id=$(gh api graphql -f query='query{repository(owner:"PIIIX-org",name:"chapters"){pullRequest(number:<N>){id}}}' --jq .data.repository.pullRequest.id)
+gh api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position}}}' -F id=$id
+```
+
+A red check on the queue commit removes the entry; fix, re-verdict if the
+head moved, and enqueue again. The first PR through the queue was #1056
+(60813a6). Rollback: delete ruleset 26310472 and set `strict` back to
+`true` on `dev`'s classic protection and in ruleset 24421063.
 
 A status belongs to a **commit, not a PR**, and a promotion's head (the
 tip of `dev`) can also be the head of other PRs. So:
