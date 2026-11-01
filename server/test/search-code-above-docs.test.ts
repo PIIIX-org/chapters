@@ -43,6 +43,12 @@ beforeAll(async () => {
       content:
         '# Function parseConfig Guide\n\nThe function parseConfig is documented here. The function parseConfig handles deployment and architecture.\n',
     },
+    // 2b. A data file naming the function more often than the code does: not code, so no boost.
+    {
+      path: 'config/settings.json',
+      content:
+        '{"function parseConfig": "function parseConfig", "alias": "function parseConfig function parseConfig"}\n',
+    },
     // 3. Overview doc for prose query test
     {
       path: 'docs/overview.md',
@@ -95,6 +101,17 @@ describe('code ranks above docs for code-shaped queries (#457)', () => {
     )
     expect(res.results.length).toBeGreaterThan(0)
     expect(res.results[0]!.path).toBe('docs/overview.md')
+  })
+
+  it('a json file is data, not code: it gets no boost', async () => {
+    const res = await searchNotes(
+      { vaultIds: [], repositoryIds: [repoId] },
+      'function parseConfig',
+      10,
+    )
+    const paths = res.results.map((r) => r.path)
+    expect(paths).toContain('config/settings.json')
+    expect(paths[0]).toBe('src/config/parser.ts')
   })
 
   it('isCodeShaped rejects prose queries with tech brands, slashes, parens, and rationale questions', () => {

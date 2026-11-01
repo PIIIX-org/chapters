@@ -1549,7 +1549,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     hits receive a bounded boost `CODE_BOOST = 0.0008` (about 3 RRF positions)
     over documentation, plans and data (`resourceType: 'note'`, or repository files
     with doc or data extensions, `.json`, `.yml`, `.toml` among them, README-type
-    names, or under a `docs`, `plans`, `wiki` or `specs` folder at
+    names, or under a `doc`, `docs`, `plan`, `plans`, `wiki`, `spec` or `specs` folder at
     any depth). Prose queries are untouched, and a doc that genuinely answers
     the question still wins.
   - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a
