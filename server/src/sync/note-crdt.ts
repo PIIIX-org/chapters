@@ -399,6 +399,48 @@ export async function setFoldError(tx: Tx, crdt: NoteCrdt, foldError: string): P
   crdt.foldError = foldError
 }
 
+/**
+ * Records a rebase update just appended (ADR-003 §5.4, #891): the client id
+ * its items carry (this process's SERVER_CLIENT_ID) and that client's clock
+ * just past them. A client whose state vector has less for that client lacks
+ * the rebase. An update of deletions only adds no item a stale client could
+ * hold a second copy of, so it leaves the earlier record standing.
+ */
+export async function recordRebase(tx: Tx, noteId: string, update: Uint8Array): Promise<void> {
+  const clock = Y.parseUpdateMeta(update).to.get(SERVER_CLIENT_ID)
+  if (clock === undefined) return
+  await tx.update(noteCrdt).set({ rebaseClient: SERVER_CLIENT_ID, rebaseClock: clock }).where(eq(noteCrdt.noteId, noteId))
+}
+
+/** The latest rebase recorded for a note (recordRebase): its client id and the clock just past its items. */
+export interface RebaseMark {
+  client: number
+  clock: number
+}
+
+/** Note `noteId`'s latest recorded rebase, or null when none is recorded. */
+export async function readRebaseMark(client: typeof db, noteId: string): Promise<RebaseMark | null> {
+  const [row] = await client
+    .select({ client: noteCrdt.rebaseClient, clock: noteCrdt.rebaseClock })
+    .from(noteCrdt)
+    .where(eq(noteCrdt.noteId, noteId))
+  return row && row.client !== null && row.clock !== null ? { client: row.client, clock: row.clock } : null
+}
+
+/**
+ * True when a client whose state vector is `client` holds items `doc` does
+ * not: a clock above the document's for some client (#891).
+ */
+export function holdsUnknownItems(client: Map<number, number>, doc: Y.Doc): boolean {
+  for (const [id, clock] of client) if (clock > Y.getState(doc.store, id)) return true
+  return false
+}
+
+/** True when a client whose state vector is `client` lacks the rebase `mark` (its items are past what it has of that client). */
+export function lacksRebase(client: Map<number, number>, mark: RebaseMark): boolean {
+  return (client.get(mark.client) ?? 0) < mark.clock
+}
+
 /** Notes whose CRDT state needs boot work (§7 steps 4-5): the row moved past `folded_seq`, or an unfolded, non-rejected tail. */
 export async function notesNeedingFold(tx: Tx | Pick<Tx, 'execute'>): Promise<string[]> {
   const rows = (await tx.execute(sql`

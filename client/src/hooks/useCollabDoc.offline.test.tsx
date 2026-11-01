@@ -26,12 +26,14 @@ interface ProviderOptions {
   onStatus: (data: { status: string }) => void
   onSynced: (data: { state: boolean }) => void
   onUnsyncedChanges: (data: { number: number }) => void
+  onClose: (data: { event: { code: number; reason: string } }) => void
 }
 
 type StubProvider = {
   options: ProviderOptions
   isSynced: boolean
   hasUnsyncedChanges: boolean
+  destroyed: boolean
 }
 
 const stub = vi.hoisted(() => ({ providers: [] as StubProvider[] }))
@@ -48,7 +50,10 @@ vi.mock('@hocuspocus/provider', () => {
     }
     setAwarenessField() {}
     disconnect() {}
-    destroy() {}
+    destroyed = false
+    destroy() {
+      this.destroyed = true
+    }
     flushPendingUpdates() {}
     on() {}
   }
@@ -424,6 +429,62 @@ describe('useCollabDoc offline copy (#720)', () => {
     } finally {
       add.mockRestore()
     }
+  })
+})
+
+describe('a note rebased under an open tab (#891, note-rebased)', () => {
+  it('starts over on a new document and offers the old text, kept in this browser without its history, never merged', async () => {
+    const relay = new Y.Doc()
+    relay.getText('body').insert(0, 'BASE line\n')
+    const first = mount()
+    const p1 = await nthProvider(0)
+    sync(p1, relay)
+    const old = first.result.current.ydoc
+    // Typed here and stored by the relay, then the server's CRDT state was put back behind the row by SQL: the relay
+    // lost these items while the row kept the text. The socket dropped meanwhile, so this tab's copy holds them.
+    p1.hasUnsyncedChanges = true
+    act(() => p1.options.onStatus({ status: 'disconnected' }))
+    act(() => old.getText('body').insert(10, 'TYPED '))
+    await waitFor(async () => expect(await stored(STASH)).toEqual(['BASE line\nTYPED ']))
+    // The relay's rebase: the row's text as new items of the server's own client.
+    const rebase = new Y.Doc()
+    Y.applyUpdate(rebase, Y.encodeStateAsUpdate(relay))
+    rebase.getText('body').insert(10, 'TYPED ')
+    Y.applyUpdate(relay, Y.encodeStateAsUpdate(rebase, Y.encodeStateVector(relay)))
+
+    // The reconnect: the relay refuses this document's first sync.
+    act(() => p1.options.onStatus({ status: 'connected' }))
+    act(() => p1.options.onClose({ event: { code: 1000, reason: 'note-rebased' } }))
+
+    expect(p1.destroyed).toBe(true)
+    expect(first.result.current.unmerged).toBe('BASE line\nTYPED ')
+    const p2 = await nthProvider(1)
+    const fresh = p2.options.document
+    expect(fresh).not.toBe(old)
+    expect(first.result.current.ydoc).toBe(fresh)
+    expect(fresh.store.clients.size).toBe(0)
+    expect(first.result.current.writable).toBe(true)
+    sync(p2, relay)
+    // Merged, the old document would put "TYPED " in twice.
+    expect(first.result.current.ydoc.getText('body').toString()).toBe('BASE line\nTYPED ')
+    expect(first.result.current.unmerged).toBe('BASE line\nTYPED ')
+    expect(first.result.current.status).toBe('connected')
+    push(p2, relay)
+    expect(relay.getText('body').toString()).toBe('BASE line\nTYPED ')
+    // This browser keeps the offered text, and nothing of the old document's history.
+    await waitFor(async () => expect(await stored(STASH)).toEqual(['BASE line\nTYPED ']))
+    first.unmount()
+
+    // The next visit offers it again: it shares no history with the relay's document, so it is never merged.
+    const second = mount()
+    const p3 = await nthProvider(2)
+    await waitFor(() => expect(second.result.current.restored).toBe(true))
+    sync(p3, relay)
+    expect(second.result.current.ydoc.getText('body').toString()).toBe('BASE line\nTYPED ')
+    expect(second.result.current.unmerged).toBe('BASE line\nTYPED ')
+    act(() => second.result.current.discardUnmerged())
+    await waitFor(async () => expect(await stored(STASH)).toEqual([]))
+    second.unmount()
   })
 })
 

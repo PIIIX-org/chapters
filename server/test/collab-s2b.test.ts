@@ -8,7 +8,7 @@ import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
-import { getLiveNote, loadCollabState, purgeNote, renameNote, softDeleteNote } from '../src/notes/store.js'
+import { foldPendingCollab, getLiveNote, loadCollabState, purgeNote, renameNote, softDeleteNote } from '../src/notes/store.js'
 import { serializeNote, type OkfNote } from '../src/notes/okf.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { runStoreBackfill } from '../src/notes/store-reconcile.js'
@@ -326,6 +326,90 @@ describe('rebase of a row changed behind the store (§5.4)', () => {
     await waitFor(() => text.toString() === 'NEW alpha beta GAMMA\n')
     await waitFor(async () => (await rowBody(note.path)) === 'NEW alpha beta GAMMA\n')
     expect(count(text.toString(), 'NEW')).toBe(1)
+  })
+
+  /**
+   * #891 (lab collab-duplication S18): the CRDT state put back by SQL behind a
+   * row that holds the tab's typing. The relay's load rebases the row's text
+   * into new server items while the tab, left open, still holds the original
+   * items of the same text. The relay refuses that tab's first sync with
+   * `note-rebased` before anything is exchanged (Hocuspocus 4.7.1 awaits
+   * `beforeSync` before `readSyncStep1`), so neither side gets the other's
+   * copy; a fresh tab then syncs as usual.
+   */
+  it('refuses a tab left open across a rebase of its own typing with note-rebased: nothing doubled, a fresh tab gets the text once (#891)', async () => {
+    const note = await create('stale-tab', 'base line\n')
+    const { provider, text } = await open(note.id)
+    // The CRDT state before the typing: what a manual restore of note_crdt/note_updates puts back.
+    const [saved] = (await db.execute(sql`
+      SELECT c.snapshot, c.snapshot_through, c.folded_through, c.folded_seq,
+        (SELECT coalesce(max(id), 0) FROM note_updates WHERE note_id = ${note.id}) AS last_update
+      FROM note_crdt c WHERE c.note_id = ${note.id}`)) as unknown as Array<Record<string, unknown>>
+    const marker = '@STALE-891@'
+    text.insert(text.length, `${marker}\n`)
+    await waitFor(async () => count(await rowBody(note.path), marker) === 1)
+    const closes: string[] = []
+    provider.on('close', ({ event }: { event: { reason: string } }) => closes.push(event.reason))
+    await collab.destroy()
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`DELETE FROM note_updates WHERE note_id = ${note.id} AND id > ${saved!.last_update}`)
+      await tx.execute(sql`
+        UPDATE note_crdt SET snapshot = ${saved!.snapshot}, snapshot_through = ${saved!.snapshot_through},
+          folded_through = ${saved!.folded_through}, folded_seq = ${saved!.folded_seq}
+        WHERE note_id = ${note.id}`)
+    })
+    const staleVector = Y.encodeStateVector(provider.document)
+    collab = startCollabServer(app.server)
+
+    // The tab reconnects with its own items; the relay's load rebases the row's marker into server items first.
+    await waitFor(() => closes.includes('note-rebased') || count(text.toString(), marker) > 1, 15_000)
+    expect(count(text.toString(), marker)).toBe(1)
+    expect(closes).toContain('note-rebased')
+    // Refused before the exchange: the tab got nothing of the relay's document, and the relay logged nothing of the tab's.
+    expect(Y.encodeStateVector(provider.document)).toEqual(staleVector)
+    const [logged] = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM note_updates
+      WHERE note_id = ${note.id} AND id > ${saved!.last_update} AND actor_detail->>'kind' = 'collab'`)) as unknown as Array<{ n: number }>
+    expect(logged!.n).toBe(0)
+    const [mark] = (await db.execute(sql`
+      SELECT rebase_client, rebase_clock FROM note_crdt WHERE note_id = ${note.id}`)) as unknown as Array<{ rebase_client: string | null; rebase_clock: string | null }>
+    expect(Number(mark!.rebase_clock)).toBeGreaterThan(0)
+    expect(mark!.rebase_client).not.toBeNull()
+    provider.destroy()
+
+    // A fresh tab (the editor's restart on a new document) lacks the rebase too, but holds nothing of its own: it syncs.
+    const fresh = await open(note.id)
+    expect(count(fresh.text.toString(), marker)).toBe(1)
+    expect(fresh.text.toString()).toBe(`base line\n${marker}\n`)
+    fresh.text.insert(0, 'after ')
+    await waitFor(async () => (await rowBody(note.path)) === `after base line\n${marker}\n`)
+    expect(count(await storedCrdtText(vaultId, note.path), marker)).toBe(1)
+  }, 40_000)
+
+  it('records the rebase on note_crdt on the boot fold and on a write, not before (#891)', async () => {
+    const rebaseMark = async (id: string) => {
+      const [row] = (await db.execute(sql`
+        SELECT rebase_client, rebase_clock FROM note_crdt WHERE note_id = ${id}`)) as unknown as Array<{ rebase_client: string | null; rebase_clock: string | null }>
+      return row!
+    }
+    const atBoot = await create('mark-boot', 'one\n')
+    const onWrite = await create('mark-write', 'one\n')
+    for (const note of [atBoot, onWrite]) {
+      const tab = await open(note.id)
+      tab.provider.destroy()
+      await waitFor(() => !collab.hocuspocus.documents.has(`${vaultId}/~${note.id}`))
+      expect(await rebaseMark(note.id)).toEqual({ rebase_client: null, rebase_clock: null })
+      await db.execute(sql`UPDATE notes SET body = ${'ONE\n'} WHERE id = ${note.id}`)
+    }
+    await foldPendingCollab([atBoot.id])
+    await writeThroughCollab(vaultId, onWrite.path, { body: (current) => `${current}agent\n` }, { type: 'user' })
+    expect(await rowBody(atBoot.path)).toBe('ONE\n')
+    expect(await rowBody(onWrite.path)).toBe('ONE\nagent\n')
+    for (const note of [atBoot, onWrite]) {
+      const mark = await rebaseMark(note.id)
+      expect(mark.rebase_client).not.toBeNull()
+      expect(Number(mark.rebase_clock)).toBeGreaterThan(0)
+    }
   })
 })
 
