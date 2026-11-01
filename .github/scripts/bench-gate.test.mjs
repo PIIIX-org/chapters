@@ -403,6 +403,8 @@ describe('the held-out suite (#1059)', () => {
     assert.deepEqual(added.failures, [])
     const unknown = evaluate({ results: moved(), baseline: base(), baseBaseline: base(), pr: pr(['bench-suite-change'], 'Bench-suite-change: the harness moved'), changed: null })
     assert.match(failures(unknown), /holdout: baseline fingerprint fp1 != run fp2/)
+  })
+})
 
 describe('the golds floor across a harness change (#1058 review)', () => {
   it('compares with the base even when the suite-change label makes the run its own reference', () => {
