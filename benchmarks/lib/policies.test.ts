@@ -343,3 +343,14 @@ test('elara: a hit without a location is still read page by page, and a search t
   const ambiguous = await runElara('q', [{ path: 'src/b.ts', start: 1, end: 1 }], none)
   assert.equal(ambiguous.abstained, true)
 })
+
+test('elara: the route a search took is read from its answer, conceptual when it names none (#1060)', async () => {
+  const routed: ElaraTools = {
+    ...fakeElara([], []),
+    async search() {
+      return { text: JSON.stringify({ status: 'ok', route: 'identifier', confidence: 1, results: [{ resourceType: 'symbol', path: 'src/b.ts', startLine: 40, endLine: 41, snippet: 'x' }] }), ms: 1, ok: true }
+    },
+  }
+  assert.equal((await runElara('q', [{ path: 'src/b.ts', start: 40, end: 40 }], routed)).route, 'identifier')
+  assert.equal((await runElara('q', [{ path: 'src/b.ts', start: 40, end: 40 }], fakeElara([], []))).route, 'conceptual')
+})
