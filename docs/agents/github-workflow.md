@@ -287,8 +287,9 @@ it runs the PR's, and the summary says which. The job:
    `client/src/**/__snapshots__/**`. Everything else is source.
 2. checks out the base commit (the first parent of GitHub's PR merge
    commit) in a separate worktree, copies the PR's test-side files over
-   it, runs `pnpm install --frozen-lockfile`, and runs only the
-   `*.test.ts(x)` files the PR adds or changes (server ones against a
+   it, runs `pnpm install --frozen-lockfile`, and runs the
+   `*.test.ts(x)` files the PR adds or changes, each file in full (every
+   test in it, not only the tests the diff touches; server ones against a
    pgvector container, like `checks`).
 3. passes if at least one of those tests **fails on an assertion or
    error of its own**. These do not count, and are reported separately:
@@ -313,6 +314,19 @@ it runs the PR's, and the summary says which. The job:
    base is not a failure. The job fails if every changed test passes on
    base, if only failures that do not count remain, or if the fix PR
    changes no test file.
+4. fails if a test file the PR **adds** passes entirely on base, even
+   when another changed file fails there: a new file whose every test
+   passes without the fix is vacuous (it pins nothing the fix changed).
+   A new file that legitimately passes on base (a characterisation test
+   the fix must keep passing, a helper exercised only by other files)
+   carries a line comment `// fails-before: exempt <reason>` anywhere in
+   the file, with at least 10 characters of reason; the summary shows the
+   reason and the job prints it as a notice. The diff is taken with
+   `--no-renames`, so a test file the PR moves or renames counts as added
+   at its new path and falls under this rule too (it needs a failing test
+   or the marker). The marker only lifts the vacuous rule: a PR whose only
+   changed file is an exempt new file still needs a failing test
+   somewhere, or the label below.
 
 The job summary lists every changed test file with its result on base
 (the failing test names and first error line, the load error, or the
@@ -327,7 +341,18 @@ PRs to `prod` the job is skipped (a skipped required check passes): each
 fix a promotion carries passed it on its PR to `dev`. It is a guard, not a
 proof: a test that fails on base only because the diff is missing (for
 example asserting on source text) still counts, so reviewers read the
-failing test names in the summary.
+failing test names in the summary. On a merge-queue commit (`merge_group`
+event, branch `gh-readonly-queue/dev/pr-<N>-<sha>`) the job does not
+re-run the tests: `.github/scripts/merge-group-forward.mjs` (the base
+commit's copy when it has one) resolves PR `<N>`, refuses unless the PR's
+live head is the commit the queue merged (the queue commit's second
+parent, `HEAD^2`), waits up to 3 minutes for the latest `fails-before`
+check run on that head to complete (a body or label edit right after
+enqueue re-runs it) and re-applies its conclusion (success, skipped or
+neutral pass; anything else, a run still unfinished after the wait, or no
+run fails, with a link), so the queue inherits the PR's verdict without
+re-judging a title and labels that did not change. Unit tests:
+`.github/scripts/merge-group-forward.test.mjs`, run by `checks`.
 
 **PR evidence** (`.github/workflows/pr-evidence.yml`, job `pr-evidence`,
 #579) runs on every PR to `dev` or `prod` (promotions included) when it
@@ -432,6 +457,64 @@ another model. Tests, with real git in scratch repositories:
 `.github/scripts/githooks.test.mjs`, run by `checks`. The hooks cover
 local commits only: commits made elsewhere (web UI, other machines) are
 still checked by `attribution`.
+
+**Issue close check** (`.github/workflows/issue-close-check.yml`, job
+`issue-close`, script `.github/scripts/issue-close-check.mjs`) runs on
+every open PR to `dev` when it is opened, pushed, reopened or edited, and
+on `merge_group` for `dev` (the PR is resolved from the queue branch
+`gh-readonly-queue/dev/pr-<N>-<sha>` and checked the same way, so the
+queue's commit gets a result, not a skip). `edited` also fires after a
+merge; the job is skipped for a closed PR, so a late body edit neither
+fails on the issues the merge closed nor rewrites the comment. Like
+pr-evidence it runs the base commit's copy of the script when the base
+has one (the workflow file itself still comes from the PR, like every
+workflow). For every issue the body closes (`Closes`/`Fixes`/`Resolves`
+`#N`, `owner/repo#N` or the issue URL, in any case; not inside code or
+HTML comments; issues of other repositories are only mentioned), it:
+
+1. reads the issue's **acceptance items**: the text of a `Done when` line
+   (`**Done when:** ...`) and the list right after it, the list items or
+   paragraphs of a `Done when` heading of any level, and every unchecked
+   `- [ ]` item anywhere (checked `- [x]` items are done already). It
+   keeps **one sticky PR comment** (first line `<!-- issue-close-check -->`;
+   the job finds that comment and updates it in place when its text
+   changes, so a PR normally has one) that lists each item as `mentioned`
+   or **not in the PR body**. An item is mentioned when the body (comments
+   and code fences aside) contains its text, or at least two thirds of its
+   content words (4+ letters, not stop words), so quoting the item always
+   counts; the match is lenient both ways (no stemming, and an incidental
+   "tests pass" can satisfy an item), so reviewers read the list, not the
+   label. **An unmentioned item is a warning (a `::warning` annotation and
+   a request to the author in the comment), not a failure**: owner
+   decision from the review of the first 80 merged PRs, where most issues
+   carry fix-list boilerplate items ("CI is green", "plan note records
+   ...") that cannot be met at PR time. The author answers in the body
+   (the edit re-runs the check) or in a reply. An issue with no items
+   passes and the comment says so. `@mentions` copied from issue text get
+   a zero-width joiner after the `@`, so the comment pings nobody.
+2. fails when `lab/known-defects.json` (as it would merge) still has an
+   entry whose `issue` is `N`: the lab gate turns red once `N` is closed
+   (`lab.md`, rule 5), so the fix removes the entry in the same PR.
+3. fails when `#N` is already closed (reopen it, or drop the keyword), is
+   a pull request, or does not exist.
+4. warns (and passes) when the body has no closing keyword but the title
+   names an issue number (`fix: ... (#457)`): merging closes nothing.
+   When that is intended, say so with `refs #457` (also `references`,
+   `related to`, `part of`, `see`), and the warning is not raised.
+
+A PR that closes nothing and names no issue in its title passes with
+nothing posted; if an earlier body version had left a comment, it is
+updated to say there is nothing to check. The job summary carries the
+same report, the source event and what happened to the comment; when the
+comment cannot be written (a fork PR's read-only token) the summary shows
+its text instead and the verdict stands. An API call that fails on the
+network, a 5xx, a 429 or the rate limit is retried once (after
+`retry-after`, else 5 s); anything else fails the run with the response
+in the summary. Unit tests with fixtures for each rule:
+`.github/scripts/issue-close-check.test.mjs`, run by `checks`. It is
+**not** a required check: making it one is an owner decision (add
+`issue-close` to `dev`'s required checks; it reports on `merge_group` so
+the merge queue can require it).
 
 **STATE.md** (`.github/workflows/state-md.yml`, #582). The block of
 `docs/agents/STATE.md` between `<!-- state:generated:start -->` and
