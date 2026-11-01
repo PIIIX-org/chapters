@@ -136,11 +136,27 @@ describe('impact (#470)', () => {
 
   it('stops at the depth asked, and a textual hop makes the rest of its chain textual', async () => {
     expect((await impact(repositoryId, await one('normalize'), 1)).map((l) => l.sites.length)).toEqual([3])
-    const levels = await impact(repositoryId, await one('Store.save'), 2)
+    // `main` calls `helper` from another file (textual); `entry` calls `main` in its own file (resolved, but the chain is only as sure as its hop).
+    const levels = await impact(repositoryId, await one('helper'), 2)
     expect(levels.map((l) => shown(l.sites))).toEqual([
-      ['src/store.ts:6 Store.load call resolved', 'src/handler.ts:5 handle call textual'],
-      ['src/handler.ts:10 route call textual'],
+      ['lib/util.py:6 run call resolved', 'lib/main.py:5 main call textual', 'tests/test_util.py:5 test_helper call textual'],
+      ['lib/main.py:9 entry call textual'],
     ])
+    expect((await impact(repositoryId, await one('helper'), 1)).length).toBe(1)
+  })
+
+  it('member calls of an unknown receiver are references, not callers or dependents', async () => {
+    // `store.save(x)` in handler.ts: a member of `store`, matched to `Store.save` by its unique name. Not evidence of a call.
+    const save = await one('Store.save')
+    expect(shown(await codeSites(repositoryId, save, SITE_KINDS.references, { limit: 20, offset: 0 }))).toContain('src/handler.ts:5 handle call textual')
+    expect(shown(await codeSites(repositoryId, save, SITE_KINDS.callers, { limit: 20, offset: 0 }, false))).toEqual(['src/store.ts:6 Store.load call resolved'])
+    expect((await impact(repositoryId, save, 3)).map((l) => shown(l.sites))).toEqual([['src/store.ts:6 Store.load call resolved']])
+  })
+
+  it('past level 1 only resolved rows continue: a name match in another file is a caller, not a dependent', async () => {
+    expect(shown(await codeSites(repositoryId, await one('main'), SITE_KINDS.callers, { limit: 20, offset: 0 }, false))).toEqual(['lib/main.py:9 entry call resolved', 'lib/app.py:5 app call textual'])
+    const levels = await impact(repositoryId, await one('helper'), 3)
+    expect(levels.flatMap((l) => l.sites.map((s) => s.path))).not.toContain('lib/app.py')
   })
 
   it('a cycle does not come back, and the depth is capped at 3', async () => {

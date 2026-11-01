@@ -47,6 +47,9 @@ export const FIXTURE: Record<string, string> = {
   'src/path-user.ts': "import { normalize } from 'path-lib'\n\nexport function tidy(p: string): string {\n  return normalize(p)\n}\n\nexport function legacy(p: string): string {\n  return legacyHelper(p)\n}\n",
   'src/store.test.ts': "import { normalize } from './store'\n\ntest('normalize', () => {\n  normalize(' a ')\n})\n",
   'lib/util.py': 'def helper():\n    return 1\n\n\ndef run():\n    return helper()\n',
-  'lib/main.py': 'from util import helper\n\n\ndef main():\n    return helper()\n',
+  // `entry` calls `main` in its own file: a resolved row above a textual one.
+  // `app` calls `main` of another file: a textual row, a caller of `main` but no hop of the dependents of `helper`.
+  'lib/app.py': 'from main import main\n\n\ndef app():\n    return main()\n',
+  'lib/main.py': 'from util import helper\n\n\ndef main():\n    return helper()\n\n\ndef entry():\n    return main()\n',
   'tests/test_util.py': 'from util import helper\n\n\ndef test_helper():\n    assert helper() == 1\n',
 }

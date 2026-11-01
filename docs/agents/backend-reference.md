@@ -3612,13 +3612,18 @@ answers the same bytes (`mcp-deterministic-answers.test.ts` asks each mode in
 both databases). **Paging:** `references`, `callers`, `tests` and `at` page by
 offset (a keyset section, the cursor holds the offset; `limit` is the page
 size, 1-50, default 20). `impact` groups by depth: sections `depth1`..`depthN`
-(ranked sections: `limit` bounds each level, a larger one shows more) and
-`total: {1: n, 2: n, ...}` in the head, each level's number of sites (`">500"`
-when the level was cut at `IMPACT_LEVEL_ROWS` rows). **Impact walk:** level 1
+(ranked sections: `limit`, at most 50, bounds each level and there is no
+cursor; `total` says how many more there are) and
+`total: {1: n, 2: n, ...}` in the head, each level's number of sites (`">n"`
+when the level was cut at `IMPACT_LEVEL_ROWS` rows, or came from a level cut
+at `IMPACT_FRONTIER` symbols). **Impact walk:** level 1
 is the `call` and `reference` sites of the definition (with the name-only ones
 of an ambiguous name); level n + 1 is the sites that name a symbol that has a
-site on level n (only rows with a target continue: a name-only match of a
-common name would fan out to every definition of it), each symbol on its
+site on level n (only `resolved` rows continue past level 1: a name match
+of a common name would fan out to every definition of it, and 6 of 33 such
+hand-checked rows were right (#1055 review); `callers` and `impact` also leave
+out member calls of a receiver of unknown type matched by name alone, such as
+`res.json()`, which `references` lists as `textual`), each symbol on its
 first (shortest) level, so cycles end; at most 200 symbols go on from a level;
 a site at module level ends its chain; a row is `resolved` only when every hop
 to it is. A caller that is a later overload is followed by its own block id, so the sites

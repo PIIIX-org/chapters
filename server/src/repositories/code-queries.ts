@@ -29,10 +29,13 @@
  * `impact` follows the `call` and `reference` rows from `D` outwards, one
  * level per hop of symbols: level 1 holds the sites that name `D`, level
  * `n + 1` the sites that name a symbol one of whose sites is on level `n`,
- * each symbol on the first (shortest) level that reaches it. Only rows with
- * a target continue past level 1 (a name-only match of a common name would
- * fan out to every definition of it). A row is `resolved` only when every hop
- * on its way is. A site at module level ends its chain.
+ * each symbol on the first (shortest) level that reaches it. Past level 1
+ * only `resolved` rows continue (a name-only match of a common name would
+ * fan out to every definition of it: 6 of 33 hand-checked such rows were
+ * right, #1055 review), and `callers` and `impact` leave out the member calls
+ * of a receiver of unknown type matched by name alone (`res.json()`), which
+ * `references` lists. A row is `resolved` only when every hop on its way is.
+ * A site at module level ends its chain.
  */
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
@@ -158,6 +161,12 @@ const SITE_ORDER = sql`ORDER BY (e.confidence = 'resolved') DESC, sf.path COLLAT
 const NOT_EXTERNAL = sql`NOT (e.confidence = 'textual' AND e.via IS NOT NULL AND sf.language = ANY(${textArray(EXTERNAL_SPECIFIER_LANGUAGES)})
   AND NOT EXISTS (SELECT 1 FROM repository_file_imports i WHERE i.source_file_id = e.source_file_id AND i.target_path = e.via AND i.resolved_target_file_id IS NOT NULL))`
 
+/**
+ * A member call of a receiver whose type is unknown (`res.json()`, `x.where()`) matched by name alone: 6 of 33
+ * hand-checked such rows were right (#1055 review), so `callers` and `impact` leave them out; `references` lists them.
+ */
+const NOT_GUESSED_MEMBER = sql`NOT (e.confidence = 'textual' AND e.member)`
+
 /** The rows that name `target`: those resolved to it, and the target-less ones of its name. */
 const naming = (target: Target): SQL => sql`(
   ${target.fileId !== null ? sql`(e.target_file_id = ${target.fileId} AND e.target_block_id = ANY(${textArray(target.blockIds)})) OR` : sql``}
@@ -169,11 +178,14 @@ export async function codeSites(
   target: Target,
   kinds: readonly CodeEdgeKind[],
   page: { limit: number; offset: number },
+  /** False for `callers`: member calls matched by name alone are not listed (`NOT_GUESSED_MEMBER`). */
+  members = true,
 ): Promise<CodeSite[]> {
   return (await db.execute(sql`
     SELECT ${SITE_COLUMNS}
     FROM code_edges e ${SITE_JOINS}
     WHERE e.repository_id = ${repositoryId} AND e.kind = ANY(${textArray(kinds)}) AND ${naming(target)} AND ${NOT_EXTERNAL}
+      AND ${members ? sql`true` : NOT_GUESSED_MEMBER}
     ${SITE_ORDER}
     LIMIT ${page.limit} OFFSET ${page.offset}`)) as unknown as CodeSite[]
 }
@@ -231,6 +243,7 @@ export interface ImpactLevel {
   sites: ImpactSite[]
   /** How many there are: `IMPACT_LEVEL_ROWS` and `capped` when more were found. */
   total: number
+  /** More rows exist than are listed: the level was cut at `IMPACT_LEVEL_ROWS`, or came from a frontier cut at `IMPACT_FRONTIER` symbols. */
   capped: boolean
 }
 
@@ -250,6 +263,7 @@ export async function impact(repositoryId: string, target: Target, depth: number
   const visited = new Set<string>(target.fileId !== null ? target.blockIds.map((b) => `${target.fileId}\0${b}`) : [])
   /** The symbols the next level looks for sites of, by `fileId\0blockId`. */
   let frontier = new Map<string, Reached>()
+  let frontierCut = false
   for (let level = 1; level <= Math.min(depth, MAX_IMPACT_DEPTH); level++) {
     let rows: Array<CodeSite & { sourceFileId: string; sourceBlockId: string | null; targetFileId: string | null; targetBlockId: string | null }>
     if (level === 1) {
@@ -257,6 +271,7 @@ export async function impact(repositoryId: string, target: Target, depth: number
         SELECT ${SITE_COLUMNS}, e.source_file_id AS "sourceFileId", e.source_block_id AS "sourceBlockId", e.target_file_id AS "targetFileId", e.target_block_id AS "targetBlockId"
         FROM code_edges e ${SITE_JOINS}
         WHERE e.repository_id = ${repositoryId} AND e.kind = ANY(${textArray(SITE_KINDS.dependents)}) AND ${naming(target)} AND ${NOT_EXTERNAL}
+          AND ${NOT_GUESSED_MEMBER}
         ${SITE_ORDER}
         LIMIT ${IMPACT_LEVEL_ROWS + 1}`)) as unknown as typeof rows
     } else {
@@ -266,6 +281,7 @@ export async function impact(repositoryId: string, target: Target, depth: number
         SELECT ${SITE_COLUMNS}, e.source_file_id AS "sourceFileId", e.source_block_id AS "sourceBlockId", e.target_file_id AS "targetFileId", e.target_block_id AS "targetBlockId"
         FROM code_edges e ${SITE_JOINS}
         WHERE e.repository_id = ${repositoryId} AND e.kind = ANY(${textArray(SITE_KINDS.dependents)}) AND ${NOT_EXTERNAL}
+          AND e.confidence = 'resolved'
           AND (e.target_file_id, e.target_block_id) IN (SELECT w.f, w.b FROM jsonb_to_recordset(${wanted}::jsonb) AS w(f uuid, b text))
           AND NOT EXISTS (SELECT 1 FROM jsonb_to_recordset(${seen}::jsonb) AS v(f uuid, b text) WHERE v.f = e.source_file_id AND v.b = e.source_block_id)
         ${SITE_ORDER}
@@ -296,9 +312,10 @@ export async function impact(repositoryId: string, target: Target, depth: number
         a.col - b.col ||
         compare(a.kind, b.kind),
     )
-    levels.push({ sites, total: rows.length, capped })
+    levels.push({ sites, total: rows.length, capped: capped || frontierCut })
 
     frontier = new Map()
+    frontierCut = next.size > IMPACT_FRONTIER
     for (const [key, reached] of next) {
       // Every symbol listed here is on its shortest level, also one past the frontier.
       visited.add(key)

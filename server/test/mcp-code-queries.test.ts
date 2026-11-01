@@ -100,9 +100,11 @@ describe('find_symbols refs: callers, references, tests (#470)', () => {
     expect(rows((await q('helper', 'tests')).json.results)).toEqual(['tests/test_util.py:5 test_helper test textual'])
   })
 
-  it('Python: cross-file calls are textual, and a method is found by Class.method or its bare name', async () => {
+  it('Python: cross-file calls are textual, and a method is found by Class.method or its bare name; member calls of unknown receivers are not callers', async () => {
     expect(rows((await q('helper', 'callers')).json.results)).toEqual(['lib/util.py:6 run call resolved', 'lib/main.py:5 main call textual', 'tests/test_util.py:5 test_helper call textual'])
-    for (const name of ['Store.save', 'save']) expect(rows((await q(name, 'callers')).json.results), name).toEqual(['src/store.ts:6 Store.load call resolved', 'src/handler.ts:5 handle call textual'])
+    for (const name of ['Store.save', 'save']) expect(rows((await q(name, 'callers')).json.results), name).toEqual(['src/store.ts:6 Store.load call resolved'])
+    // `store.save(x)` is a member of an unknown receiver: a reference, not a caller.
+    expect(rows((await q('save', 'references')).json.results)).toContain('src/handler.ts:5 handle call textual')
   })
 
   it('pages with the cursor: the pages are the whole answer', async () => {

@@ -1,5 +1,4 @@
 import {
-  IMPACT_LEVEL_ROWS,
   MAX_DEFINITIONS,
   MAX_IMPACT_DEPTH,
   SITE_KINDS,
@@ -173,7 +172,7 @@ export async function askCode(repositoryId: string, args: RefsArgs): Promise<Cod
     const levels = await impact(repositoryId, target, depth)
     if (definition === null && levels.length === 0) throw nothing()
     // Each level's number of sites: `">500"` when the level was cut at the rows read for it.
-    const total = Object.fromEntries(levels.map((l, i) => [i + 1, l.capped ? `>${IMPACT_LEVEL_ROWS}` : l.total]))
+    const total = Object.fromEntries(levels.map((l, i) => [i + 1, l.capped ? `>${l.total}` : l.total]))
     return {
       head: { refs: 'impact', symbol, depth, total },
       lists: Array.from({ length: depth }, (_, i) => ({ name: `depth${i + 1}`, rows: (levels[i]?.sites ?? []).slice(0, limit + 1).map(row), paged: false })),
@@ -181,7 +180,7 @@ export async function askCode(repositoryId: string, args: RefsArgs): Promise<Cod
     }
   }
 
-  const sites = await codeSites(repositoryId, target, SITE_KINDS[args.refs], { limit: limit + 1, offset })
+  const sites = await codeSites(repositoryId, target, SITE_KINDS[args.refs], { limit: limit + 1, offset }, args.refs !== 'callers')
   if (definition === null && offset === 0 && sites.length === 0) throw nothing()
   return { head: { refs: args.refs, symbol }, lists: [{ name: 'results', rows: sites.map(row), paged: true }], limit }
 }
@@ -206,7 +205,7 @@ export type CodeRefsQuery = Omit<RefsArgs, 'refs'> & { refs: Refs }
 /**
  * The REST answer: the head and each list's first `limit` rows under its
  * name; `next` is the `offset` that continues a list that pages, when more
- * rows exist (a list that does not page is complete up to `limit`: raise it).
+ * rows exist (a list that does not page is complete up to `limit`, at most MAX_LIMIT).
  */
 export async function codeRefsBody(repositoryId: string, args: RefsArgs): Promise<Record<string, unknown>> {
   const answer = await askCode(repositoryId, args)
