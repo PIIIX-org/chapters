@@ -4,7 +4,10 @@
 // refuses path names with `reload-required` since ADR-003 S2b), and pays for
 // every (re)connect with a fresh single-use ticket from POST /api/collab/ticket
 // (server/src/sync/routes.ts:58) using the browser session cookie. The Y.Doc
-// is owned by the caller so a reconnect can reuse it, as the hook does.
+// is owned by the caller so a reconnect can reuse it, as the hook does. Like
+// the hook, a document the relay refuses with `note-rebased` (#891) is set
+// aside: its text is kept in `offered`, and the client starts over on a new
+// Y.Doc.
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import type { RestSession } from './rest.ts'
@@ -24,6 +27,8 @@ export class CollabClient {
   synced = false
   authFailed: string | null = null
   ticketErrors = 0
+  /** The text of a document the relay refused with `note-rebased` (#891): what the editor offers the person (`unmerged`). */
+  offered: string | null = null
   readonly events: CollabEvent[] = []
   private readonly t0 = Date.now()
 
@@ -52,6 +57,11 @@ export class CollabClient {
   async connect(timeoutMs = 30_000): Promise<boolean> {
     this.synced = false
     this.authFailed = null
+    this.open()
+    return this.waitSynced(timeoutMs)
+  }
+
+  private open() {
     const url = this.baseUrl.replace(/^http/, 'ws') + '/collab'
     this.provider = new HocuspocusProvider({
       url,
@@ -80,9 +90,29 @@ export class CollabClient {
         this.authFailed = reason
         this.ev('auth-failed', reason)
       },
-      onClose: ({ event }) => this.ev('close', `${event.code} ${event.reason}`),
+      onClose: ({ event }) => {
+        this.ev('close', `${event.code} ${event.reason}`)
+        if (event.reason === 'note-rebased') this.rebased()
+      },
     } as ConstructorParameters<typeof HocuspocusProvider>[0])
-    return this.waitSynced(timeoutMs)
+  }
+
+  /**
+   * The relay refused this document's first sync (#891): the note was rebased
+   * since it last synced and it holds items the relay does not. As
+   * client/src/hooks/useCollabDoc.ts does: its text is kept to offer, never
+   * merged, nothing more of it is sent, and the client starts over on a new
+   * Y.Doc.
+   */
+  private rebased() {
+    this.offered = this.body
+    this.ev('rebased')
+    const stale = this.provider
+    this.provider = null
+    this.synced = false
+    stale?.destroy()
+    this.ydoc = new Y.Doc()
+    this.open()
   }
 
   async waitSynced(timeoutMs = 30_000): Promise<boolean> {

@@ -107,10 +107,11 @@ export interface CollabSession {
   /** True while `ydoc` is a copy restored from this browser that is not merged
    *  with the relay's document yet: shown even when the relay is unreachable. */
   restored: boolean
-  /** Text kept in this browser from an earlier session that was NOT merged,
-   *  because the relay's document no longer shares any history with it (the
-   *  note was re-created, or its CRDT state was lost). Merging two unrelated
-   *  histories duplicates the whole note, so the person gets the text instead. */
+  /** Text kept in this browser that was NOT merged, because the relay's
+   *  document no longer shares its history (the note was re-created, or its
+   *  CRDT state was lost), or because the relay refused this tab's document
+   *  after the note was rebased under it (#891, close reason `note-rebased`).
+   *  Merging either duplicates text, so the person gets the text instead. */
   unmerged: string | null
   /** Deletes the copy behind `unmerged` from this browser. */
   discardUnmerged: () => void
@@ -282,6 +283,11 @@ function sharesHistory(a: Y.Doc, b: Y.Doc): boolean {
   return false
 }
 
+/** A copy held by this tab alone, where this browser keeps none (no IndexedDB): offered while the tab lives. */
+function heldInMemory(doc: Y.Doc): CollabCopy {
+  return { doc, flushed: () => Promise.resolve(false), close: () => Promise.resolve(), release: () => Promise.resolve() }
+}
+
 /**
  * Joins the note's Yjs document on the Hocuspocus relay
  * (`server/src/sync/collab-server.ts`). Editors only.
@@ -349,9 +355,10 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
   // Copies that could not be merged, kept until the person discards them or
   // leaves. They stay this tab's (no other tab offers them meanwhile).
   const unmergedRef = useRef<CollabCopy[] | null>(null)
-  // A document rebuilt after a refusal (see `rebuild` below) and this
-  // browser's copy of it, for the connect effect it re-runs to adopt.
-  const handoffRef = useRef<{ ydoc: Y.Doc; copy: CollabCopy | null; sizes: RelaySizes | null } | null>(null)
+  // A document that replaces this one (see `rebuild` and `rebased` below),
+  // this browser's copy of it, and whether it holds anything unsent, for the
+  // connect effect it re-runs to adopt.
+  const handoffRef = useRef<{ ydoc: Y.Doc; copy: CollabCopy | null; sizes: RelaySizes | null; unsent: boolean } | null>(null)
 
   useEffect(() => {
     if (!enabled) return
@@ -400,14 +407,15 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
     let restore: CollabCopy[] | null = null
     let release: number | undefined
 
-    // A document rebuilt after a refusal: everything in it is unsent, and it
-    // already has its copy in this browser.
+    // A document that replaced this effect's one: a rebuilt one (everything
+    // in it unsent, its copy in this browser already) or a new one after a
+    // rebase (nothing in it yet).
     const handed = handoffRef.current
     if (handed?.ydoc === ydoc) {
       handoffRef.current = null
       live = handed.copy
       relaySizes = handed.sizes
-      dirty = true
+      dirty = handed.unsent
       everConnected = true
     }
 
@@ -547,8 +555,50 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
         void (copy ? copy.flushed().then((ok) => (ok ? old.release() : old.close())) : old.close())
       }
       handingOff = true
-      handoffRef.current = { ydoc: rebuilt, copy, sizes: relaySizes }
+      handoffRef.current = { ydoc: rebuilt, copy, sizes: relaySizes, unsent: true }
       setDoc((current) => (current.ydoc === ydoc ? { ...current, ydoc: rebuilt } : current))
+    }
+
+    /**
+     * The relay refused this document's first sync (#891, close reason
+     * `note-rebased`): the note's text was rebased on the server since this
+     * document last synced, and the document holds items the relay does not.
+     * They may be the originals of text the rebase already holds as new
+     * items (the tab's own typing, put back behind a newer row), so syncing
+     * would put that text in twice. The editor starts over on a new document,
+     * which syncs the relay's text, and the old document's text is offered to
+     * the person like a copy that shares no history (`unmerged`), never
+     * merged. It is kept in this browser as a document of its own, with no
+     * history in common with the relay's, so a later visit offers it too;
+     * the old document's own copy is deleted once that one is stored.
+     */
+    const rebased = () => {
+      if (stopped || cancelled || handingOff) return
+      handingOff = true
+      const offer = new Y.Doc()
+      offer.getText('body').insert(0, ydoc.getText('body').toString())
+      const copy = (stashName ? keepCollabCopy(stashName, offer) : null) ?? heldInMemory(offer)
+      const old = live
+      live = null
+      // Deleted only once the offer is stored: a failed write (storage full) keeps the old copy instead.
+      if (old) void copy.flushed().then((ok) => (ok ? old.release() : old.close()))
+      const pending = [...(unmergedRef.current ?? []), copy]
+      unmergedRef.current = pending
+      setUnmerged(pending.map((kept) => kept.doc.getText('body').toString()).join('\n\n'))
+      // Nothing more of the old document goes to the relay.
+      const stale = provider
+      provider = undefined
+      setAwareness(null)
+      stale?.destroy()
+      setPeers([])
+      // Copies from earlier sessions not merged yet go back to this browser with this effect (its cleanup).
+      setRestoredDoc(null)
+      setSynced(false)
+      setUnsynced(false)
+      setStatus('reconnecting')
+      const fresh = new Y.Doc()
+      handoffRef.current = { ydoc: fresh, copy: null, sizes: null, unsent: false }
+      setDoc((current) => (current.ydoc === ydoc ? { ...current, ydoc: fresh } : current))
     }
 
     const onUpdate = (_update: Uint8Array, origin: unknown) => {
@@ -773,7 +823,7 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
           }
         },
         onStatus: ({ status: socketStatus }) => {
-          if (stopped || refused || paused) return
+          if (stopped || refused || paused || handingOff) return
           if (socketStatus === WebSocketStatus.Connected) {
             everConnected = true
             socketOpen = true
@@ -806,14 +856,17 @@ export function useCollabDoc({ vaultId, noteId, path, user, enabled }: UseCollab
         // relay closes with `signed-out` when the session ended (#498), with
         // `note-deleted` when the note is deleted or purged, with
         // `note-not-migrated` when its S2b roll-forward failed at this boot,
-        // and with `reload-required` for a document named the way an older
-        // bundle names it (a close, so that bundle retries instead, #907).
+        // with `reload-required` for a document named the way an older
+        // bundle names it (a close, so that bundle retries instead, #907),
+        // and with `note-rebased` for a document that missed a rebase of the
+        // note and holds items the relay does not (#891).
         onClose: ({ event }) => {
           if (event.reason === 'store-busy') storeBusy()
           else if (event.reason === 'signed-out') stop('signed-out')
           else if (event.reason === 'note-deleted') stop('deleted')
           else if (event.reason === 'note-not-migrated') stop('not-migrated')
           else if (event.reason === 'reload-required') stop('reload-required')
+          else if (event.reason === 'note-rebased') rebased()
           else if (event.reason === 'note-too-large' || event.code === 1009) refuse()
         },
         onSynced: () => {
