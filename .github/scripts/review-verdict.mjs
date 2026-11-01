@@ -111,7 +111,9 @@ export function queueContains({ parents = [], baseSha, prHead }) {
   const shas = parents.map((p) => p.sha ?? p)
   if (shas.includes(prHead)) return { ok: true }
   const other = shas.filter((s) => s !== baseSha)
-  if (shas.length < 2 || other.length === 0) return { ok: true, unverified: true }
+  // A single-parent queue commit (squash or rebase queue) cannot show the PR head: fail closed.
+  if (shas.length < 2) return { ok: false, contains: shas[0] ?? null, notMerge: true }
+  if (other.length === 0) return { ok: true, unverified: true }
   return { ok: false, contains: other[0] }
 }
 
@@ -333,7 +335,9 @@ async function main() {
     const { data: qc } = await api(`${r}/commits/${queue.head_sha}`)
     const contains = queueContains({ parents: qc.parents, baseSha: queue.base_sha, prHead: head })
     if (!contains.ok) {
-      const description = `Queue commit ${short(queue.head_sha)} was built from ${short(contains.contains)}, not the PR head ${short(head)}`
+      const description = contains.notMerge
+      ? `Queue commit ${short(queue.head_sha)} is not a merge commit, so it cannot show the PR head ${short(head)}; set the queue's merge method to merge commit`
+      : `Queue commit ${short(queue.head_sha)} was built from ${short(contains.contains)}, not the PR head ${short(head)}`
       await setStatus(false, description)
       return summary(
         [
@@ -341,13 +345,15 @@ async function main() {
           '',
           `**${description}**`,
           '',
-          `Status \`${context}\` set to failure on the queue commit \`${queue.head_sha}\`. The PR head moved after it was queued; the queue drops it. Review the new head, post the verdict again and re-queue.`,
+          contains.notMerge
+            ? `Status \`${context}\` set to failure on the queue commit \`${queue.head_sha}\`. A squash or rebase queue builds single-parent commits; the merge queue must use the merge-commit method (docs/agents/github-workflow.md, Merge queue settings).`
+            : `Status \`${context}\` set to failure on the queue commit \`${queue.head_sha}\`. The PR head moved after it was queued; the queue drops it. Review the new head, post the verdict again and re-queue.`,
           ...(CHECKER ? ['', CHECKER] : []),
         ].join('\n'),
       )
     }
     queueNote = `Merge queue \`${queue.head_ref}\`: queue commit \`${queue.head_sha}\` ${
-      contains.unverified ? 'is not a merge commit; the PR head is taken as queued (a PR whose head moves leaves the queue)' : `contains the PR head \`${head}\` as a parent`
+      contains.unverified ? 'merges the base with itself; the PR head is taken as queued (a PR whose head moves leaves the queue)' : `contains the PR head \`${head}\` as a parent`
     }.`
   }
   const [reviews, comments, commit, suites, timeline] = await Promise.all([

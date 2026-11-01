@@ -150,7 +150,12 @@ benchmark change (below).
   `dev` that touch `server/src/search/**`, `server/src/mcp/**` or the
   benchmark, where every suite runs): a suite's `goldReached` is below the
   base baseline's. No tolerance: a question whose gold stops being reached
-  is a lost answer, whatever hit@5 does.
+  is a lost answer, whatever hit@5 does. There is no override; the only
+  way past is a change of the suite fingerprint (questions, keywords,
+  config or harness), accepted with the `bench-suite-change` label, which
+  sets a new reference. All-suite instances take 80–175 minutes (two
+  timed out at the old 180-minute budget), hence the 225/240-minute
+  budgets.
 - **Missing instance** (red, at once): a `bench-results-<n>` artifact has
   no `results.json` (that instance failed, timed out or was cancelled). The
   gate stops before evaluating anything and names the artifact; the

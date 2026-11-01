@@ -773,10 +773,19 @@ queue branch (`gh-readonly-queue/<base>/pr-<N>-<sha>`; the sha in the name
 is the queue's base, not the PR head), applies the same rules to the PR's
 current head, which the queue's temporary merge commit must contain as its
 second parent (a queue commit built from another head gets a failure
-status naming both), and sets the status on the queue commit, so
+status naming both, and a single-parent queue commit, from a squash or
+rebase queue, fails closed), and sets the status on the queue commit, so
 `review-verdict/dev` reports there too. A verdict posted while the PR is
 queued is picked up by re-running the newest **Review verdict** run of the
 queue commit.
+
+**Merge queue settings.** The merge method is **merge commit**: the
+verdict check needs the PR head as the queue commit's second parent and
+fails closed otherwise. The maximum group size is **1**: `lab-plan` and
+`review-verdict` resolve only the PR named in the queue branch, so a
+grouped commit would carry other PRs' changes unplanned and unreviewed.
+The status-check timeout is **at least 240 minutes**, the `bench` job's
+all-suite budget.
 
 A status belongs to a **commit, not a PR**, and a promotion's head (the
 tip of `dev`) can also be the head of other PRs. So:

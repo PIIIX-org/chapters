@@ -31,7 +31,11 @@ describe('plan', () => {
   })
 
   it('search, MCP or benchmark changes run every suite and require the golds', () => {
-    for (const file of ['server/src/search/fusion.ts', 'server/src/mcp/tools/read.ts', 'benchmarks/questions/rea.json', 'benchmarks/lib/policies.ts']) {
+    for (const file of ['server/src/search/fusion.ts', 'server/src/mcp/tools/read.ts', 'benchmarks/questions/rea.json', 'benchmarks/lib/policies.ts', 'benchmarks/run.ts',
+      'server/src/repositories/extraction.ts', 'server/src/repositories/extraction-queue.ts', 'server/src/repositories/extraction-languages.ts', 'server/src/repositories/code-blocks.ts',
+      'server/src/repositories/code-edges.ts', 'server/src/repositories/code-edge-rules.ts', 'server/src/repositories/outline.ts',
+      'server/src/repositories/import-resolution.ts', 'server/src/repositories/language.ts', 'server/src/text/blocks.ts',
+      'server/src/notes/note-blocks.ts', 'server/src/config.ts']) {
       const p = plan(['README.md', file])
       assert.equal(p.bench, 'all', file)
       assert.equal(p.golds, true, file)
@@ -40,13 +44,20 @@ describe('plan', () => {
     // Markdown under benchmarks/ (README, run notes) changes no result.
     assert.deepEqual(plan(['benchmarks/README.md', 'benchmarks/runs/2026-10-31.md']), { tier: 'none', also: '', bench: 'none', golds: false })
     assert.equal(plan(['benchmarks/baseline.json']).bench, 'all')
+    // Benchmark files outside the premise inputs run nothing.
+    for (const file of ['benchmarks/agent-trial/run.ts', 'benchmarks/runs/2026-10-31.json', 'benchmarks/session/x.ts', 'benchmarks/package.json']) {
+      assert.deepEqual(plan([file]), { tier: 'none', also: '', bench: 'none', golds: false }, file)
+    }
+    // The rest of repositories/ stays on the chapters suite without the golds floor.
+    for (const file of ['server/src/repositories/store.ts', 'server/src/repositories/git-sync.ts', 'server/src/repositories/routes.ts', 'server/src/repositories/scheduler.ts', 'server/src/text/other.ts']) {
+      assert.equal(plan([file]).golds, false, file)
+    }
   })
 
   it('the wider chapters set runs the chapters suite only, without the golds floor', () => {
     for (const file of [
-      'server/src/repositories/extraction-queue.ts',
+      'server/src/repositories/store.ts',
       'server/src/db/schema.ts',
-      'server/src/config.ts',
       'server/drizzle/0001.sql',
       'server/package.json',
       'pnpm-lock.yaml',

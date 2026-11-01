@@ -117,9 +117,12 @@ describe('merge queue', () => {
   it('refuses a queue commit built from another head, naming it', () => {
     assert.deepEqual(queueContains({ parents: [{ sha: BASE }, { sha: OLD }], baseSha: BASE, prHead: HEAD }), { ok: false, contains: OLD })
   })
-  it('cannot verify a commit that is not a merge and says so', () => {
-    assert.deepEqual(queueContains({ parents: [{ sha: BASE }], baseSha: BASE, prHead: HEAD }), { ok: true, unverified: true })
-    assert.deepEqual(queueContains({ parents: [], baseSha: BASE, prHead: HEAD }), { ok: true, unverified: true })
+  it('fails closed on a queue commit that is not a merge (squash or rebase queue)', () => {
+    assert.deepEqual(queueContains({ parents: [{ sha: BASE }], baseSha: BASE, prHead: HEAD }), { ok: false, contains: BASE, notMerge: true })
+    assert.deepEqual(queueContains({ parents: [], baseSha: BASE, prHead: HEAD }), { ok: false, contains: null, notMerge: true })
+  })
+  it('a merge of the base with itself is unverified', () => {
+    assert.deepEqual(queueContains({ parents: [{ sha: BASE }, { sha: BASE }], baseSha: BASE, prHead: HEAD }), { ok: true, unverified: true })
   })
 })
 

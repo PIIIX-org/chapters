@@ -37,16 +37,20 @@ export const BACKUP_RESTORE =
  * What decides what an agent gets back: search, extraction and ingestion,
  * MCP responses, the schema, the image's dependencies, and the benchmark
  * with its lab plumbing. Markdown under benchmarks/ (README, run notes)
- * cannot change a result and runs nothing.
+ * cannot change a result and runs nothing; neither can agent-trial/, runs/,
+ * session/ or package.json, which feed no premise fingerprint.
  */
 export const BENCH_CHAPTERS =
-  /^(server\/src\/(search|mcp|repositories|db)\/|server\/src\/(config|index|app)\.ts$|server\/drizzle\/|server\/package\.json$|pnpm-lock\.yaml$|Dockerfile$|docker-compose\.yml$|benchmarks\/(?!.*\.md$)|lab\/bootstrap\.ts$|lab\/lib\/|lab\/docker-compose\.lab\.yml$|\.github\/workflows\/elara-lab\.yml$|\.github\/actions\/lab-instance\/|\.github\/scripts\/bench-gate\.mjs$|\.github\/scripts\/lab-plan\.mjs$)/
+  /^(server\/src\/(search|mcp|repositories|db)\/|server\/src\/(config|index|app)\.ts$|server\/drizzle\/|server\/package\.json$|pnpm-lock\.yaml$|Dockerfile$|docker-compose\.yml$|benchmarks\/(run\.ts$|baseline\.json$|lib\/|questions\/)|lab\/bootstrap\.ts$|lab\/lib\/|lab\/docker-compose\.lab\.yml$|\.github\/workflows\/elara-lab\.yml$|\.github\/actions\/lab-instance\/|\.github\/scripts\/bench-gate\.mjs$|\.github\/scripts\/lab-plan\.mjs$)/
 
 /**
- * Response shaping and token paths (search ranking, MCP response text) and
- * the benchmark itself: every suite runs, and no suite may lose a gold.
+ * Response shaping and token paths (search ranking, MCP response text), the
+ * extraction path (blocks, code edges, outlines, languages, config) and the
+ * benchmark's premise inputs (run.ts, lib/, questions/, baseline.json):
+ * every suite runs, and no suite may lose a gold.
  */
-export const BENCH_ALL = /^(server\/src\/(search|mcp)\/|benchmarks\/(?!.*\.md$))/
+export const BENCH_ALL =
+  /^(server\/src\/(search|mcp)\/|server\/src\/repositories\/(extraction|code-blocks|code-edge|outline|import-resolution|language)[^/]*$|server\/src\/text\/blocks\.ts$|server\/src\/notes\/note-blocks\.ts$|server\/src\/config\.ts$|benchmarks\/(run\.ts$|baseline\.json$|lib\/|questions\/))/
 
 /** The plan for a list of changed paths: { tier, also, bench, golds }. */
 export function plan(files) {
