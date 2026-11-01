@@ -314,14 +314,15 @@ test('elara: the lines a span page left are read next; a file whose span shows n
   assert.equal(run.episode.callsToGold, 5, 'the whole-file read, the last call, reaches line 99')
 })
 
-test('elara: a second located hit of a file already read whole is not read again, nor is its span repeated', async () => {
+test('elara: only the first hit is read as a span; a second located hit of a file already read whole adds no read', async () => {
   const calls: string[] = []
   const hits = [
     { resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 52, snippet: 's' },
     { resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 51, snippet: 's' },
+    { resourceType: 'symbol', path: 'src/b.ts', startLine: 5, endLine: 6, snippet: 's' },
   ]
-  await runElara('q', [{ path: 'src/a.ts', start: 99, end: 99 }], fakeElara(hits, calls))
-  assert.deepEqual(calls, ['search q', 'read_file src/a.ts:40-82', 'read_file src/a.ts'])
+  await runElara('q', [{ path: 'src/b.ts', start: 40, end: 40 }], fakeElara(hits, calls))
+  assert.deepEqual(calls, ['search q', 'read_file src/a.ts:40-82', 'read_file src/a.ts', 'read_file src/b.ts'])
 })
 
 test('elara: a span that shows the gold ends the episode without reading the file', async () => {

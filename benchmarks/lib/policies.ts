@@ -3,11 +3,11 @@
 // index Elara builds. Both stop as soon as every gold range has been in
 // their context (an oracle stop, the same for both), or when a cap is hit.
 //
-//   elara  search(question) -> each hit best first: a hit that carries a
-//          location is read as that span first (read_file `targets`, the
-//          same window around it the grep agent reads, #1058); then, when
-//          the gold is not in it (or the hit has no location), its file,
-//          read_file page by page (the default 4,000-token budget)
+//   elara  search(question) -> each hit best first: the first hit, when it
+//          carries a location, is read as that span first (read_file
+//          `targets`, the same window around it the grep agent reads,
+//          #1058); then, when the gold is not in it (or the hit has no
+//          location), its file, read_file page by page (the default 4,000-token budget)
 //          following its cursor
 //   grep   rg --count (files ranked by matching lines) -> rg -n over the
 //          top files (first matches of each) -> ranged reads around them
@@ -246,15 +246,16 @@ export async function runElara(question: string, gold: readonly LineRange[], too
   const status = searchStatus(parsed)
   const run = { ranking, hits: located, abstained: status === 'no_match' || status === 'ambiguous', episode: ep }
 
-  // Each hit, best first, up to the file cap: a located hit is read as its span first; a file whose hit shows no gold, or has no location, is read page by page.
+  // Each hit, best first, up to the file cap: the first hit, when it is located, is read as its span first; a file whose span shows no gold, and every other hit, is read page by page.
   const paged = new Set<string>()
   const files = new Set<string>()
   for (const [i, hit] of hits.entries()) {
     const path = hit.path
     if (typeof path !== 'string' || ep.done || paged.has(path) || (!files.has(path) && files.size >= caps.maxFiles)) continue
     files.add(path)
+    // Only the first hit is read as a span: each span read is a call, and a wrong one is a call the file read then repeats (the call cap is 15).
     const span = located[i]
-    if (span !== null && span !== undefined) {
+    if (i === 0 && span !== null && span !== undefined) {
       // The same window around the evidence the grep agent reads; the lines a page of it left follow. Lines already in context are not asked for again: the window shrinks to its first and last new line.
       const want: { start: number; end: number } | undefined = { start: Math.max(1, span.start - GREP.readBefore), end: span.end + GREP.readAfter }
       while (want.start <= want.end && ep.seen.has(path, want.start)) want.start++
