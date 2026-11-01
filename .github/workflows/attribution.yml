@@ -11,23 +11,34 @@ name: Commit attribution
 # (CI, Commit attribution).
 #
 # Not a required check (yet): it reports on every PR to `dev` or `prod`.
+#
+# On `merge_group` (the queue's temporary commit) the job forwards the PR's
+# own result: it resolves the PR from the queue branch name and re-applies
+# the conclusion of the latest `attribution` run on the PR head
+# (.github/scripts/merge-group-forward.mjs), so the check also reports on
+# the queue commit once it is required.
 
 on:
   pull_request:
     branches: [dev, prod]
     types: [opened, synchronize, reopened, labeled, unlabeled, ready_for_review]
+  merge_group:
+    branches: [dev]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
   pull-requests: read
+  # The merge-group step reads the PR's check runs.
+  checks: read
 
 jobs:
   attribution:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,6 +54,7 @@ jobs:
       # says which). The copy runs alone from $RUNNER_TEMP, so the script
       # must stay a single file with no sibling imports.
       - name: Check every commit for a Co-Authored-By trailer
+        if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -52,4 +64,22 @@ jobs:
             ATTRIBUTION_CHECKER=base node "$RUNNER_TEMP/attribution.mjs"
           else
             ATTRIBUTION_CHECKER=pr node "$checker"
+          fi
+      # Queue commit: HEAD^1 is the queue base (dev, or the entry ahead), so
+      # the same rule gives the base's copy of the forwarder; HEAD^2 is the
+      # PR head the queue merged, which must still be the PR's live head
+      # (fetch-depth 2 includes both parents).
+      - name: Forward the PR's attribution result to the queue commit
+        if: github.event_name == 'merge_group'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MERGE_GROUP_CHECK: attribution
+        run: |
+          export MERGE_GROUP_PR_HEAD="$(git rev-parse --verify --quiet HEAD^2 || true)"
+          checker=.github/scripts/merge-group-forward.mjs
+          if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
+            git show "HEAD^1:$checker" > "$RUNNER_TEMP/merge-group-forward.mjs"
+            MERGE_GROUP_CHECKER=base node "$RUNNER_TEMP/merge-group-forward.mjs"
+          else
+            MERGE_GROUP_CHECKER=pr node "$checker"
           fi
