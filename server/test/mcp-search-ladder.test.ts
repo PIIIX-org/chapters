@@ -6,7 +6,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
+import { LOCATE_HITS } from '../src/search/locate.js'
 import { createNote } from '../src/notes/store.js'
+import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 let app: FastifyInstance
@@ -27,6 +30,8 @@ beforeAll(async () => {
   for (let i = 0; i < 40; i++) {
     await createNote(vaultId, { path: `docs/ladder-${String(i).padStart(2, '0')}`, body: `# Ladder ${i}\n\nThe pomelo harvest notes number ${i}: ${'a long sentence about pomelo trees and their harvest. '.repeat(6)}\n` })
   }
+  await flushExtraction()
+  await flushEmbeddings()
 }, 180_000)
 
 afterAll(async () => {
@@ -63,6 +68,8 @@ describe('search answers down the budget ladder (#414)', () => {
     expect(located.truncated).toMatchObject({ level: 'locations' })
     const rows = located.results as unknown[]
     expect(rows.length).toBeGreaterThan(0)
-    for (const row of rows) expect(row).toMatch(/^docs\/ladder-\d\d#L\d+-L\d+$/)
+    // The first LOCATE_HITS hits are located; a hit past them is its path.
+    for (const row of rows.slice(0, LOCATE_HITS)) expect(row).toMatch(/^docs\/ladder-\d\d#L\d+-L\d+$/)
+    for (const row of rows.slice(LOCATE_HITS)) expect(row).toMatch(/^docs\/ladder-\d\d$/)
   })
 })

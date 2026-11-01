@@ -180,7 +180,6 @@ export async function locateHits(results: SearchResult[], query: string, vectorB
   ])
 
   const noteById = new Map(notes.map((n) => [n.id, n]))
-  const fileById = new Map(files.map((f) => [f.id, f]))
   const symbolById = new Map(symbols.map((s) => [s.id, s]))
   const blocksOf = (rows: readonly BlockRow[]) => {
     const byOwner = new Map<string, BlockRow[]>()
