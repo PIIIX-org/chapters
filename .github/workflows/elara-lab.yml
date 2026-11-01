@@ -166,7 +166,7 @@ jobs:
                 tier=full
                 bench=all
               else
-                gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+                gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/changed.txt"
                 node .github/scripts/lab-plan.mjs --files "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/plan.txt"
                 cat "$RUNNER_TEMP/plan.txt"
                 tier=$(sed -n 's/^tier=//p' "$RUNNER_TEMP/plan.txt")

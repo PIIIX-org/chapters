@@ -398,6 +398,23 @@ describe('the held-out suite (#1059)', () => {
     assert.match(failures(evaluate({ results: other, baseline: base(), baseBaseline: base(), pr: pr(), changed: changedSearch })), /held-out questions or repository differ/)
   })
 
+  it('a deleted or renamed suite is not a way out: every suite of the base must run on the all-suites path', () => {
+    const gone = run({}, { suites: ['s'] })
+    const report = evaluate({ results: gone, baseline: baselineOf(gone), baseBaseline: base(), pr: pr(), requireGolds: true, changed: changedSearch })
+    assert.match(failures(report), /holdout: in the base baseline but not in this run/)
+    // A tier that runs one suite on purpose (no golds floor) is not asked for the others.
+    assert.doesNotMatch(failures(evaluate({ results: gone, baseline: baselineOf(gone), baseBaseline: base(), pr: pr(), changed: ['docs/x.md'] })), /not in this run/)
+  })
+
+  it('the extraction path and a renamed file lock it too, and its report shows numbers only', () => {
+    const better = moved({ hit5: 0.9 })
+    for (const file of ['server/src/repositories/extraction-queue.ts', 'server/src/text/blocks.ts', 'server/src/notes/note-blocks.ts', 'server/src/config.ts']) {
+      assert.match(failures(evaluate({ results: better, baseline: baselineOf(better), baseBaseline: base(), pr: pr(), changed: [file] })), /changes the held-out entry/, file)
+    }
+    const md = render(evaluate({ results: moved(), baseline: base(), baseBaseline: base(), pr: pr(), changed: changedSearch }), moved())
+    assert.doesNotMatch(md.split('## holdout')[1] ?? '', /questions changed|not exact/)
+  })
+
   it('without a base entry (the PR that adds the suite) or without a file list it is judged as any suite', () => {
     const added = evaluate({ results: baseRun(), baseline: base(), baseBaseline: baselineOf(run()), pr: pr(), changed: changedSearch })
     assert.deepEqual(added.failures, [])

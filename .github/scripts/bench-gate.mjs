@@ -69,7 +69,15 @@ const FRACTION_METRICS = new Set(['hit5', 'exact1', 'goldReachedRate'])
  * RANKING_PATHS cannot write or lower its baseline and cannot argue a regression away with a label.
  */
 export const HOLDOUT = 'holdout'
-export const RANKING_PATHS = [/^server\/src\/search\//, /^server\/src\/mcp\//, /^benchmarks\/lib\/policies\.ts$/]
+export const RANKING_PATHS = [
+  /^server\/src\/(search|mcp)\//,
+  // What decides an agent's answer besides search and MCP: the extraction path (lab-plan.mjs `BENCH_ALL`).
+  /^server\/src\/repositories\/(extraction|code-blocks|code-edge|outline|import-resolution|language)[^/]*$/,
+  /^server\/src\/text\/(blocks|lines|targets)\.ts$/,
+  /^server\/src\/notes\/note-blocks\.ts$/,
+  /^server\/src\/config\.ts$/,
+  /^benchmarks\/lib\/policies\.ts$/,
+]
 
 /** Owner overrides: label + PR body line with the reason. */
 export const OVERRIDES = {
@@ -232,6 +240,12 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
   const notes = []
   const suites = []
   if (!results) return { ok: false, failures: ['no benchmark results (harness failure: see the bench jobs)'], notes, suites, requireGolds }
+  // The all-suites path runs every suite of the base: one missing (deleted, renamed) is not judged by the loop below, so it fails here (#1059).
+  if (requireGolds && baseBaseline?.suites) {
+    for (const name of Object.keys(baseBaseline.suites)) {
+      if (!results.selected.includes(name)) failures.push(`${name}: in the base baseline but not in this run (a suite deleted or renamed is not judged: the all-suites path runs every one)`)
+    }
+  }
   for (const name of results.selected) {
     const run = results.suites[name]
     if (!run) {
@@ -412,7 +426,8 @@ export function render(report, results) {
       const ratio = run.paired.grep > 0 ? ` Elara ÷ grep = ${fmt(Math.round((run.paired.elara / run.paired.grep) * 100) / 100)} (the phase-3 exit criterion is at most 1).` : ''
       md.push(`Questions both agents reach: ${run.paired.questions}; mean tokens-to-gold on those, Elara ${fmt(run.paired.elara)}, grep ${fmt(run.paired.grep)}.${ratio}`, '')
     }
-    const failing = run.perQuestion.filter((q) => q.elara.tokensToGold === null || q.elara.exact1 === 0)
+    // The held-out suite reports numbers only: per-question detail would be tuning feedback (#1059).
+    const failing = row.name === HOLDOUT ? [] : run.perQuestion.filter((q) => q.elara.tokensToGold === null || q.elara.exact1 === 0)
     if (failing.length) {
       md.push(`<details><summary>${failing.length} of ${run.questions} questions not exact (Elara)</summary>`, '', '| question | outcome | tokens-to-gold | first returned location |', '|---|---|---|---|')
       for (const q of failing) {
@@ -421,7 +436,7 @@ export function render(report, results) {
       }
       md.push('', '</details>', '')
     }
-    const changes = questionChanges(row.ref ?? own, run)
+    const changes = row.name === HOLDOUT ? [] : questionChanges(row.ref ?? own, run)
     if (changes.length) md.push(`<details><summary>${changes.length} questions changed (Elara)</summary>`, '', ...changes.map((c) => `- ${c}`), '', '</details>', '')
   }
   md.push(
