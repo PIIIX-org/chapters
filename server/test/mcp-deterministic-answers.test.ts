@@ -196,16 +196,17 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
 
   // Blocks get their ids last, in the order of their labels (no row references a block id).
   const owned = await db
-    .select({ id: blocks.id, ownerId: blocks.ownerId, kind: blocks.kind, innerPath: blocks.innerPath, startLine: blocks.startLine })
+    .select({ id: blocks.id, blockId: blocks.blockId, ownerId: blocks.ownerId, kind: blocks.kind, innerPath: blocks.innerPath, startLine: blocks.startLine })
     .from(blocks)
     .where(inArray(blocks.containerId, [vaultId, repoId]))
   const blockLabels = owned
-    .map((b) => ({ old: b.id, label: `<block:${ownerLabel.get(b.ownerId) ?? b.ownerId}:${b.kind}:${b.innerPath}:${b.startLine}>` }))
+    .map((b) => ({ old: b.id, blockId: b.blockId, label: `<block:${ownerLabel.get(b.ownerId) ?? b.ownerId}:${b.kind}:${b.innerPath}:${b.startLine}>` }))
     .sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
   if (new Set(blockLabels.map((b) => b.label)).size !== blockLabels.length) throw new Error('two blocks share a label: their id order would be random')
   const renamed = blockLabels.map((b, i) => ({ ...b, id: idAt(i) }))
   await db.execute(sql`UPDATE blocks b SET id = u.id FROM jsonb_to_recordset(${JSON.stringify(renamed)}::jsonb) AS u(old uuid, id uuid) WHERE b.id = u.old`)
-  for (const b of renamed) labels.push([b.id, b.label])
+  // A block's `b_...` id hashes its owner's id, so it differs per database: masked as the block it names (search hits carry it, #414).
+  for (const b of renamed) labels.push([b.id, b.label], [b.blockId, b.label.replace('<block:', '<blockid:')])
   for (const [id, label] of ownerLabel) labels.push([id, label])
   // Names carry the container's first 8 id characters (`name#1a2b3c4d`).
   labels.push([vaultId.slice(0, 8), '<vault8>'], [repoId.slice(0, 8), '<repository8>'])
