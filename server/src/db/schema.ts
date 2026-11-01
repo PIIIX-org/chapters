@@ -3,6 +3,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  check,
   customType,
   date,
   doublePrecision,
@@ -859,6 +860,11 @@ export const repositoryFiles = pgTable(
     embedderId: text('embedder_id'),
     /** embed-key.ts `CHUNK_VERSION` of its blocks (migration 0035; 0: before #452a), checked by boot catch-up like the two above. */
     chunkVersion: integer('chunk_version').notNull().default(0),
+    /**
+     * Why the last extraction stored only part of this file's code edges (#469: the per-file cap,
+     * code-edges.ts `MAX_CODE_EDGES_PER_FILE`); null when it stored them all.
+     */
+    edgeNote: text('edge_note'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -900,6 +906,59 @@ export const repositoryFileImports = pgTable(
     primaryKey({ columns: [t.sourceFileId, t.targetPath] }),
     index('repository_file_imports_resolved_idx').on(t.resolvedTargetFileId),
     index('repository_file_imports_lookup_keys_idx').using('gin', t.lookupKeys),
+  ],
+)
+
+/**
+ * Symbol-level code edges (#469, ADR-004 §2.8, migration 0061), beside the
+ * file-level `repository_file_imports`: one row per call, reference or
+ * imported name a file writes (repositories/code-edges.ts), and one `test`
+ * row per name a test file uses. A row is its site (`line`, `col`: 1-based,
+ * UTF-16 code units) in its source file, its enclosing symbol block, the
+ * name, and the target symbol block once one is found: `resolved` through
+ * the file's own scope, its imports or its package, `textual` when matched
+ * by name only (the one definition of that name in the repository); an
+ * ambiguous or undefined name keeps no target. Re-extracting a file
+ * replaces its rows; a change to the definitions re-resolves the rows that
+ * name them, so the table is a function of the files.
+ */
+export const codeEdges = pgTable(
+  'code_edges',
+  {
+    sourceFileId: uuid('source_file_id')
+      .notNull()
+      .references(() => repositoryFiles.id, { onDelete: 'cascade' }),
+    line: integer('line').notNull(),
+    col: integer('col').notNull(),
+    /** code-edges.ts `CodeEdgeKind`. */
+    kind: text('kind').notNull(),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    /** The `block_id` of the innermost symbol block of the source file around the site; null at module level. */
+    sourceBlockId: text('source_block_id'),
+    /** The name looked up: as written, or the name an import alias stands for. */
+    targetName: text('target_name').notNull(),
+    /** `Parent.name` (a target symbol's `inner_path`) when the site names its parent: `this.x()`, `Store.open()`. */
+    targetQualified: text('target_qualified'),
+    /** The import specifier (`repository_file_imports.target_path`) the name or its qualifier is bound by in the source file. */
+    via: text('via'),
+    /** A member of a receiver whose type is not known (`obj.save()`): matched by name only, never by scope. */
+    member: boolean('member').notNull().default(false),
+    /** The target symbol block (`blocks.owner_id`, `blocks.block_id`); no foreign key: re-resolution keeps them current. */
+    targetFileId: uuid('target_file_id'),
+    targetBlockId: text('target_block_id'),
+    /** 'resolved' | 'textual'. */
+    confidence: text('confidence').notNull(),
+    /** The source line, trimmed, cut to code-edges.ts `CONTEXT_CHARS` code points. */
+    context: text('context').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.sourceFileId, t.line, t.col, t.kind] }),
+    index('code_edges_target_idx').on(t.targetFileId, t.targetBlockId).where(sql`target_file_id is not null`),
+    index('code_edges_name_idx').on(t.repositoryId, t.targetName),
+    check('code_edges_kind_check', sql`kind in ('call', 'reference', 'import', 'test')`),
+    check('code_edges_confidence_check', sql`confidence in ('resolved', 'textual')`),
   ],
 )
 
@@ -961,6 +1020,10 @@ export const blocks = pgTable(
     unique('blocks_owner_block').on(t.ownerType, t.ownerId, t.blockId),
     // The unique index also serves (owner_type, owner_id) lookups.
     index('blocks_container_idx').on(t.containerId),
+    // A repository's symbol blocks by bare name, for code edge resolution (#469, migration 0061; code-edges.ts `SYMBOL_NAME`).
+    index('blocks_symbol_name_idx')
+      .on(t.containerId, sql`(CASE WHEN symbol_parent IS NULL THEN inner_path ELSE substr(inner_path, length(symbol_parent) + 2) END)`)
+      .where(sql`owner_type = 'code' AND kind = 'symbol'`),
   ],
 )
 

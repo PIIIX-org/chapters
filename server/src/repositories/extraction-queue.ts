@@ -9,6 +9,17 @@ import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
 import { fieldKeywords, fileKeywords, symbolKeywords } from '../search/identifiers.js'
 import { queueSemanticEdgeRefresh, runSemanticEdgeRefresh } from '../search/semantic-edges.js'
 import { codeBlocks } from './code-blocks.js'
+import {
+  blockDefinitions,
+  changedDefinitions,
+  codeEdgeDrafts,
+  lockRepositoryEdges,
+  nearFiles,
+  replaceFileEdges,
+  reresolveAfterChange,
+  reresolveFiles,
+  storedDefinitions,
+} from './code-edges.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { hasOutline, outlineSections } from './outline.js'
 import {
@@ -202,13 +213,19 @@ async function reresolveRepositoryImports(
       // A key is a repository id and a file name: no `/` in it.
       if (target === r.resolvedId && r.lookupKeys?.join('/') === lookupKeys.join('/')) return []
       if (target !== null && target !== r.resolvedId) gained += 1
-      return [{ source: r.sourceFileId, path: r.targetPath, target, keys: lookupKeys }]
+      return [{ source: r.sourceFileId, path: r.targetPath, target, keys: lookupKeys, moved: target !== r.resolvedId }]
     })
     if (changed.length > 0) {
-      await db.execute(sql`
-        UPDATE repository_file_imports i SET resolved_target_file_id = u.target, lookup_keys = u.keys
-        FROM jsonb_to_recordset(${JSON.stringify(changed)}::jsonb) AS u(source uuid, path text, target uuid, keys text[])
-        WHERE i.source_file_id = u.source AND i.target_path = u.path`)
+      // The code edges of a file whose import rows changed target resolve through the new targets (#469).
+      const moved = [...new Set(changed.filter((c) => c.moved).map((c) => c.source))]
+      await db.transaction(async (tx) => {
+        await lockRepositoryEdges(tx, repositoryId)
+        await tx.execute(sql`
+          UPDATE repository_file_imports i SET resolved_target_file_id = u.target, lookup_keys = u.keys
+          FROM jsonb_to_recordset(${JSON.stringify(changed)}::jsonb) AS u(source uuid, path text, target uuid, keys text[])
+          WHERE i.source_file_id = u.source AND i.target_path = u.path`)
+        await reresolveFiles(tx, repositoryId, moved)
+      })
     }
     if (page.length < RERESOLVE_BATCH) break
     after = page.at(-1)!
@@ -515,8 +532,10 @@ export const extractionWork = { processFile }
 /**
  * Derives one file (#453, #413, #460): everything is computed first, the
  * slow embed included, outside any transaction; then one short transaction
- * locks the row, checks its content is still the one extracted, and replaces
- * the imports, the file's whole block set and the versions together. A
+ * locks the row (after the repository's code edge lock), checks its content
+ * is still the one extracted, and replaces the imports, the file's whole
+ * block set, the versions and its code edges together, re-resolving the
+ * code edges elsewhere that name a definition it gained or lost (#469). A
  * failure or a crash at any point before the commit leaves the previous rows
  * whole and searchable. A result for content a push replaced meanwhile (an
  * older `owner_version`) is dropped: that push enqueued the job of the new
@@ -539,8 +558,8 @@ async function processFile(fileId: string): Promise<void> {
   const language = detectLanguage(row.path)
   const structured = !looksMinified(row.content)
   // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
-  const { imports, symbols }: ExtractionResult =
-    structured && isSupportedLanguage(language) ? await extractStructure(language, row.content, row.path) : { imports: [], symbols: [] }
+  const { imports, symbols, sites }: ExtractionResult =
+    structured && isSupportedLanguage(language) ? await extractStructure(language, row.content, row.path) : { imports: [], symbols: [], sites: [] }
   // The minified rule is about code: a Markdown file with one long line (a table, a paragraph) keeps its outline.
   const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, row.content) : []
   // The keyword channel's identifier lexemes (#455): a minified file's mangled names are left out, its path kept.
@@ -563,6 +582,9 @@ async function processFile(fileId: string): Promise<void> {
   }
 
   const fileBlocks = codeBlocks(fileId, row.path, row.content, symbols, sections)
+  // Code edges (#469): resolved in the transaction below, against the blocks and imports it writes.
+  const { drafts: edgeDrafts, note: edgeNote } = codeEdgeDrafts(row.path, row.content, fileBlocks.filter((b) => b.kind === 'symbol'), sites)
+  if (edgeNote) console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${edgeNote}`)
   // The fields the code keyword leg ranks above the body (#455 part 2): the path's and the symbol names' lexemes.
   const fields = fieldKeywords(row.path, fileBlocks.flatMap((b) => (b.kind === 'symbol' ? [b.innerPath] : [])))
   const head = keywordVector(fields) ?? sql`''::tsvector`
@@ -633,6 +655,8 @@ async function processFile(fileId: string): Promise<void> {
   const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !currentKeys.has(k))
   const newKeys = toEmbed.map((i) => keys.get(i)!)
   const refreshJob = await db.transaction(async (tx) => {
+    // Before the row lock, as every code edge writer takes them (code-edges.ts).
+    await lockRepositoryEdges(tx, row.repositoryId)
     const [current] = await tx
       .select({ contentHash: repositoryFiles.contentHash })
       .from(repositoryFiles)
@@ -642,6 +666,7 @@ async function processFile(fileId: string): Promise<void> {
     await tx.delete(repositoryFileImports).where(eq(repositoryFileImports.sourceFileId, fileId))
     // One row per specifier: a file importing one path twice keeps the first line (chunks insert in order).
     for (const chunk of chunks(importRows)) await tx.insert(repositoryFileImports).values(chunk).onConflictDoNothing()
+    const definitionsBefore = await storedDefinitions(tx, [fileId])
     // The block set is replaced whole: blocks this content no longer has go, the others are written over in place.
     await replaceBlockSet(tx, 'code', fileId, blockRows)
     // The code keyword leg's documents (#455, migrations 0052 and 0059): `keyword_head`, the file's fields (its path's
@@ -649,11 +674,17 @@ async function processFile(fileId: string): Promise<void> {
     // checked above) plus the identifier lexemes and the fields. Raw SQL: like `fts`, they are kept out of the
     // Drizzle model, so a `select()` of files never reads them.
     await tx.execute(sql`
-      UPDATE repository_files SET language = ${language}, embedding_note = ${embeddingNote}, extracted_hash = ${row.contentHash},
-        extractor_version = ${extractorVersion}, embedder_id = ${embedderId}, chunk_version = ${chunkVersion},
-        keyword_head = h.head, keyword_fts = fts || ${keywords ?? sql`''::tsvector`} || h.head
+      UPDATE repository_files SET language = ${language}, embedding_note = ${embeddingNote}, edge_note = ${edgeNote},
+        extracted_hash = ${row.contentHash}, extractor_version = ${extractorVersion}, embedder_id = ${embedderId},
+        chunk_version = ${chunkVersion}, keyword_head = h.head, keyword_fts = fts || ${keywords ?? sql`''::tsvector`} || h.head
       FROM (SELECT ${head} || strip(to_tsvector('english', array_to_string(${textArray(fields)}, ' '))) AS head) h
       WHERE id = ${fileId}`)
+    await replaceFileEdges(tx, { id: fileId, repositoryId: row.repositoryId, path: row.path, language }, edgeDrafts)
+    // Rows elsewhere naming a definition this file gained or lost resolve again (#469).
+    const definitionsMoved = changedDefinitions(definitionsBefore, blockDefinitions(blockRows))
+    if (definitionsMoved.length > 0) {
+      await reresolveAfterChange(tx, row.repositoryId, [fileId], definitionsMoved, await nearFiles(tx, row.repositoryId, [fileId]))
+    }
     const job = changed ? await queueSemanticEdgeRefresh(tx, 'code', fileId, newKeys) : null
     failpoint('extract.before-commit')
     return job

@@ -915,12 +915,14 @@ function queryExactContext(query: string): ExactContext {
   if (queryStripped.length > 0) whole.add(queryStripped)
 
   const words = query.trim().split(/\s+/).filter(Boolean)
-  const quoted = new Set([...query.matchAll(/`([^`\s]+)`/g)].map((m) => m[1]!))
+  const edges = /^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu
+  // Backticked call forms (`parse()`, `Foo.bar(x)`) are stripped as the terms are, so they match.
+  const quoted = new Set([...query.matchAll(/`([^`\s]+)`/g)].map((m) => m[1]!.replace(edges, '')))
   const terms = new Set<string>()
   const termsLower = new Set<string>()
   const spelling = new Set<string>()
   for (const raw of words) {
-    const cleaned = raw.replace(/^[^\p{L}\p{N}_$/.-]+|[^\p{L}\p{N}_$/.-]+$/gu, '')
+    const cleaned = raw.replace(edges, '')
     if (cleaned.length <= 1 || !isIdentifierShaped(cleaned)) continue
     if (words.length > SHORT_QUERY_WORDS && !quoted.has(cleaned)) continue
     terms.add(cleaned)

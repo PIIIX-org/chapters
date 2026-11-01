@@ -6,6 +6,7 @@ import { blocks, jobs, repositories, repositoryFiles } from '../db/schema.js'
 import { kickSemanticEdges, removeSemanticNodes } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
 import { enqueueExtractions, extractionJobKeySql, hasCurrentBlocksSql, scheduleImportReresolution } from './extraction-queue.js'
+import { lockRepositoryEdges, nearFiles, reresolveAfterChange, storedDefinitions } from './code-edges.js'
 import { isResolutionManifest } from './import-resolution.js'
 import { checkCodeStaleness } from '../notes/staleness.js'
 
@@ -146,8 +147,14 @@ export async function syncRepositoryFiles(
   const toDelete = existing.filter((r) => !currentPathSet.has(r.path))
   if (toDelete.length > 0) {
     // Same as notes: semanticEdges has no FK and does not cascade (#92). The files' rows go in the delete's
-    // transaction and the nodes that held one are queued once each (#1015), the batch file below too.
+    // transaction and the nodes that held one are queued once each (#1015), the batch file below too. Under the
+    // repository's code edge lock (#469): the code edges that named a deleted file's definitions, or resolved
+    // through it, resolve again without them in the same transaction.
+    const deletedIds = toDelete.map((r) => r.id)
     await db.transaction(async (tx) => {
+      await lockRepositoryEdges(tx, repositoryId)
+      const definitions = await storedDefinitions(tx, deletedIds)
+      const near = definitions.size > 0 ? await nearFiles(tx, repositoryId, deletedIds) : []
       const deleted = await tx
         .delete(repositoryFiles)
         .where(
@@ -157,7 +164,10 @@ export async function syncRepositoryFiles(
           ),
         )
         .returning({ id: repositoryFiles.id })
-      await removeSemanticNodes(tx, 'code', repositoryId, deleted.map((r) => r.id))
+      const deletedNow = deleted.map((r) => r.id)
+      await removeSemanticNodes(tx, 'code', repositoryId, deletedNow)
+      const gone = new Set(deletedNow)
+      await reresolveAfterChange(tx, repositoryId, deletedNow, [...definitions.values()], near.filter((id) => !gone.has(id)))
     })
     kickSemanticEdges()
     result.deleted = toDelete.length
