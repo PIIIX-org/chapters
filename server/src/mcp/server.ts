@@ -2959,9 +2959,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
             items: results,
             id: (r) => `${r.resourceType}:${r.id}`,
             limit,
-            // Down the ladder: without snippet, frontmatter and updated, then the path (`path#La-Lb` for a symbol); counted per path.
+            // Down the ladder: without snippet, frontmatter, updated, heading and tokens, then the location (`path#La-Lb` for a located hit, else the path); counted per path.
             ladder: {
-              no_context: (r) => ({ ...r, snippet: undefined, frontmatter: undefined, updated: undefined }),
+              // Without the passage's description too (#414): the lines and the block id stay, they are what a read needs.
+              no_context: (r) => ({ ...r, snippet: undefined, frontmatter: undefined, updated: undefined, heading: undefined, tokens: undefined }),
               locations: (r) => (r.startLine !== undefined && r.endLine !== undefined ? location(r.path, r.startLine, r.endLine) : r.path),
               group: (r) => r.path,
             },

@@ -1257,6 +1257,6 @@ export async function searchNotes(
     .slice(0, limit)
     .map(([key, hit]): SearchResult => ({ ...hit, channel: legs.get(key)!.size === 2 ? 'both' : legs.get(key)!.has('keyword') ? 'keyword' : 'vector' }))
   observeSearchLeg('fusion', performance.now() - fusionStarted)
-  await locateHits(results, query, vectorBlocks)
+  await locateHits(results, query, vectorBlocks, vec ?? undefined)
   return respond(results, vec !== null, keyword, vector, await state)
 }
