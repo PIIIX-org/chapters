@@ -9,7 +9,10 @@ import { sampleEventLoop, sampleProcessMemory, setJobQueue, startEventLoopMonito
 
 export const SAMPLE_INTERVAL_MS = 15_000
 
-/** The pending jobs per kind (`done_at IS NULL`: queued, running or in backoff) and the age of each kind's oldest. */
+/**
+ * The pending jobs per kind (`done_at IS NULL`: queued, running or in backoff) and the age of each kind's oldest:
+ * `created_at`, which every re-queue of a finished job resets (`onJobConflict`, `recomputeJobs`, the store export).
+ */
 export async function jobQueueDepths(): Promise<JobQueueDepth[]> {
   const rows = (await db.execute(sql`
     SELECT kind, count(*)::int AS pending, extract(epoch FROM now() - min(created_at))::float8 AS oldest

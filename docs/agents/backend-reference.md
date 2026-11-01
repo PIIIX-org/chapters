@@ -4501,20 +4501,29 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
       value describes the last 15 s, not the uptime. Alert: p99 above
       0.2 s for 2 samples (something synchronous holds the loop: a large
       extraction, a graph assembly; every request and the collab relay wait
-      with it); max above 1 s once.
+      with it); max above 1 s once. The max (and p99) gauge covers only
+      the last 15 s sample, so a scrape interval above 15 s misses the
+      spikes of the samples in between: scrape every 15 s or less.
     - `elara_jobs_pending{kind}` and `elara_jobs_oldest_pending_age_seconds{kind}`
       (gauges, `kind` = `jobs.kind`: `extract`, `embed_note`,
       `compact_revisions`, `note_links`, `semantic_edges`, `store_*`),
       `elara_jobs_sample_timestamp_seconds`. One query per sample,
       `SELECT kind, count(*), min(created_at) FROM jobs WHERE done_at IS
       NULL GROUP BY kind` over the `jobs_pending` index; running jobs and
-      jobs in backoff count as pending. A failed read keeps the previous
+      jobs in backoff count as pending. A finished job queued again (the
+      `ON CONFLICT ... DO UPDATE` of `onJobConflict` in `jobs/durable.ts`
+      and `recomputeJobs` in `semantic-edges.ts`, the store export's retry
+      of given-up store jobs) gets `created_at = now()`, so the age is the
+      wait since it was last queued, not since its key first was; a job
+      still pending keeps its `created_at` when an enqueue raises its
+      priority or restarts it. A failed read keeps the previous
       sample and logs the error's name. Alert: oldest age above 15 min for
       `extract` or `embed_note` while `elara_jobs_total{outcome="succeeded"}`
-      for that kind does not move (a stuck or dead drainer, an embedder
-      that cannot load); pending rising for 30 min is a backlog the
-      instance cannot drain at its rate (a version bump re-deriving
-      everything is expected to show this once).
+      for its monitoring kind (`kind="extraction"` for `extract`,
+      `kind="embedding"` for `embed_note`) does not move (a stuck or dead
+      drainer, an embedder that cannot load); pending rising for 30 min is
+      a backlog the instance cannot drain at its rate (a version bump
+      re-deriving everything is expected to show this once).
     - `elara_search_leg_duration_seconds{leg}` (histogram, buckets
       `DURATION_BUCKETS_MS` 1 ms to 60 s plus `+Inf`): `search.ts` times
       each leg that runs a query (`note_keyword`, `code_keyword`,

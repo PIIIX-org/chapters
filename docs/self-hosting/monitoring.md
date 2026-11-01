@@ -65,10 +65,13 @@ The same store in the Prometheus text format, under the same access rule (token 
 scrape_configs:
   - job_name: elara
     metrics_path: /api/admin/metrics
+    scrape_interval: 15s
     authorization: { credentials: '<ELARA_MONITORING_TOKEN>' }
     static_configs: [{ targets: ['elara.example.com:443'] }]
     scheme: https
 ```
+
+Keep `scrape_interval` at 15 s or less: the event-loop lag gauges (`elara_event_loop_lag_max_seconds` included) describe only the last 15 s sample, so a slower scrape misses the spikes of the samples in between.
 
 ## Alerts
 

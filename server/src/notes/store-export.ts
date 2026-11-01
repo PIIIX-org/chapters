@@ -96,9 +96,11 @@ export async function exportLegacyFiles(): Promise<LegacyExportReport> {
     await db.execute(sql`
       UPDATE note_projections SET lease_until = NULL, attempts = 0
       WHERE applied_seq < target_seq AND projection IN ('file', 'dir_index')`)
-    // Store jobs: leased, out of attempts, or given up (done with an error) run again now.
+    // Store jobs: leased, out of attempts, or given up (done with an error) run again now;
+    // a given-up one is queued from now (`created_at`, elara_jobs_oldest_pending_age_seconds).
     await db.execute(sql`
-      UPDATE jobs SET lease_until = NULL, attempts = 0, done_at = NULL
+      UPDATE jobs SET lease_until = NULL, attempts = 0, done_at = NULL,
+        created_at = CASE WHEN done_at IS NOT NULL THEN now() ELSE created_at END
       WHERE kind IN ${Object.values(STORE_JOBS)} AND (done_at IS NULL OR last_error IS NOT NULL)`)
     await flushProjections()
     const pending = (await db.execute(sql`

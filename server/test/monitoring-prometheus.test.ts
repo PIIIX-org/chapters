@@ -2,14 +2,16 @@
 // under the monitoring endpoint's access rule. The instruments move under
 // real work: a search times each leg and the fusion, an extraction job times
 // its extract, embed and write stages, and the sampler reads the pending jobs
-// per kind from the `jobs` table.
+// per kind from the `jobs` table (a finished job queued again counts its wait
+// from the re-queue, not from its first enqueue).
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
+import { randomUUID } from 'node:crypto'
 import { setImmediate as nextTurn } from 'node:timers/promises'
 import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { jobs } from '../src/db/schema.js'
+import { jobs, semanticEdges } from '../src/db/schema.js'
 import {
   INDEX_STAGES,
   instrumentSnapshot,
@@ -24,6 +26,7 @@ import { createNote } from '../src/notes/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import { SEMANTIC_EDGES_JOB, enqueueSemanticEdgeRebuild, removeSemanticNodes } from '../src/search/semantic-edges.js'
 import { findSymbols, searchNotes } from '../src/search/search.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -35,6 +38,7 @@ let adminCookie: string
 let memberCookie: string
 let vaultId: string
 let repoId: string
+let noteId: string
 
 async function scrape(): Promise<string> {
   const res = await app.inject({ method: 'GET', url: ENDPOINT, headers: { authorization: `Bearer ${TOKEN}` } })
@@ -63,7 +67,7 @@ beforeAll(async () => {
     (await app.inject({ method: 'POST', url, headers: { cookie: memberCookie }, body })).json<{ id: string }>()
   vaultId = (await post('/api/vaults', { name: 'prometheus vault' })).id
   repoId = (await post('/api/repositories', { name: 'prometheus-repo', ingestionMethod: 'agent_push' })).id
-  await createNote(vaultId, { path: 'ops/telemetry', body: 'telemetry '.repeat(40) })
+  noteId = (await createNote(vaultId, { path: 'ops/telemetry', body: 'telemetry '.repeat(40) })).id
   await flushEmbeddings()
 }, 120_000)
 
@@ -162,6 +166,52 @@ describe('GET /api/admin/metrics', () => {
       expect(series(text, 'elara_process_heap_used_bytes')).toBeGreaterThan(0)
     } finally {
       await db.execute(sql`DELETE FROM jobs WHERE id = ${job!.id}`)
+    }
+  })
+
+  it('ages a finished job queued again from its re-queue, not from its first enqueue', async () => {
+    const monthAgo = new Date(Date.now() - 30 * 86_400_000)
+    const key = `${SEMANTIC_EDGES_JOB}:note:${noteId}`
+    const edgeQueue = async () => (await jobQueueDepths()).find((d) => d.kind === SEMANTIC_EDGES_JOB)
+    try {
+      // The note's rebuild job, first queued a month ago and finished since.
+      await db.execute(sql`DELETE FROM jobs WHERE idempotency_key = ${key}`)
+      await db.insert(jobs).values({
+        kind: SEMANTIC_EDGES_JOB,
+        payload: { nodeType: 'note', nodeId: noteId },
+        idempotencyKey: key,
+        createdAt: monthAgo,
+        doneAt: new Date(monthAgo.getTime() + 60_000),
+      })
+      // `pnpm reindex`: `enqueueSemanticEdgeRebuild('finished')`, the `onJobConflict` re-queue of a finished job.
+      expect(await enqueueSemanticEdgeRebuild('finished')).toBeGreaterThanOrEqual(1)
+      const [requeued] = (await db.execute(sql`
+        SELECT done_at, extract(epoch FROM now() - created_at)::float8 AS age FROM jobs WHERE idempotency_key = ${key}`)) as unknown as Array<{
+        done_at: Date | null
+        age: number
+      }>
+      expect(requeued!.done_at).toBeNull()
+      expect(Math.abs(requeued!.age)).toBeLessThan(60)
+      const rebuilt = await edgeQueue()
+      expect(rebuilt?.pending).toBeGreaterThanOrEqual(1)
+      expect(Math.abs(rebuilt!.oldestAgeSeconds)).toBeLessThan(60)
+      await sampleOnce()
+      expect(series(await scrape(), 'elara_jobs_oldest_pending_age_seconds', `{kind="${SEMANTIC_EDGES_JOB}"}`)).toBeLessThan(60)
+
+      // Every edge job finished a month ago again; then a delete takes a node the note's list holds:
+      // `removeSemanticNodes` re-queues the note's rebuild through its own ON CONFLICT (`recomputeJobs`).
+      await db.execute(sql`
+        UPDATE jobs SET done_at = now() - interval '30 days', created_at = now() - interval '30 days'
+        WHERE kind = ${SEMANTIC_EDGES_JOB} AND done_at IS NULL`)
+      expect(await edgeQueue()).toBeUndefined()
+      const goneId = randomUUID()
+      await db.insert(semanticEdges).values({ sourceType: 'note', sourceId: noteId, targetType: 'note', targetId: goneId, similarity: 0.9 })
+      expect(await db.transaction((tx) => removeSemanticNodes(tx, 'note', vaultId, [goneId]))).toBe(1)
+      const recomputed = await edgeQueue()
+      expect(recomputed?.pending).toBe(1)
+      expect(Math.abs(recomputed!.oldestAgeSeconds)).toBeLessThan(60)
+    } finally {
+      await db.execute(sql`DELETE FROM jobs WHERE kind = ${SEMANTIC_EDGES_JOB} AND (done_at IS NULL OR idempotency_key = ${key})`)
     }
   })
 
