@@ -6,6 +6,7 @@ import { EMBEDDING_JOB, scheduleMissingEmbeddings } from './search/embedding-que
 import { startLocalWatchers, startPollingScheduler, reconcileOrphanedSyncs } from './repositories/scheduler.js'
 import { EXTRACTION_JOB, backfillUnresolvedImports, scheduleMissingExtractions } from './repositories/extraction-queue.js'
 import { pruneFinishedJobs, startJobPolling } from './jobs/durable.js'
+import { startMetricsSampler } from './monitoring/sampler.js'
 import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { sweepGitMirrors } from './repositories/git-mirror.js'
 import { startBackupScheduler } from './export/backup-service.js'
@@ -90,6 +91,8 @@ try {
   // The usage report's retention (#678), also while it is off: rows past it go even if no call is recorded again.
   void pruneUsage().catch((err: unknown) => console.error('usage report prune failed:', err instanceof Error ? err.name : err))
   startJobPolling()
+  // Process memory, event-loop lag and job-queue depth for GET /api/admin/metrics, every 15 s (monitoring/sampler.ts).
+  const stopMetricsSampler = startMetricsSampler()
   const reconciled = await reconcileOrphanedSyncs()
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)
   const sweptMirrors = await sweepGitMirrors()
@@ -118,7 +121,11 @@ try {
   // (ADR-003 §7) so their files land and no claim is left behind.
   const drainProjector = () =>
     Promise.race([flushProjections(), new Promise<void>((resolve) => setTimeout(resolve, 5_000).unref())]).catch(() => {})
-  const shutdown = () => collab.destroy().then(drainProjector).then(() => app.close())
+  // The sampler stops first: no queue read races `sql.end`.
+  const shutdown = () => {
+    stopMetricsSampler()
+    return collab.destroy().then(drainProjector).then(() => app.close())
+  }
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
       void shutdown()

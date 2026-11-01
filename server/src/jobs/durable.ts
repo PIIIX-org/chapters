@@ -119,10 +119,11 @@ export function onJobConflict(rerun: JobRerun): SQL {
     errored: sql`AND ${erroredJob(sql`jobs`)}`,
     finished: sql``,
   }[rerun]
-  // A job run again takes the priority of the enqueue that runs it.
+  // A job run again takes the priority of the enqueue that runs it, and is queued
+  // from now: `created_at` is the start of its wait (elara_jobs_oldest_pending_age_seconds).
   return sql`ON CONFLICT (idempotency_key) DO UPDATE
     SET id = nextval(pg_get_serial_sequence('jobs', 'id')), done_at = NULL, attempts = 0, last_error = NULL, lease_until = NULL,
-      priority = EXCLUDED.priority
+      priority = EXCLUDED.priority, created_at = now()
     WHERE jobs.done_at IS NOT NULL ${which}`
 }
 
