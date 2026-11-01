@@ -302,26 +302,34 @@ test('elara: a located hit is read as its span with the grep window, not as a wh
   assert.equal(run.abstained, false)
 })
 
-test('elara: the lines a span page left are read next, and a located hit already in context is not read again', async () => {
+test('elara: the lines a span page left are read next; a file whose span shows no gold is then read whole, once', async () => {
   const calls: string[] = []
   const hits = [
     { resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 52, snippet: 's' },
     { resourceType: 'symbol', path: 'src/a.ts', startLine: 55, endLine: 58, snippet: 's' },
   ]
-  // The window 40-82 comes in pages of 20 lines; the second hit's window 45-88 reaches beyond it, so only what is new is asked again.
+  // The window 40-82 comes in pages of 20 lines; the gold (line 99) is not in it, so the file is read whole once, and the second hit of that file adds no read.
   const run = await runElara('q', [{ path: 'src/a.ts', start: 99, end: 99 }], fakeElara(hits, calls, 20))
-  assert.deepEqual(calls, ['search q', 'read_file src/a.ts:40-82', 'read_file src/a.ts:60-82', 'read_file src/a.ts:80-82', 'read_file src/a.ts:83-88'])
-  assert.equal(run.episode.tokensToGold, null)
+  assert.deepEqual(calls, ['search q', 'read_file src/a.ts:40-82', 'read_file src/a.ts:60-82', 'read_file src/a.ts:80-82', 'read_file src/a.ts'])
+  assert.equal(run.episode.callsToGold, 5, 'the whole-file read, the last call, reaches line 99')
 })
 
-test('elara: a located hit whose window is already in context is not read again', async () => {
+test('elara: a second located hit of a file already read whole is not read again, nor is its span repeated', async () => {
   const calls: string[] = []
   const hits = [
     { resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 52, snippet: 's' },
     { resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 51, snippet: 's' },
   ]
   await runElara('q', [{ path: 'src/a.ts', start: 99, end: 99 }], fakeElara(hits, calls))
+  assert.deepEqual(calls, ['search q', 'read_file src/a.ts:40-82', 'read_file src/a.ts'])
+})
+
+test('elara: a span that shows the gold ends the episode without reading the file', async () => {
+  const calls: string[] = []
+  const hits = [{ resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 52, snippet: 's' }]
+  const run = await runElara('q', [{ path: 'src/a.ts', start: 51, end: 51 }], fakeElara(hits, calls))
   assert.deepEqual(calls, ['search q', 'read_file src/a.ts:40-82'])
+  assert.equal(run.episode.callsToGold, 2)
 })
 
 test('elara: a hit without a location is still read page by page, and a search that abstains says so', async () => {

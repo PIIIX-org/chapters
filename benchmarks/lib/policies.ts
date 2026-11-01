@@ -4,9 +4,10 @@
 // their context (an oracle stop, the same for both), or when a cap is hit.
 //
 //   elara  search(question) -> each hit best first: a hit that carries a
-//          location is read as that span (read_file `targets`, the same
-//          window around it the grep agent reads, #1058); a hit without one
-//          is read_file page by page (the default 4,000-token budget)
+//          location is read as that span first (read_file `targets`, the
+//          same window around it the grep agent reads, #1058); then, when
+//          the gold is not in it (or the hit has no location), its file,
+//          read_file page by page (the default 4,000-token budget)
 //          following its cursor
 //   grep   rg --count (files ranked by matching lines) -> rg -n over the
 //          top files (first matches of each) -> ranged reads around them
@@ -245,45 +246,40 @@ export async function runElara(question: string, gold: readonly LineRange[], too
   const status = searchStatus(parsed)
   const run = { ranking, hits: located, abstained: status === 'no_match' || status === 'ambiguous', episode: ep }
 
-  // Each hit, best first, up to the file cap: a located hit is read as its span, a hit without a location as its file, page by page.
+  // Each hit, best first, up to the file cap: a located hit is read as its span first; a file whose hit shows no gold, or has no location, is read page by page.
   const paged = new Set<string>()
   const files = new Set<string>()
   for (const [i, hit] of hits.entries()) {
     const path = hit.path
-    if (typeof path !== 'string' || ep.done) continue
-    const span = located[i]
-    if (span === null || span === undefined) {
-      if (paged.has(path) || (!files.has(path) && files.size >= caps.maxFiles)) continue
-      paged.add(path)
-      files.add(path)
-      // A long file comes in pages (#420): follow `truncated.cursor` until the gold is seen or the file ends.
-      let cursor: string | undefined
-      do {
-        if (ep.done) break
-        const file = await tools.readFile(path, cursor)
-        const cut = ep.clip(file.text)
-        const page = readFilePage(file.ok ? parseJson(file.text) : undefined)
-        const lines = page ? (cut.truncated ? visibleContentLines(file.text, page.content, caps.perCallChars) : page.lines) : 0
-        ep.record('read_file', path, cut.visible, cut.truncated, file.ms, file.ok, page && lines > 0 ? [{ path, start: page.first, end: page.first + lines - 1 }] : [])
-        cursor = cut.truncated ? undefined : page?.cursor
-      } while (cursor)
-      continue
-    }
-    if (paged.has(path) || (!files.has(path) && files.size >= caps.maxFiles)) continue
+    if (typeof path !== 'string' || ep.done || paged.has(path) || (!files.has(path) && files.size >= caps.maxFiles)) continue
     files.add(path)
-    // The same window around the evidence the grep agent reads, once; the lines a page of it left follow.
-    let want: { start: number; end: number } | undefined = { start: Math.max(1, span.start - GREP.readBefore), end: span.end + GREP.readAfter }
-    // Lines already in context are not asked for again: the window shrinks to its first and last new line.
-    while (want.start <= want.end && ep.seen.has(path, want.start)) want.start++
-    while (want.end >= want.start && ep.seen.has(path, want.end)) want.end--
-    if (want.start > want.end) continue
-    while (want && !ep.done) {
-      const read = await tools.readSpan(path, want.start, want.end)
-      const cut = ep.clip(read.text)
-      const part = read.ok && !cut.truncated ? readSpanPart(parseJson(read.text)) : null
-      ep.record('read_file', `${path}:${want.start}-${want.end}`, cut.visible, cut.truncated, read.ms, read.ok, part ? [{ path, start: part.start, end: part.end }] : [])
-      want = part?.next
+    const span = located[i]
+    if (span !== null && span !== undefined) {
+      // The same window around the evidence the grep agent reads; the lines a page of it left follow. Lines already in context are not asked for again: the window shrinks to its first and last new line.
+      const want: { start: number; end: number } | undefined = { start: Math.max(1, span.start - GREP.readBefore), end: span.end + GREP.readAfter }
+      while (want.start <= want.end && ep.seen.has(path, want.start)) want.start++
+      while (want.end >= want.start && ep.seen.has(path, want.end)) want.end--
+      let next: { start: number; end: number } | undefined = want.start <= want.end ? want : undefined
+      while (next && !ep.done) {
+        const read = await tools.readSpan(path, next.start, next.end)
+        const cut = ep.clip(read.text)
+        const part = read.ok && !cut.truncated ? readSpanPart(parseJson(read.text)) : null
+        ep.record('read_file', `${path}:${next.start}-${next.end}`, cut.visible, cut.truncated, read.ms, read.ok, part ? [{ path, start: part.start, end: part.end }] : [])
+        next = part?.next
+      }
     }
+    // A long file comes in pages (#420): follow `truncated.cursor` until the gold is seen or the file ends.
+    paged.add(path)
+    let cursor: string | undefined
+    do {
+      if (ep.done) break
+      const file = await tools.readFile(path, cursor)
+      const cut = ep.clip(file.text)
+      const page = readFilePage(file.ok ? parseJson(file.text) : undefined)
+      const lines = page ? (cut.truncated ? visibleContentLines(file.text, page.content, caps.perCallChars) : page.lines) : 0
+      ep.record('read_file', path, cut.visible, cut.truncated, file.ms, file.ok, page && lines > 0 ? [{ path, start: page.first, end: page.first + lines - 1 }] : [])
+      cursor = cut.truncated ? undefined : page?.cursor
+    } while (cursor)
   }
   return run
 }
