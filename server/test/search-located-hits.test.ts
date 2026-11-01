@@ -115,5 +115,7 @@ describe('locating a match', () => {
     expect(snippet).toContain('NEEDLE')
     expect(snippet.startsWith('ord ')).toBe(false)
     expect(snippetAround(text, text.indexOf('NEEDLE'), ['needle'])).toContain('<b>NEEDLE</b>')
+    // Whole words only, as ts_headline marks them.
+    expect(snippetAround('SCOPEMARK scope probe', 0, ['scope'])).toBe('SCOPEMARK <b>scope</b> probe')
   })
 })
