@@ -1,6 +1,6 @@
 // Where a search hit points (#414): the passage of the note or file, not the document. For the hits a search
 // returns (at most its `limit`, so a few documents), `locateHits` fills `block`, `heading`, `startLine`/`endLine`
-// (the lines `read_note` and `read_file` take: a note's are lines of its file, ADR-004 §2.2 D3), `tokens` (what
+// (the lines `read_note` and `read_file` take: a note's are lines of its file, ADR-004 §2.2 D3, counted as `read_note` does), `tokens` (what
 // reading that span costs) and a snippet of up to `SNIPPET_CHARS` characters around the match.
 //
 // A note hit points at the block its vector leg found nearest, or else at the innermost block around the best
@@ -126,8 +126,8 @@ export async function locateHits(results: SearchResult[], query: string, vectorB
     noteIds.length === 0
       ? []
       : (db.execute(sql`
-          SELECT id, CASE WHEN length(body) <= ${LOCATE_MAX_CHARS} THEN body END AS body, frontmatter, frontmatter_src
-          FROM notes WHERE id = ANY(${uuids(noteIds)})`) as unknown as Promise<Array<{ id: string; body: string | null; frontmatter: unknown; frontmatter_src: unknown }>>),
+          SELECT id, CASE WHEN length(body) <= ${LOCATE_MAX_CHARS} THEN body END AS body, frontmatter
+          FROM notes WHERE id = ANY(${uuids(noteIds)})`) as unknown as Promise<Array<{ id: string; body: string | null; frontmatter: unknown }>>),
     fileIds.length === 0
       ? []
       : (db.execute(sql`
@@ -181,7 +181,7 @@ export async function locateHits(results: SearchResult[], query: string, vectorB
       const wanted = vectorBlocks.get(`note:${hit.id}`)
       const block = blocks.find((b) => b.block_id === wanted) ?? (place ? innermost(blocks, place.line) : undefined) ?? blocks.sort((a, b) => a.start_line - b.start_line)[0]
       if (!block) continue
-      const shift = bodyStartLine({ frontmatter: row.frontmatter, frontmatterSrc: row.frontmatter_src }) - 1
+      const shift = bodyStartLine({ frontmatter: row.frontmatter, frontmatterSrc: null }) - 1
       hit.block = block.block_id
       if (block.kind === 'section') hit.heading = block.inner_path
       hit.startLine = block.start_line + shift

@@ -59,7 +59,7 @@ describe('a note hit points at its passage (#414)', () => {
     expect(hit.heading).toContain('Rotating the zephyrkey credentials')
     // The lines are the ones `read_note` numbers: cut the file as rendered and the section is there, from its heading.
     const [row] = await db.select().from(notes).where(eq(notes.id, hit.id))
-    const file = renderNoteFile({ frontmatter: row!.frontmatter, frontmatterSrc: row!.frontmatterSrc, body: row!.body }).split('\n')
+    const file = renderNoteFile({ frontmatter: row!.frontmatter, frontmatterSrc: null, body: row!.body }).split('\n')
     const passage = file.slice(hit.startLine! - 1, hit.endLine)
     expect(passage[0]).toMatch(/^## Rotating the zephyrkey credentials/)
     expect(passage.join('\n')).toContain('restart the gateway')
