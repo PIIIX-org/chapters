@@ -75,7 +75,7 @@ async function symbols(query: string): Promise<string[]> {
 
 async function search(query: string, type: 'code' | 'symbol' | 'note'): Promise<string[]> {
   keywordOnly()
-  const answer = await searchNotes({ vaultIds: [vault], repositoryIds: [repo] }, query, 20, {}, { includeSymbols: true })
+  const answer = await searchNotes({ vaultIds: [vault], repositoryIds: [repo] }, query, 20, {}, { includeSymbols: true, route: false })
   expect(answer.retrieval_mode).toBe('keyword_only')
   return answer.results.filter((r) => r.resourceType === type).map((r) => (type === 'symbol' ? `${r.path}#${r.symbolName}` : r.path))
 }
@@ -125,7 +125,7 @@ describe('search by identifier (#455)', () => {
     expect(await search('parseFrontmatter', 'code')).toContain('src/load.ts')
     // The English query matches nothing in it (`fm.parseFrontmatter` is one host lexeme), so no headline.
     keywordOnly()
-    const { results } = await searchNotes({ vaultIds: [], repositoryIds: [repo] }, 'parseFrontmatter')
+    const { results } = await searchNotes({ vaultIds: [], repositoryIds: [repo] }, 'parseFrontmatter', 20, {}, { route: false })
     expect(results.find((r) => r.path === 'src/load.ts')?.snippet).toBe(FILES[3]!.content.slice(0, 200))
   })
 
