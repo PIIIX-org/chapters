@@ -411,6 +411,47 @@ describe('rebase of a row changed behind the store (§5.4)', () => {
       expect(Number(mark.rebase_clock)).toBeGreaterThan(0)
     }
   })
+
+  /** A note with a recorded rebase (row changed behind the store, then folded) and no open document. */
+  async function noteWithRecordedRebase(slug: string) {
+    const note = await create(slug, 'one\n')
+    const first = await open(note.id)
+    first.provider.destroy()
+    await waitFor(() => !collab.hocuspocus.documents.has(`${vaultId}/~${note.id}`))
+    await db.execute(sql`UPDATE notes SET body = ${'ONE\n'} WHERE id = ${note.id}`)
+    await foldPendingCollab([note.id])
+    const [mark] = (await db.execute(sql`
+      SELECT rebase_clock FROM note_crdt WHERE note_id = ${note.id}`)) as unknown as Array<{ rebase_clock: string | null }>
+    expect(Number(mark!.rebase_clock)).toBeGreaterThan(0)
+    return note
+  }
+
+  it('does not refuse a tab that has the recorded rebase and holds unknown items: its offline edits land once (#891)', async () => {
+    const note = await noteWithRecordedRebase('has-rebase-offline')
+    const first = await open(note.id)
+    expect(first.text.toString()).toBe('ONE\n')
+    // The tab goes offline holding the rebase, edits, and reconnects on the same document.
+    first.provider.destroy()
+    first.text.insert(first.text.length, '@OFFLINE-891@\n')
+    const { provider, text } = await open(note.id, first.provider.document)
+    const closes: string[] = []
+    provider.on('close', ({ event }: { event: { reason: string } }) => closes.push(event.reason))
+    await waitFor(async () => (await rowBody(note.path)) === 'ONE\n@OFFLINE-891@\n', 15_000)
+    expect(closes).not.toContain('note-rebased')
+    expect(count(text.toString(), '@OFFLINE-891@')).toBe(1)
+    expect(count(await storedCrdtText(vaultId, note.path), '@OFFLINE-891@')).toBe(1)
+    provider.destroy()
+  }, 40_000)
+
+  it('does not refuse a tab that lacks the rebase but holds no unknown items: it syncs and receives the rebase (#891)', async () => {
+    const note = await noteWithRecordedRebase('lacks-rebase-empty')
+    const { provider, text } = await open(note.id, new Y.Doc())
+    const closes: string[] = []
+    provider.on('close', ({ event }: { event: { reason: string } }) => closes.push(event.reason))
+    expect(text.toString()).toBe('ONE\n')
+    expect(closes).not.toContain('note-rebased')
+    provider.destroy()
+  }, 40_000)
 })
 
 describe('the cached stored state of an open document (§5.4 "Before S3")', () => {
