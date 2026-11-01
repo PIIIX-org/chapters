@@ -3,8 +3,12 @@
 // index Elara builds. Both stop as soon as every gold range has been in
 // their context (an oracle stop, the same for both), or when a cap is hit.
 //
-//   elara  search(question) -> read_file of each hit, best first, page by
-//          page (the default 4,000-token budget) following its cursor
+//   elara  search(question) -> each hit best first: the first hit, when it
+//          carries a location, is read as that span first (read_file
+//          `targets`, the same window around it the grep agent reads,
+//          #1058); then, when the gold is not in it (or the hit has no
+//          location), its file, read_file page by page (the default 4,000-token budget)
+//          following its cursor
 //   grep   rg --count (files ranked by matching lines) -> rg -n over the
 //          top files (first matches of each) -> ranged reads around them
 //
@@ -103,6 +107,10 @@ export interface ToolResponse {
 export interface PolicyRun {
   /** Distinct files of the policy's ranking call, best first (at most what the agent saw). */
   ranking: string[]
+  /** The location each result of the ranking call returned, in the server's order; null for a result that names none (#1058). */
+  hits: Array<LineRange | null>
+  /** The search answered `no_match` or `ambiguous` instead of a first hit (#1058). */
+  abstained: boolean
   episode: Episode
 }
 
@@ -113,6 +121,8 @@ export interface ElaraTools {
   search(query: string): Promise<ToolResponse>
   /** MCP `read_file` {repositoryId, path, cursor?}: one page of the file. */
   readFile(path: string, cursor?: string): Promise<ToolResponse>
+  /** MCP `read_file` {repositoryId, path, targets: [{lines: "start-end"}]}: those lines of the file (#416). */
+  readSpan(path: string, start: number, end: number): Promise<ToolResponse>
 }
 
 interface SearchHit {
@@ -135,7 +145,10 @@ export function searchHits(answer: unknown): SearchHit[] {
   const results: unknown = answer && typeof answer === 'object' ? Reflect.get(answer, 'results') : undefined
   if (!Array.isArray(results)) return []
   return results.flatMap((hit: unknown): SearchHit[] => {
-    if (typeof hit === 'string') return [{ path: hit.replace(/#L\d+(-L\d+)?$/, '') }]
+    if (typeof hit === 'string') {
+      const at = /#L(\d+)(?:-L(\d+))?$/.exec(hit)
+      return [{ path: hit.replace(/#L\d+(-L\d+)?$/, ''), ...(at ? { startLine: Number(at[1]), endLine: Number(at[2] ?? at[1]) } : {}) }]
+    }
     return hit && typeof hit === 'object' ? [hit as SearchHit] : []
   })
 }
@@ -146,6 +159,17 @@ function parseJson(text: string): unknown {
   } catch {
     return undefined
   }
+}
+
+/** The location a search hit returns: its path and line range, whatever it is (a symbol, a block); null when it names no lines. */
+export function hitLocation(hit: SearchHit): LineRange | null {
+  if (typeof hit.path !== 'string' || typeof hit.startLine !== 'number' || typeof hit.endLine !== 'number') return null
+  return hit.endLine >= hit.startLine && hit.startLine >= 1 ? { path: hit.path, start: hit.startLine, end: hit.endLine } : null
+}
+
+/** The envelope's `status` of a search answer, when it has one. */
+function searchStatus(answer: unknown): unknown {
+  return answer && typeof answer === 'object' ? Reflect.get(answer, 'status') : undefined
 }
 
 /**
@@ -198,6 +222,17 @@ export function readFilePage(json: unknown): { content: string; first: number; l
   return { content, first, lines: newlines + last, ...(cursor === undefined ? {} : { cursor }) }
 }
 
+/** The part of a `read_file` `targets` answer: the lines it shows and the lines a page left (`next: "c-d"`). */
+export function readSpanPart(json: unknown): { start: number; end: number; next?: { start: number; end: number } } | null {
+  const targets: unknown = json && typeof json === 'object' ? Reflect.get(json, 'targets') : undefined
+  const part: unknown = Array.isArray(targets) ? targets[0] : undefined
+  if (!part || typeof part !== 'object') return null
+  const lines: unknown = Reflect.get(part, 'lines')
+  if (!Array.isArray(lines) || typeof lines[0] !== 'number' || typeof lines[1] !== 'number' || lines[1] < lines[0]) return null
+  const more = /^(\d+)-(\d+)$/.exec(String(Reflect.get(part, 'next') ?? ''))
+  return { start: lines[0], end: lines[1], ...(more ? { next: { start: Number(more[1]), end: Number(more[2]) } } : {}) }
+}
+
 export async function runElara(question: string, gold: readonly LineRange[], tools: ElaraTools, caps: Caps = CAPS): Promise<PolicyRun> {
   const ep = new Episode(gold, caps)
   const res = await tools.search(question)
@@ -207,9 +242,35 @@ export async function runElara(question: string, gold: readonly LineRange[], too
   const ranges = hits.map(symbolLines).filter((r): r is LineRange => r !== null)
   ep.record('search', question, visible, truncated, res.ms, res.ok, ranges)
   const ranking = dedupe(hits.map((h) => h.path).filter((p): p is string => typeof p === 'string'))
+  const located = hits.map(hitLocation)
+  const status = searchStatus(parsed)
+  const run = { ranking, hits: located, abstained: status === 'no_match' || status === 'ambiguous', episode: ep }
 
-  for (const path of ranking.slice(0, caps.maxFiles)) {
+  // Each hit, best first, up to the file cap: the first hit, when it is located, is read as its span first; a file whose span shows no gold, and every other hit, is read page by page.
+  const paged = new Set<string>()
+  const files = new Set<string>()
+  for (const [i, hit] of hits.entries()) {
+    const path = hit.path
+    if (typeof path !== 'string' || ep.done || paged.has(path) || (!files.has(path) && files.size >= caps.maxFiles)) continue
+    files.add(path)
+    // Only the first hit is read as a span: each span read is a call, and a wrong one is a call the file read then repeats (the call cap is 15).
+    const span = located[i]
+    if (i === 0 && span !== null && span !== undefined) {
+      // The same window around the evidence the grep agent reads; the lines a page of it left follow. Lines already in context are not asked for again: the window shrinks to its first and last new line.
+      const want: { start: number; end: number } | undefined = { start: Math.max(1, span.start - GREP.readBefore), end: span.end + GREP.readAfter }
+      while (want.start <= want.end && ep.seen.has(path, want.start)) want.start++
+      while (want.end >= want.start && ep.seen.has(path, want.end)) want.end--
+      let next: { start: number; end: number } | undefined = want.start <= want.end ? want : undefined
+      while (next && !ep.done) {
+        const read = await tools.readSpan(path, next.start, next.end)
+        const cut = ep.clip(read.text)
+        const part = read.ok && !cut.truncated ? readSpanPart(parseJson(read.text)) : null
+        ep.record('read_file', `${path}:${next.start}-${next.end}`, cut.visible, cut.truncated, read.ms, read.ok, part ? [{ path, start: part.start, end: part.end }] : [])
+        next = part?.next
+      }
+    }
     // A long file comes in pages (#420): follow `truncated.cursor` until the gold is seen or the file ends.
+    paged.add(path)
     let cursor: string | undefined
     do {
       if (ep.done) break
@@ -221,7 +282,7 @@ export async function runElara(question: string, gold: readonly LineRange[], too
       cursor = cut.truncated ? undefined : page?.cursor
     } while (cursor)
   }
-  return { ranking, episode: ep }
+  return run
 }
 
 // ---- grep ------------------------------------------------------------------
@@ -250,7 +311,7 @@ export async function runGrep(keywords: readonly string[], gold: readonly LineRa
   const list = ep.clip(shown.map((f) => `${f.path}:${f.count}`).join('\n'))
   ep.record('rg --count', flags, list.visible, list.truncated, counted.ms, true, [])
   const ranking = shown.map((f) => f.path)
-  if (ranking.length === 0 || ep.done) return { ranking, episode: ep }
+  if (ranking.length === 0 || ep.done) return { ranking, hits: [], abstained: false, episode: ep }
 
   // 2. rg -n -i -m 5 <patterns> -- <top files>: where in each file, shown in ranking order.
   const top = ranking.slice(0, Math.min(GREP.previewFiles, caps.maxFiles))
@@ -276,5 +337,5 @@ export async function runGrep(keywords: readonly string[], gold: readonly LineRa
     }
     if (ep.done) break
   }
-  return { ranking, episode: ep }
+  return { ranking, hits: [], abstained: false, episode: ep }
 }

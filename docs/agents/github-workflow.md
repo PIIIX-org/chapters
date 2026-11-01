@@ -653,8 +653,8 @@ the image's dependencies, the lab plumbing, the workflow or the gate; all
 five suites also run nightly, on every PR to `prod` and by hand
 (`-f tier=none -f bench=all`). The gate
 (`.github/scripts/bench-gate.mjs`, base copy on PRs) fails when Elara's
-hit@5 drops by more than one question of a suite or its mean
-tokens-to-gold rises by more than 10 % against the **base** commit's
+hit@5, exact@1 or gold-reached rate drops by more than one question of a
+suite (#1058) or its mean tokens-to-gold rises by more than 10 % against the **base** commit's
 `benchmarks/baseline.json`; with `--require-golds` (the all-suites path
 rule) when any suite's `goldReached` is below the base baseline's, with no
 tolerance; when the suite changed (questions, keywords, policy config or
