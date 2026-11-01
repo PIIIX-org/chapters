@@ -1,4 +1,5 @@
 import { locateHits } from './locate.js'
+import { routeQuery } from './router.js'
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { config } from '../config.js'
@@ -350,8 +351,8 @@ export interface SearchResult {
   heading?: string
   /** What reading `startLine`-`endLine` costs, characters / 4. */
   tokens?: number
-  /** Which retrieval channel found it: the keyword leg, the vector leg or both (#414). */
-  channel: 'keyword' | 'vector' | 'both'
+  /** Which retrieval channel found it: the keyword leg, the vector leg or both (#414), or `exact`: the router's lookup (#1060). */
+  channel: 'keyword' | 'vector' | 'both' | 'exact'
   /** Up to `SNIPPET_CHARS` characters around the match. */
   snippet: string
   score: number
@@ -378,6 +379,8 @@ export interface SearchNotesOptions {
   includeSymbols?: boolean
   /** The asking account: its repeated queries come from the query-embedding cache (#684). Without it nothing is cached. */
   accountId?: string
+  /** False: take the hybrid path whatever the query is (#1060). The tests of the legs use it; MCP and REST do not offer it yet. */
+  route?: boolean
 }
 
 /**
@@ -403,7 +406,8 @@ export interface SearchNotesOptions {
  *   `symbol`), then a symbol's start line, then id (#623).
  */
 export type SearchStatus = 'ok' | 'no_match' | 'index_building' | 'unavailable'
-export type RetrievalMode = 'hybrid' | 'keyword_only' | 'vector_only' | 'none'
+/** `exact`: a routed query answered by lookup, no channel ran (#1060). */
+export type RetrievalMode = 'hybrid' | 'keyword_only' | 'vector_only' | 'none' | 'exact'
 export type Degraded = false | { reason: 'embedder_failed' | 'vector_leg_failed' | 'keyword_leg_failed' }
 export interface IndexState {
   pending_notes: number
@@ -416,6 +420,12 @@ export interface SearchResponse<H> {
   retrieval_mode: RetrievalMode
   degraded: Degraded
   index?: IndexState
+  /** Present only when the query was routed (#1060): `identifier` or `path`; a conceptual query names none. */
+  route?: 'identifier' | 'path'
+  /** 1: the routed lookup found one exact answer. */
+  confidence?: 1
+  /** The routed lookup found several exact answers, all listed. */
+  ambiguous?: true
   results: H[]
 }
 
@@ -1157,6 +1167,14 @@ export async function searchNotes(
   const symbolRepos = includeSymbols ? repositoryIds : []
   const state = indexState(vaultIds, repositoryIds)
   const [notes, files, symbols] = [noteFilter(filters), fileFilter(filters), symbolFilter(filters)]
+  // An identifier or a path asked for by itself is answered by lookup (#1060); a filter would narrow a list the lookup does not have.
+  if (options.route !== false && notes?.length === 0 && files?.length === 0 && symbols?.length === 0) {
+    const routed = await routeQuery(resources, query, includeSymbols)
+    if (routed) {
+      const { results, ...answer } = routed
+      return { status: 'ok', retrieval_mode: 'exact', degraded: false, ...answer, results: results.slice(0, limit) }
+    }
+  }
   const vec = await queryVector(query, options.accountId)
   const [keyword, vector] = await Promise.all([
     channel<[Row[], Row[], SymbolRow[]]>('keyword', [
