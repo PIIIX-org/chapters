@@ -30,6 +30,7 @@ import {
   watchLocalRepository,
 } from './scheduler.js'
 import { deleteRepositoryRecord, listRepositoryFiles } from './store.js'
+import { CodeQueryError, codeRefsBody, codeRefsQuerySchema, type CodeRefsQuery } from './code-refs.js'
 import { buildGraph } from '../graph/assemble.js'
 import { graphQuerySchema, parseGraphFilters, type GraphQuery } from '../graph/filters.js'
 import { searchNotes } from '../search/search.js'
@@ -346,6 +347,22 @@ export function repositoryRoutes(app: FastifyInstance) {
         includeSymbols: req.query.symbols,
         accountId: req.user!.id,
       })
+    },
+  )
+
+  // #470: the symbol at a line, and a symbol's references, callers, impact and tests (code-refs.ts); the MCP tool is `find_symbols` with `refs`.
+  app.get<{ Params: { id: string }; Querystring: CodeRefsQuery }>(
+    '/repositories/:id/code-refs',
+    { schema: { querystring: codeRefsQuerySchema } },
+    async (req, reply) => {
+      const access = await resolveRepositoryAccess(req.user!.id, req.params.id)
+      if (!access) return reply.code(404).send({ error: 'not found' })
+      try {
+        return await codeRefsBody(req.params.id, req.query)
+      } catch (err) {
+        if (err instanceof CodeQueryError) return reply.code(err.code === 'NOT_FOUND' ? 404 : 400).send({ error: err.message })
+        throw err
+      }
     },
   )
 
