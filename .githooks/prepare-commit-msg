@@ -1,0 +1,10 @@
+#!/bin/sh
+# `git revert` and `git cherry-pick` commit through the sequencer, which
+# runs this hook but never commit-msg (git 2.50). With source `message`
+# (no editor: `--no-edit`, or a message given in full with -m/-F/-C) the
+# message is final, so the trailer is added here; commit-msg then finds it
+# and adds nothing. Every other source (empty, template, merge, squash,
+# commit) is left to commit-msg, after the editor. Logic and opt-out:
+# .githooks/coauthor.
+[ "$2" = message ] || exit 0
+exec sh "$(git rev-parse --git-path hooks)/coauthor" "$1"
