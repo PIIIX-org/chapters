@@ -19,6 +19,13 @@ name: Review verdict
 #
 # `issue_comment` runs this file and the script from the default branch
 # (`dev`), so posting a verdict only re-evaluates once this is on `dev`.
+#
+# Merge queue: on `merge_group` the script resolves the PR from the queue
+# branch (gh-readonly-queue/<base>/pr-<N>-<sha>), checks the latest verdict
+# against the PR head the queue commit was built from (its second parent)
+# and sets the status on the queue commit, so the required check reports
+# on it. HEAD^1 of the queue commit is the queue's base: the base copy of
+# the script runs, as on PR events.
 
 on:
   pull_request:
@@ -27,11 +34,13 @@ on:
     types: [submitted, edited, dismissed]
   issue_comment:
     types: [created, edited, deleted]
+  merge_group:
 
 # Every run reads the PR's current state, so the newest run is the one that
-# counts.
+# counts. A merge group's ref names its PR and base, so queue runs never
+# cancel PR runs or each other's PRs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -46,24 +55,27 @@ jobs:
     # Comments on plain issues are not reviews. Fork PRs never run here (the
     # script also refuses them on comment events, whose payload has no head).
     if: >-
+      github.event_name == 'merge_group' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request) ||
       (github.event_name != 'issue_comment' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
-          # On PR events HEAD is GitHub's merge of the PR into its base, and
-          # HEAD^1 (the base) must be in the clone.
+          # On PR events HEAD is GitHub's merge of the PR into its base, on
+          # merge_group the queue's merge commit; HEAD^1 (the base) must be
+          # in the clone.
           fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      # On PR events run the base's copy of the checker so a PR cannot edit
-      # the check it is judged by; until the base has one, run the PR's copy.
-      # Comment events check out the default branch and run its copy. The
-      # copy runs alone from $RUNNER_TEMP, so the script must stay a single
-      # file with no sibling imports.
+      # On PR and merge_group events run the base's copy of the checker so a
+      # PR cannot edit the check it is judged by; until the base has one, run
+      # the PR's copy. Comment events check out the default branch and run
+      # its copy. The copy runs alone from $RUNNER_TEMP, so the script must
+      # stay a single file with no sibling imports.
       - name: Evaluate the review verdict and set the status
         env:
           GITHUB_TOKEN: ${{ github.token }}
