@@ -23,7 +23,7 @@ import { config } from '../config.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 import { bodyMeasured, documentSizes, updateFits } from './collab-size.js'
 import { liveTookUpdate, updateToLog } from './collab-append.js'
-import { advanceStoredState, rejectUpdate, rememberLoadedState } from './note-crdt.js'
+import { advanceStoredState, holdsUnknownItems, lacksRebase, readRebaseMark, rejectUpdate, rememberLoadedState } from './note-crdt.js'
 import { failpoint } from '../failpoints.js'
 import { forgetAgentPresence, stripAgentClaims } from './agent-presence.js'
 import { writesPaused } from '../notes/maintenance-lock.js'
@@ -42,7 +42,8 @@ const DEBOUNCE_MS = Number(process.env.COLLAB_DEBOUNCE_MS ?? 2000)
 const MAX_PENDING_SOCKET_BYTES = 16 * 1024 * 1024
 const pendingSocketBytes = new WeakMap<object, number>()
 
-/** y-protocols/sync message types that carry a Yjs update (step 2 of the handshake, and live edits). */
+/** y-protocols/sync message types: step 1 of the handshake (the client's state vector), step 2 and live edits (a Yjs update each). */
+const SYNC_STEP_1 = 0
 const SYNC_STEP_2 = 1
 const SYNC_UPDATE = 2
 
@@ -68,6 +69,29 @@ class NoteTooLargeRefusal extends Error {
 }
 
 const SIZE_NOTICE = 'elara-size'
+
+/**
+ * Thrown from `beforeSync` for a client's first sync (step 1, its state
+ * vector) when the note's CRDT state was rebased since that client last
+ * synced and the client holds items the document does not (#891). A rebase
+ * (`rebaseLocked`, ADR-003 §5.4) writes the row's out-of-band change as new
+ * items of the server's client id; when that change was the client's own
+ * typing (its items removed from `note_updates` by a manual restore), the
+ * client still holds the originals, and syncing both would put the text in
+ * twice. The relay cannot tell those originals from typing the server never
+ * saw, so it takes neither: the hook awaits this before `readSyncStep1`,
+ * before the relay has sent the client anything of the document or asked for
+ * its state. Hocuspocus then closes the document connection with this
+ * reason; the editor (client/src/hooks/useCollabDoc.ts) starts over on a new
+ * document and offers the old one's text to the person.
+ */
+class NoteRebasedRefusal extends Error {
+  readonly code = 4409
+  readonly reason = 'note-rebased'
+  constructor(documentName: string) {
+    super(`refused the sync of ${documentName}: the note was rebased since this client last synced, and it holds items the relay does not have (#891)`)
+  }
+}
 
 /**
  * The store is not taking writes for a moment (ADR-003 §5.1: this process's
@@ -286,6 +310,25 @@ interface ConnectionContext {
 const documentNotes = new WeakMap<Y.Doc, string>()
 
 /**
+ * True when a client whose sync step 1 carries state vector `payload` must
+ * not sync with `document` (#891, NoteRebasedRefusal): it holds items the
+ * document does not, and it lacks the note's latest recorded rebase. A
+ * client that only lacks the rebase (all its typing stored) syncs as usual
+ * and receives it; the store is asked only when the client is ahead.
+ */
+async function missedRebase(document: Y.Doc, payload: Uint8Array, socket: Parameters<typeof refuseStoreBusy>[0], documentName: string): Promise<boolean> {
+  const noteId = documentNotes.get(document)
+  if (!noteId) return false
+  const client = Y.decodeStateVector(payload)
+  if (!holdsUnknownItems(client, document)) return false
+  const mark = await readRebaseMark(db, noteId).catch((err: unknown) => {
+    if (storeUnavailable(err)) throw refuseStoreBusy(socket, documentName, err instanceof Error ? err.message : String(err))
+    throw err
+  })
+  return mark !== null && lacksRebase(client, mark)
+}
+
+/**
  * The sync relay (spec 5 + audit hardening). It has no listener of its own:
  * it is attached to Fastify's HTTP server and answers websocket upgrades on
  * `COLLAB_PATH` only, so the whole app is one process on one port. Editors
@@ -430,6 +473,11 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         throw err
       })
       Y.applyUpdate(document, state)
+      // Hocuspocus batches every document update for broadcast at the end of the event loop turn, the load's too.
+      // Sent now it reaches nobody (a connection is attached only once the load finished); left in the batch it
+      // would reach the first connection as an update before its sync step 1 is checked, which hands a stale
+      // client a rebase it then holds twice (#891, missedRebase). A client gets the document through its sync.
+      document.flush()
       // The stored state this document holds, so its stores need not materialise it again (§5.4 "Before S3").
       if (lastId !== null) rememberLoadedState(document, name.noteId, lastId)
       documentNotes.set(document, name.noteId)
@@ -491,8 +539,17 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * reconnects and resends what is still unsynced, and Yjs applies a
      * resend once. A refused note (trashed, purged) is refused again by
      * `onAuthenticate` on that reconnect.
+     *
+     * A client's first sync (step 1) is checked against the note's latest
+     * rebase (#891, NoteRebasedRefusal) before anything is exchanged.
      */
     async beforeSync({ type, payload, document, documentName, context, connection }) {
+      if (type === SYNC_STEP_1) {
+        if (!connection.readOnly && (await missedRebase(document, payload, connection.webSocket, documentName))) {
+          throw new NoteRebasedRefusal(documentName)
+        }
+        return
+      }
       if (type !== SYNC_STEP_2 && type !== SYNC_UPDATE) return
       if (writesPaused()) throw refuseStoreBusy(connection.webSocket, documentName, 'writes paused')
       const toLog = updateToLog(document, payload)

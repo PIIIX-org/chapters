@@ -31,16 +31,6 @@
       "issue": 617
     },
     {
-      "test": "collab-duplication",
-      "check": "S18 CRDT state put back by SQL, stale ydoc (tab kept open): no duplicated text",
-      "issue": 891
-    },
-    {
-      "test": "collab-duplication",
-      "check": "S18 CRDT state put back by SQL, stale ydoc (tab kept open): @INJSTALE@ kept exactly once on disk",
-      "issue": 891
-    },
-    {
       "test": "export-roundtrip",
       "check": "attachment links in the exported bundle resolve inside the bundle (OKF §6.1 bundle-relative)",
       "issue": 565

@@ -18,9 +18,11 @@
 // and the CRDT state put back by SQL behind a newer row (S18 SQL, S19): the
 // state the old relay's crash window left (note written, CRDT state not),
 // which since S2b only a manual change of `note_crdt`/`note_updates` leaves.
-// The S18 SQL step is the faithful reproduction of #488's mechanism; its
-// stale-tab checks are baselined under #891. S19 keeps ".crdt" in its check
-// names from before S2b.
+// The S18 SQL step is the faithful reproduction of #488's mechanism: since
+// #891 the relay refuses the stale tab's document (`note-rebased`), and the
+// client starts over on a new one and offers the old text (lib/collab.ts
+// mirrors useCollabDoc.ts). S19 keeps ".crdt" in its check names from before
+// S2b.
 //
 // After every step: body on disk (parsed by the app's own parseNote inside
 // the container), notes.body in Postgres, the note's CRDT state decoded from
@@ -488,8 +490,18 @@ const test: LabTest = {
       if (variant.startsWith('fresh')) C.ydoc = new Y.Doc()
       const ok = await C.connect()
       await settle(C)
-      const rec = await snap(`S18 CRDT state put back by SQL, ${variant}`, n2, { C }, { once: [m, base2] }, { diskBefore, binBefore, reconnected: ok })
-      injection.push({ variant: `SQL, ${variant}`, marker: m, diskBefore, binBefore, after: rec.counts[m], duplicated: rec.duplicated })
+      const rec = await snap(`S18 CRDT state put back by SQL, ${variant}`, n2, { C }, { once: [m, base2] }, { diskBefore, binBefore, reconnected: ok, offered: C.offered })
+      if (variant.startsWith('stale')) {
+        // The tab's typing is in the note once (the rebase), and its old document's text is offered, not merged (#891).
+        checks.push({
+          name: `S18 CRDT state put back by SQL, ${variant}: the relay refused the stale document (note-rebased) and its text is offered`,
+          expected: 'closed with note-rebased; the offered text holds the marker once',
+          actual: `${C.events.filter((e) => e.kind === 'rebased').length} note-rebased refusal(s); offered: ${C.offered === null ? 'nothing' : `${label(m)} x${count(C.offered, m)}`}`,
+          ok: C.offered !== null && count(C.offered, m) === 1,
+          severity: 'high',
+        })
+      }
+      injection.push({ variant: `SQL, ${variant}`, marker: m, diskBefore, binBefore, after: rec.counts[m], duplicated: rec.duplicated, offered: C.offered !== null })
       C.destroy()
     }
 

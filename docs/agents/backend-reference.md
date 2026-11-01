@@ -1956,6 +1956,27 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   end of the write's transaction, so a refused write (a check, an op that
   does not resolve, validation) still gets this check on its connection's
   disconnect store: a document a person doubled stays out of the row (#408).
+- **A client that missed a rebase is refused** (#891). A rebase
+  (`rebaseLocked` in `notes/store.ts`: the row changed behind the store,
+  merged at boot, on a write or on the relay's load) writes the row's
+  change as new items of the process's `SERVER_CLIENT_ID` and records them
+  on `note_crdt` (migration 0062: `rebase_client`, `rebase_clock`, the
+  clock just past them). When that change is a tab's own typing whose items
+  a manual restore of `note_crdt`/`note_updates` removed, the tab still holds
+  the originals, and syncing both copies would double the text; the relay
+  cannot tell them from typing it never saw. So `beforeSync` checks a
+  client's sync step 1 (its state vector), which Hocuspocus awaits before
+  `readSyncStep1`: a client that holds items the document does not (a clock
+  above the document's) and lacks the recorded rebase (less than
+  `rebase_clock` for `rebase_client`) is closed with reason `note-rebased`
+  before anything is exchanged. A client that only lacks the rebase syncs
+  and receives it. The load's own state is flushed from Hocuspocus's
+  broadcast batch at the end of `onLoadDocument` (no connection is attached
+  yet), so it never reaches the first connection ahead of its sync. The
+  editor (`useCollabDoc`) starts over on a new document and offers the old
+  one's text as `unmerged`, kept in this browser as a document of its own
+  (no shared history, so a later visit offers it again and never merges it);
+  the old document's browser copy is deleted once that one is stored.
 - **An ack means committed in Postgres** (ADR-003 §5.4 "Append", S3,
   #487; `collab-append.ts`, `appendCollabUpdate` in `notes/store.ts`).
   `beforeSync` runs on every sync-step-2 and update message before
