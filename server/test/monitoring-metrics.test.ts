@@ -1,14 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
+import { setTimeout as sleep } from 'node:timers/promises'
 import {
+  DURATION_BUCKETS_MS,
+  INDEX_STAGES,
   MAX_ERRORS,
   MAX_ROUTES,
+  SEARCH_LEGS,
   WINDOW_MINUTES,
   errorInfo,
+  instrumentSnapshot,
   metricsSnapshot,
+  metricsText,
+  observeIndexStage,
+  observeSearchLeg,
   recordJob,
   recordRequest,
+  resetInstruments,
   resetMetrics,
   routeKey,
+  sampleEventLoop,
+  sampleProcessMemory,
+  setJobQueue,
+  startEventLoopMonitor,
+  stopEventLoopMonitor,
   type RequestSample,
 } from '../src/monitoring/metrics.js'
 
@@ -115,5 +129,122 @@ describe('monitoring metrics (#705)', () => {
     const routes = metricsSnapshot(T0).routes
     expect(routes).toHaveLength(MAX_ROUTES + 1)
     expect(routes.find((r) => r.route === 'GET (other)')?.count).toBe(20)
+  })
+})
+
+/** The value of the sample `name{labels}` in a scrape, or undefined when the series is absent. */
+function series(text: string, name: string, labels = ''): number | undefined {
+  const line = text.split('\n').find((l) => l.startsWith(`${name}${labels} `))
+  return line === undefined ? undefined : Number(line.slice(name.length + labels.length + 1))
+}
+
+describe('Prometheus exposition (GET /api/admin/metrics)', () => {
+  beforeEach(() => resetInstruments())
+  afterEach(() => stopEventLoopMonitor())
+
+  it('exports the boot counters as counters, every job kind by outcome', () => {
+    recordRequest(sample({ durationMs: 8 }), T0)
+    recordRequest(sample({ status: 500 }), T0)
+    recordJob('embedding', 'ok')
+    recordJob('sync', { error: new Error('x') })
+    recordJob('sync', { error: new Error('x'), repeat: true })
+    const text = metricsText()
+    expect(text).toContain('# TYPE elara_requests_total counter')
+    expect(series(text, 'elara_requests_total')).toBe(2)
+    expect(series(text, 'elara_request_server_errors_total')).toBe(1)
+    expect(series(text, 'elara_job_failures_total')).toBe(1)
+    expect(series(text, 'elara_jobs_total', '{kind="embedding",outcome="succeeded"}')).toBe(1)
+    expect(series(text, 'elara_jobs_total', '{kind="sync",outcome="failed"}')).toBe(1)
+    expect(series(text, 'elara_jobs_total', '{kind="sync",outcome="repeated"}')).toBe(1)
+    expect(series(text, 'elara_jobs_total', '{kind="backup",outcome="failed"}')).toBe(0)
+    expect(text.endsWith('\n')).toBe(true)
+    // Every sample line names a metric that has a HELP and a TYPE line.
+    for (const line of text.split('\n')) {
+      if (line === '' || line.startsWith('#')) continue
+      const name = /^([a-z0-9_]+)(?:\{| )/.exec(line)![1]!.replace(/_(bucket|sum|count)$/, '')
+      expect(text, line).toContain(`# TYPE ${name} `)
+    }
+  })
+
+  it('exports a histogram per search leg and per extraction stage with cumulative buckets in seconds', () => {
+    observeSearchLeg('note_keyword', 3)
+    observeSearchLeg('note_keyword', 30)
+    observeSearchLeg('note_keyword', 70_000)
+    observeSearchLeg('note_keyword', Number.NaN)
+    observeIndexStage('write', 12)
+    const text = metricsText()
+    expect(text).toContain('# TYPE elara_search_leg_duration_seconds histogram')
+    expect(series(text, 'elara_search_leg_duration_seconds_bucket', '{leg="note_keyword",le="0.001"}')).toBe(1)
+    expect(series(text, 'elara_search_leg_duration_seconds_bucket', '{leg="note_keyword",le="0.005"}')).toBe(2)
+    expect(series(text, 'elara_search_leg_duration_seconds_bucket', '{leg="note_keyword",le="0.05"}')).toBe(3)
+    expect(series(text, 'elara_search_leg_duration_seconds_bucket', '{leg="note_keyword",le="60"}')).toBe(3)
+    expect(series(text, 'elara_search_leg_duration_seconds_bucket', '{leg="note_keyword",le="+Inf"}')).toBe(4)
+    expect(series(text, 'elara_search_leg_duration_seconds_count', '{leg="note_keyword"}')).toBe(4)
+    expect(series(text, 'elara_search_leg_duration_seconds_sum', '{leg="note_keyword"}')).toBeCloseTo(70.033, 6)
+    for (const leg of SEARCH_LEGS) expect(series(text, 'elara_search_leg_duration_seconds_count', `{leg="${leg}"}`)).toBe(leg === 'note_keyword' ? 4 : 0)
+    for (const stage of INDEX_STAGES) expect(series(text, 'elara_index_stage_duration_seconds_count', `{stage="${stage}"}`)).toBe(stage === 'write' ? 1 : 0)
+    expect(series(text, 'elara_index_stage_duration_seconds_bucket', '{stage="write",le="0.01"}')).toBe(0)
+    expect(series(text, 'elara_index_stage_duration_seconds_bucket', '{stage="write",le="0.025"}')).toBe(1)
+    expect(instrumentSnapshot().searchLegs.note_keyword.buckets).toHaveLength(DURATION_BUCKETS_MS.length)
+  })
+
+  it('samples process memory into gauges, zero before the first sample', () => {
+    expect(series(metricsText(), 'elara_process_resident_memory_bytes')).toBe(0)
+    expect(series(metricsText(), 'elara_process_memory_sample_timestamp_seconds')).toBe(0)
+    sampleProcessMemory(T0)
+    const text = metricsText()
+    expect(series(text, 'elara_process_resident_memory_bytes')).toBeGreaterThan(1_000_000)
+    expect(series(text, 'elara_process_heap_used_bytes')).toBeGreaterThan(0)
+    expect(series(text, 'elara_process_heap_total_bytes')).toBeGreaterThanOrEqual(series(text, 'elara_process_heap_used_bytes')!)
+    expect(series(text, 'elara_process_external_memory_bytes')).toBeGreaterThan(0)
+    expect(series(text, 'elara_process_array_buffers_bytes')).toBeGreaterThanOrEqual(0)
+    expect(series(text, 'elara_process_memory_sample_timestamp_seconds')).toBe(T0 / 1000)
+    expect(series(text, 'elara_process_start_time_seconds')).toBeGreaterThan(1_700_000_000)
+  })
+
+  // Real time on purpose: `monitorEventLoopDelay` measures the platform's event loop, which fake timers do not drive.
+  it('reports event-loop lag percentiles over the interval since the previous sample', async () => {
+    sampleEventLoop(T0)
+    expect(instrumentSnapshot().eventLoop.sampledAt, 'no-op before the monitor starts').toBe(0)
+    startEventLoopMonitor()
+    // The monitor measures from its first tick: let it take one before the loop is held.
+    await sleep(30)
+    const until = Date.now() + 80
+    while (Date.now() < until) {
+      /* a busy loop of 80 ms: the delay monitor sees at least one late tick */
+    }
+    await sleep(30)
+    sampleEventLoop(T0)
+    const text = metricsText()
+    expect(series(text, 'elara_event_loop_lag_max_seconds')).toBeGreaterThan(0.05)
+    expect(series(text, 'elara_event_loop_lag_p99_seconds')).toBeGreaterThan(0)
+    expect(series(text, 'elara_event_loop_lag_p50_seconds')).toBeLessThanOrEqual(series(text, 'elara_event_loop_lag_p99_seconds')!)
+    expect(series(text, 'elara_event_loop_lag_mean_seconds')).toBeGreaterThan(0)
+    expect(series(text, 'elara_event_loop_lag_sample_timestamp_seconds')).toBe(T0 / 1000)
+    // Reset after the sample: a quiet interval reports a small lag again, not the busy loop's maximum.
+    await sleep(40)
+    sampleEventLoop(T0 + 15_000)
+    expect(series(metricsText(), 'elara_event_loop_lag_max_seconds')).toBeLessThan(0.05)
+  })
+
+  it('exports job-queue depth and oldest age per kind, sorted, dropping a kind that is not an identifier', () => {
+    setJobQueue(
+      [
+        { kind: 'extract', pending: 12, oldestAgeSeconds: 90.5 },
+        { kind: 'embed_note', pending: 3, oldestAgeSeconds: 2 },
+        { kind: 'bad kind; with text', pending: 1, oldestAgeSeconds: 1 },
+        { kind: 'store_note', pending: 0, oldestAgeSeconds: -1 },
+      ],
+      T0,
+    )
+    const text = metricsText()
+    expect(series(text, 'elara_jobs_pending', '{kind="extract"}')).toBe(12)
+    expect(series(text, 'elara_jobs_pending', '{kind="embed_note"}')).toBe(3)
+    expect(series(text, 'elara_jobs_oldest_pending_age_seconds', '{kind="extract"}')).toBe(90.5)
+    expect(series(text, 'elara_jobs_oldest_pending_age_seconds', '{kind="store_note"}')).toBe(0)
+    expect(text).not.toContain('bad kind')
+    expect(text.indexOf('elara_jobs_pending{kind="embed_note"}')).toBeLessThan(text.indexOf('elara_jobs_pending{kind="extract"}'))
+    expect(series(text, 'elara_jobs_sample_timestamp_seconds')).toBe(T0 / 1000)
+    expect(instrumentSnapshot().jobQueue.rows.map((r) => r.kind)).toEqual(['embed_note', 'extract', 'store_note'])
   })
 })
