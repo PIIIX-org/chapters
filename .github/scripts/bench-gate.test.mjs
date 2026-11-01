@@ -357,3 +357,20 @@ describe('the questions that are not exact (#1058)', () => {
     assert.match(md, /Elara ÷ grep = 3 /)
   })
 })
+
+describe('the golds floor across a harness change (#1058 review)', () => {
+  it('compares with the base even when the suite-change label makes the run its own reference', () => {
+    const base = baselineOf(run())
+    const fewer = run({ goldReached: 11, goldReachedRate: 0.55 }, { fingerprint: 'fp2' })
+    const report = evaluate({
+      results: fewer,
+      baseline: baselineOf(fewer),
+      baseBaseline: base,
+      pr: pr(['bench-suite-change'], 'Bench-suite-change: the policy changed'),
+      requireGolds: true,
+    })
+    assert.match(failures(report), /s: golds lost, Elara goldReached 12 -> 11 of 20 \(base baseline/)
+    const same = run({}, { fingerprint: 'fp2' })
+    assert.deepEqual(evaluate({ results: same, baseline: baselineOf(same), baseBaseline: base, pr: pr(['bench-suite-change'], 'Bench-suite-change: the policy changed'), requireGolds: true }).failures, [])
+  })
+})

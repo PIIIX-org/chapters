@@ -272,10 +272,13 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
     // Golds are a floor, not a tolerance: a suite that loses one fails (--require-golds).
     if (requireGolds) {
       const cur = run.aggregate.elara.goldReached
-      const was = ref.elara.goldReached
+      // A harness change makes the run's own baseline the reference (the suite-change label): that would compare the run with itself.
+      // The golds of the same questions on the base still count, whatever the harness did (#1058 review).
+      const floor = base && base.questions === run.questions ? base : ref
+      const was = floor.elara.goldReached
       const lost = cur === null || cur === undefined || cur < was
       row.verdicts.goldReached = lost ? 'regression' : 'ok'
-      if (lost) failures.push(`${name}: golds lost, Elara goldReached ${was} -> ${cur ?? '-'} of ${run.questions} (${refLabel}; every suite must reach at least as many golds as the reference)`)
+      if (lost) failures.push(`${name}: golds lost, Elara goldReached ${was} -> ${cur ?? '-'} of ${run.questions} (${floor === base ? 'base baseline' : refLabel}; every suite must reach at least as many golds as the reference)`)
     }
     // The recorded bar may only go up unless an owner says otherwise.
     if (base && base.fingerprint === own.fingerprint) {
