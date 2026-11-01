@@ -64,6 +64,13 @@ export const GATED = ['hit5', 'exact1', 'goldReachedRate', 'tokensToGold']
 /** Gated metrics that are a fraction of the suite's questions. */
 const FRACTION_METRICS = new Set(['hit5', 'exact1', 'goldReachedRate'])
 
+/**
+ * The held-out suite (#1059): its questions are never used to tune ranking constants. A PR that touches one of
+ * RANKING_PATHS cannot write or lower its baseline and cannot argue a regression away with a label.
+ */
+export const HOLDOUT = 'holdout'
+export const RANKING_PATHS = [/^server\/src\/search\//, /^server\/src\/mcp\//, /^benchmarks\/lib\/policies\.ts$/]
+
 /** Owner overrides: label + PR body line with the reason. */
 export const OVERRIDES = {
   suiteChange: { label: 'bench-suite-change', line: 'Bench-suite-change' },
@@ -130,6 +137,7 @@ export function combine(list) {
     })
     suites[name] = {
       fingerprint: runs[0].fingerprint,
+      suiteFingerprint: runs[0].suiteFingerprint,
       questions: runs[0].questions,
       index: {
         outcome: outcomes.length === 1 ? outcomes[0] : outcomes.join('/'),
@@ -163,6 +171,7 @@ export function toBaseline(combined, previous = { suites: {} }) {
   for (const [name, s] of Object.entries(combined.suites)) {
     suites[name] = {
       fingerprint: s.fingerprint,
+      suiteFingerprint: s.suiteFingerprint,
       commit: combined.commit,
       runs: combined.runUrls,
       instances: combined.instances,
@@ -217,7 +226,8 @@ export function overrideReason(pr, override) {
  * request, `requireGolds` = every suite must reach at least the reference's
  * goldReached (no tolerance).
  */
-export function evaluate({ results, baseline, baseBaseline = null, pr = null, requireGolds = false }) {
+export function evaluate({ results, baseline, baseBaseline = null, pr = null, requireGolds = false, changed = null }) {
+  const rankingChange = changed !== null && changed.some((f) => RANKING_PATHS.some((re) => re.test(f)))
   const failures = []
   const notes = []
   const suites = []
@@ -236,7 +246,18 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
       failures.push(`${name}: no entry in benchmarks/baseline.json; add it from this run (--write-baseline)`)
       continue
     }
-    if (own.fingerprint !== run.fingerprint) {
+    // The held-out baseline is frozen against a PR that changes ranking code (#1059): it may not be written or lowered, and the run
+    // is judged by the base's entry whatever the harness fingerprint says, as long as the questions and the repository are the same.
+    const locked = name === HOLDOUT && rankingChange && base !== undefined
+    if (locked) {
+      if (JSON.stringify(own) !== JSON.stringify(base)) {
+        failures.push(`${name}: benchmarks/baseline.json changes the held-out entry in a PR that touches search, MCP or the Elara policy. A ranking change never writes its own held-out baseline: record it in a separate \`bench:\` PR that only updates the baseline.`)
+      }
+      if (base.suiteFingerprint === undefined || base.suiteFingerprint !== run.suiteFingerprint) {
+        failures.push(`${name}: the held-out questions or repository differ from the base's (suite fingerprint ${base.suiteFingerprint ?? 'missing'} vs ${run.suiteFingerprint ?? 'missing'}), so the base cannot judge this run; change them in a PR that touches no ranking code`)
+        continue
+      }
+    } else if (own.fingerprint !== run.fingerprint) {
       failures.push(`${name}: baseline fingerprint ${own.fingerprint} != run ${run.fingerprint} (questions, keywords, policy config or harness code changed); regenerate the entry from this run`)
       continue
     }
@@ -246,9 +267,9 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
     // Regression reference: the base commit's baseline. A changed suite cannot be judged by it.
     let ref = own
     let refLabel = 'baseline'
-    if (base && base.fingerprint === run.fingerprint) {
+    if (locked || (base && base.fingerprint === run.fingerprint)) {
       ref = base
-      refLabel = 'base baseline'
+      refLabel = locked ? 'base baseline (held out: no label argues a regression away)' : 'base baseline'
     } else if (base) {
       const reason = overrideReason(pr, OVERRIDES.suiteChange)
       const what = `suite changed (questions, keywords, policy config or harness code: fingerprint ${base.fingerprint} on the base, ${run.fingerprint} here), so the base baseline cannot judge this run`
@@ -262,10 +283,10 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
       // A baseline recorded before a metric existed (#1058) has no number to judge it by: the run is stale until it records one, a regression is not yet defined.
       const vsRef = cur === undefined || ref.elara[metric] === undefined ? 'same' : movement(metric, ref.elara[metric], cur, run.questions)
       const vsOwn = cur === undefined ? 'same' : own.elara[metric] === undefined ? 'better' : movement(metric, own.elara[metric], cur, run.questions)
-      row.verdicts[metric] = vsRef === 'worse' ? 'regression' : vsOwn !== 'same' ? 'stale' : 'ok'
+      row.verdicts[metric] = vsRef === 'worse' ? 'regression' : vsOwn !== 'same' && !locked ? 'stale' : 'ok'
       if (vsRef === 'worse') {
         failures.push(`${name}: regression, Elara ${metric} ${ref.elara[metric]} -> ${cur} (${refLabel}; tolerance ${describeTolerance(metric, run.questions)})`)
-      } else if (vsOwn !== 'same') {
+      } else if (vsOwn !== 'same' && !locked) {
         failures.push(`${name}: stale baseline, Elara ${metric} is ${vsOwn} than benchmarks/baseline.json (${own.elara[metric]} -> ${cur}); record this run with --write-baseline in this PR`)
       }
     }
@@ -472,12 +493,16 @@ function main() {
     results = combine(list)
     const prJson = readJson(opt('--pr'))
     const pr = prJson ? { labels: (prJson.labels ?? []).map((l) => l.name ?? l), body: prJson.body ?? '' } : null
+    // The files the PR changes, one per line (the workflow writes them from the pulls API): the held-out suite is locked against ranking changes (#1059).
+    const changedFile = opt('--changed')
+    const changed = changedFile && existsSync(changedFile) ? readFileSync(changedFile, 'utf8').split(/\r?\n/).filter(Boolean) : null
     report = evaluate({
       results,
       baseline: readJson(baselineFile),
       baseBaseline: readJson(opt('--base-baseline')),
       pr,
       requireGolds: args.includes('--require-golds'),
+      changed,
     })
   } catch (err) {
     report = { ok: false, failures: [String(err.message ?? err)], notes: [], suites: [] }

@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { combine, compare, evaluate, missingReport, movement, overrideReason, overview, render, toBaseline, TOLERANCE } from './bench-gate.mjs'
+import { HOLDOUT, combine, compare, evaluate, missingReport, movement, overrideReason, overview, render, toBaseline, TOLERANCE } from './bench-gate.mjs'
 
 const GATE = fileURLToPath(new URL('./bench-gate.mjs', import.meta.url))
 
@@ -37,7 +37,7 @@ const agg = (over = {}) => ({
 })
 
 /** One instance's results.json. */
-function instance(elara = {}, { fingerprint = 'fp1', outcome = 'complete', suites = ['s'], rank = 1 } = {}) {
+function instance(elara = {}, { fingerprint = 'fp1', suiteFingerprint = 'sf1', outcome = 'complete', suites = ['s'], rank = 1 } = {}) {
   return {
     commit: 'abc',
     runUrl: 'https://github.com/PIIIX-org/chapters/actions/runs/1',
@@ -48,6 +48,7 @@ function instance(elara = {}, { fingerprint = 'fp1', outcome = 'complete', suite
         name,
         {
           fingerprint,
+          suiteFingerprint,
           questions: 20,
           index: { outcome, files: 100, symbols: 50, ms: 60_000 },
           aggregate: { elara: agg(elara), grep: agg({ hit5: 0.8, tokensToGold: 9_000 }) },
@@ -355,5 +356,52 @@ describe('the questions that are not exact (#1058)', () => {
     assert.match(md, /\| Q3 \| gold not reached \(abstained\) \| - \| - \|/)
     assert.doesNotMatch(md, /\| Q1 \|/)
     assert.match(md, /Elara ÷ grep = 3 /)
+  })
+})
+
+describe('the held-out suite (#1059)', () => {
+  const changedSearch = ['server/src/search/search.ts']
+  const baseRun = () => run({}, { suites: ['s', HOLDOUT] })
+  const base = () => baselineOf(baseRun())
+  // A ranking PR changes the harness fingerprint of every suite; the held-out questions stay the same.
+  const moved = (elara = {}) => run(elara, { suites: ['s', HOLDOUT], fingerprint: 'fp2' })
+
+  it('is judged by the base entry across a harness change, and needs no baseline of its own from a ranking PR', () => {
+    const ok = evaluate({ results: moved(), baseline: base(), baseBaseline: base(), pr: pr(['bench-suite-change'], 'Bench-suite-change: the harness moved'), changed: changedSearch })
+    // `s` carries the suite-change label; the held-out row needs none.
+    assert.deepEqual(ok.failures.filter((f) => f.startsWith(HOLDOUT)), [])
+    assert.match(ok.suites.find((r) => r.name === HOLDOUT).refLabel, /held out/)
+  })
+
+  it('a regression on it is red and no label argues it away', () => {
+    const worse = moved({ hit5: 0.3 })
+    const report = evaluate({ results: worse, baseline: base(), baseBaseline: base(), pr: pr(['bench-suite-change', 'bench-baseline-lowered'], 'Bench-suite-change: the harness moved\nBench-baseline-lowered: ranking trade'), changed: changedSearch })
+    assert.match(failures(report), /holdout: regression, Elara hit5 0.6 -> 0.3 \(base baseline \(held out/)
+  })
+
+  it('a ranking PR cannot write or lower its baseline', () => {
+    const better = moved({ hit5: 0.9 })
+    const own = baselineOf(better)
+    const report = evaluate({ results: better, baseline: own, baseBaseline: base(), pr: pr(['bench-suite-change'], 'Bench-suite-change: the harness moved'), changed: changedSearch })
+    assert.match(failures(report), /holdout: benchmarks\/baseline.json changes the held-out entry in a PR that touches search, MCP or the Elara policy/)
+    // The policy file and the MCP code count too; a PR that touches neither may record it.
+    for (const file of ['benchmarks/lib/policies.ts', 'server/src/mcp/server.ts']) {
+      assert.match(failures(evaluate({ results: better, baseline: own, baseBaseline: base(), pr: pr(), changed: [file] })), /changes the held-out entry/, file)
+    }
+    const recorded = run({ hit5: 0.9 }, { suites: ['s', HOLDOUT] })
+    const bench = evaluate({ results: recorded, baseline: baselineOf(recorded), baseBaseline: base(), pr: pr(), changed: ['benchmarks/baseline.json'] })
+    assert.deepEqual(bench.failures.filter((f) => f.startsWith(HOLDOUT)), [])
+  })
+
+  it('other questions or another repository need a PR with no ranking change', () => {
+    const other = run({}, { suites: ['s', HOLDOUT], fingerprint: 'fp2', suiteFingerprint: 'sf2' })
+    assert.match(failures(evaluate({ results: other, baseline: base(), baseBaseline: base(), pr: pr(), changed: changedSearch })), /held-out questions or repository differ/)
+  })
+
+  it('without a base entry (the PR that adds the suite) or without a file list it is judged as any suite', () => {
+    const added = evaluate({ results: baseRun(), baseline: base(), baseBaseline: baselineOf(run()), pr: pr(), changed: changedSearch })
+    assert.deepEqual(added.failures, [])
+    const unknown = evaluate({ results: moved(), baseline: base(), baseBaseline: base(), pr: pr(['bench-suite-change'], 'Bench-suite-change: the harness moved'), changed: null })
+    assert.match(failures(unknown), /holdout: baseline fingerprint fp1 != run fp2/)
   })
 })

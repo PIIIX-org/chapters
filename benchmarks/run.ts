@@ -237,6 +237,8 @@ for (const p of prepared) {
   const paired = pairedTokensToGold(outcomes.elara, outcomes.grep)
   results[s.suite] = {
     fingerprint: fingerprint(s, CONFIG),
+    // The questions and the repository alone, without the harness: what the held-out suite is judged by across a harness change (#1059).
+    suiteFingerprint: fingerprint(s, null),
     repo: s.repo,
     questions: s.questions.length,
     index,

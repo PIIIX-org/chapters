@@ -392,6 +392,8 @@ jobs:
             fi
             gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" > "$RUNNER_TEMP/pr.json"
             set -- "$@" --pr "$RUNNER_TEMP/pr.json"
+            gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --jq '.[].filename' > "$RUNNER_TEMP/changed.txt"
+            set -- "$@" --changed "$RUNNER_TEMP/changed.txt"
           fi
           node "$gate" "$@"
 
