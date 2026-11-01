@@ -2954,12 +2954,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         sections: [
           ranked({
             name: 'results',
-            items: results,
+            // A note hit carries no frontmatter (#419: 53 % of its tokens): `read_note` has it, REST keeps it for the UI's tags.
+            items: results.map((r) => ({ ...r, frontmatter: undefined })),
             id: (r) => `${r.resourceType}:${r.id}`,
             limit,
-            // Down the ladder: without snippet, frontmatter and updated, then the path (`path#La-Lb` for a symbol); counted per path.
+            // Down the ladder: without snippet and updated, then the path (`path#La-Lb` for a located hit); counted per path.
             ladder: {
-              no_context: (r) => ({ ...r, snippet: undefined, frontmatter: undefined, updated: undefined }),
+              no_context: (r) => ({ ...r, snippet: undefined, updated: undefined }),
               locations: (r) => (r.startLine !== undefined && r.endLine !== undefined ? location(r.path, r.startLine, r.endLine) : r.path),
               group: (r) => r.path,
             },

@@ -1538,6 +1538,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     texts are read once per search for the returned hits only; one over `LOCATE_MAX_CHARS` (262,144) is not
     read, and its hit keeps the document-level fields. The block id hashes the owner's id, so it differs per
     database: `mcp-deterministic-answers.test.ts` masks it as the block it names.
+  - **No frontmatter in MCP hits** (#419): the MCP `search` handler drops `frontmatter` from every hit (it was
+    53 % of a note hit's tokens); `searchNotes` and the REST routes still return it, the client's search overlay
+    shows its tags.
   - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
     merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a
     fixed window of `CANDIDATES = 30` rows per leg (the population the
