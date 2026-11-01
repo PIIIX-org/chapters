@@ -10,6 +10,7 @@ import { MAX_KEYWORD_LENGTH, isPlainWord, keywordTerms, splitIdentifier, type Id
 import { extractionState } from '../repositories/extraction-queue.js'
 import { timeBound, type GraphFilters } from '../graph/assemble.js'
 import { compareCodeUnits } from '../mcp/response.js'
+import { observeSearchLeg, type SearchLeg } from '../monitoring/metrics.js'
 
 function uuidArray(ids: string[]): SQL {
   // ponytail: single Postgres array parameter literal instead of N placeholders (DB-07).
@@ -580,13 +581,23 @@ async function noteKeywordRows(vaultIds: string[], query: string, filterSql: SQL
   return [...rows, ...relaxed.map((r) => ({ ...r, relaxed: true as const }))]
 }
 
+/** Times a leg's query for `elara_search_leg_duration_seconds` (metrics.ts), whether it resolves or throws. */
+async function timed<T>(leg: SearchLeg, run: () => Promise<T>): Promise<T> {
+  const started = performance.now()
+  try {
+    return await run()
+  } finally {
+    observeSearchLeg(leg, performance.now() - started)
+  }
+}
+
 async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'semantic', vec: string | undefined, filter: LegFilter): Promise<Row[]> {
   if (vaultIds.length === 0 || filter === null) return []
   const filterSql = clauses(filter)
   const rows =
     mode === 'keyword'
-      ? await noteKeywordRows(vaultIds, query, filterSql)
-      : await blockLeg(vaultIds, vec!, (distance) =>
+      ? await timed('note_keyword', () => noteKeywordRows(vaultIds, query, filterSql))
+      : await timed('note_vector', () => blockLeg(vaultIds, vec!, (distance) =>
           gated(sql`
             -- A note's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per note, as before
             -- blocks; #967's relevance gate applies to that best distance. Equal distances at the 200-block cut go by
@@ -608,7 +619,7 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
             FROM best JOIN notes ON notes.id = best.owner_id
             WHERE notes.deleted_at IS NULL
             ORDER BY best.distance, notes.path COLLATE "C", notes.id`),
-        )
+        ))
   return rows as unknown as Row[]
 }
 
@@ -691,8 +702,8 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
   const filterSql = clauses(filter)
   const rows =
     mode === 'keyword'
-      ? await codeKeywordRows(repositoryIds, query, filterSql)
-      : await blockLeg(repositoryIds, vec!, (distance) =>
+      ? await timed('code_keyword', () => codeKeywordRows(repositoryIds, query, filterSql))
+      : await timed('code_vector', () => blockLeg(repositoryIds, vec!, (distance) =>
           gated(sql`
             -- A file's vector rank is its file block's (path and content, the old file vector): one row per file,
             -- as before blocks. The ADR-004 §2.5 best-block roll-up ranked chapters A6 and A13 out of the top 5 (bench
@@ -705,7 +716,7 @@ async function codeRows(repositoryIds: string[], query: string, mode: 'keyword' 
             -- owner_type = 'code' index (migration 0036), whose post-filter is what the files-only index avoids.
             WHERE b.kind = 'file' AND b.container_id = ANY(${uuidArray(repositoryIds)}) AND b.embedding IS NOT NULL ${filterSql}
             ORDER BY ${distance(sql`b.embedding`)}, f.path COLLATE "C", f.id`),
-        )
+        ))
   return rows as unknown as Row[]
 }
 
@@ -774,8 +785,8 @@ async function symbolRows(
   const filterSql = clauses(filter)
   const rows =
     mode === 'keyword'
-      ? await symbolKeywordRows(repositoryIds, query, filterSql)
-      : await blockLeg(repositoryIds, vec!, (distance) =>
+      ? await timed('symbol_keyword', () => symbolKeywordRows(repositoryIds, query, filterSql))
+      : await timed('symbol_vector', () => blockLeg(repositoryIds, vec!, (distance) =>
           gated(sql`
             SELECT ${SYMBOL_COLUMNS}, ${distance(sql`b.embedding`)} AS distance
             FROM blocks b JOIN repository_files f ON f.id = b.owner_id
@@ -785,7 +796,7 @@ async function symbolRows(
             ORDER BY ${distance(sql`b.embedding`)}, f.path COLLATE "C", b.start_line, b.id`,
             sql`path COLLATE "C", start_line, id`,
           ),
-        )
+        ))
   return rows as unknown as SymbolRow[]
 }
 
@@ -795,7 +806,7 @@ async function symbolRows(
  */
 async function queryVector(query: string, accountId: string | undefined): Promise<string | null> {
   try {
-    return JSON.stringify(await embedQuery(query, accountId ?? null))
+    return await timed('query_embed', async () => JSON.stringify(await embedQuery(query, accountId ?? null)))
   } catch (err) {
     console.warn('[search] query embedding failed; answering from the keyword channel:', err)
     return null
@@ -1088,7 +1099,7 @@ export async function findSymbols(
     channel<[SymbolRow[]]>('keyword', [symbolRows(repositoryIds, query, 'keyword', undefined, filter)]),
     vec === null ? null : channel<[SymbolRow[]]>('vector', [symbolRows(repositoryIds, query, 'semantic', vec, filter)]),
   ])
-
+  const fusionStarted = performance.now()
   const ctx = queryExactContext(query)
   const map = new Map<string, SymbolSearchResult>()
   const contribute = (rows: SymbolRow[], preferSnippet: boolean) => {
@@ -1122,6 +1133,7 @@ export async function findSymbols(
   if (keyword) contribute(keyword[0], true)
 
   const results = [...map.values()].sort(byScore).slice(0, limit)
+  observeSearchLeg('fusion', performance.now() - fusionStarted)
   return respond(results, vec !== null, keyword, vector, await state)
 }
 
@@ -1160,8 +1172,8 @@ export async function searchNotes(
           symbolRows(symbolRepos, query, 'semantic', vec, symbols),
         ]),
   ])
-
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
+  const fusionStarted = performance.now()
   const ctx = queryExactContext(query)
   const codeShaped = isCodeShaped(query)
   const merged = new Map<string, Omit<SearchResult, 'channel'>>()
@@ -1244,6 +1256,7 @@ export async function searchNotes(
     .sort(([, a], [, b]) => byScore(a, b))
     .slice(0, limit)
     .map(([key, hit]): SearchResult => ({ ...hit, channel: legs.get(key)!.size === 2 ? 'both' : legs.get(key)!.has('keyword') ? 'keyword' : 'vector' }))
+  observeSearchLeg('fusion', performance.now() - fusionStarted)
   await locateHits(results, query, vectorBlocks)
   return respond(results, vec !== null, keyword, vector, await state)
 }

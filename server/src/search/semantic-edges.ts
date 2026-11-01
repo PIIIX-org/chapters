@@ -618,7 +618,8 @@ function recomputeJobs(nodes: SQL): SQL {
     ORDER BY n.type DESC, n.id
     ON CONFLICT (idempotency_key) DO UPDATE
       SET id = nextval(pg_get_serial_sequence('jobs', 'id')), done_at = NULL, attempts = 0, last_error = NULL, lease_until = NULL,
-        priority = least(jobs.priority, EXCLUDED.priority)
+        priority = least(jobs.priority, EXCLUDED.priority),
+        created_at = CASE WHEN jobs.done_at IS NOT NULL THEN now() ELSE jobs.created_at END
       WHERE jobs.done_at IS NOT NULL OR jobs.attempts > 0 OR jobs.priority > EXCLUDED.priority
     RETURNING id`
 }
