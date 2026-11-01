@@ -126,14 +126,20 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
       },
     })
 
-    expect(prompt.messages).toHaveLength(1)
+    // The instructions, then the project note as an embedded resource (#556).
+    expect(prompt.messages).toHaveLength(2)
     const text = (prompt.messages[0]?.content as { type: string; text: string }).text
     expect(text).toContain('You are actively pairing on project "elara"')
     expect(text).toContain('Implement MCP prompts suite with 20 engineering workflows')
     expect(text).toContain('session/')
-    expect(text).toContain('Elara flagship knowledge base project note')
+    expect(text).toContain('[[project/elara]]')
+    expect(text).not.toContain('Elara flagship knowledge base project note')
     // The session log is appended to atomically (#478), never read and written back whole.
     expect(text).toContain('append_note')
+    const block = prompt.messages[1]!.content
+    if (block.type !== 'resource' || !('text' in block.resource)) throw new Error(`expected a text resource, got ${block.type}`)
+    expect(block.resource.uri).toBe(`elara://vault/${vaultId}/notes/project/elara`)
+    expect(block.resource.text).toContain('Elara flagship knowledge base project note')
   })
 
   it('evaluates sync_local_docs_to_vault prompt with validation steps', async () => {
@@ -206,6 +212,7 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
       },
     })
 
+    // No note matches the symbol (#441): the instructions alone.
     expect(prompt.messages).toHaveLength(1)
     const text = (prompt.messages[0]?.content as { type: string; text: string }).text
     expect(text).toContain('server/src/sync/collab-server.ts')

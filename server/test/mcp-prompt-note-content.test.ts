@@ -1,17 +1,17 @@
-// Where note text lands in the MCP prompts that include it (#552).
+// Where note text lands in the MCP prompts that include it (#552, #556).
 //
 // The vault holds ordinary notes whose text contains an imperative sentence.
 // Nothing here runs a model: the test reads the prompt messages Elara returns
-// and records where that sentence sits relative to the prompt's own
+// and checks where that sentence sits relative to the prompt's own
 // instructions.
 //
-// Known defect #556 (fix list item 159): today every one of these prompts
-// returns ONE user-role text message in which the note text sits after a
-// heading and before the prompt's own instructions, in the same text, so the
-// note's sentence reads like part of the instructions. The expected
-// behaviour is note text in a separate data block (an embedded resource)
-// marked untrusted. These tests pin today's placement; the fix for #556
-// changes them.
+// Before #556 (fix list item 159) every one of these prompts returned ONE
+// user-role text message in which the note text sat after a heading and
+// before the prompt's own instructions, in the same text, so the note's
+// sentence read like part of the instructions. Now the instruction message
+// carries the heading and the note paths only; each note's text is its own
+// message, an embedded resource (`elara://vault/<vaultId>/notes/<path>`,
+// text/markdown) whose `_meta` marks it untrusted.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -38,7 +38,7 @@ interface PromptCase {
 const CASES: Record<string, PromptCase> = {
   active_project_companion: {
     args: (vaultId) => ({ projectName: 'ledger', taskDescription: 'tidy the exports', vaultId }),
-    heading: 'Existing Project Note:',
+    heading: 'BASELINE KNOWLEDGE BASE CONTEXT:',
     instructions: 'CONTINUOUS WORKFLOW MANDATE:',
   },
   prepare_task_context: {
@@ -115,27 +115,41 @@ afterAll(async () => {
   await app.close()
 })
 
-describe('note text inside MCP prompts (#552; known defect #556)', () => {
-  it.each(Object.keys(CASES))('today: %s puts the note text inside its single user-role instruction message', async (name) => {
+describe('note text inside MCP prompts (#552, #556)', () => {
+  it.each(Object.keys(CASES))('%s keeps the note text out of its instructions, in an embedded resource marked untrusted', async (name) => {
     const c = CASES[name]!
     const prompt = await client.getPrompt({ name, arguments: c.args(vaultId) })
 
-    // One message, role user, plain text: no separate data message, no embedded resource.
-    expect(prompt.messages).toHaveLength(1)
-    const [message] = prompt.messages
-    expect(message!.role).toBe('user')
-    const content = message!.content
-    if (content.type !== 'text') throw new Error(`${name}: expected a text message, got ${content.type}`)
-    // Search snippets highlight matched words with <b>; the placement is about the words.
-    const text = content.text.replaceAll('<b>', '').replaceAll('</b>', '')
-
-    // The sentence arrives verbatim, after a heading and before the prompt's
-    // own instructions, in the same text.
+    // The first message is the prompt's own text: heading, then instructions, no note text.
+    const [instructions, ...blocks] = prompt.messages
+    expect(instructions!.role).toBe('user')
+    if (instructions!.content.type !== 'text') throw new Error(`${name}: expected a text message first, got ${instructions!.content.type}`)
+    const text = instructions!.content.text
     const heading = text.indexOf(c.heading)
-    const sentence = text.indexOf(SENTENCE)
-    const instructions = text.indexOf(c.instructions)
     expect(heading, `${name}: heading`).toBeGreaterThanOrEqual(0)
-    expect(sentence, `${name}: note sentence`).toBeGreaterThan(heading)
-    expect(instructions, `${name}: instructions`).toBeGreaterThan(sentence)
+    expect(text.indexOf(c.instructions), `${name}: instructions`).toBeGreaterThan(heading)
+    expect(text, `${name}: note sentence inside the instructions`).not.toContain(SENTENCE)
+    expect(text).toContain('untrusted')
+
+    // The note text: one embedded resource per note, after the instructions, never carrying them.
+    expect(blocks.length, `${name}: note blocks`).toBeGreaterThan(0)
+    const prefix = `elara://vault/${vaultId}/notes/`
+    let withSentence = 0
+    for (const m of blocks) {
+      expect(m.role).toBe('user')
+      if (m.content.type !== 'resource') throw new Error(`${name}: expected an embedded resource, got ${m.content.type}`)
+      const resource = m.content.resource
+      expect(resource.uri).toMatch(new RegExp(`^${prefix}[a-z0-9/-]+$`))
+      expect(resource.mimeType).toBe('text/markdown')
+      expect(m.content._meta).toMatchObject({ trust: 'untrusted' })
+      expect(resource._meta).toMatchObject({ trust: 'untrusted' })
+      // The instructions name every attached note by path.
+      expect(text).toContain(`[[${resource.uri.slice(prefix.length)}]]`)
+      if (!('text' in resource)) throw new Error(`${name}: a blob resource`)
+      expect(resource.text, `${name}: instructions inside a note block`).not.toContain(c.instructions)
+      // Search snippets highlight matched words with <b>; the placement is about the words.
+      if (resource.text.replaceAll('<b>', '').replaceAll('</b>', '').includes(SENTENCE)) withSentence++
+    }
+    expect(withSentence, `${name}: the sentence arrives in a note block`).toBeGreaterThan(0)
   })
 })
