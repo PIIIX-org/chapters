@@ -399,4 +399,16 @@ describe('exact and identifier matches outrank fuzzy ones in fusion (#456)', () 
     expect(hit).toBeDefined()
     expect(hit!.score).toBeGreaterThan(1)
   })
+
+  it('a backticked call form `alphaHandler()` is singled out too', async () => {
+    await queryLike('alphaHandler')
+    const res = await findSymbols(
+      [repoId],
+      'how does `alphaHandler()` fit into the request pipeline',
+      { limit: 10 },
+    )
+    const hit = res.results.find((r) => r.name === 'alphaHandler')
+    expect(hit).toBeDefined()
+    expect(hit!.score).toBeGreaterThan(1)
+  })
 })
