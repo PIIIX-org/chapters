@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { CAPS, Episode, GREP, missCost, runElara, runGrep, searchHits, visibleContentLines, type ElaraTools, type GrepTools } from './policies.ts'
+import { CAPS, Episode, GREP, hitLocation, missCost, readSpanPart, runElara, runGrep, searchHits, visibleContentLines, type ElaraTools, type GrepTools } from './policies.ts'
 
 /** A `search` answer (#441, #442, #458): the hits inside the envelope. */
 const answer = (results: unknown[]) => JSON.stringify({ status: results.length > 0 ? 'ok' : 'no_match', retrieval_mode: 'hybrid', degraded: false, results, truncated: false })
@@ -10,6 +10,9 @@ test('searchHits reads the envelope in the server order, location strings as pat
     JSON.parse(answer([{ path: 'b.ts', score: 0.03 }, 'src/a.ts', 'src/c.ts#L4-L9', { path: 'z.ts', score: 0.01 }])),
   )
   assert.deepEqual(hits.map((h) => h.path), ['b.ts', 'src/a.ts', 'src/c.ts', 'z.ts'])
+  // A location string keeps its lines (#1058).
+  assert.deepEqual(hits.map(hitLocation), [null, null, { path: 'src/c.ts', start: 4, end: 9 }, null])
+  assert.deepEqual(searchHits({ results: ['x.ts#L7'] }).map(hitLocation), [{ path: 'x.ts', start: 7, end: 7 }])
   // An answer at `counts` (an object, not a list) or a bare array is not a ranking.
   assert.deepEqual(searchHits({ status: 'ok', results: { 'src/a.ts': 2 } }), [])
   assert.deepEqual(searchHits([{ path: 'a.ts' }]), [])
@@ -22,8 +25,20 @@ const FILES: Record<string, string> = {
   'src/c.ts': 'one\ntwo\nthree',
 }
 
-function fakeElara(hits: unknown[], calls: string[]): ElaraTools {
+/** `read_file` with `targets: [{lines}]` (#416): the lines asked for, at most `page` of them, `next` naming the rest. */
+function spanAnswer(path: string, start: number, end: number, page = 1_000): string {
+  const lines = (FILES[path] ?? '').split('\n')
+  const last = Math.min(end, lines.length, start + page - 1)
+  const next = last < Math.min(end, lines.length) ? { next: `${last + 1}-${Math.min(end, lines.length)}` } : {}
+  return JSON.stringify({ path, total_lines: lines.length, targets: [{ lines: [start, last], text: lines.slice(start - 1, last).join('\n'), ...next }], truncated: false })
+}
+
+function fakeElara(hits: unknown[], calls: string[], page = 1_000): ElaraTools {
   return {
+    async readSpan(path, start, end) {
+      calls.push(`read_file ${path}:${start}-${end}`)
+      return { text: spanAnswer(path, start, end, page), ms: 3, ok: true }
+    },
     async search(query) {
       calls.push(`search ${query}`)
       return { text: answer(hits), ms: 5, ok: true }
@@ -265,4 +280,66 @@ test('the miss cost is at least what any episode can spend', () => {
   const m = missCost(CAPS)
   assert.equal(m.calls, CAPS.maxCalls)
   assert.ok(m.tokens >= CAPS.tokenBudget + CAPS.perCallChars / 4)
+})
+
+test('readSpanPart reads the lines a targets answer shows and the lines it left', () => {
+  assert.deepEqual(readSpanPart(JSON.parse(spanAnswer('src/a.ts', 5, 50, 10))), { start: 5, end: 14, next: { start: 15, end: 50 } })
+  assert.deepEqual(readSpanPart(JSON.parse(spanAnswer('src/a.ts', 5, 8))), { start: 5, end: 8 })
+  assert.equal(readSpanPart({ targets: [{ lines: [1, 2], error: undefined }, {}] })?.start, 1)
+  assert.equal(readSpanPart({ targets: [{ error: { code: 'NOT_FOUND' } }] }), null)
+  assert.equal(readSpanPart({ content: 'x' }), null)
+})
+
+test('elara: a located hit is read as its span with the grep window, not as a whole file', async () => {
+  const calls: string[] = []
+  const hits = [{ resourceType: 'symbol', path: 'src/b.ts', startLine: 38, endLine: 45, snippet: 'export function target() {' }]
+  const run = await runElara('target', [{ path: 'src/b.ts', start: 40, end: 40 }], fakeElara(hits, calls))
+  assert.deepEqual(calls, ['search target', `read_file src/b.ts:${38 - GREP.readBefore}-${45 + GREP.readAfter}`])
+  assert.equal(run.episode.callsToGold, 2)
+  // Lines 28-60 of a 60-line file, not the file from line 1; the hit and its location are returned for the exactness metric.
+  assert.equal(run.episode.seen.size, 33)
+  assert.deepEqual(run.hits, [{ path: 'src/b.ts', start: 38, end: 45 }])
+  assert.equal(run.abstained, false)
+})
+
+test('elara: the lines a span page left are read next; a file whose span shows no gold is then read whole, once', async () => {
+  const calls: string[] = []
+  const hits = [
+    { resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 52, snippet: 's' },
+    { resourceType: 'symbol', path: 'src/a.ts', startLine: 55, endLine: 58, snippet: 's' },
+  ]
+  // The window 40-82 comes in pages of 20 lines; the gold (line 99) is not in it, so the file is read whole once, and the second hit of that file adds no read.
+  const run = await runElara('q', [{ path: 'src/a.ts', start: 99, end: 99 }], fakeElara(hits, calls, 20))
+  assert.deepEqual(calls, ['search q', 'read_file src/a.ts:40-82', 'read_file src/a.ts:60-82', 'read_file src/a.ts:80-82', 'read_file src/a.ts'])
+  assert.equal(run.episode.callsToGold, 5, 'the whole-file read, the last call, reaches line 99')
+})
+
+test('elara: only the first hit is read as a span; a second located hit of a file already read whole adds no read', async () => {
+  const calls: string[] = []
+  const hits = [
+    { resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 52, snippet: 's' },
+    { resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 51, snippet: 's' },
+    { resourceType: 'symbol', path: 'src/b.ts', startLine: 5, endLine: 6, snippet: 's' },
+  ]
+  await runElara('q', [{ path: 'src/b.ts', start: 40, end: 40 }], fakeElara(hits, calls))
+  assert.deepEqual(calls, ['search q', 'read_file src/a.ts:40-82', 'read_file src/a.ts', 'read_file src/b.ts'])
+})
+
+test('elara: a span that shows the gold ends the episode without reading the file', async () => {
+  const calls: string[] = []
+  const hits = [{ resourceType: 'symbol', path: 'src/a.ts', startLine: 50, endLine: 52, snippet: 's' }]
+  const run = await runElara('q', [{ path: 'src/a.ts', start: 51, end: 51 }], fakeElara(hits, calls))
+  assert.deepEqual(calls, ['search q', 'read_file src/a.ts:40-82'])
+  assert.equal(run.episode.callsToGold, 2)
+})
+
+test('elara: a hit without a location is still read page by page, and a search that abstains says so', async () => {
+  const calls: string[] = []
+  const hits = [{ resourceType: 'code', path: 'src/b.ts', snippet: 'y' }]
+  const run = await runElara('q', [{ path: 'src/b.ts', start: 40, end: 40 }], fakeElara(hits, calls))
+  assert.deepEqual(calls, ['search q', 'read_file src/b.ts'])
+  assert.deepEqual(run.hits, [null])
+  const none: ElaraTools = { ...fakeElara([], []), async search() { return { text: JSON.stringify({ status: 'ambiguous', results: [{ path: 'src/b.ts', startLine: 1, endLine: 2 }] }), ms: 1, ok: true } } }
+  const ambiguous = await runElara('q', [{ path: 'src/b.ts', start: 1, end: 1 }], none)
+  assert.equal(ambiguous.abstained, true)
 })
