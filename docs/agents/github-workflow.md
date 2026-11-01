@@ -10,7 +10,8 @@ Two long-lived branches, everything else is short-lived.
 - Feature branches: `<type>/<short-topic>` off `dev` — types: `feat`,
   `fix`, `ci`, `docs`, `chore`, `test` (`<type>-<topic>` is checked the
   same way). Deleted after merge. `bot/` is for branches a workflow writes
-  (`bot/state-md`, see **STATE.md** under CI); nobody else pushes there.
+  (`bot/state-md`, see **STATE.md** under CI; `bot/review-archive`, see
+  **Review records** under the review gate); nobody else pushes there.
 - Never commit directly to `dev` or `prod`. No exceptions, including docs.
 
 ## The change cycle
@@ -23,7 +24,9 @@ Every change — code, spec, doc — follows the same loop:
    `Co-Authored-By: <model> <email>` trailer (for example
    `Co-Authored-By: Claude Opus <noreply@anthropic.com>`), the only record
    that an agent wrote it (step 7); the `attribution` check (see CI) flags
-   commits without one.
+   commits without one. After `pnpm install` the hooks in `.githooks/`
+   add that trailer to any commit that lacks one (see **Commit
+   attribution** under CI).
 3. **Open a PR** targeting `dev`. Fill in the template
    (`.github/pull_request_template.md`): Problem, Change, **Evidence**,
    Not covered, `Closes #N`. Evidence is links, not adjectives: the CI
@@ -284,8 +287,9 @@ it runs the PR's, and the summary says which. The job:
    `client/src/**/__snapshots__/**`. Everything else is source.
 2. checks out the base commit (the first parent of GitHub's PR merge
    commit) in a separate worktree, copies the PR's test-side files over
-   it, runs `pnpm install --frozen-lockfile`, and runs only the
-   `*.test.ts(x)` files the PR adds or changes (server ones against a
+   it, runs `pnpm install --frozen-lockfile`, and runs the
+   `*.test.ts(x)` files the PR adds or changes, each file in full (every
+   test in it, not only the tests the diff touches; server ones against a
    pgvector container, like `checks`).
 3. passes if at least one of those tests **fails on an assertion or
    error of its own**. These do not count, and are reported separately:
@@ -310,6 +314,19 @@ it runs the PR's, and the summary says which. The job:
    base is not a failure. The job fails if every changed test passes on
    base, if only failures that do not count remain, or if the fix PR
    changes no test file.
+4. fails if a test file the PR **adds** passes entirely on base, even
+   when another changed file fails there: a new file whose every test
+   passes without the fix is vacuous (it pins nothing the fix changed).
+   A new file that legitimately passes on base (a characterisation test
+   the fix must keep passing, a helper exercised only by other files)
+   carries a line comment `// fails-before: exempt <reason>` anywhere in
+   the file, with at least 10 characters of reason; the summary shows the
+   reason and the job prints it as a notice. The diff is taken with
+   `--no-renames`, so a test file the PR moves or renames counts as added
+   at its new path and falls under this rule too (it needs a failing test
+   or the marker). The marker only lifts the vacuous rule: a PR whose only
+   changed file is an exempt new file still needs a failing test
+   somewhere, or the label below.
 
 The job summary lists every changed test file with its result on base
 (the failing test names and first error line, the load error, or the
@@ -324,7 +341,18 @@ PRs to `prod` the job is skipped (a skipped required check passes): each
 fix a promotion carries passed it on its PR to `dev`. It is a guard, not a
 proof: a test that fails on base only because the diff is missing (for
 example asserting on source text) still counts, so reviewers read the
-failing test names in the summary.
+failing test names in the summary. On a merge-queue commit (`merge_group`
+event, branch `gh-readonly-queue/dev/pr-<N>-<sha>`) the job does not
+re-run the tests: `.github/scripts/merge-group-forward.mjs` (the base
+commit's copy when it has one) resolves PR `<N>`, refuses unless the PR's
+live head is the commit the queue merged (the queue commit's second
+parent, `HEAD^2`), waits up to 3 minutes for the latest `fails-before`
+check run on that head to complete (a body or label edit right after
+enqueue re-runs it) and re-applies its conclusion (success, skipped or
+neutral pass; anything else, a run still unfinished after the wait, or no
+run fails, with a link), so the queue inherits the PR's verdict without
+re-judging a title and labels that did not change. Unit tests:
+`.github/scripts/merge-group-forward.test.mjs`, run by `checks`.
 
 **PR evidence** (`.github/workflows/pr-evidence.yml`, job `pr-evidence`,
 #579) runs on every PR to `dev` or `prod` (promotions included) when it
@@ -403,6 +431,91 @@ fails (the API lists no more). Unit tests:
 required check: it reports on every PR, and making it required is an
 owner decision (add `attribution` to both branches' required checks).
 
+The hooks in **`.githooks/`** add the trailer so the check has nothing to
+flag. The root `prepare` script runs `.githooks/install.sh` on
+`pnpm install`: it sets `core.hooksPath .githooks` for the clone, does
+nothing outside a git checkout (the Docker build), and leaves a clone that
+already uses another hooks path alone with a warning. The logic is in
+`.githooks/coauthor`: cut the message at the scissors line (`commit -v`),
+leave it alone if it strips to nothing (so an editor commit left empty is
+still aborted by git), else `git interpret-trailers --if-exists doNothing
+--trailer 'Co-Authored-By: Claude Opus <noreply@anthropic.com>'`, which
+puts the trailer after the last paragraph (joining a `Signed-off-by`
+block, above `Conflicts:` comments) and adds nothing when a
+`Co-Authored-By` trailer in any case is already there (another model,
+say). **`commit-msg`** runs it after the editor, on the final message, for
+`commit` (-m, -F, editor, -v, --amend), `merge` and the commit of a
+`merge --squash`; a subject typed in the editor therefore stays its own
+paragraph. `revert` and `cherry-pick` commit through the sequencer, which
+runs no commit-msg hook, so **`prepare-commit-msg`** runs it for source
+`message` only (`--no-edit`, or a message given in full); with `--edit`
+those two get no trailer and `attribution` flags them. The owner
+committing by hand from the shared account turns it off for that clone
+with `git config chapters.coauthor none` (and labels the PR
+`human-only`); `git config chapters.coauthor 'Name <email>'` names
+another model. Tests, with real git in scratch repositories:
+`.github/scripts/githooks.test.mjs`, run by `checks`. The hooks cover
+local commits only: commits made elsewhere (web UI, other machines) are
+still checked by `attribution`.
+
+**Issue close check** (`.github/workflows/issue-close-check.yml`, job
+`issue-close`, script `.github/scripts/issue-close-check.mjs`) runs on
+every open PR to `dev` when it is opened, pushed, reopened or edited, and
+on `merge_group` for `dev` (the PR is resolved from the queue branch
+`gh-readonly-queue/dev/pr-<N>-<sha>` and checked the same way, so the
+queue's commit gets a result, not a skip). `edited` also fires after a
+merge; the job is skipped for a closed PR, so a late body edit neither
+fails on the issues the merge closed nor rewrites the comment. Like
+pr-evidence it runs the base commit's copy of the script when the base
+has one (the workflow file itself still comes from the PR, like every
+workflow). For every issue the body closes (`Closes`/`Fixes`/`Resolves`
+`#N`, `owner/repo#N` or the issue URL, in any case; not inside code or
+HTML comments; issues of other repositories are only mentioned), it:
+
+1. reads the issue's **acceptance items**: the text of a `Done when` line
+   (`**Done when:** ...`) and the list right after it, the list items or
+   paragraphs of a `Done when` heading of any level, and every unchecked
+   `- [ ]` item anywhere (checked `- [x]` items are done already). It
+   keeps **one sticky PR comment** (first line `<!-- issue-close-check -->`;
+   the job finds that comment and updates it in place when its text
+   changes, so a PR normally has one) that lists each item as `mentioned`
+   or **not in the PR body**. An item is mentioned when the body (comments
+   and code fences aside) contains its text, or at least two thirds of its
+   content words (4+ letters, not stop words), so quoting the item always
+   counts; the match is lenient both ways (no stemming, and an incidental
+   "tests pass" can satisfy an item), so reviewers read the list, not the
+   label. **An unmentioned item is a warning (a `::warning` annotation and
+   a request to the author in the comment), not a failure**: owner
+   decision from the review of the first 80 merged PRs, where most issues
+   carry fix-list boilerplate items ("CI is green", "plan note records
+   ...") that cannot be met at PR time. The author answers in the body
+   (the edit re-runs the check) or in a reply. An issue with no items
+   passes and the comment says so. `@mentions` copied from issue text get
+   a zero-width joiner after the `@`, so the comment pings nobody.
+2. fails when `lab/known-defects.json` (as it would merge) still has an
+   entry whose `issue` is `N`: the lab gate turns red once `N` is closed
+   (`lab.md`, rule 5), so the fix removes the entry in the same PR.
+3. fails when `#N` is already closed (reopen it, or drop the keyword), is
+   a pull request, or does not exist.
+4. warns (and passes) when the body has no closing keyword but the title
+   names an issue number (`fix: ... (#457)`): merging closes nothing.
+   When that is intended, say so with `refs #457` (also `references`,
+   `related to`, `part of`, `see`), and the warning is not raised.
+
+A PR that closes nothing and names no issue in its title passes with
+nothing posted; if an earlier body version had left a comment, it is
+updated to say there is nothing to check. The job summary carries the
+same report, the source event and what happened to the comment; when the
+comment cannot be written (a fork PR's read-only token) the summary shows
+its text instead and the verdict stands. An API call that fails on the
+network, a 5xx, a 429 or the rate limit is retried once (after
+`retry-after`, else 5 s); anything else fails the run with the response
+in the summary. Unit tests with fixtures for each rule:
+`.github/scripts/issue-close-check.test.mjs`, run by `checks`. It is
+**not** a required check: making it one is an owner decision (add
+`issue-close` to `dev`'s required checks; it reports on `merge_group` so
+the merge queue can require it).
+
 **STATE.md** (`.github/workflows/state-md.yml`, #582). The block of
 `docs/agents/STATE.md` between `<!-- state:generated:start -->` and
 `<!-- state:generated:end -->` is built from GitHub data by
@@ -424,15 +537,21 @@ always gives the same text.
   changed. Don't run it in every fix PR: a PR's own `Closes #N` changes
   the data when it merges, so the block it commits is already stale, and
   parallel PRs would all conflict on the block under strict protection.
-  The `refresh` job catches up after each merge. Without `--write` the
+  The nightly `refresh` job catches up. Without `--write` the
   script only prints the block and says whether the file is current. It
   keeps the file's line endings.
-- **refresh** job: daily (05:17 UTC), on every push to `dev` and by
-  `gh workflow run state-md.yml --ref dev`. When `dev`'s block is stale,
-  it writes the diff to the job summary and force-pushes `bot/state-md`
-  (one commit on top of `dev` by `github-actions[bot]`, changing only
-  STATE.md). When `dev` is current, it closes the bot PR and deletes the
-  branch.
+- **refresh** job: daily at 02:00 UTC and by
+  `gh workflow run state-md.yml --ref dev`; not per push. `dev` takes no
+  direct commit (ruleset 24421063 requires a PR with no bypass actor and
+  classic protection enforces the required checks on admins too), so every
+  refresh is a bot PR with a full CI cycle; running it on every push to
+  `dev` meant up to a dozen such cycles a day for the same block (eleven
+  on 2026-10-31). One refresh a day batches a day's merges into one PR;
+  dispatch it by hand when the block must be current sooner. When `dev`'s
+  block is stale, it writes the diff to the job summary and force-pushes
+  `bot/state-md` (one commit on top of `dev` by `github-actions[bot]`,
+  changing only STATE.md). When `dev` is current, it closes the bot PR
+  and deletes the branch.
   - With the secret **`STATE_MD_TOKEN`** (a secret of the Actions
     environment `state-md`, whose deployment branches are limited to
     `dev`; the job runs in that environment) it pushes with that
@@ -444,8 +563,9 @@ always gives the same text.
     (skipped: not a `fix` title), `plan`, `lab` and `bench-gate` (both
     skipped: no image or search change) like any PR; `attribution`
     skips `bot/` branches. Review it like any PR (the diff must touch
-    only the block) and merge it. The merge is a push to `dev`, which
-    regenerates the same block and opens nothing.
+    only the block) and merge it. A merge between two refreshes leaves the
+    block one day behind at most; the next refresh force-pushes a fresh
+    commit on the new `dev`.
   - Without the secret it pushes with `GITHUB_TOKEN` and ends with a
     **warning**, not a failure (`dev` is fine; only the block is behind),
     with the diff, the PR body and the commands in its summary. Pushes
@@ -786,6 +906,34 @@ The rules:
 
 If the status looks stale, re-run the newest **Review verdict** run, or
 edit the PR body.
+
+**Review records.** A review's record is a file
+`docs/reviews/<pr>-<head sha>.md` (`# Review of #<pr> — <title>`, `Head
+reviewed:`, `Verdict:`, then the findings), committed to the PR branch with
+a `review: <title> (#<pr> at <sha>)` commit before the verdict is posted,
+and linked from the verdict by commit sha
+(`https://github.com/PIIIX-org/chapters/blob/<sha>/docs/reviews/<file>`,
+or the `tree/<sha>/docs/reviews` directory). One PR can have several (one
+per head reviewed). The top-level directory holds the records of **open and
+recently merged PRs only**: once a PR has been merged (or closed without
+merging) for more than **7 days**, its records move to
+`docs/reviews/archive/YYYY-MM/`, the month it was merged or closed. A
+verdict link pins a sha, so it keeps working after the move; never link a
+record by branch. `.github/scripts/review-archive.mjs` does the move
+(`node .github/scripts/review-archive.mjs --write`; without `--write` it
+lists what is due; `--days` changes the age; token and repository as for
+`state-md.mjs`) and the workflow **`review-archive.yml`** runs it every
+Sunday at 03:00 UTC (not at the STATE.md hour: under strict protection
+two bot PRs merged back to back cost an extra CI cycle; or by `gh workflow
+run review-archive.yml --ref
+dev`): with `STATE_MD_TOKEN` it force-pushes `bot/review-archive` (one
+commit of renames on top of `dev`; the job fails if the commit is anything
+but `R100` moves into `docs/reviews/archive/`) and opens or updates the PR
+`docs(reviews): archive review records of PRs merged over 7 days ago
+(bot)`, reviewed and merged like the STATE.md bot PR; without the secret
+it only reports, for the same reason as there. When nothing is due it
+closes that PR and deletes the branch. Unit tests:
+`.github/scripts/review-archive.test.mjs`, run by `checks`.
 
 What the gate does and does not guarantee. By policy everything is done
 from the `Taha-Mahmoodi` account (step 7 of the change cycle), and GitHub
