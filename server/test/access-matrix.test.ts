@@ -1,3 +1,4 @@
+// fails-before: exempt guard matrix; the #1034 leak it targets is already fixed on dev, and reverting the `reachable` filter in usage/report.ts fails 2 of 52 (see review record)
 // The access-control matrix (helpers/access-matrix.ts) on every read surface
 // that can name a note or a file: an owner shares a vault and a repository
 // with a second account; the owner and the shared account see the object,
