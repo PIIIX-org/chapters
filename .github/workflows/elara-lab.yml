@@ -28,14 +28,19 @@ name: Elara lab
 # lab instances of their own, in parallel with the lab job; bench-gate takes
 # the per-metric median of the three and gates it against
 # benchmarks/baseline.json (.github/scripts/bench-gate.mjs):
-#   chapters  PRs to dev that change extraction, schema, server start-up/
-#             config, the image's dependencies or the lab plumbing (~9 min)
+#   chapters  PRs to dev that change the rest of repositories/, schema,
+#             server start-up, the image's dependencies or the lab plumbing
+#             (~9 min)
 #   all       PRs to dev that change search or MCP (server/src/search/**,
-#             server/src/mcp/**: what shapes a response and its tokens) or
-#             the benchmark (benchmarks/**); the gate then also requires every
+#             server/src/mcp/**: what shapes a response and its tokens),
+#             the extraction path (repositories/{extraction,code-blocks,
+#             code-edge,outline,import-resolution,language}*,
+#             text/{blocks,lines,targets}.ts, notes/note-blocks.ts,
+#             config.ts) or the benchmark's premise inputs
+#             (benchmarks/{run.ts,lib/,questions/,baseline.json}); the gate then also requires every
 #             suite to reach at least the base's golds (--require-golds).
 #             Also nightly on dev, every PR to prod, and by hand (-f bench=...)
-#             (80 to 170 min: embedding throughput varies between runners).
+#             (80 to 175 min: embedding throughput varies between runners).
 # The path rules are .github/scripts/lab-plan.mjs (unit-tested). Every job
 # has a timeout-minutes; the bench matrix is fail-fast, so a failed or
 # timed-out instance cancels the others and bench-gate reports the missing
@@ -274,7 +279,7 @@ jobs:
   # median of the three. The gate needs all three, so the matrix is
   # fail-fast: one failed or timed-out instance cancels the others and
   # bench-gate reports at once. Budget: chapters 4 to 10 min measured; all
-  # suites 80 to 170 min (embedding throughput differs between runners; run
+  # suites 80 to 175 min (embedding throughput differs between runners; run
   # 41189703249 took 80, 168 and over 180 min on its three instances). The
   # step budget is below the job's so the logs are still collected and
   # uploaded after a timeout.

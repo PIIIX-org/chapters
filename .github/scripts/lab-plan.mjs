@@ -7,9 +7,13 @@
 //   also   extra fast-tier tests: browser (client collab code), backup-restore
 //          (#493: backup or restore code).
 //   bench  all when the PR touches what shapes a search or MCP response
-//          (server/src/search/**, server/src/mcp/**) or the benchmark itself
-//          (benchmarks/**); chapters when it touches the wider set the
-//          chapters suite covers (extraction, schema, start-up, the image's
+//          (server/src/search/**, server/src/mcp/**), the extraction path
+//          (repositories/{extraction,code-blocks,code-edge,outline,
+//          import-resolution,language}*, text/{blocks,lines,targets}.ts,
+//          notes/note-blocks.ts, config.ts) or the benchmark's premise
+//          inputs (benchmarks/{run.ts,lib/,questions/,baseline.json});
+//          chapters when it touches the wider set the chapters suite
+//          covers (the rest of repositories/, schema, start-up, the image's
 //          dependencies, the lab plumbing, the workflow, the gate); else none.
 //   golds  true with bench=all by path: bench-gate then also requires every
 //          suite to reach at least the reference's goldReached
@@ -45,12 +49,13 @@ export const BENCH_CHAPTERS =
 
 /**
  * Response shaping and token paths (search ranking, MCP response text), the
- * extraction path (blocks, code edges, outlines, languages, config) and the
+ * extraction path (blocks, line ranges, targets, code edges, outlines,
+ * languages, config) and the
  * benchmark's premise inputs (run.ts, lib/, questions/, baseline.json):
  * every suite runs, and no suite may lose a gold.
  */
 export const BENCH_ALL =
-  /^(server\/src\/(search|mcp)\/|server\/src\/repositories\/(extraction|code-blocks|code-edge|outline|import-resolution|language)[^/]*$|server\/src\/text\/blocks\.ts$|server\/src\/notes\/note-blocks\.ts$|server\/src\/config\.ts$|benchmarks\/(run\.ts$|baseline\.json$|lib\/|questions\/))/
+  /^(server\/src\/(search|mcp)\/|server\/src\/repositories\/(extraction|code-blocks|code-edge|outline|import-resolution|language)[^/]*$|server\/src\/text\/(blocks|lines|targets)\.ts$|server\/src\/notes\/note-blocks\.ts$|server\/src\/config\.ts$|benchmarks\/(run\.ts$|baseline\.json$|lib\/|questions\/))/
 
 /** The plan for a list of changed paths: { tier, also, bench, golds }. */
 export function plan(files) {

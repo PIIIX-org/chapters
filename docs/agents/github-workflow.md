@@ -641,9 +641,14 @@ its own, never against production (the runner refuses any other base
 URL), and gates their median. Which suites run is decided by the paths a
 PR to `dev` changes (`lab-plan.mjs`): **all five suites, and no suite may
 lose a gold**, when it touches what shapes a response and its tokens,
-`server/src/search/**` or `server/src/mcp/**`, or the benchmark itself,
-`benchmarks/**` (markdown there excepted); the `chapters` suite alone when
-it touches extraction or ingestion, the schema, server start-up/config,
+`server/src/search/**` or `server/src/mcp/**`, the extraction path
+(`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`,
+`server/src/text/{blocks,lines,targets}.ts`,
+`server/src/notes/note-blocks.ts`, `server/src/config.ts`), or the
+benchmark's premise inputs (`benchmarks/run.ts`, `lib/`, `questions/`,
+`baseline.json`; the rest of `benchmarks/` runs nothing); the `chapters`
+suite alone when it touches the rest of `repositories/`, the schema,
+server start-up,
 the image's dependencies, the lab plumbing, the workflow or the gate; all
 five suites also run nightly, on every PR to `prod` and by hand
 (`-f tier=none -f bench=all`). The gate
@@ -664,7 +669,7 @@ opens with one row per suite (tokens-to-gold, golds, hit@5, MRR, reference
 -> run, verdict) and then the full delta tables. `bench-gate` is a
 required status check on `dev` and `prod` (#574); it is skipped (passes)
 when no suite applies. The `bench` matrix is fail-fast with a budget per
-tier (`chapters` 45 min, `all` 240 min; measured 4 to 10 and 80 to 170
+tier (`chapters` 45 min, `all` 240 min; measured 4 to 10 and 80 to 175
 min, the all-suites spread being embedding throughput on the runner), so a
 failed or timed-out instance cancels the others, and the gate then stops
 at once naming the missing `bench-results-<n>` artifact instead of

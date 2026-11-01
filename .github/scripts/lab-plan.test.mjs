@@ -34,7 +34,7 @@ describe('plan', () => {
     for (const file of ['server/src/search/fusion.ts', 'server/src/mcp/tools/read.ts', 'benchmarks/questions/rea.json', 'benchmarks/lib/policies.ts', 'benchmarks/run.ts',
       'server/src/repositories/extraction.ts', 'server/src/repositories/extraction-queue.ts', 'server/src/repositories/extraction-languages.ts', 'server/src/repositories/code-blocks.ts',
       'server/src/repositories/code-edges.ts', 'server/src/repositories/code-edge-rules.ts', 'server/src/repositories/outline.ts',
-      'server/src/repositories/import-resolution.ts', 'server/src/repositories/language.ts', 'server/src/text/blocks.ts',
+      'server/src/repositories/import-resolution.ts', 'server/src/repositories/language.ts', 'server/src/text/blocks.ts', 'server/src/text/lines.ts', 'server/src/text/targets.ts',
       'server/src/notes/note-blocks.ts', 'server/src/config.ts']) {
       const p = plan(['README.md', file])
       assert.equal(p.bench, 'all', file)

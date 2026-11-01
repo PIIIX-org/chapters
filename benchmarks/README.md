@@ -147,13 +147,14 @@ benchmark change (below).
   by more than the tolerance in either direction (an improvement must be
   recorded in the same PR), or its fingerprint or index outcome differs.
 - **Golds lost** (red, `--require-golds`; the workflow passes it on PRs to
-  `dev` that touch `server/src/search/**`, `server/src/mcp/**` or the
-  benchmark, where every suite runs): a suite's `goldReached` is below the
+  `dev` that touch `server/src/search/**`, `server/src/mcp/**`, the
+  extraction path or the benchmark's premise inputs, where every suite
+  runs): a suite's `goldReached` is below the
   base baseline's. No tolerance: a question whose gold stops being reached
   is a lost answer, whatever hit@5 does. There is no override; the only
   way past is a change of the suite fingerprint (questions, keywords,
   config or harness), accepted with the `bench-suite-change` label, which
-  sets a new reference. All-suite instances take 80–175 minutes (two
+  sets a new reference. All-suite instances take 80 to 175 minutes (two
   timed out at the old 180-minute budget), hence the 225/240-minute
   budgets.
 - **Missing instance** (red, at once): a `bench-results-<n>` artifact has
@@ -182,12 +183,12 @@ after).
 
 | tier | when | suites |
 |---|---|---|
-| all | PRs to `dev` that touch `server/src/search/`, `server/src/mcp/` or `benchmarks/` (markdown excepted): the gate also requires every suite's golds; nightly on `dev`, every PR to `prod` (promotion), by hand | all five |
-| chapters | PRs to `dev` that touch `server/src/{repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, the lab plumbing it uses, the workflow, the plan or the gate | `chapters` |
+| all | PRs to `dev` that touch `server/src/search/`, `server/src/mcp/`, the extraction path (`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`, `server/src/text/{blocks,lines,targets}.ts`, `server/src/notes/note-blocks.ts`, `server/src/config.ts`) or the benchmark's premise inputs (`benchmarks/run.ts`, `lib/`, `questions/`, `baseline.json`): the gate also requires every suite's golds; nightly on `dev`, every PR to `prod` (promotion), by hand | all five |
+| chapters | PRs to `dev` that touch the rest of `server/src/repositories/`, `server/src/db/`, `server/src/{index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, the lab plumbing it uses, the workflow, the plan or the gate | `chapters` |
 
 The path rules are `.github/scripts/lab-plan.mjs` (unit tests next to it).
 Budgets: `bench` jobs have 45 min for `chapters` (4 to 10 measured) and
-240 for `all` (80 to 170 measured; embedding throughput differs between
+240 for `all` (80 to 175 measured; embedding throughput differs between
 runners), `bench-gate` 15.
 
 `bench-gate` is a required status check on `dev` and `prod` (#574); it is
