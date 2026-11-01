@@ -411,6 +411,8 @@ describe('the held-out suite (#1059)', () => {
     for (const file of ['server/src/repositories/extraction-queue.ts', 'server/src/text/blocks.ts', 'server/src/notes/note-blocks.ts', 'server/src/config.ts']) {
       assert.match(failures(evaluate({ results: better, baseline: baselineOf(better), baseBaseline: base(), pr: pr(), changed: [file] })), /changes the held-out entry/, file)
     }
+    // A file moved out of `server/src/search/` lists both its names (the workflow adds `previous_filename`): the old one locks.
+    assert.match(failures(evaluate({ results: better, baseline: baselineOf(better), baseBaseline: base(), pr: pr(), changed: ['src/elsewhere/x.ts', 'server/src/search/x.ts'] })), /changes the held-out entry/)
     const md = render(evaluate({ results: moved(), baseline: base(), baseBaseline: base(), pr: pr(), changed: changedSearch }), moved())
     assert.doesNotMatch(md.split('## holdout')[1] ?? '', /questions changed|not exact/)
   })
