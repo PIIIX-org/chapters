@@ -247,7 +247,7 @@ export async function runElara(question: string, gold: readonly LineRange[], too
   const located = hits.map(hitLocation)
   const status = searchStatus(parsed)
   const named = parsed && typeof parsed === 'object' ? Reflect.get(parsed, 'route') : undefined
-  const run = { ranking, hits: located, abstained: status === 'no_match' || status === 'ambiguous', route: named === 'identifier' || named === 'path' ? named : ('conceptual' as const), episode: ep }
+  const run = { ranking, hits: located, abstained: status === 'no_match' || status === 'ambiguous' || Reflect.get(parsed ?? {}, 'ambiguous') === true, route: named === 'identifier' || named === 'path' ? named : ('conceptual' as const), episode: ep }
 
   // Each hit, best first, up to the file cap: the first hit, when it is located, is read as its span first; a file whose span shows no gold, and every other hit, is read page by page.
   const paged = new Set<string>()
