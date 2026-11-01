@@ -91,7 +91,8 @@ export function snippetAround(text: string, at: number, terms: readonly string[]
   const raw = text.slice(start, start + SNIPPET_CHARS)
   const cut = (start > 0 ? raw.replace(/^\S*\s/, '') : raw).trim()
   if (terms.length === 0) return cut
-  const marked = new RegExp(terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'gi')
+  // Whole words only, as `ts_headline` marks them: `scope` is not marked inside `SCOPEMARK`.
+  const marked = new RegExp(`(?<![\\p{L}\\p{N}_])(?:${terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\p{L}\\p{N}_])`, 'giu')
   return cut.replace(marked, '<b>$&</b>')
 }
 
