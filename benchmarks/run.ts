@@ -163,8 +163,9 @@ function outcome(q: Question, run: PolicyRun): { outcome: QuestionOutcome; row: 
     rank: rankIndex < 0 ? null : rankIndex + 1,
     ranking: run.ranking.slice(0, 10),
     located: run.hits.slice(0, 5).map((h) => (h ? `${h.path}#L${h.start}-L${h.end}` : null)),
-    exact1: exactAtK(run.hits, gold, 1) === 1,
-    exact5: exactAtK(run.hits, gold, 5) === 1,
+    // The locations of an answer that abstained (`ambiguous`, `no_match`) are what it offered instead of one, not its answer.
+    exact1: !run.abstained && exactAtK(run.hits, gold, 1) === 1,
+    exact5: !run.abstained && exactAtK(run.hits, gold, 5) === 1,
     abstained: run.abstained,
     tokensToGold: o.tokensToGold,
     callsToGold: o.callsToGold,

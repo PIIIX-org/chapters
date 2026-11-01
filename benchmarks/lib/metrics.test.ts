@@ -206,6 +206,15 @@ test('aggregate: means over questions, misses cost the miss price', () => {
   assert.ok(a.ndcg10 >= 0 && a.ndcg10 <= 1)
 })
 
+test('an answer that abstained scores no exact hit, whatever locations it offered (#1058 review)', () => {
+  const gold = [{ path: 'a', start: 1, end: 2 }]
+  const base = { judgments: rel(['a', 1]), gold, hits: [{ path: 'a', start: 1, end: 2 }], callsToGold: 1, tokensToAllGold: 1, precision: 1, recall: 1, tokens: 1, calls: 1, ms: 1, ranking: ['a'], tokensToGold: 1 }
+  const a = aggregate([{ ...base, abstained: false }, { ...base, abstained: true }], 1000, 15)
+  assert.equal(a.exact1, 0.5)
+  assert.equal(a.exact5, 0.5)
+  assert.equal(a.abstained, 0.5)
+})
+
 test('exactAtK: the first k returned locations overlap a gold range of the same file', () => {
   const gold = [{ path: 'a.ts', start: 10, end: 12 }, { path: 'b.ts', start: 1, end: 1 }]
   const at = (path: string, start: number, end: number) => ({ path, start, end })
