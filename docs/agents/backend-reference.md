@@ -1976,6 +1976,27 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   end of the write's transaction, so a refused write (a check, an op that
   does not resolve, validation) still gets this check on its connection's
   disconnect store: a document a person doubled stays out of the row (#408).
+- **A client that missed a rebase is refused** (#891). A rebase
+  (`rebaseLocked` in `notes/store.ts`: the row changed behind the store,
+  merged at boot, on a write or on the relay's load) writes the row's
+  change as new items of the process's `SERVER_CLIENT_ID` and records them
+  on `note_crdt` (migration 0062: `rebase_client`, `rebase_clock`, the
+  clock just past them). When that change is a tab's own typing whose items
+  a manual restore of `note_crdt`/`note_updates` removed, the tab still holds
+  the originals, and syncing both copies would double the text; the relay
+  cannot tell them from typing it never saw. So `beforeSync` checks a
+  client's sync step 1 (its state vector), which Hocuspocus awaits before
+  `readSyncStep1`: a client that holds items the document does not (a clock
+  above the document's) and lacks the recorded rebase (less than
+  `rebase_clock` for `rebase_client`) is closed with reason `note-rebased`
+  before anything is exchanged. A client that only lacks the rebase syncs
+  and receives it. The load's own state is flushed from Hocuspocus's
+  broadcast batch at the end of `onLoadDocument` (no connection is attached
+  yet), so it never reaches the first connection ahead of its sync. The
+  editor (`useCollabDoc`) starts over on a new document and offers the old
+  one's text as `unmerged`, kept in this browser as a document of its own
+  (no shared history, so a later visit offers it again and never merges it);
+  the old document's browser copy is deleted once that one is stored.
 - **An ack means committed in Postgres** (ADR-003 §5.4 "Append", S3,
   #487; `collab-append.ts`, `appendCollabUpdate` in `notes/store.ts`).
   `beforeSync` runs on every sync-step-2 and update message before
@@ -2542,7 +2563,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export, Notifications & Usage* (5): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`, `usage_report` (admin profile only; **5.12**).
-  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols`, `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused; community numbers depend on `types`, `tags` and `edgeTypes`; `cappedGroups` is the whole graph's in the community view and the listed nodes' groups otherwise; `narrow` names `neighborsOf` by id), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
+  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols` (with `refs`: `at`, `references`, `callers`, `impact` over the code edges, #470; **Code queries** in §5.10), `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused; community numbers depend on `types`, `tags` and `edgeTypes`; `cappedGroups` is the whole graph's in the community view and the listed nodes' groups otherwise; `narrow` names `neighborsOf` by id), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
   - *Prompts*: 20, registered in `prompts.ts`. The five that include note text (`active_project_companion`, `prepare_task_context`, `test_gap_analysis` read bodies; `plan_feature_implementation`, `explain_code_architecture` search snippets) answer with the instruction message first (heading, the note paths, and that the blocks are untrusted data) and then one message per note: an embedded resource `elara://vault/<vaultId>/notes/<path>`, `text/markdown`, `_meta {trust: "untrusted", origin: "note"}` on the content and the resource (#556, **6.1**).
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
   Every handler is wrapped so thrown errors become an `isError` result
@@ -3605,7 +3626,81 @@ target's path, symbol and line) and `symbolCandidates`; indexes
 `code_edges_target_idx` (by resolved target), `code_edges_name_idx`
 (repository, name), the key (by source file and line), and
 `blocks_symbol_name_idx` (a repository's symbol blocks by bare name, for
-resolution). No MCP tool reads them yet (#470).
+resolution). `find_symbols` with `refs` and `GET /repositories/:id/code-refs`
+read them (**Code queries**, next).
+
+**Code queries** (#470; `repositories/code-queries.ts` the store queries,
+`repositories/code-refs.ts` the answer both surfaces share, `mcp/code-queries.ts`
+the budgeted sections): the questions over `code_edges` and `blocks`, with no
+new MCP tool (the reader budget has no room for one: `find_symbols` gained
+`refs`, `path` and `depth`; measured on dev 36b98a76 → this change, reader
+`tools/list` + instructions 7,970 → 7,984 characters (1,993 → 1,996 of 2,000
+tokens), writer 15,498 → 15,512 (3,875 → 3,878 of 4,000), admin `tools/list`
+41,372 → 41,371 (ceiling 43,000); paid for by `intRange` (`limit` and `depth`
+of the reader tools are checked but no longer listed as `minimum`/`maximum`),
+a shorter `cursor` description and shorter `graph`, `find_graph_path` and
+`types` texts). `refs` is `at` (`query: "path:line"`: the innermost symbol block
+around the line, and the edges on that line with their targets), `references`
+(call, reference and import sites), `callers` (calls), `tests` (the `test`
+edges) or `impact` (dependents to `depth` 1-3, default 2). `query` is a name
+(`parse`, `Store.save`) or a symbol id (`find_symbols`' `id`, or a `block_id`);
+`path` and `kind` pick among definitions. **One definition** (overloads, one
+inner path in one file, count once) is answered; **several** are never guessed
+between: the answer is `{refs, matches?, candidates: [{id, path, name, kind,
+parent?, line}], truncated}` (at most 10, `matches` the number when more), and
+the next call passes `path`, `kind` or the `id`. A name nothing defines is
+answered from the rows that only name it (`symbol: {name}`), or `NOT_FOUND`
+when there are none; a missing file (`at`), or a `path`, `kind` or id that
+matches no definition, is `NOT_FOUND` too. **Rows:** `{at: "path:line", in?:
+enclosing symbol, kind: call|reference|import|test, confidence:
+resolved|textual, context}`: the line's trimmed text, 160 code points; past
+level 1 of `impact` a row also has `to: "path#symbol"`, the symbol it names
+one level in; for `at` the rows are `{kind, name, confidence, to?}`. **Which rows
+name a definition:** those whose target block is one of its blocks, and the
+rows with no target whose name is its bare name and whose qualifier, if any, is
+its inner path (an ambiguous name's sites, `textual`). **Excluded:** a
+`textual` row of a TypeScript or JavaScript file whose import specifier resolves
+to no file of the repository (step 4 of the resolution gave a name its
+repository-unique definition although the file imports it from a package: 2
+of 10 hand-checked such rows were right, #1046 review; Python and Go `textual`
+rows, whose specifiers never resolve, were 8 of 10 and 8 of 8 and stay). The
+resolver and the stored rows are unchanged; Java, Kotlin and Rust externals are
+not measured and not excluded. **Order:** `resolved` before `textual`, then
+path (code units), line, column, kind: a total order, so the same index
+answers the same bytes (`mcp-deterministic-answers.test.ts` asks each mode in
+both databases). **Paging:** `references`, `callers`, `tests` and `at` page by
+offset (a keyset section, the cursor holds the offset; `limit` is the page
+size, 1-50, default 20). `impact` groups by depth: sections `depth1`..`depthN`
+(ranked sections: `limit`, at most 50, bounds each level and there is no
+cursor; `total` says how many more there are) and
+`total: {1: n, 2: n, ...}` in the head, each level's number of sites (`">n"`
+when the level was cut at `IMPACT_LEVEL_ROWS` rows, or came from a level cut
+at `IMPACT_FRONTIER` symbols). **Impact walk:** level 1
+is the `call` and `reference` sites of the definition (with the name-only ones
+of an ambiguous name); level n + 1 is the sites that name a symbol that has a
+site on level n (guessed member calls, a receiver of unknown type matched
+by name alone such as `res.json()`, are left out of `callers` and `impact`:
+6 of 33 hand-checked such rows were right (#1055 review), and
+`references` lists them as `textual`; a `textual` level-1 site continues, its
+chain labelled `textual`; levels 2 and 3 follow `resolved` edges only, as a
+name match of a common name would fan out to every definition of it), each symbol on its
+first (shortest) level, so cycles end; at most 200 symbols go on from a level;
+a site at module level ends its chain; a row is `resolved` only when every hop
+to it is. A caller that is a later overload is followed by its own block id, so the sites
+resolved to the first overload are not found from it. Answers carry the indexed version (#471), the
+usual `truncated` (below `full`: without `context`, then `path:line` only,
+then counts per file), and `structuredContent` (#433; reader tools have no
+`outputSchema`, the listing cost is the reader budget's). `refs` needs one
+repository (`repositoryId` or a pinned token; `everywhere` or an account
+token without it is `INVALID_ARGUMENT`); `path` and `depth` without `refs`,
+`depth` with another `refs` than `impact`, and `path`/`kind` with `at` are
+refused rather than ignored; a repository the account cannot read is the
+`NOT_FOUND` of a missing one. REST `GET /repositories/:id/code-refs?query&refs&kind&path&depth&limit&offset`
+answers the same object without `truncated`: the head, each list under its
+name (`results`, `candidates`, `depth1`..), `next` the offset of the following
+page of a list that pages; 400 for refused arguments, 404 for a missing
+repository, file or symbol. The usage report (#678) records `refs` and `depth`
+as filters of a `find_symbols` call.
 
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,
