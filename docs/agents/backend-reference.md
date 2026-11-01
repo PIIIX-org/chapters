@@ -3637,11 +3637,12 @@ when the level was cut at `IMPACT_LEVEL_ROWS` rows, or came from a level cut
 at `IMPACT_FRONTIER` symbols). **Impact walk:** level 1
 is the `call` and `reference` sites of the definition (with the name-only ones
 of an ambiguous name); level n + 1 is the sites that name a symbol that has a
-site on level n (only `resolved` rows continue past level 1: a name match
-of a common name would fan out to every definition of it, and 6 of 33 such
-hand-checked rows were right (#1055 review); `callers` and `impact` also leave
-out member calls of a receiver of unknown type matched by name alone, such as
-`res.json()`, which `references` lists as `textual`), each symbol on its
+site on level n (guessed member calls, a receiver of unknown type matched
+by name alone such as `res.json()`, are left out of `callers` and `impact`:
+6 of 33 hand-checked such rows were right (#1055 review), and
+`references` lists them as `textual`; a `textual` level-1 site continues, its
+chain labelled `textual`; levels 2 and 3 follow `resolved` edges only, as a
+name match of a common name would fan out to every definition of it), each symbol on its
 first (shortest) level, so cycles end; at most 200 symbols go on from a level;
 a site at module level ends its chain; a row is `resolved` only when every hop
 to it is. A caller that is a later overload is followed by its own block id, so the sites

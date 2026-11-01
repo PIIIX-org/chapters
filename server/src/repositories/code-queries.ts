@@ -29,12 +29,14 @@
  * `impact` follows the `call` and `reference` rows from `D` outwards, one
  * level per hop of symbols: level 1 holds the sites that name `D`, level
  * `n + 1` the sites that name a symbol one of whose sites is on level `n`,
- * each symbol on the first (shortest) level that reaches it. Past level 1
- * only `resolved` rows continue (a name-only match of a common name would
- * fan out to every definition of it: 6 of 33 hand-checked such rows were
- * right, #1055 review), and `callers` and `impact` leave out the member calls
- * of a receiver of unknown type matched by name alone (`res.json()`), which
- * `references` lists. A row is `resolved` only when every hop on its way is.
+ * each symbol on the first (shortest) level that reaches it. Guessed member
+ * calls (a receiver of unknown type matched by name alone, `res.json()`) are
+ * left out of `callers` and `impact`; `references` lists them. Level 1 may hold a
+ * `textual` site (a name-only match of an ambiguous name) and its chain
+ * continues, labelled `textual`; levels 2 and 3 follow `resolved` edges only
+ * (a name match of a common name would fan out to every definition of it: 6
+ * of 33 hand-checked such rows were right, #1055 review). A row is `resolved`
+ * only when every hop on its way is.
  * A site at module level ends its chain.
  */
 import { sql, type SQL } from 'drizzle-orm'
