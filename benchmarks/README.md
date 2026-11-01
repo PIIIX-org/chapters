@@ -77,7 +77,7 @@ procedure, so a run is deterministic up to the index Elara builds.
 |---|---|---|
 | ranking call | MCP `search {query: question, repositoryId, limit: 10}` (default budget); the agent reads `results` in the server's order (score, then path, then id, #441), a hit down the budget's ladder as its path | `rg --count -i -e <keywords>` over the checkout, files sorted by matching lines (ties by path), first 50 shown |
 | where in the files | (the `search` response itself) | one `rg -n -i -m 5 -e <keywords> -- <top 10 files>`: the first 5 matching lines of each, each line cut at 200 characters |
-| reads, best file first | MCP `read_file` of each hit, page by page from line 1 (the default 4,000-token budget, #420), following `truncated.cursor` until the gold is seen or the file ends; Elara has no ranged reads yet | up to 2 ranged reads per file of 41 lines (10 before, 30 after a match the earlier read did not show) |
+| reads, best hit first | a hit that returns a location (`startLine`/`endLine`, or a `path#La-Lb` location string) is read as that span: MCP `read_file` `targets: [{lines}]` (#416) over the same window the grep agent reads, 10 lines before and 30 after (#1058), following `next` for what a page left, and skipped when those lines are already in context; a hit without a location is read as before, page by page from line 1 (the default 4,000-token budget, #420), following `truncated.cursor` until the gold is seen or the file ends | up to 2 ranged reads per file of 41 lines (10 before, 30 after a match the earlier read did not show) |
 | lines put in context | the lines of the pages read (a line split across pages counts on the page where it ends); for `search` symbol hits, the snippet's lines (file hits carry a keyword headline without line numbers, so they show none) | the `rg -n` lines and the ranged reads |
 
 Note that the grep ranking lists up to 50 files and Elara's at most 10
@@ -99,9 +99,11 @@ counted whole.
 | metric | meaning |
 |---|---|
 | `hit1`, `hit5`, `hit10` | a relevant file is among the first 1/5/10 distinct files of the ranking call |
+| `exact1`, `exact5` | the first / one of the first 5 returned **locations** (a result's `path` and its `startLine`-`endLine`, or a `path#La-Lb` location) overlaps a gold range of the question: the answer names the evidence itself, with no read (#1058). A result without lines (a file or note hit today) never counts. The first-hit `hit1` is about files, `exact1` about lines |
 | `mrr` | 1 / rank of the first relevant file (0 when none) |
 | `ndcg10` | DCG@10 of the distinct ranked files over the ideal DCG@10 of the judged relevances (gain / log2(rank + 1)); a file counts once; always in [0, 1] |
-| `goldReached` | questions where the first gold range was fully seen |
+| `goldReached`, `goldReachedRate` | questions where the first gold range was fully seen, and that over the suite's questions |
+| `abstained` | the fraction of questions where `search` answered `no_match` or `ambiguous` instead of a first hit: not a pass, not a wrong answer either (reported, not gated) |
 | `tokensToGold`, `tokensToGoldMedian` | tokens received until the first gold range was fully seen; a miss counts as 65,000 (the most an episode can spend: budget + one capped response) |
 | `tokensToGoldReached` | the same, mean over the questions this agent reached (misses left out) |
 | paired (job summary, `paired` in results) | mean tokens-to-gold of both agents on the questions **both** reached: the like-for-like cost |
@@ -123,10 +125,10 @@ Every bench run is **three instances** (three `bench` jobs, three lab
 instances of the same build); `bench-gate` takes the per-metric median of
 the three and compares it with [`baseline.json`](baseline.json)
 (`.github/scripts/bench-gate.mjs`), and prints the delta table in the job
-summary. Gated: the Elara agent's `hit5` and `tokensToGold`, per suite.
+summary: per suite the paired Elara ÷ grep token ratio and the questions that are not exact (id, outcome, tokens, first returned location). Gated: the Elara agent's `hit5`, `exact1`, `goldReachedRate` and `tokensToGold`, per suite.
 
-- **Regression** (red): `hit5` drops by more than 1 question of the suite,
-  or `tokensToGold` rises by more than 10 %. On a pull request the reference
+- **Regression** (red): `hit5`, `exact1` or `goldReachedRate` drops by more than
+  1 question of the suite, or `tokensToGold` rises by more than 10 %. On a pull request the reference
   is the **base commit's** baseline, judged by the base commit's copy of the
   gate.
 - **Suite changed** (red on a PR): the suite's `fingerprint` covers the
@@ -144,6 +146,22 @@ summary. Gated: the Elara agent's `hit5` and `tokensToGold`, per suite.
 - **Stale baseline** (red): the run differs from the PR's `baseline.json`
   by more than the tolerance in either direction (an improvement must be
   recorded in the same PR), or its fingerprint or index outcome differs.
+
+A reference recorded before a metric existed (`exact1`, `goldReachedRate`,
+#1058) does not judge it; the PR that first runs it records it, and from then on
+it is gated.
+
+### Phase-3 exit criteria
+
+The product goal is an exact answer, at least 99 % of the time, for fewer
+tokens than grep (#1058). Phase 3 is done when, on every suite:
+
+- `goldReachedRate` is at least 0.99;
+- `exact1` is not lower than the suite's previous baseline;
+- the paired Elara ÷ grep tokens-to-gold ratio is at most 1.
+
+Where the suites stand is the table under [Current numbers](#current-numbers)
+and, per run, the gate summary.
 
 Labels and the PR body are read when the gate runs: after adding an
 override, re-run the `bench-gate` job. The gate and its tolerances come

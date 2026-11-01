@@ -10,9 +10,13 @@ const agg = (over = {}) => ({
   hit1: 0.4,
   hit5: 0.6,
   hit10: 0.7,
+  exact1: 0.3,
+  exact5: 0.5,
   mrr: 0.5,
   ndcg10: 0.5,
   goldReached: 12,
+  goldReachedRate: 0.6,
+  abstained: 0,
   tokensToGold: 20_000,
   tokensToGoldMedian: 9_000,
   tokensToGoldReached: 4_000,
@@ -127,6 +131,27 @@ describe('evaluate', () => {
     assert.match(failures(evaluate({ results: run({ tokensToGold: 30_000 }), baseline: base })), /regression, Elara tokensToGold 20000 -> 30000/)
   })
 
+  it('exact@1 and the gold-reached rate are gated like hit@5: more than one question lost is red (#1058)', () => {
+    const base = baselineOf(run())
+    // 20 questions: one question is 0.05.
+    assert.deepEqual(evaluate({ results: run({ exact1: 0.26, goldReachedRate: 0.56 }), baseline: base }).failures.filter((f) => /regression/.test(f)), [], 'a loss of 2 of 20 at 0.04 each is within one question... of 0.3 and 0.6')
+    assert.match(failures(evaluate({ results: run({ exact1: 0.2 }), baseline: base })), /regression, Elara exact1 0.3 -> 0.2 \(baseline; tolerance 1 of 20 questions\)/)
+    assert.match(failures(evaluate({ results: run({ goldReachedRate: 0.5 }), baseline: base })), /regression, Elara goldReachedRate 0.6 -> 0.5/)
+  })
+
+  it('a reference recorded before a metric existed does not judge it; the PR must record it', () => {
+    const old = baselineOf(run())
+    for (const entry of Object.values(old.suites)) {
+      delete entry.elara.exact1
+      delete entry.elara.goldReachedRate
+    }
+    const r = run({ exact1: 0.1 })
+    const stale = evaluate({ results: r, baseline: old, baseBaseline: old, pr: pr() })
+    assert.doesNotMatch(failures(stale), /regression/)
+    assert.match(failures(stale), /stale baseline, Elara exact1/)
+    assert.deepEqual(evaluate({ results: r, baseline: baselineOf(r), baseBaseline: old, pr: pr() }).failures, [])
+  })
+
   it('a PR cannot hide a regression by lowering its own baseline: the base baseline is the reference', () => {
     const base = baselineOf(run())
     const worse = run({ hit5: 0.3 })
@@ -229,5 +254,20 @@ describe('render and compare', () => {
     const md = compare(a, b)
     assert.match(md, /\| mrr \| 0\.5 \| 0\.4 \| -0\.1 \(worse\)/)
     assert.match(md, /Q1: rank 1 -> 3/)
+  })
+})
+
+describe('the questions that are not exact (#1058)', () => {
+  it('the gate summary lists each question whose gold was missed or whose first location is off gold, with the paired ratio', () => {
+    const inst = (q) => ({ ...instance(), suites: { s: { ...instance().suites.s, perQuestion: q } } })
+    const q = (id, elara) => ({ id, elara: { rank: 1, tokensToGold: 500, exact1: true, abstained: false, located: ['a.ts#L1-L5'], ...elara }, grep: { rank: 1, tokensToGold: 300 } })
+    const perQuestion = [q('Q1', {}), q('Q2', { exact1: false, located: ['b.ts#L9-L9'] }), q('Q3', { tokensToGold: null, exact1: false, abstained: true, located: [null] })]
+    const r = combine([inst(perQuestion), inst(perQuestion), inst(perQuestion)])
+    const md = render(evaluate({ results: r, baseline: baselineOf(r) }), r)
+    assert.match(md, /2 of 20 questions not exact/)
+    assert.match(md, /\| Q2 \| first location not on gold \| 500 \| b\.ts#L9-L9 \|/)
+    assert.match(md, /\| Q3 \| gold not reached \(abstained\) \| - \| - \|/)
+    assert.doesNotMatch(md, /\| Q1 \|/)
+    assert.match(md, /Elara ÷ grep = 3 /)
   })
 })
