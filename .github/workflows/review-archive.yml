@@ -1,0 +1,128 @@
+name: Review archive
+
+# Keeps docs/reviews/ to the records of open and recent PRs.
+# .github/scripts/review-archive.mjs moves each record (<pr>-<sha>.md) whose
+# PR has been merged or closed for more than 7 days to
+# docs/reviews/archive/YYYY-MM/ (the month it was merged or closed). Verdict
+# comments link records by commit sha, so moved records stay reachable.
+#
+# Weekly (Sundays 03:00 UTC; not the 02:00 of state-md.yml: under strict
+# protection two bot PRs merged back to back cost an extra CI cycle) and by
+# hand (`gh workflow run review-archive.yml --ref dev`). `dev` takes no
+# direct push (ruleset 24421063 requires a PR,
+# no bypass), so like state-md.yml it force-pushes `bot/review-archive` (one
+# commit of renames on top of `dev`) and opens or updates a PR with the
+# STATE_MD_TOKEN secret (environment `state-md`, limited to `dev`; #635):
+# a PR made with that token gets its required checks, one made with
+# GITHUB_TOKEN never does. Without the secret it only reports the moves.
+# When nothing is due it closes the bot PR and deletes the branch. Policy
+# and docs: docs/agents/github-workflow.md (Review records).
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  archive:
+    if: github.ref == 'refs/heads/dev'
+    environment: state-md
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # delete bot/review-archive when nothing is due
+      pull-requests: write # close the bot PR when nothing is due
+    env:
+      BRANCH: bot/review-archive
+      TITLE: 'docs(reviews): archive review records of PRs merged over 7 days ago (bot)'
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      HAS_TOKEN: ${{ secrets.STATE_MD_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.STATE_MD_TOKEN || github.token }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Plan and apply the moves
+        id: plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .github/scripts/review-archive.mjs --write
+
+      - name: Push bot/review-archive and open, update or close its PR
+        env:
+          CHANGED: ${{ steps.plan.outputs.changed }}
+          GH_TOKEN: ${{ secrets.STATE_MD_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          summary() { printf '%s\n\n' "$1" | tee -a "$GITHUB_STEP_SUMMARY"; }
+          pr=$(gh pr list --head "$BRANCH" --base dev --state open --json number --jq '.[0].number // empty')
+
+          if [ "$CHANGED" != true ]; then
+            if [ -n "$pr" ]; then
+              gh pr close "$pr" --comment "Nothing left to archive on \`dev\` ($RUN_URL). Closing."
+              summary "Closed #$pr: nothing to archive."
+            fi
+            if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+              git push --quiet origin --delete "$BRANCH"
+              summary "Deleted \`$BRANCH\`."
+            fi
+            summary "No review record is due for the archive."
+            exit 0
+          fi
+
+          if [ "$HAS_TOKEN" != true ]; then
+            summary "Records are due (see above) but no STATE_MD_TOKEN is set, so no PR was opened: a PR made with GITHUB_TOKEN never gets its required checks. Run \`node .github/scripts/review-archive.mjs --write\` in a PR instead (#635)."
+            echo "::warning title=Review records due::No STATE_MD_TOKEN, so nothing was pushed. See the job summary."
+            exit 0
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch --quiet -c "$BRANCH"
+          git add -A docs/reviews
+          git commit --quiet -m 'docs(reviews): archive review records of merged PRs' \
+            -m "Moved by .github/scripts/review-archive.mjs in $RUN_URL"
+          # Renames under docs/reviews and nothing else.
+          if git diff --name-status HEAD^ HEAD | grep -Ev $'^R100\tdocs/reviews/[^\t]+\tdocs/reviews/archive/'; then
+            echo '::error::the bot commit must only move files from docs/reviews/ into docs/reviews/archive/'
+            exit 1
+          fi
+          git push --quiet --force origin "$BRANCH"
+          head=$(git rev-parse HEAD)
+          summary "Pushed \`$BRANCH\` at $head."
+
+          cat > "$RUNNER_TEMP/body.md" <<EOF
+          ## Problem
+
+          \`docs/reviews/\` holds review records of PRs merged or closed more than 7 days ago. Policy (docs/agents/github-workflow.md, Review records): those move to \`docs/reviews/archive/YYYY-MM/\`, the month the PR was merged or closed.
+
+          ## Change
+
+          Moves the records \`.github/scripts/review-archive.mjs\` listed in the source run below, on top of \`dev\` $GITHUB_SHA. Renames only, no content change. The \`review-archive.yml\` workflow force-pushes this branch and rewrites this body each week while records are due, and closes this PR once none are.
+
+          ## Evidence
+
+          - Source run (the list of moves is in its summary): $RUN_URL
+          - Commit (renames only, checked by the workflow): $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$head
+          - Script: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_SHA/.github/scripts/review-archive.mjs
+
+          ## Not covered
+
+          Verdict links to the moved records pin a commit sha and keep working; nothing rewrites them. A reviewer checks that the diff is renames into \`docs/reviews/archive/\` only.
+          EOF
+
+          if [ -n "$pr" ]; then
+            gh pr edit "$pr" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md" > /dev/null
+            summary "Updated #$pr."
+          else
+            url=$(gh pr create --base dev --head "$BRANCH" --title "$TITLE" --body-file "$RUNNER_TEMP/body.md")
+            summary "Opened $url."
+          fi
