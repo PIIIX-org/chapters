@@ -1158,7 +1158,10 @@ export async function searchNotes(
     const routed = await routeQuery(resources, query, includeSymbols)
     if (routed) {
       const { results, ...answer } = routed
-      return { status: 'ok', retrieval_mode: 'exact', degraded: false, ...answer, results: results.slice(0, limit) }
+      // A symbol in a file still awaiting extraction is reported with the index block, as any answer is.
+      const index = (await state)?.index
+      const pending = index ? index.pending_notes + index.pending_files + index.pending_repositories : 0
+      return { status: 'ok', retrieval_mode: 'exact', degraded: false, ...(index && (pending > 0 || index.failed > 0) ? { index } : {}), ...answer, results: results.slice(0, limit) }
     }
   }
   const vec = await queryVector(query, options.accountId)

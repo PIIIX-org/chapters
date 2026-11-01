@@ -354,3 +354,15 @@ test('elara: the route a search took is read from its answer, conceptual when it
   assert.equal((await runElara('q', [{ path: 'src/b.ts', start: 40, end: 40 }], routed)).route, 'identifier')
   assert.equal((await runElara('q', [{ path: 'src/b.ts', start: 40, end: 40 }], fakeElara([], []))).route, 'conceptual')
 })
+
+test('elara: a routed answer that lists several exact answers abstains from naming one (#1060 review)', async () => {
+  const several: ElaraTools = {
+    ...fakeElara([], []),
+    async search() {
+      return { text: JSON.stringify({ status: 'ok', route: 'identifier', ambiguous: true, results: [{ resourceType: 'symbol', path: 'a.ts', startLine: 1, endLine: 2, snippet: 'x' }, { resourceType: 'symbol', path: 'b.ts', startLine: 1, endLine: 2, snippet: 'x' }] }), ms: 1, ok: true }
+    },
+  }
+  const run = await runElara('q', [{ path: 'a.ts', start: 1, end: 1 }], several)
+  assert.equal(run.abstained, true)
+  assert.equal(run.route, 'identifier')
+})

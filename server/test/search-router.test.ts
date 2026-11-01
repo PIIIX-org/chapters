@@ -47,6 +47,10 @@ describe('the term a query asks for', () => {
     expect(routeTerm('how does the parser handle `parseFrontmatter` when the text has no fence')).toBeNull()
     expect(routeTerm('where are MCP rate limits enforced')).toBeNull()
     expect(routeTerm('parse frontmatter')).toBeNull()
+    // A verb around a backticked term asks for more than the term: not an identifier lookup.
+    for (const q of ['who calls `parseFrontmatter`', 'tests for `parseFrontmatter`', 'references to `Store.save`']) expect(routeTerm(q), q).toBeNull()
+    expect(routeTerm('./src/store.ts')).toBe('src/store.ts')
+    expect(routeTerm('/src/store.ts')).toBe('src/store.ts')
     expect(routeTerm('ab')).toBeNull()
   })
 })
@@ -111,5 +115,27 @@ describe('path route (#1060)', () => {
     const res = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, 'docs/guide', 10)
     expect(res).toMatchObject({ route: 'path', confidence: 1 })
     expect(res.results.map((r) => `${r.resourceType}:${r.path}`)).toEqual(['note:docs/guide'])
+  })
+})
+
+describe('limits of a routed answer (#1060 review)', () => {
+  it('more than ten exact answers is not an answer: the hybrid path ranks them', async () => {
+    const files = Array.from({ length: 12 }, (_, i) => ({ path: `pkg${String(i).padStart(2, '0')}/handler.ts`, content: `export function handler(): number {\n  return ${i}\n}\n` }))
+    await syncRepositoryFiles(repoId, files, ['src/notes/frontmatter.ts', 'src/store.ts', 'src/a/parse.ts', 'src/b/parse.ts', 'docs/readme.md', ...files.map((f) => f.path)])
+    await flushExtraction()
+    const res = await ask('handler')
+    expect(res.route).toBeUndefined()
+    expect(res.retrieval_mode).toBe('hybrid')
+    const files2 = await ask('handler.ts')
+    expect(files2.route).toBeUndefined()
+  })
+
+  it('a routed answer carries the index block while something is still being indexed', async () => {
+    await syncRepositoryFiles(repoId, [{ path: 'src/store.ts', content: 'export class Store {\n  save(item: string): string {\n    return item + "!"\n  }\n}\n' }], ['src/store.ts'])
+    const res = await ask('src/store.ts')
+    expect(res.route).toBe('path')
+    expect(res.index?.pending_files).toBeGreaterThan(0)
+    await flushExtraction()
+    expect((await ask('src/store.ts')).index).toBeUndefined()
   })
 })

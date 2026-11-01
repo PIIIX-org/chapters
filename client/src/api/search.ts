@@ -26,7 +26,11 @@ export interface SearchResult {
  */
 export interface SearchResponse {
   status: 'ok' | 'no_match' | 'index_building' | 'unavailable'
-  retrieval_mode: 'hybrid' | 'keyword_only' | 'vector_only' | 'none'
+  retrieval_mode: 'hybrid' | 'keyword_only' | 'vector_only' | 'none' | 'exact'
+  /** Present when the query was answered by lookup (#1060): an identifier or a path. */
+  route?: 'identifier' | 'path'
+  confidence?: 1
+  ambiguous?: true
   degraded: false | { reason: 'embedder_failed' | 'vector_leg_failed' | 'keyword_leg_failed' }
   index?: { pending_notes: number; pending_files: number; pending_repositories: number; failed: number }
   results: SearchResult[]
