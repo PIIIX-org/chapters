@@ -82,6 +82,8 @@ export const METRICS = [
   'goldReached',
   'goldReachedRate',
   'abstained',
+  'routed',
+  'exact1Routed',
   'tokensToGold',
   'tokensToGoldMedian',
   'tokensToGoldReached',

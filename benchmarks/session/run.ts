@@ -142,6 +142,7 @@ function outcome(gold: LineRange[], j: Judgments, run: RereadRun): { outcome: Qu
       hits: [],
       gold,
       abstained: false,
+      route: 'conceptual',
       tokensToGold: ep.tokensToGold,
       callsToGold: ep.callsToGold,
       tokensToAllGold: ep.tokensToAllGold,

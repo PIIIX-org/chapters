@@ -127,6 +127,7 @@ interface PolicyRow {
   exact1: boolean
   exact5: boolean
   abstained: boolean
+  route: 'identifier' | 'path' | 'conceptual'
   tokensToGold: number | null
   callsToGold: number | null
   tokensToAllGold: number | null
@@ -150,6 +151,7 @@ function outcome(q: Question, run: PolicyRun): { outcome: QuestionOutcome; row: 
     hits: run.hits,
     gold,
     abstained: run.abstained,
+    route: run.route,
     tokensToGold: ep.tokensToGold,
     callsToGold: ep.callsToGold,
     tokensToAllGold: ep.tokensToAllGold,
@@ -167,6 +169,7 @@ function outcome(q: Question, run: PolicyRun): { outcome: QuestionOutcome; row: 
     exact1: !run.abstained && exactAtK(run.hits, gold, 1) === 1,
     exact5: !run.abstained && exactAtK(run.hits, gold, 5) === 1,
     abstained: run.abstained,
+    route: run.route,
     tokensToGold: o.tokensToGold,
     callsToGold: o.callsToGold,
     tokensToAllGold: o.tokensToAllGold,
