@@ -2,8 +2,15 @@
 // Run: node --test '.github/scripts/*.test.mjs' (the `checks` job in ci.yml does).
 
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { combine, compare, evaluate, movement, overrideReason, render, toBaseline, TOLERANCE } from './bench-gate.mjs'
+import { fileURLToPath } from 'node:url'
+import { combine, compare, evaluate, missingReport, movement, overrideReason, overview, render, toBaseline, TOLERANCE } from './bench-gate.mjs'
+
+const GATE = fileURLToPath(new URL('./bench-gate.mjs', import.meta.url))
 
 const agg = (over = {}) => ({
   questions: 20,
@@ -196,6 +203,31 @@ describe('evaluate', () => {
     const both = baselineOf(run({}, { suites: ['s', 't'] }))
     assert.deepEqual(evaluate({ results: run(), baseline: both }).failures, [])
   })
+
+  it('--require-golds: a suite that reaches fewer golds than the reference fails, with no tolerance', () => {
+    const base = baselineOf(run({}, { suites: ['s', 't'] }))
+    const lost = run({ goldReached: 11 }, { suites: ['s', 't'] })
+    // Without the flag one gold is inside the hit@5 tolerance and nothing else moved: passes.
+    assert.deepEqual(evaluate({ results: lost, baseline: base, baseBaseline: base, pr: pr() }).failures, [])
+    const strict = evaluate({ results: lost, baseline: base, baseBaseline: base, pr: pr(), requireGolds: true })
+    assert.equal(strict.ok, false)
+    assert.match(failures(strict), /^s: golds lost, Elara goldReached 12 -> 11 of 20 \(base baseline/m)
+    assert.match(failures(strict), /^t: golds lost, Elara goldReached 12 -> 11 of 20/m)
+    assert.equal(strict.suites[0].verdicts.goldReached, 'regression')
+    // Equal or more golds pass; the flag is reported in the footer.
+    const same = evaluate({ results: run({}, { suites: ['s', 't'] }), baseline: base, baseBaseline: base, pr: pr(), requireGolds: true })
+    assert.deepEqual(same.failures, [])
+    assert.equal(same.suites[1].verdicts.goldReached, 'ok')
+    assert.match(render(same, run({}, { suites: ['s', 't'] })), /Golds: every suite must reach at least the reference/)
+    const more = run({ goldReached: 13 })
+    assert.deepEqual(evaluate({ results: more, baseline: baselineOf(more), baseBaseline: baselineOf(run()), pr: pr(), requireGolds: true }).failures, [])
+  })
+
+  it('--require-golds: a suite whose golds are missing in the run fails', () => {
+    const base = baselineOf(run())
+    const none = run({ goldReached: null })
+    assert.match(failures(evaluate({ results: none, baseline: base, requireGolds: true })), /s: golds lost, Elara goldReached 12 -> -/)
+  })
 })
 
 describe('toBaseline', () => {
@@ -229,5 +261,59 @@ describe('render and compare', () => {
     const md = compare(a, b)
     assert.match(md, /\| mrr \| 0\.5 \| 0\.4 \| -0\.1 \(worse\)/)
     assert.match(md, /Q1: rank 1 -> 3/)
+  })
+
+  it('prints one overview row per suite: tokens-to-gold, golds, hit@5 and MRR, reference -> run', () => {
+    const base = baselineOf(run({}, { suites: ['s', 't'] }))
+    const r = run({ tokensToGold: 30_000, goldReached: 11, mrr: 0.45 }, { suites: ['s', 't'] })
+    const report = evaluate({ results: r, baseline: base, baseBaseline: base, pr: pr(), requireGolds: true })
+    const rows = overview(report)
+    assert.equal(rows[0], '| suite | questions | tokens-to-gold | golds | hit@5 | MRR | gate |')
+    assert.equal(rows[2], '| s | 20 | 20000 -> 30000 | 12 -> 11 | 0.6 -> 0.6 | 0.5 -> 0.45 | tokensToGold: regression, goldReached: regression |')
+    assert.equal(rows[3], '| t | 20 | 20000 -> 30000 | 12 -> 11 | 0.6 -> 0.6 | 0.5 -> 0.45 | tokensToGold: regression, goldReached: regression |')
+    const ok = run()
+    assert.equal(overview(evaluate({ results: ok, baseline: baselineOf(ok) }))[2], '| s | 20 | 20000 -> 20000 | 12 -> 12 | 0.6 -> 0.6 | 0.5 -> 0.5 | ok |')
+    // A suite without a baseline entry shows the run's numbers alone.
+    const rowsNoEntry = overview(evaluate({ results: run({}, { suites: ['s', 'u'] }), baseline: baselineOf(run()) }))
+    assert.equal(rowsNoEntry[3], '| u | 20 | 20000 | 12 | 0.6 | 0.5 | no baseline entry |')
+    // The overview sits above the per-suite tables in the rendered summary.
+    const md = render(report, r)
+    assert.ok(md.indexOf('| suite | questions |') < md.indexOf('## s: 20 questions'))
+  })
+})
+
+describe('missing results', () => {
+  it('names the artifact and stops before evaluating anything', () => {
+    const md = missingReport(['bench-runs/bench-results-2/results.json'])
+    assert.match(md, /\*\*Fail\.\*\*/)
+    assert.match(md, /Missing results: bench-results-2\. The bench job of that instance failed, timed out or was cancelled/)
+    assert.match(md, /- bench-results-2: no bench-runs\/bench-results-2\/results\.json/)
+    assert.match(missingReport(['x/results.json']), /Missing results: x\/results\.json\./)
+  })
+
+  it('the CLI exits 1 with the artifact name when one instance is missing, even if the others would pass', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bench-gate-'))
+    const r = run()
+    const files = [1, 2, 3].map((n) => join(dir, `bench-results-${n}`, 'results.json'))
+    const writeInstance = (f) => {
+      mkdirSync(join(f, '..'), { recursive: true })
+      writeFileSync(f, JSON.stringify(instance()))
+    }
+    files.slice(0, 2).forEach(writeInstance)
+    const baselineFile = join(dir, 'baseline.json')
+    writeFileSync(baselineFile, JSON.stringify(baselineOf(r)))
+    const out = join(dir, 'out')
+    const res = spawnSync(process.execPath, [GATE, '--results', files.join(','), '--baseline', baselineFile, '--out', out], { encoding: 'utf8' })
+    assert.equal(res.status, 1)
+    assert.match(res.stdout, /Missing results: bench-results-3\./)
+    assert.match(res.stdout, /::error title=bench-gate: missing results::bench-results-3 missing/)
+    assert.ok(!/## s: 20 questions/.test(res.stdout), 'nothing evaluated')
+    assert.match(readFileSync(join(out, 'gate.md'), 'utf8'), /Missing results: bench-results-3\./)
+    // With all three present the same files pass.
+    writeInstance(files[2])
+    const okRes = spawnSync(process.execPath, [GATE, '--results', files.join(','), '--baseline', baselineFile, '--out', out], { encoding: 'utf8' })
+    assert.equal(okRes.status, 0, okRes.stdout)
+    assert.match(okRes.stdout, /\*\*Pass\.\*\*/)
+    assert.ok(existsSync(join(out, 'gate.md')))
   })
 })
