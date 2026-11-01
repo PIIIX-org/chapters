@@ -57,10 +57,12 @@ Every change — code, spec, doc — follows the same loop:
    fix commits to the same PR referencing the issue (`refs #N`), and
    when fixed, close the issue as solved (`closes #N` in the fixing
    commit/PR comment).
-6. **Merge** into `dev` (merge commit, delete branch) once review is
-   clean and CI is green. **As of 2026-08-27 the agent merges its own
-   PRs again**: open the PR, wait for CI to pass, then merge. Do not
-   merge on red or pending CI. (History: auto-merge was authorized
+6. **Merge** into `dev` once review is clean and CI is green. **As of
+   2026-08-27 the agent merges its own PRs again**: open the PR, wait for
+   CI to pass, then add it to the merge queue (since 2026-11-01; see
+   **Landing a PR on `dev`**), which merges it with a merge commit; delete
+   the branch after. Do not enqueue on red or pending CI. (History:
+   auto-merge was authorized
    2026-07-15, revoked 2026-07-20 with the owner merging personally,
    and re-authorized 2026-08-27.) Promotion `dev → prod` still needs
    the owner's explicit OK each time — that has never changed.
@@ -542,7 +544,7 @@ always gives the same text.
   `GITHUB_REPOSITORY` or the `origin` remote), then commit STATE.md if it
   changed. Don't run it in every fix PR: a PR's own `Closes #N` changes
   the data when it merges, so the block it commits is already stale, and
-  parallel PRs would all conflict on the block under strict protection.
+  parallel PRs would all conflict on the block.
   The nightly `refresh` job catches up. Without `--write` the
   script only prints the block and says whether the file is current. It
   keeps the file's line endings.
@@ -837,11 +839,12 @@ Rules apply to `dev` and `prod` in layers, and all must pass:
     `dismiss_stale_reviews_on_push`, all three merge methods allowed.
   - `required_status_checks`: `checks` (integration 15368), not strict
     (since 2026-11-01, for the merge queue).
-- **Repository ruleset 26310472, "dev merge queue"**, on `dev` only: a
-  `merge_queue` rule with the settings under **Merge queue settings**.
 
   `gh api repos/PIIIX-org/chapters/rules/branches/<branch>` lists the
-  ruleset rules in force on a branch. #574 does not change the ruleset.
+  ruleset rules in force on a branch. #574 did not change this ruleset;
+  the merge queue (2026-11-01) turned its strict setting off.
+- **Repository ruleset 26310472, "dev merge queue"**, on `dev` only: a
+  `merge_queue` rule with the settings under **Merge queue settings**.
 
 Required status checks (classic protection, #574):
 
@@ -882,7 +885,9 @@ Otherwise the first promotion is the first run of that configuration, and
 a red one blocks it. Rollback for either branch (and the emergency hotfix
 path under **Promotion to prod**):
 `gh api -X PATCH repos/PIIIX-org/chapters/branches/<branch>/protection/required_status_checks --input <file>`
-with `{"strict": true, "checks": [{"context": "checks", "app_id": 15368}]}`.
+with `{"strict": true, "checks": [{"context": "checks", "app_id": 15368}]}`
+(for `dev`, also see the merge-queue rollback under **Landing a PR on
+`dev`**).
 App 15368 is GitHub Actions. It owns the job check runs and also the
 `review-verdict` status, which the workflow posts with its token.
 
@@ -995,8 +1000,8 @@ record by branch. `.github/scripts/review-archive.mjs` does the move
 (`node .github/scripts/review-archive.mjs --write`; without `--write` it
 lists what is due; `--days` changes the age; token and repository as for
 `state-md.mjs`) and the workflow **`review-archive.yml`** runs it every
-Sunday at 03:00 UTC (not at the STATE.md hour: under strict protection
-two bot PRs merged back to back cost an extra CI cycle; or by `gh workflow
+Sunday at 03:00 UTC (not at the STATE.md hour: two bot PRs to `dev` go
+through the merge queue one at a time; or by `gh workflow
 run review-archive.yml --ref
 dev`): with `STATE_MD_TOKEN` it force-pushes `bot/review-archive` (one
 commit of renames on top of `dev`; the job fails if the commit is anything
