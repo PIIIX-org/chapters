@@ -131,6 +131,15 @@ export function linePrecisionRecall(gold: readonly LineRange[], seen: LineSet): 
   return { precision: seen.size === 0 ? 0 : hit / seen.size, recall: hit / goldSet.size }
 }
 
+/**
+ * 1 when one of the first k returned locations overlaps a gold range (#1058):
+ * the answer itself names the evidence, with no read needed. A result that
+ * names no lines (null) never does.
+ */
+export function exactAtK(hits: ReadonlyArray<LineRange | null>, gold: readonly LineRange[], k: number): number {
+  return hits.slice(0, k).some((h) => h !== null && gold.some((g) => g.path === h.path && h.start <= g.end && g.start <= h.end)) ? 1 : 0
+}
+
 // ---- tokens ----------------------------------------------------------------
 
 /** Token estimate of text an agent receives: characters / 4, rounded up. */
@@ -145,6 +154,12 @@ export interface QuestionOutcome {
   /** Distinct documents in the order the policy's first ranking returned them. */
   ranking: string[]
   judgments: Judgments
+  /** The location each result of the ranking call returned, in the server's order; null where a result names none (#1058). */
+  hits: ReadonlyArray<LineRange | null>
+  /** The gold ranges of the question (#1058). */
+  gold: readonly LineRange[]
+  /** The search answered `no_match` or `ambiguous` instead of a first hit (#1058). */
+  abstained: boolean
   /** Tokens / calls spent when the first gold range was fully seen; null = never. */
   tokensToGold: number | null
   callsToGold: number | null
@@ -162,10 +177,18 @@ export interface Aggregate {
   hit1: number
   hit5: number
   hit10: number
+  /** Questions whose first returned location overlaps a gold range, as a fraction (#1058). */
+  exact1: number
+  /** The same for the first five returned locations. */
+  exact5: number
   mrr: number
   ndcg10: number
   /** Questions where the first gold range was reached. */
   goldReached: number
+  /** `goldReached / questions`: the phase-3 exit criterion is 0.99 (#1058). */
+  goldReachedRate: number
+  /** Questions the search answered `no_match` or `ambiguous` instead of a first hit, as a fraction: not a pass, not a wrong answer either. */
+  abstained: number
   /** Mean tokens to the first gold range; a miss counts as `missTokens`. */
   tokensToGold: number
   /** Median of the same per-question values. */
@@ -210,9 +233,13 @@ export function aggregate(outcomes: readonly QuestionOutcome[], missTokens: numb
     hit1: round4(mean(outcomes.map((o) => hitAtK(o.ranking, o.judgments, 1)))),
     hit5: round4(mean(outcomes.map((o) => hitAtK(o.ranking, o.judgments, 5)))),
     hit10: round4(mean(outcomes.map((o) => hitAtK(o.ranking, o.judgments, 10)))),
+    exact1: round4(mean(outcomes.map((o) => (o.abstained ? 0 : exactAtK(o.hits, o.gold, 1))))),
+    exact5: round4(mean(outcomes.map((o) => (o.abstained ? 0 : exactAtK(o.hits, o.gold, 5))))),
     mrr: round4(mean(outcomes.map((o) => reciprocalRank(o.ranking, o.judgments)))),
     ndcg10: round4(mean(outcomes.map((o) => ndcgAtK(o.ranking, o.judgments, 10)))),
     goldReached: outcomes.filter((o) => o.tokensToGold !== null).length,
+    goldReachedRate: round4(outcomes.length === 0 ? 0 : outcomes.filter((o) => o.tokensToGold !== null).length / outcomes.length),
+    abstained: round4(mean(outcomes.map((o) => (o.abstained ? 1 : 0)))),
     tokensToGold: Math.round(mean(toGold)),
     tokensToGoldMedian: Math.round(median(toGold)),
     tokensToGoldReached: Math.round(mean(outcomes.flatMap((o) => (o.tokensToGold === null ? [] : [o.tokensToGold])))),

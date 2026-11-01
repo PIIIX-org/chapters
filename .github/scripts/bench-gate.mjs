@@ -8,9 +8,10 @@
 //      cancelled), before any evaluation;
 //   1. a selected suite has no results, or the instances disagree on a
 //      suite's fingerprint (harness failure);
-//   2. regression: Elara's hit@5 or mean tokens-to-gold is worse than the
-//      reference by more than TOLERANCE. On a pull request the reference is
-//      the BASE commit's baseline;
+//   2. regression: Elara's hit@5, exact@1, gold-reached rate or mean
+//      tokens-to-gold is worse than the reference by more than TOLERANCE
+//      (#1058). On a pull request the reference is the BASE commit's
+//      baseline; a metric the reference does not have yet is not judged;
 //   3. suite changed: on a pull request the run's fingerprint (questions,
 //      keywords, policy config and the harness source in benchmarks/) differs
 //      from the base baseline's, so the base cannot judge it. Passing needs
@@ -50,14 +51,18 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 /**
- * hit5Questions: questions whose hit@5 may flip before a change counts
- * (hit@5 tolerance = hit5Questions / questions of the suite).
+ * hit5Questions: questions whose hit@5, exact@1 or gold-reached rate may
+ * flip before a change counts (tolerance = hit5Questions / questions of the
+ * suite; more than one question lost is red).
  * tokensRelative: relative change of mean tokens-to-gold that counts.
  */
 export const TOLERANCE = { hit5Questions: 1, tokensRelative: 0.1 }
 
 /** Metrics the gate acts on (Elara policy); the rest are reported only. */
-export const GATED = ['hit5', 'tokensToGold']
+export const GATED = ['hit5', 'exact1', 'goldReachedRate', 'tokensToGold']
+
+/** Gated metrics that are a fraction of the suite's questions. */
+const FRACTION_METRICS = new Set(['hit5', 'exact1', 'goldReachedRate'])
 
 /** Owner overrides: label + PR body line with the reason. */
 export const OVERRIDES = {
@@ -70,9 +75,13 @@ export const METRICS = [
   'hit1',
   'hit5',
   'hit10',
+  'exact1',
+  'exact5',
   'mrr',
   'ndcg10',
   'goldReached',
+  'goldReachedRate',
+  'abstained',
   'tokensToGold',
   'tokensToGoldMedian',
   'tokensToGoldReached',
@@ -112,6 +121,10 @@ export function combine(list) {
       const side = (policy) => ({
         rank: med(runs.map((s) => s.perQuestion[i][policy].rank)),
         tokensToGold: med(runs.map((s) => s.perQuestion[i][policy].tokensToGold)),
+        // Whether the first returned location overlapped gold and whether the search abstained, in the median instance (#1058); the first returned location of the first instance.
+        exact1: med(runs.map((s) => (s.perQuestion[i][policy].exact1 ? 1 : 0)), false),
+        abstained: med(runs.map((s) => (s.perQuestion[i][policy].abstained ? 1 : 0)), false),
+        located: runs[0].perQuestion[i][policy].located?.[0] ?? null,
       })
       return { id: q.id, elara: side('elara'), grep: side('grep') }
     })
@@ -174,7 +187,7 @@ export function toBaseline(combined, previous = { suites: {} }) {
  * (within tolerance). hit5 is a fraction of `questions`.
  */
 export function movement(metric, ref, cur, questions) {
-  if (metric === 'hit5') {
+  if (FRACTION_METRICS.has(metric)) {
     // Aggregates are rounded to 4 decimals (round4 in benchmarks/lib/metrics.ts): allow that rounding.
     const tol = TOLERANCE.hit5Questions / questions + 1e-4
     return cur < ref - tol ? 'worse' : cur > ref + tol ? 'better' : 'same'
@@ -246,8 +259,9 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
     row.refLabel = refLabel
     for (const metric of GATED) {
       const cur = run.aggregate.elara[metric]
-      const vsRef = movement(metric, ref.elara[metric], cur, run.questions)
-      const vsOwn = movement(metric, own.elara[metric], cur, run.questions)
+      // A baseline recorded before a metric existed (#1058) has no number to judge it by: the run is stale until it records one, a regression is not yet defined.
+      const vsRef = cur === undefined || ref.elara[metric] === undefined ? 'same' : movement(metric, ref.elara[metric], cur, run.questions)
+      const vsOwn = cur === undefined ? 'same' : own.elara[metric] === undefined ? 'better' : movement(metric, own.elara[metric], cur, run.questions)
       row.verdicts[metric] = vsRef === 'worse' ? 'regression' : vsOwn !== 'same' ? 'stale' : 'ok'
       if (vsRef === 'worse') {
         failures.push(`${name}: regression, Elara ${metric} ${ref.elara[metric]} -> ${cur} (${refLabel}; tolerance ${describeTolerance(metric, run.questions)})`)
@@ -258,14 +272,17 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
     // Golds are a floor, not a tolerance: a suite that loses one fails (--require-golds).
     if (requireGolds) {
       const cur = run.aggregate.elara.goldReached
-      const was = ref.elara.goldReached
+      // A harness change makes the run's own baseline the reference (the suite-change label): that would compare the run with itself.
+      // The golds of the same questions on the base still count, whatever the harness did (#1058 review).
+      const floor = base && base.questions === run.questions ? base : ref
+      const was = floor.elara.goldReached
       const lost = cur === null || cur === undefined || cur < was
       row.verdicts.goldReached = lost ? 'regression' : 'ok'
-      if (lost) failures.push(`${name}: golds lost, Elara goldReached ${was} -> ${cur ?? '-'} of ${run.questions} (${refLabel}; every suite must reach at least as many golds as the reference)`)
+      if (lost) failures.push(`${name}: golds lost, Elara goldReached ${was} -> ${cur ?? '-'} of ${run.questions} (${floor === base ? 'base baseline' : refLabel}; every suite must reach at least as many golds as the reference)`)
     }
     // The recorded bar may only go up unless an owner says otherwise.
     if (base && base.fingerprint === own.fingerprint) {
-      const lowered = GATED.filter((m) => (LOWER_IS_BETTER.has(m) ? own.elara[m] > base.elara[m] : own.elara[m] < base.elara[m]))
+      const lowered = GATED.filter((m) => base.elara[m] !== undefined && (LOWER_IS_BETTER.has(m) ? own.elara[m] > base.elara[m] : own.elara[m] < base.elara[m]))
       if (lowered.length > 0) {
         const what = `benchmarks/baseline.json lowers ${lowered.map((m) => `${m} ${base.elara[m]} -> ${own.elara[m]}`).join(', ')} against the base`
         const reason = overrideReason(pr, OVERRIDES.baselineLowered)
@@ -278,7 +295,7 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
 }
 
 function describeTolerance(metric, questions) {
-  return metric === 'hit5' ? `${TOLERANCE.hit5Questions} of ${questions} questions` : `${TOLERANCE.tokensRelative * 100} %`
+  return FRACTION_METRICS.has(metric) ? `${TOLERANCE.hit5Questions} of ${questions} questions` : `${TOLERANCE.tokensRelative * 100} %`
 }
 
 function fmt(v) {
@@ -370,12 +387,24 @@ export function render(report, results) {
       md.push(`| ${m} | ${fmt(own?.elara?.[m])}${b} | ${fmt(run.aggregate.elara[m])} | ${delta(m, refV(m), run.aggregate.elara[m])} | ${fmt(run.aggregate.grep[m])} | ${row.verdicts[m] ?? ''} |`)
     }
     md.push('')
-    if (run.paired) md.push(`Questions both agents reach: ${run.paired.questions}; mean tokens-to-gold on those, Elara ${fmt(run.paired.elara)}, grep ${fmt(run.paired.grep)}.`, '')
+    if (run.paired) {
+      const ratio = run.paired.grep > 0 ? ` Elara ÷ grep = ${fmt(Math.round((run.paired.elara / run.paired.grep) * 100) / 100)} (the phase-3 exit criterion is at most 1).` : ''
+      md.push(`Questions both agents reach: ${run.paired.questions}; mean tokens-to-gold on those, Elara ${fmt(run.paired.elara)}, grep ${fmt(run.paired.grep)}.${ratio}`, '')
+    }
+    const failing = run.perQuestion.filter((q) => q.elara.tokensToGold === null || q.elara.exact1 === 0)
+    if (failing.length) {
+      md.push(`<details><summary>${failing.length} of ${run.questions} questions not exact (Elara)</summary>`, '', '| question | outcome | tokens-to-gold | first returned location |', '|---|---|---|---|')
+      for (const q of failing) {
+        const outcome = q.elara.tokensToGold === null ? (q.elara.abstained ? 'gold not reached (abstained)' : 'gold not reached') : q.elara.abstained ? 'abstained' : 'first location not on gold'
+        md.push(`| ${q.id} | ${outcome} | ${fmt(q.elara.tokensToGold)} | ${q.elara.located ?? '-'} |`)
+      }
+      md.push('', '</details>', '')
+    }
     const changes = questionChanges(row.ref ?? own, run)
     if (changes.length) md.push(`<details><summary>${changes.length} questions changed (Elara)</summary>`, '', ...changes.map((c) => `- ${c}`), '', '</details>', '')
   }
   md.push(
-    `Gated: Elara ${GATED.join(', ')}, median of the instances. Tolerance: hit@5 ${TOLERANCE.hit5Questions} questions per suite, tokens-to-gold ${TOLERANCE.tokensRelative * 100} %.${report.requireGolds ? ' Golds: every suite must reach at least the reference\u2019s goldReached (--require-golds).' : ''} A miss costs ${results?.missCost?.tokens ?? '?'} tokens and ${results?.missCost?.calls ?? '?'} calls. Method: benchmarks/README.md.`,
+    `Gated: Elara ${GATED.join(', ')}, median of the instances. Tolerance: hit@5, exact@1 and gold-reached rate ${TOLERANCE.hit5Questions} questions per suite, tokens-to-gold ${TOLERANCE.tokensRelative * 100} %.${report.requireGolds ? ' Golds: every suite must reach at least the reference\u2019s goldReached (--require-golds).' : ''} A miss costs ${results?.missCost?.tokens ?? '?'} tokens and ${results?.missCost?.calls ?? '?'} calls. Method: benchmarks/README.md.`,
   )
   return md.join('\n')
 }
