@@ -1,0 +1,7 @@
+#!/bin/sh
+# Adds the attribution trailer to the final message of every commit git
+# runs this hook for: `commit` (-m, -F, the editor, -v, --amend), `merge`,
+# `merge --squash`'s commit. Runs after the editor, so an empty buffer stays
+# empty (git aborts) and a subject typed above a pre-filled trailer cannot
+# be glued to it. Logic and opt-out: .githooks/coauthor.
+exec sh "$(git rev-parse --git-path hooks)/coauthor" "$1"

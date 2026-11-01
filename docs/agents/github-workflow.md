@@ -10,7 +10,8 @@ Two long-lived branches, everything else is short-lived.
 - Feature branches: `<type>/<short-topic>` off `dev` — types: `feat`,
   `fix`, `ci`, `docs`, `chore`, `test` (`<type>-<topic>` is checked the
   same way). Deleted after merge. `bot/` is for branches a workflow writes
-  (`bot/state-md`, see **STATE.md** under CI); nobody else pushes there.
+  (`bot/state-md`, see **STATE.md** under CI; `bot/review-archive`, see
+  **Review records** under the review gate); nobody else pushes there.
 - Never commit directly to `dev` or `prod`. No exceptions, including docs.
 
 ## The change cycle
@@ -23,7 +24,9 @@ Every change — code, spec, doc — follows the same loop:
    `Co-Authored-By: <model> <email>` trailer (for example
    `Co-Authored-By: Claude Opus <noreply@anthropic.com>`), the only record
    that an agent wrote it (step 7); the `attribution` check (see CI) flags
-   commits without one.
+   commits without one. After `pnpm install` the hooks in `.githooks/`
+   add that trailer to any commit that lacks one (see **Commit
+   attribution** under CI).
 3. **Open a PR** targeting `dev`. Fill in the template
    (`.github/pull_request_template.md`): Problem, Change, **Evidence**,
    Not covered, `Closes #N`. Evidence is links, not adjectives: the CI
@@ -354,11 +357,17 @@ re-judging a title and labels that did not change. Unit tests:
 **PR evidence** (`.github/workflows/pr-evidence.yml`, job `pr-evidence`,
 #579) runs on every PR to `dev` or `prod` (promotions included) when it
 is opened, pushed, reopened, edited or marked ready, so a body edit
-re-runs it. Like fails-before, it runs the base commit's copy of
-`.github/scripts/pr-evidence.mjs` when the base has one. Here, a **link**
-is a full URL to a GitHub Actions run, PR, issue, commit or file
-(`blob/`, `tree/`) of this repository; links to other repositories never
-count. It fails when:
+re-runs it, and on the merge queue's `merge_group` commit, where it reads
+the PR the queue branch names (`gh-readonly-queue/<base>/pr-<N>-<sha>`)
+from the API and judges it the same way. Like fails-before, it runs the
+base commit's copy of `.github/scripts/pr-evidence.mjs` when the base has
+one. Here, a **link** is a full URL to a GitHub Actions run or one of its
+artifacts (`actions/runs/<id>/artifacts/<id>`, or the artifact's
+`api.github.com` URL), a PR, an issue, a commit, or a file or directory
+of this repository at a ref (`blob/`, `tree/`; a review record such as
+`blob/<sha>/docs/reviews/<pr>-<sha>.md`, or its `raw.githubusercontent.com`
+URL, is a file). A bare path (`docs/reviews/1011-a6fe0b6.md`) is not a
+link, and links to other repositories never count. It fails when:
 
 1. the Evidence section is missing: no heading containing the word
    Evidence (`## Evidence`, `### Tests / Evidence`, any level) and no
@@ -427,6 +436,33 @@ fails (the API lists no more). Unit tests:
 `.github/scripts/attribution.test.mjs`, run by `checks`. It is **not** a
 required check: it reports on every PR, and making it required is an
 owner decision (add `attribution` to both branches' required checks).
+
+The hooks in **`.githooks/`** add the trailer so the check has nothing to
+flag. The root `prepare` script runs `.githooks/install.sh` on
+`pnpm install`: it sets `core.hooksPath .githooks` for the clone, does
+nothing outside a git checkout (the Docker build), and leaves a clone that
+already uses another hooks path alone with a warning. The logic is in
+`.githooks/coauthor`: cut the message at the scissors line (`commit -v`),
+leave it alone if it strips to nothing (so an editor commit left empty is
+still aborted by git), else `git interpret-trailers --if-exists doNothing
+--trailer 'Co-Authored-By: Claude Opus <noreply@anthropic.com>'`, which
+puts the trailer after the last paragraph (joining a `Signed-off-by`
+block, above `Conflicts:` comments) and adds nothing when a
+`Co-Authored-By` trailer in any case is already there (another model,
+say). **`commit-msg`** runs it after the editor, on the final message, for
+`commit` (-m, -F, editor, -v, --amend), `merge` and the commit of a
+`merge --squash`; a subject typed in the editor therefore stays its own
+paragraph. `revert` and `cherry-pick` commit through the sequencer, which
+runs no commit-msg hook, so **`prepare-commit-msg`** runs it for source
+`message` only (`--no-edit`, or a message given in full); with `--edit`
+those two get no trailer and `attribution` flags them. The owner
+committing by hand from the shared account turns it off for that clone
+with `git config chapters.coauthor none` (and labels the PR
+`human-only`); `git config chapters.coauthor 'Name <email>'` names
+another model. Tests, with real git in scratch repositories:
+`.github/scripts/githooks.test.mjs`, run by `checks`. The hooks cover
+local commits only: commits made elsewhere (web UI, other machines) are
+still checked by `attribution`.
 
 **Issue close check** (`.github/workflows/issue-close-check.yml`, job
 `issue-close`, script `.github/scripts/issue-close-check.mjs`) runs on
@@ -507,15 +543,21 @@ always gives the same text.
   changed. Don't run it in every fix PR: a PR's own `Closes #N` changes
   the data when it merges, so the block it commits is already stale, and
   parallel PRs would all conflict on the block under strict protection.
-  The `refresh` job catches up after each merge. Without `--write` the
+  The nightly `refresh` job catches up. Without `--write` the
   script only prints the block and says whether the file is current. It
   keeps the file's line endings.
-- **refresh** job: daily (05:17 UTC), on every push to `dev` and by
-  `gh workflow run state-md.yml --ref dev`. When `dev`'s block is stale,
-  it writes the diff to the job summary and force-pushes `bot/state-md`
-  (one commit on top of `dev` by `github-actions[bot]`, changing only
-  STATE.md). When `dev` is current, it closes the bot PR and deletes the
-  branch.
+- **refresh** job: daily at 02:00 UTC and by
+  `gh workflow run state-md.yml --ref dev`; not per push. `dev` takes no
+  direct commit (ruleset 24421063 requires a PR with no bypass actor and
+  classic protection enforces the required checks on admins too), so every
+  refresh is a bot PR with a full CI cycle; running it on every push to
+  `dev` meant up to a dozen such cycles a day for the same block (eleven
+  on 2026-10-31). One refresh a day batches a day's merges into one PR;
+  dispatch it by hand when the block must be current sooner. When `dev`'s
+  block is stale, it writes the diff to the job summary and force-pushes
+  `bot/state-md` (one commit on top of `dev` by `github-actions[bot]`,
+  changing only STATE.md). When `dev` is current, it closes the bot PR
+  and deletes the branch.
   - With the secret **`STATE_MD_TOKEN`** (a secret of the Actions
     environment `state-md`, whose deployment branches are limited to
     `dev`; the job runs in that environment) it pushes with that
@@ -527,8 +569,9 @@ always gives the same text.
     (skipped: not a `fix` title), `plan`, `lab` and `bench-gate` (both
     skipped: no image or search change) like any PR; `attribution`
     skips `bot/` branches. Review it like any PR (the diff must touch
-    only the block) and merge it. The merge is a push to `dev`, which
-    regenerates the same block and opens nothing.
+    only the block) and merge it. A merge between two refreshes leaves the
+    block one day behind at most; the next refresh force-pushes a fresh
+    commit on the new `dev`.
   - Without the secret it pushes with `GITHUB_TOKEN` and ends with a
     **warning**, not a failure (`dev` is fine; only the block is behind),
     with the diff, the PR body and the commands in its summary. Pushes
@@ -578,8 +621,16 @@ that covers more than one kind of check, or a crashed test turns it red.
 A fix that makes a known defect pass removes its entry in the same PR.
 `lab` is a required status check on `dev` and `prod` (#574): when `plan`
 picks no tier the job is skipped, which passes; `plan` is required too, so
-a failed `plan` (which skips `lab`) cannot pass as a skipped lab. Tiers,
-the baseline, how to add a test: `docs/agents/lab.md`.
+a failed `plan` (which skips `lab`) cannot pass as a skipped lab. The
+path rules are `.github/scripts/lab-plan.mjs` (unit tests
+`lab-plan.test.mjs`, run by `checks`). On the merge queue's `merge_group`
+commit `plan` resolves the PR from the queue branch
+(`gh-readonly-queue/<base>/pr-<N>-<sha>`) and plans it the same way, so
+`plan`, `lab` and `bench-gate` report on the queue commit; its `HEAD^1`
+is the queue's base, so the base copies of the gates run there as on a
+PR. Every job has a `timeout-minutes` (`lab` 60 for the fast tier, 180
+for the full one). Tiers, the baseline, how to add a test:
+`docs/agents/lab.md`.
 
 **Premise benchmark** (same workflow, jobs `bench` ×3 and `bench-gate`,
 #570/#572) measures the tokens and calls a scripted agent needs to reach
@@ -587,27 +638,43 @@ the evidence for a question with Elara's MCP tools, against ripgrep +
 ranged reads on a checkout of the same pinned commit, plus hit@k, MRR,
 NDCG@10 and line-level precision/recall. It runs on three lab instances of
 its own, never against production (the runner refuses any other base
-URL), and gates their median. The `chapters` suite runs on PRs to `dev`
-that touch search, extraction or ingestion, MCP, the schema, server
-start-up/config, the image's dependencies or the benchmark; all five
-suites run nightly, on every PR to `prod` and by hand
+URL), and gates their median. Which suites run is decided by the paths a
+PR to `dev` changes (`lab-plan.mjs`): **all five suites, and no suite may
+lose a gold**, when it touches what shapes a response and its tokens,
+`server/src/search/**` or `server/src/mcp/**`, the extraction path
+(`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`,
+`server/src/text/{blocks,lines,targets}.ts`,
+`server/src/notes/note-blocks.ts`, `server/src/config.ts`), or the
+benchmark's premise inputs (`benchmarks/run.ts`, `lib/`, `questions/`,
+`baseline.json`; the rest of `benchmarks/` runs nothing); the `chapters`
+suite alone when it touches the rest of `repositories/`, the schema,
+server start-up,
+the image's dependencies, the lab plumbing, the workflow or the gate; all
+five suites also run nightly, on every PR to `prod` and by hand
 (`-f tier=none -f bench=all`). The gate
 (`.github/scripts/bench-gate.mjs`, base copy on PRs) fails when Elara's
 hit@5 drops by more than one question of a suite or its mean
 tokens-to-gold rises by more than 10 % against the **base** commit's
-`benchmarks/baseline.json`; when the suite changed (questions, keywords,
-policy config or harness source) unless the PR has the label
-`bench-suite-change` and a `Bench-suite-change: <why>` line; when the PR's
-baseline is worse than the base's unless it has `bench-baseline-lowered`
-and a `Bench-baseline-lowered: <why>` line; and when the run no longer
-matches the PR's baseline (an improvement is recorded in the same PR with
-`--write-baseline` from the PR's own three instances). Labels are read when
-the gate runs: re-run `bench-gate` after adding one. The delta table is in
-the job summary. `bench-gate` is a required status check on `dev` and
-`prod` (#574); it is skipped (passes) when no suite applies, and it fails
-when a `bench` instance did not produce results.
-Method, thresholds and the only publishable numbers:
-`benchmarks/README.md`.
+`benchmarks/baseline.json`; with `--require-golds` (the all-suites path
+rule) when any suite's `goldReached` is below the base baseline's, with no
+tolerance; when the suite changed (questions, keywords, policy config or
+harness source) unless the PR has the label `bench-suite-change` and a
+`Bench-suite-change: <why>` line; when the PR's baseline is worse than
+the base's unless it has `bench-baseline-lowered` and a
+`Bench-baseline-lowered: <why>` line; and when the run no longer matches
+the PR's baseline (an improvement is recorded in the same PR with
+`--write-baseline` from the PR's own three instances). Labels are read
+when the gate runs: re-run `bench-gate` after adding one. The job summary
+opens with one row per suite (tokens-to-gold, golds, hit@5, MRR, reference
+-> run, verdict) and then the full delta tables. `bench-gate` is a
+required status check on `dev` and `prod` (#574); it is skipped (passes)
+when no suite applies. The `bench` matrix is fail-fast with a budget per
+tier (`chapters` 45 min, `all` 240 min; measured 4 to 10 and 80 to 175
+min, the all-suites spread being embedding throughput on the runner), so a
+failed or timed-out instance cancels the others, and the gate then stops
+at once naming the missing `bench-results-<n>` artifact instead of
+waiting for the slowest instance. Method, thresholds and the only
+publishable numbers: `benchmarks/README.md`.
 
 **Image check** (`.github/workflows/image-check.yml`, job
 `offline-scripts`, #872) builds the root `Dockerfile` and runs the
@@ -826,6 +893,25 @@ would never show on the PR. The job itself is green whenever it could
 evaluate; read the status (its details link opens the run, whose summary
 lists what counted, each verdict author's permission and how to pass).
 
+On the merge queue's `merge_group` event the job resolves the PR from the
+queue branch (`gh-readonly-queue/<base>/pr-<N>-<sha>`; the sha in the name
+is the queue's base, not the PR head), applies the same rules to the PR's
+current head, which the queue's temporary merge commit must contain as its
+second parent (a queue commit built from another head gets a failure
+status naming both, and a single-parent queue commit, from a squash or
+rebase queue, fails closed), and sets the status on the queue commit, so
+`review-verdict/dev` reports there too. A verdict posted while the PR is
+queued is picked up by re-running the newest **Review verdict** run of the
+queue commit.
+
+**Merge queue settings.** The merge method is **merge commit**: the
+verdict check needs the PR head as the queue commit's second parent and
+fails closed otherwise. The maximum group size is **1**: `lab-plan` and
+`review-verdict` resolve only the PR named in the queue branch, so a
+grouped commit would carry other PRs' changes unplanned and unreviewed.
+The status-check timeout is **at least 240 minutes**, the `bench` job's
+all-suite budget.
+
 A status belongs to a **commit, not a PR**, and a promotion's head (the
 tip of `dev`) can also be the head of other PRs. So:
 
@@ -869,6 +955,34 @@ The rules:
 
 If the status looks stale, re-run the newest **Review verdict** run, or
 edit the PR body.
+
+**Review records.** A review's record is a file
+`docs/reviews/<pr>-<head sha>.md` (`# Review of #<pr> — <title>`, `Head
+reviewed:`, `Verdict:`, then the findings), committed to the PR branch with
+a `review: <title> (#<pr> at <sha>)` commit before the verdict is posted,
+and linked from the verdict by commit sha
+(`https://github.com/PIIIX-org/chapters/blob/<sha>/docs/reviews/<file>`,
+or the `tree/<sha>/docs/reviews` directory). One PR can have several (one
+per head reviewed). The top-level directory holds the records of **open and
+recently merged PRs only**: once a PR has been merged (or closed without
+merging) for more than **7 days**, its records move to
+`docs/reviews/archive/YYYY-MM/`, the month it was merged or closed. A
+verdict link pins a sha, so it keeps working after the move; never link a
+record by branch. `.github/scripts/review-archive.mjs` does the move
+(`node .github/scripts/review-archive.mjs --write`; without `--write` it
+lists what is due; `--days` changes the age; token and repository as for
+`state-md.mjs`) and the workflow **`review-archive.yml`** runs it every
+Sunday at 03:00 UTC (not at the STATE.md hour: under strict protection
+two bot PRs merged back to back cost an extra CI cycle; or by `gh workflow
+run review-archive.yml --ref
+dev`): with `STATE_MD_TOKEN` it force-pushes `bot/review-archive` (one
+commit of renames on top of `dev`; the job fails if the commit is anything
+but `R100` moves into `docs/reviews/archive/`) and opens or updates the PR
+`docs(reviews): archive review records of PRs merged over 7 days ago
+(bot)`, reviewed and merged like the STATE.md bot PR; without the secret
+it only reports, for the same reason as there. When nothing is due it
+closes that PR and deletes the branch. Unit tests:
+`.github/scripts/review-archive.test.mjs`, run by `checks`.
 
 What the gate does and does not guarantee. By policy everything is done
 from the `Taha-Mahmoodi` account (step 7 of the change cycle), and GitHub

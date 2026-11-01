@@ -36,8 +36,9 @@ that touches none of those paths skips the `lab` job. Lockfile-only
 changes (Dependabot bumps of `yjs` or `@hocuspocus/*`, for example) run the
 fast tier. Fast-tier tests today: `access-behaviour` (token revocation,
 deactivation and hashing, the MCP rate limit and its 429, two-account
-separation, note text in prompts; #552), `smoke`, `concurrency`,
-`scoped-tokens`, `collab-duplication` (without the eight-kill S17 sweep),
+separation, note text in prompts; #552), `access-matrix` (the access-control
+matrix below on every read surface, usage report included; #1034), `smoke`,
+`concurrency`, `scoped-tokens`, `collab-duplication` (without the eight-kill S17 sweep),
 `fix-attribution`, `fix-crash-catchup`, `fix-frontmatter`,
 `fix-import-edges` (without the chapters repo), `monitoring-alerts`
 (the uptime monitor with the lab's `ELARA_MONITORING_TOKEN` and
@@ -174,8 +175,8 @@ because Elara's ranks move between identical instances (#623).
 
 | tier | when | suites | time |
 |---|---|---|---|
-| chapters | PRs to `dev` touching `server/src/{search,mcp,repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, `benchmarks/`, `lab/bootstrap.ts`, `lab/lib/`, `lab/docker-compose.lab.yml`, the workflow, the action or `bench-gate.mjs` | `chapters` (29 questions) | about 9 min (instances in parallel) |
-| all | nightly, every PR to `prod`, by hand (`-f bench=all`) | all five suites (109 questions) | about 50 min (instances in parallel) |
+| chapters | PRs to `dev` touching `server/src/{repositories,db}/`, `server/src/{config,index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, `lab/bootstrap.ts`, `lab/lib/`, `lab/docker-compose.lab.yml`, the workflow, the action, `lab-plan.mjs` or `bench-gate.mjs` (rules: `.github/scripts/lab-plan.mjs`) | `chapters` (29 questions) | 4 to 10 min (instances in parallel; job budget 45) |
+| all | PRs to `dev` touching `server/src/search/`, `server/src/mcp/`, the extraction path (`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`, `server/src/text/{blocks,lines,targets}.ts`, `server/src/notes/note-blocks.ts`, `server/src/config.ts`) or the benchmark's premise inputs (`benchmarks/run.ts`, `lib/`, `questions/`, `baseline.json`; the gate then also requires every suite's golds, `--require-golds`); nightly, every PR to `prod`, by hand (`-f bench=all`) | all five suites (109 questions) | 80 to 175 min (instances in parallel; job budget 240; the matrix is fail-fast) |
 
 Dispatches default to `bench=none`, so a hand-started lab run costs no
 extra runner. `benchmarks/run.ts` reads `lab-env.json`, refuses any base
@@ -380,6 +381,48 @@ Type-check and lint locally without a pnpm install: `eslint` covers `lab/`
 in `pnpm lint`; for types run `tsc --noEmit` with `types: ["bun"]`,
 `moduleResolution: "bundler"`, `allowImportingTsExtensions` over
 `lab/**/*.ts` after `bun install` in `lab/`.
+
+### Access-control matrix: a MUST for every new read endpoint
+
+Every read surface that can name a note, a file or anything else an
+account owns (a REST route, an MCP tool, a report) ships with the
+access-control matrix, in the server suite **and** in the lab, before it
+merges. The matrix is one helper applied per surface; both copies take the
+same four cases, in this order:
+
+1. **owner**: the owner's read answers and names the object (every
+   identifier the matrix lists: path, id, title or a body marker);
+2. **shared**: an account the owner shared the vault or repository with
+   reads it the same way;
+3. **unrelated**: an account the object was never shared with never sees
+   it, probed while the share is live, so the share widens to nobody else;
+4. **revoked**: after the owner revokes the share, the shared account gets
+   NOT_FOUND / 403 (an `object` surface) or an answer without the object (a
+   `listing` surface: a search across every reachable vault, the usage
+   report), and **no identifying field is in the answer, error text
+   included**. This is the #1034 class: the usage report listed a read by
+   its note's path after the share that allowed the read was gone.
+
+- Server suite: `accessMatrix(name, { setup, read })` in
+  `server/test/helpers/access-matrix.ts` registers the four cases as `it`
+  blocks; `restOutcome` / `mcpOutcome` turn an `app.inject` answer or a
+  `callTool` result into what it judges. `server/test/access-matrix.test.ts`
+  applies it to `read_note`, `read_file`, `search` (in a vault and
+  everywhere, MCP and REST), backlinks, `graph` / local graph and the usage
+  report (`GET /api/usage/report`, `usage_report`): add the new surface
+  there. With the #1034 filter taken out of `server/src/usage/report.ts`
+  (the `reachable` join conditions of `fallbackSection`) the two usage
+  matrices fail on the revoked case, naming the leaked id and path.
+- Lab: `runAccessMatrix` in `lab/lib/access-matrix.ts` returns the four
+  checks (named `<surface>: the owner sees it`, `…: the shared account sees
+  it`, `…: an unrelated account never sees it`, `…: after the revoke the
+  shared account is refused and nothing identifying leaks`; a leak is
+  `critical`). `lab/tests/access-matrix.test.ts` (fast tier) runs the same
+  surfaces on the live instance with the admin as owner, the member as
+  shared and a user signed up by the test as unrelated: add the new surface
+  to its `matrices` list.
+- A review of a PR that adds a read endpoint without both entries asks for
+  them (change cycle step 5).
 
 ### What `ctx` gives you (`lab/lib/context.ts`)
 

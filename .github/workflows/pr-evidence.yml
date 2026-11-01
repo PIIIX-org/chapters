@@ -9,27 +9,39 @@ name: PR evidence
 #
 # Separate from ci.yml so a body edit re-evaluates this check without
 # re-running the whole suite.
+#
+# Merge queue: on `merge_group` the script resolves the PR from the queue
+# branch (gh-readonly-queue/<base>/pr-<N>-<sha>), reads its body from the
+# API and judges it the same way, so the queue's temporary commit carries
+# this required check. HEAD^1 of the queue commit is the queue's base, so
+# the base copy of the checker runs there as on PR events.
 
 on:
   pull_request:
     branches: [dev, prod]
     types: [opened, synchronize, reopened, edited, ready_for_review]
+  merge_group:
+    branches: [dev, prod]
 
+# A merge group's ref names its PR and base, so queue runs never cancel PR
+# runs or each other's PRs.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   pr-evidence:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
-          # HEAD is GitHub's merge of the PR into its base; HEAD^1 (the base)
-          # must be in the clone.
+          # HEAD is GitHub's merge of the PR into its base (or the queue's
+          # merge commit); HEAD^1 (the base) must be in the clone.
           fetch-depth: 2
           persist-credentials: false
       - uses: actions/setup-node@v7
@@ -40,6 +52,8 @@ jobs:
       # says which). The copy runs alone from $RUNNER_TEMP, so the script
       # must stay a single file with no sibling imports.
       - name: Check the PR body for evidence
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           checker=.github/scripts/pr-evidence.mjs
           if git cat-file -e "HEAD^1:$checker" 2>/dev/null; then
