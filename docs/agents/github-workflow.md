@@ -987,12 +987,21 @@ edit the PR body.
 **Review records.** A review's record is a file
 `docs/reviews/<pr>-<head sha>.md` (`# Review of #<pr> — <title>`, `Head
 reviewed:`, `Verdict:`, then the findings), committed to the PR branch with
-a `review: <title> (#<pr> at <sha>)` commit before the verdict is posted,
-and linked from the verdict by commit sha
+a `review: <title> (#<pr> at <sha>)` commit before the `VERDICT: MERGE` is
+posted, and linked from that verdict by commit sha
 (`https://github.com/PIIIX-org/chapters/blob/<sha>/docs/reviews/<file>`,
-or the `tree/<sha>/docs/reviews` directory). One PR can have several (one
-per head reviewed). The top-level directory holds the records of **open and
-recently merged PRs only**: once a PR has been merged (or closed without
+or the `tree/<sha>/docs/reviews` directory). **Since 2026-11-02 the record
+is committed once, on the MERGE round** (master decision): a commit moves
+the head, and on a PR that runs the all-suite bench (#1053) that cancels a
+run of up to three hours. A `VERDICT: CHANGES` round therefore posts only
+the inline review and the verdict comment (its findings, with the head it
+reviewed); the MERGE record then holds **every round**, each under its own
+`## Round <n> (<head sha>)` heading with the verdict it gave. #1071
+tracks reusing the bench for heads that differ only under `docs/reviews/`,
+after which records go back to one commit per round. Records committed
+before this rule (one per head reviewed) stay as they are. The top-level
+directory holds the records of **open and recently merged PRs only**: once
+a PR has been merged (or closed without
 merging) for more than **7 days**, its records move to
 `docs/reviews/archive/YYYY-MM/`, the month it was merged or closed. A
 verdict link pins a sha, so it keeps working after the move; never link a
