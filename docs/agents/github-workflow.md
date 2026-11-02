@@ -118,7 +118,7 @@ The procedure, in order:
    Do this before opening the promotion, because it moves `dev`'s head. The
    first sync, for the 12 promotion merge commits up to #407, is #627.
 2. **Open the promotion PR** `dev → prod` and wait for every required
-   check. On `prod` the lab runs its full tier and the benchmark all five
+   check. On `prod` the lab runs its full tier and the benchmark all six
    suites. Don't merge anything into `dev` until the promotion is done: a new
    `dev` head is a new PR head, which re-runs every check and makes the
    verdict stale.
@@ -641,7 +641,7 @@ ranged reads on a checkout of the same pinned commit, plus hit@k, MRR,
 NDCG@10 and line-level precision/recall. It runs on three lab instances of
 its own, never against production (the runner refuses any other base
 URL), and gates their median. Which suites run is decided by the paths a
-PR to `dev` changes (`lab-plan.mjs`): **all five suites, and no suite may
+PR to `dev` changes (`lab-plan.mjs`): **all six suites, and no suite may
 lose a gold**, when it touches what shapes a response and its tokens,
 `server/src/search/**` or `server/src/mcp/**`, the extraction path
 (`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`,
@@ -652,7 +652,7 @@ benchmark's premise inputs (`benchmarks/run.ts`, `lib/`, `questions/`,
 suite alone when it touches the rest of `repositories/`, the schema,
 server start-up,
 the image's dependencies, the lab plumbing, the workflow or the gate; all
-five suites also run nightly, on every PR to `prod` and by hand
+six suites also run nightly, on every PR to `prod` and by hand
 (`-f tier=none -f bench=all`). The gate
 (`.github/scripts/bench-gate.mjs`, base copy on PRs) fails when Elara's
 hit@5, exact@1 or gold-reached rate drops by more than one question of a
@@ -671,11 +671,16 @@ opens with one row per suite (tokens-to-gold, golds, hit@5, MRR, reference
 -> run, verdict) and then the full delta tables. `bench-gate` is a
 required status check on `dev` and `prod` (#574); it is skipped (passes)
 when no suite applies. The `bench` matrix is fail-fast with a budget per
-tier (`chapters` 45 min, `all` 240 min; measured 4 to 10 and 80 to 175
-min, the all-suites spread being embedding throughput on the runner), so a
+tier (`chapters` 45 min, `all` 240 min; measured 4 to 10 and 86 to 176
+min (six suites, run 41324770132: 86, 173 and 176 min), the all-suites spread being embedding throughput on the runner), so a
 failed or timed-out instance cancels the others, and the gate then stops
 at once naming the missing `bench-results-<n>` artifact instead of
-waiting for the slowest instance. Method, thresholds and the only
+waiting for the slowest instance. A PR that touches `server/src/search/**`, `server/src/mcp/**` or
+`benchmarks/lib/policies.ts` cannot write or lower the held-out suite's
+(`holdout`) baseline and cannot argue a regression on it away with a label
+(#1059); one that changes a ranking constant or fusion rule shows the all-suite
+pair against its base in Evidence and loses no gold on any suite.
+Method, thresholds and the only
 publishable numbers: `benchmarks/README.md`.
 
 **Image check** (`.github/workflows/image-check.yml`, job
@@ -879,7 +884,7 @@ don't use it on a PR branch. Read the settings with
 `gh api repos/PIIIX-org/chapters/branches/<branch>/protection`.
 
 Before `prod` requires `lab` and `bench-gate`, the prod configuration (lab
-full tier, all five benchmark suites) must have run green once on `dev`:
+full tier, all six benchmark suites) must have run green once on `dev`:
 `gh workflow run elara-lab.yml --ref dev -f tier=full -f bench=all`.
 Otherwise the first promotion is the first run of that configuration, and
 a red one blocks it. Rollback for either branch (and the emergency hotfix

@@ -10,16 +10,16 @@ const suites = readdirSync(DIR)
   .map((f) => ({ file: f, suite: JSON.parse(readFileSync(join(DIR, f), 'utf8')) as Suite }))
 
 test('every committed suite is valid and named after its file', () => {
-  assert.deepEqual(suites.map((s) => s.file).sort(), ['chapters.json', 'context-mode.json', 'diagram-design.json', 'rea.json', 'vectorcraft.json'])
+  assert.deepEqual(suites.map((s) => s.file).sort(), ['chapters.json', 'context-mode.json', 'diagram-design.json', 'holdout.json', 'rea.json', 'vectorcraft.json'])
   for (const { file, suite } of suites) {
     assert.equal(`${suite.suite}.json`, file)
     assert.deepEqual(validateSuite(suite), [], file)
   }
 })
 
-test('suite sizes: 29 chapters questions, 20 per mapped repository', () => {
+test('suite sizes: 29 chapters questions, 20 per mapped repository and in the held-out suite', () => {
   const sizes = Object.fromEntries(suites.map(({ suite }) => [suite.suite, suite.questions.length]))
-  assert.deepEqual(sizes, { chapters: 29, 'context-mode': 20, 'diagram-design': 20, rea: 20, vectorcraft: 20 })
+  assert.deepEqual(sizes, { chapters: 29, 'context-mode': 20, 'diagram-design': 20, holdout: 20, rea: 20, vectorcraft: 20 })
 })
 
 test('parseGold reads path:line and path:start-end', () => {

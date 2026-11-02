@@ -55,6 +55,7 @@ agent searches the same tree on the runner.
 | `vectorcraft` | storytold/vectorcraft @ `a067177` | 20: where, how, identifier, architecture, build | study round 2 |
 | `context-mode` | mksglu/context-mode @ `dbec980` | 20: where, flow, identifier, architecture, config | study round 2 |
 | `rea` | PIIIX-org/rea-snapshot @ `c527772` (tree of upstream morluto/rea `ca7450b`) | 20: where, flow, identifier, architecture, config | study round 2 |
+| `holdout` | prometheus/node_exporter @ `3af7d9f` | 20: where, how, identifier, architecture, config | written for #1059; held out, see below |
 
 The round-1 note questions (N1-N10) are not included: their corpus is the
 production Chapters and ELara vaults, which must not be queried by a
@@ -173,6 +174,33 @@ A reference recorded before a metric existed (`exact1`, `goldReachedRate`,
 #1058) does not judge it; the PR that first runs it records it, and from then on
 it is gated.
 
+### The held-out suite and ranking changes (#1059)
+
+`holdout` (`questions/holdout.json`: 20 questions on a pinned Go service,
+prometheus/node_exporter) is a sixth suite whose questions are **never used to
+tune a ranking constant**. Because a PR records its own baseline, nothing else
+would notice a change that memorises the other five. So:
+
+- A PR that touches `server/src/search/**`, `server/src/mcp/**` or
+  `benchmarks/lib/policies.ts` cannot write or lower the `holdout` entry of
+  `baseline.json` (the gate fails if the entry differs from the base's), and a
+  regression on `holdout` is red with **no label escape**
+  (`bench-suite-change` and `bench-baseline-lowered` are not read for it). A
+  harness change moves every suite's `fingerprint`; `holdout` is then judged
+  against the base's entry as long as its `suiteFingerprint` (the questions and
+  the repository, without the harness) is unchanged.
+- An improvement on `holdout` is recorded by a separate `bench:` PR that touches
+  none of those paths and only updates the baseline, so the improvement is
+  attributed, not absorbed.
+- **A PR that changes a ranking constant or a fusion rule shows the all-suite
+  pair** against its base in its Evidence section: all six suites, same base,
+  median of 3 instances, `exact1`, `goldReachedRate` and the paired tokens per
+  suite, and it must not lose a gold on any suite. Evidence from one suite is
+  not enough for a ranking change.
+- **Rotation.** When `holdout` has been in use for three months it joins the
+  tuned set and a new held-out corpus is added, so the held-out set stays unseen.
+  `holdout` was added in November 2026; the next rotation is due in February 2027.
+
 ### Phase-3 exit criteria
 
 The product goal is an exact answer, at least 99 % of the time, for fewer
@@ -201,7 +229,7 @@ after).
 
 | tier | when | suites |
 |---|---|---|
-| all | PRs to `dev` that touch `server/src/search/`, `server/src/mcp/`, the extraction path (`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`, `server/src/text/{blocks,lines,targets}.ts`, `server/src/notes/note-blocks.ts`, `server/src/config.ts`) or the benchmark's premise inputs (`benchmarks/run.ts`, `lib/`, `questions/`, `baseline.json`): the gate also requires every suite's golds; nightly on `dev`, every PR to `prod` (promotion), by hand | all five |
+| all | PRs to `dev` that touch `server/src/search/`, `server/src/mcp/`, the extraction path (`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`, `server/src/text/{blocks,lines,targets}.ts`, `server/src/notes/note-blocks.ts`, `server/src/config.ts`) or the benchmark's premise inputs (`benchmarks/run.ts`, `lib/`, `questions/`, `baseline.json`): the gate also requires every suite's golds; nightly on `dev`, every PR to `prod` (promotion), by hand | all six |
 | chapters | PRs to `dev` that touch the rest of `server/src/repositories/`, `server/src/db/`, `server/src/{index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, the lab plumbing it uses, the workflow, the plan or the gate | `chapters` |
 
 The path rules are `.github/scripts/lab-plan.mjs` (unit tests next to it).
