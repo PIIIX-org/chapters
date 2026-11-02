@@ -80,6 +80,7 @@ import { serializeNote } from '../notes/okf.js'
 import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
+import { OVERLAY_SPARE, overlayHits, readOverlay } from './overlay.js'
 import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { skippedField } from '../repositories/fs-scan.js'
@@ -2941,7 +2942,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         query: z.string().describe('Search text'),
         vaultId: UUID_ARG.optional().describe('Vault to search'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Every accessible vault and repository (account tokens)'),
+        everywhere: z.boolean().optional().describe('Everything accessible (account tokens)'),
         symbols: z.boolean().optional().describe('Include code symbols'),
         limit: intRange('limit', 1, 100).optional().describe('Max results'),
       },
@@ -2999,7 +3000,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'reader',
       // The kinds are the `kind` enum (#450): naming them again in the description would cost reader tokens twice.
       description:
-        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets, without reading whole files. `refs`: the sites of the symbol `query` names.',
+        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets. `refs`: the sites of the symbol `query` names.',
       inputSchema: {
         query: z.string().describe('Name, signature or meaning'),
         kind: z.enum(SYMBOL_KINDS).optional().describe('Symbol kind'),
@@ -3009,15 +3010,21 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         refs: z.enum(REFS).optional().describe('Sites of a symbol; at: `path:line`'),
         path: z.string().optional().describe('File of the definition'),
         depth: intRange('depth', 1, 3).optional().describe('impact levels; default 2'),
+        overlay: z.string().optional().describe('`git diff --no-renames` vs the indexed commit: searches your edits'),
       },
       budget: 'list',
     },
     async (
-      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs; path?: string; depth?: number },
+      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs; path?: string; depth?: number; overlay?: string },
       { repositoryId },
       page,
     ) => {
-      refsArguments(args)
+      const { overlay, ...refsArgs } = args
+      refsArguments(refsArgs)
+      if (overlay !== undefined && (args.refs !== undefined || !repositoryId)) {
+        throw new McpToolError('INVALID_ARGUMENT', '`overlay` searches the symbols of one repository: pass `repositoryId`, and no `refs`', { field: 'overlay' })
+      }
+      const patches = overlay === undefined ? null : readOverlay(overlay)
       // null: an account-scoped connection with no repositoryId, or `everywhere`.
       if (repositoryId) await requireRepositoryAccess(repositoryId)
       if (args.refs !== undefined) {
@@ -3030,9 +3037,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
       const limit = args.limit ?? 20
       // The first `limit` symbols of the ranking, plus one to know whether more match.
-      const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1, accountId: auth.user.id })
+      const searched = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 + (patches ? OVERLAY_SPARE : 0), accountId: auth.user.id })
+      const { results: found, ...head } = searched
+      // On base + overlay (#676): the hits as the edited files declare them; the head's `commit`/`tree` is the base.
+      const results = patches ? await overlayHits(repoIds[0]!, patches, args.query, found, { kind: args.kind, limit: limit + 1 }) : found
       return {
-        head: { ...head, ...(repoIds.length === 1 ? await repositoryIndexedVersion(repoIds[0]!) : {}) },
+        head: { ...head, ...(repoIds.length === 1 ? await repositoryIndexedVersion(repoIds[0]!) : {}), ...(patches ? { overlay: true } : {}) },
         sections: [
           ranked({
             name: 'results',
@@ -3083,7 +3093,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: {
         vaultId: UUID_ARG.optional().describe('Vault graph'),
         repositoryId: UUID_ARG.optional().describe('Repository graph'),
-        types: z.array(z.string()).optional().describe('Keep these note types or code languages'),
+        types: z.array(z.string()).optional().describe('Note types or code languages'),
         tags: z.array(z.string()).optional().describe('Only these tags'),
         aggregate: z.enum(['community', 'none']).optional().describe('Default "community"'),
         // `.int()` would list JS's safe-integer bounds, 55 characters of the reader budget (as budgetArgs).
@@ -3091,7 +3101,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         neighborsOf: z.string().min(1).optional().describe('Node id, path or name'),
         depth: intRange('depth', 1, 3).optional().describe('Edges from neighborsOf; default 1'),
         edgeTypes: z.array(z.enum(EDGE_KINDS)).min(1).optional().describe('Only these edge kinds'),
-        limit: intRange('limit', 1, 1_000).optional().describe('First n nodes and their edges'),
+        limit: intRange('limit', 1, 1_000).optional().describe('First n nodes'),
       },
       budget: 'list',
     },

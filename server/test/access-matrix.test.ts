@@ -153,6 +153,17 @@ describe('read surfaces (#552, #1034)', () => {
     read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(FILE)}`)),
   })
 
+  // The overlay (#676) answers with symbols of the files it changes: the base file's names go with its read access.
+  accessMatrix('MCP find_symbols overlay', {
+    setup: () => shareBoth([FILE, `${MARK}Plan`]),
+    read: (actor) =>
+      call(actor, 'find_symbols', {
+        repositoryId,
+        query: `${MARK}Plan`,
+        overlay: `--- a/${FILE}\n+++ b/${FILE}\n@@ -1,3 +1,3 @@\n export function ${MARK}Plan(): string {\n-  return 'launch window'\n+  return 'launch window, edited'\n }\n`,
+      }),
+  })
+
   // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.
   for (const refs of ['references', 'callers', 'impact'] as const) {
     accessMatrix(`MCP find_symbols refs: ${refs}`, {

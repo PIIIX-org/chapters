@@ -2667,6 +2667,18 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     cursor's fingerprint, so a cursor from another folder is refused. The
     REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
     file, unordered, no paging.
+  - `find_symbols` with `overlay` (#676, `mcp/overlay.ts` over
+    `repositories/overlay.ts`) answers on base + overlay without writing:
+    `parseOverlay` reads a `git diff --no-renames` (200 KB, 50 files;
+    renames and binaries refused), `overlaySymbols` applies the hunks to the
+    stored content of the changed files with every context line checked
+    (`OverlayError` -> `INVALID_ARGUMENT` on `overlay`) and runs the
+    existing `extractStructure` on the result in memory, and `overlayHits`
+    drops the base hits of the changed files and merges the lexical matches
+    (exact name first, base hits, then the rest). The base search is asked for
+    `OVERLAY_SPARE` more hits for what is dropped. No blocks, edges or
+    versions are written; `server/src/search/**` is untouched. The head's
+    `commit`/`tree` is the base and `overlay: true` says it was used.
   - `browse_vault` (#425) pages in SQL the same way, one code path for
     the root (the empty folder) and a folder (`notes/store.ts`), reading
     only the page: `browseNotesPage` reads 500 + 1 live notes after the

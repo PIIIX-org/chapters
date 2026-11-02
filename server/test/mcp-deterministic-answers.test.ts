@@ -323,6 +323,17 @@ const QUESTIONS: Question[] = [
   { name: 'grep code, one name in three files, with context', tool: 'grep', args: (w) => ({ repositoryId: w.repoId, pattern: 'function parse|def parse', context: 1 }) },
   { name: 'grep notes, two notes with one body', tool: 'grep', args: (w) => ({ vaultId: w.vaultId, pattern: '(?i)checksum every' }) },
   { name: 'grep everywhere under a glob', tool: 'grep', args: () => ({ everywhere: true, pattern: '\\bupload\\b', path: '{src,guides}/**' }) },
+  // The overlay (#676): a changed file's symbols as the diff leaves them, an added file's, the base's elsewhere.
+  {
+    name: 'find_symbols overlay',
+    tool: 'find_symbols',
+    args: (w) => ({
+      repositoryId: w.repoId,
+      query: 'checksum',
+      overlay:
+        '--- a/src/checksum.ts\n+++ b/src/checksum.ts\n@@ -1,4 +1,7 @@\n /** A chunk checksum. */\n+export function checksumAll(chunks: string[]): string[] {\n+  return chunks.map((c) => String(c.length))\n+}\n export function checksum(chunk: string): string {\n   return String(chunk.length)\n }\n',
+    }),
+  },
   { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }) },
   { name: 'graph repository communities', tool: 'graph', args: (w) => ({ repositoryId: w.repoId }) },
   {

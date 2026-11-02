@@ -92,6 +92,16 @@ const test: LabTest = {
       { name: 'REST GET /api/vaults/:id/notes/*', identifiers: [sourceNote.id, source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/notes/${source}`) },
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
+      {
+        name: 'MCP find_symbols overlay',
+        identifiers: [file, `${mark}Plan`],
+        share,
+        read: viaMcp('find_symbols', {
+          repositoryId,
+          query: `${mark}Plan`,
+          overlay: `--- a/${file}\n+++ b/${file}\n@@ -1,3 +1,3 @@\n export function ${mark}Plan(): string {\n-  return 'launch window'\n+  return 'launch window, edited'\n }\n`,
+        }),
+      },
       ...(['references', 'callers', 'impact'] as const).map((refs) => ({
         name: `MCP find_symbols refs: ${refs}`,
         identifiers: [run, `${mark}Run`],
