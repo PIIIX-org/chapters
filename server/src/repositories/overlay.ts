@@ -35,6 +35,28 @@ export interface FilePatch {
   hunks: Hunk[]
 }
 
+const ESCAPES: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11, '\\': 92, '"': 34 }
+
+/** A git C-quoted path without its quotes, decoded to text (`\\303\\251` is the two bytes of `é`). */
+function unquote(quoted: string): string {
+  const bytes: number[] = []
+  for (let i = 0; i < quoted.length; i++) {
+    const c = quoted[i]!
+    if (c !== '\\') {
+      bytes.push(...Buffer.from(c))
+      continue
+    }
+    const next = quoted[++i]!
+    const octal = /^[0-7]{3}/.exec(quoted.slice(i, i + 3))
+    if (octal) {
+      bytes.push(parseInt(octal[0], 8))
+      i += 2
+    } else if (next !== undefined && next in ESCAPES) bytes.push(ESCAPES[next]!)
+    else throw new OverlayError(`unreadable quoted path: ${quoted.slice(0, 60)}`)
+  }
+  return Buffer.from(bytes).toString('utf8')
+}
+
 /** The file patches of a unified diff, by path. Renames, binary files and mode-only changes are refused or skipped. */
 export function parseOverlay(diff: string): FilePatch[] {
   if (Buffer.byteLength(diff) > OVERLAY_MAX_BYTES) throw new OverlayError(`the overlay is over ${OVERLAY_MAX_BYTES / 1000} KB`)
@@ -47,7 +69,10 @@ export function parseOverlay(diff: string): FilePatch[] {
     current = null
   }
   const stripped = (name: string): string | null => {
-    const text = name.split('\t')[0]!.trim().replace(/^"|"$/g, '')
+    const raw = name.split('\t')[0]!.trim()
+    // git quotes a path with non-ASCII bytes, a quote, backslash or control character (core.quotepath): C-style escapes,
+    // octal for each byte of the UTF-8 name.
+    const text = raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"') ? unquote(raw.slice(1, -1)) : raw
     return text === '/dev/null' ? null : text.replace(/^[ab]\//, '')
   }
   for (let i = 0; i < lines.length; i++) {

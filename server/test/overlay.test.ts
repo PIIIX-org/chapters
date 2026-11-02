@@ -59,4 +59,11 @@ deleted file mode 100644
     expect(() => parseOverlay(many)).toThrow(/more than 50 files/)
     expect(() => parseOverlay('x'.repeat(200_001))).toThrow(/200 KB/)
   })
+
+  it("decodes git's quoted paths: octal bytes of a non-ASCII name, escaped quotes and tabs", () => {
+    const patches = parseOverlay('--- "a/src/caf\\303\\251.ts"\n+++ "b/src/caf\\303\\251.ts"\n@@ -1,1 +1,1 @@\n-a\n+b\n--- "a/src/say \\"hi\\".ts"\n+++ "b/src/say \\"hi\\".ts"\n@@ -1,1 +1,1 @@\n-a\n+b\n')
+    expect(patches.map((p) => p.path)).toEqual(['src/café.ts', 'src/say "hi".ts'])
+    expect(parseOverlay('diff --git "a/\\346\\227\\245.ts" "b/\\346\\227\\245.ts"\n--- /dev/null\n+++ "b/\\346\\227\\245.ts"\n@@ -0,0 +1,1 @@\n+x\n')[0]).toMatchObject({ path: '日.ts', status: 'added' })
+    expect(() => parseOverlay('--- "a/bad\\q.ts"\n+++ "b/bad\\q.ts"\n@@ -1,1 +1,1 @@\n-a\n+b\n')).toThrow(/quoted path/)
+  })
 })

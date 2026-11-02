@@ -85,7 +85,7 @@ beforeAll(async () => {
   owner = await connect(user.email, 'overlay-owner', port)
   stranger = await connect((await createActiveUser()).email, 'overlay-stranger', port)
   repoId = (await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'overlay-repo', ingestionMethod: 'agent_push' } })).json<{ id: string }>().id
-  const files: Record<string, string> = { 'src/store.ts': STORE, 'src/other.ts': OTHER, 'notes.txt': NOTES }
+  const files: Record<string, string> = { 'src/store.ts': STORE, 'src/other.ts': OTHER, 'notes.txt': NOTES, 'src/café.ts': 'export function cafeOne(): number {\n  return 1\n}\n' }
   for (let i = 0; i < 4; i++) files[`src/many/checksum${i}.ts`] = `export function checksum${i}(): number {\n  return ${i}\n}\n`
   await syncRepositoryFiles(repoId, Object.entries(files).map(([path, content]) => ({ path, content })), Object.keys(files), { commit: COMMIT })
   await flushExtraction()
@@ -191,5 +191,12 @@ describe('find_symbols overlay', () => {
     const r = await ask(owner, { query: 'big', overlay: diff })
     expect(r.isError).toBe(true)
     expect(r.text).toMatch(/over 2 MiB/)
+  })
+
+  it('a modified file with a non-ASCII path, as git quotes it, is found in the index', async () => {
+    const diff = '--- "a/src/caf\\303\\251.ts"\n+++ "b/src/caf\\303\\251.ts"\n@@ -1,3 +1,6 @@\n export function cafeOne(): number {\n   return 1\n }\n+export function cafeTwo(): number {\n+  return 2\n+}\n'
+    const json = await find('cafeTwo', diff)
+    expect(json.skipped).toBeUndefined()
+    expect(json.results[0]).toMatchObject({ path: 'src/café.ts', name: 'cafeTwo', startLine: 4 })
   })
 })
