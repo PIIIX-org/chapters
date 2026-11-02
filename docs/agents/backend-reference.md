@@ -2273,8 +2273,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   output schemas' `$schema`.
   `test/mcp-tool-budget.test.ts` measures, per profile, the ADR-004 §2.6
   sum: characters / 4 of `tools/list`, `prompts/list` and the
-  `initialize` instructions. It fails a reader account token over 2,000
-  tokens (no prompts on reader, #428; measured 7,984 characters with
+  `initialize` instructions. It fails a reader account token over 2,500
+  tokens (2,000 until #468 raised it, with grep, as the owner decided: the
+  list cost is paid once per session and cached, #681) (no prompts on reader, #428; measured 7,984 characters with
   #435's instructions, of which `tools/list` 7,746 and instructions 238;
   7,949 with #434's annotations, 7,676 before) and a writer one whose
   `tools/list` plus instructions are over 4,000 (15,669 with #435:
