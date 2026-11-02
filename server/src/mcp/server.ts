@@ -2956,7 +2956,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         sections: [
           ranked({
             name: 'results',
-            // A note hit carries no frontmatter (#419: 53 % of its tokens): `read_note` has it, REST keeps it for the UI's tags.
+            // A note hit carries no frontmatter (#419: 42 % of a typical note hit, measured in mcp-search-hits.test.ts): `read_note` has it, REST keeps it for the UI's tags.
             items: results.map((r) => ({ ...r, frontmatter: undefined })),
             id: (r) => `${r.resourceType}:${r.id}`,
             limit,
