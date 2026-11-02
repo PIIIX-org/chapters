@@ -2,17 +2,18 @@
  * What `find_symbols` with `refs: "explain"` (#675) reads besides the code
  * queries (code-queries.ts): the definition's declaration line and the live
  * notes that cite its file. A note cites a file with a wikilink
- * `[[repo:<name or id>/<path>]]` (`note_links`, #472: the target is the file,
- * an anchor is not stored). Freshness is about the file, not the text of the
+ * the graph resolves (`repo:<name or id>/<path>`, also `code:` and `:` before the path; `note_links`, #472: the
+ * target is the file, an anchor is not stored; one citation per note, its first link). Freshness is about the file, not the text of the
  * note: `current` when the note was last written at or after the file last
  * changed, else `stale` (the file changed after it). Callers pass the vaults
  * the account may read; nothing here checks access.
  */
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
+import { repoLinkTarget } from '../graph/assemble.js'
 import { blocks, noteLinks, notes, repositories, repositoryFiles } from '../db/schema.js'
 
-/** Citing links read for one answer: one more than the section shows, so the answer can say more exist. */
+/** Citing link rows read for one answer (the first link of each note is kept): more than the section shows, so the answer can say more exist. */
 export const CITATION_ROWS = 50
 
 export interface Citation {
@@ -39,7 +40,11 @@ export async function citationsOf(repositoryId: string, path: string, vaultIds: 
   const [repo] = await db.select({ name: repositories.name }).from(repositories).where(eq(repositories.id, repositoryId))
   const [file] = await db.select({ updatedAt: repositoryFiles.updatedAt }).from(repositoryFiles).where(and(eq(repositoryFiles.repositoryId, repositoryId), eq(repositoryFiles.path, path)))
   if (!repo || !file) return []
-  const targets = [`repo:${repo.name}/${path}`.toLowerCase(), `repo:${repositoryId}/${path}`.toLowerCase()]
+  // The stored forms a link to this file can have (`repoLinkTarget`, graph/assemble.ts, is the resolver that reads them):
+  // `repo:` or `code:`, the repository's name or id, `/` or `:` before the path. Plain equality on `target_path`, so
+  // `note_links_target_idx` serves it; the resolver then confirms each row, which keeps its rules (case included).
+  const targets = ['repo', 'code'].flatMap((scheme) => [repo.name, repositoryId].flatMap((key) => [`${scheme}:${key}/${path}`, `${scheme}:${key}:${path}`]))
+  const resolvable = new Map([[repo.name, repositoryId]])
   const rows = await db
     .select({
       vaultId: notes.vaultId,
@@ -50,11 +55,21 @@ export async function citationsOf(repositoryId: string, path: string, vaultIds: 
       startLine: noteLinks.startLine,
       endLine: noteLinks.endLine,
       context: noteLinks.context,
+      target: noteLinks.targetPath,
     })
     .from(noteLinks)
     .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
-    .where(and(inArray(notes.vaultId, [...vaultIds]), isNull(notes.deletedAt), inArray(sql`lower(${noteLinks.targetPath})`, targets)))
+    .where(and(inArray(notes.vaultId, [...vaultIds]), isNull(notes.deletedAt), inArray(noteLinks.targetPath, targets)))
     .orderBy(sql`${notes.path} COLLATE "C"`, sql`${notes.vaultId}`, noteLinks.startLine)
     .limit(CITATION_ROWS + 1)
-  return rows.map(({ updatedAt, ...r }) => ({ ...r, fresh: updatedAt >= file.updatedAt }))
+  const seen = new Set<string>()
+  const cites: Citation[] = []
+  for (const { updatedAt, target, ...r } of rows) {
+    const named = repoLinkTarget(target, resolvable, [repositoryId])
+    const key = `${r.vaultId}/${r.path}`
+    if (!named || named.path !== path || seen.has(key)) continue
+    seen.add(key)
+    cites.push({ ...r, fresh: updatedAt >= file.updatedAt })
+  }
+  return cites
 }

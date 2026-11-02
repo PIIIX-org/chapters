@@ -3022,6 +3022,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       if (args.refs === 'explain') {
         if (!repositoryId) throw new McpToolError('INVALID_ARGUMENT', '`refs` reads one repository: pass `repositoryId`', { field: 'repositoryId' })
         if (args.depth !== undefined) throw new McpToolError('INVALID_ARGUMENT', '`depth` goes with `refs: "impact"`', { field: 'depth' })
+        if (args.limit !== undefined) throw new McpToolError('INVALID_ARGUMENT', '`refs: "explain"` has fixed list sizes: leave out `limit`', { field: 'limit' })
         await requireRepositoryAccess(repositoryId)
         // The vaults whose notes may cite the code: every readable one for an account token, none for a pinned one.
         const vaultIds = auth.connection.scope === 'account' ? (await listAccessibleVaults(auth.user.id)).map((v) => v.id) : []

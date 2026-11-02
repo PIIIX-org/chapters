@@ -124,6 +124,18 @@ const test: LabTest = {
       { name: 'MCP usage_report', identifiers: [sourceNote.id, source], kind: 'listing', share, read: readThenReport(viaMcp('usage_report', {})) },
     ]
     for (const m of matrices) checks.push(...(await runAccessMatrix(m)))
+    // The repository shared, the vault not (#675): `find_symbols` with `refs: "explain"` names the code, but no note of the unshared vault.
+    const onlyRepo = await rest.owner.must<{ id: string }>('POST', `/api/repositories/${repositoryId}/shares`, { granteeType: 'user', granteeId: ids.shared })
+    const explained = await mcp.shared.call('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' })
+    await rest.owner.must('DELETE', `/api/repositories/${repositoryId}/shares/${onlyRepo.id}`)
+    const leaked = [`docs/${mark}-cite`, vaultId].filter((x) => explained.text.includes(x))
+    checks.push({
+      name: 'MCP find_symbols refs: explain: repository shared, vault not',
+      expected: 'the code is answered and no note of the unshared vault is named',
+      actual: explained.ok ? (leaked.length === 0 ? 'answered, nothing leaked' : `leaked ${leaked.join(', ')}`) : `not answered: ${explained.text.slice(0, 120)}`,
+      ok: explained.ok && leaked.length === 0,
+      severity: explained.ok && leaked.length === 0 ? 'info' : 'high',
+    })
 
     if (!reportWasOn) await rest.owner.must('PUT', '/api/usage/settings', { enabled: false })
 

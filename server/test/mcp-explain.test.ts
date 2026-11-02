@@ -86,6 +86,7 @@ beforeAll(async () => {
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'explain-vault' } })).json<{ id: string }>().id
   const note = (type: string, name: string, body: string) => app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/notes`, headers: { cookie }, body: { type, name, body } })
   await note('decisions', 'why-persist', 'Why persist exists.\n\nDecision: see [[repo:explain-repo/src/store.ts]] for the write path.\n')
+  await note('docs', 'other-forms', 'Same file, other link forms: [[code:explain-repo/src/dup2.ts]] and [[repo:explain-repo:src/dup2.ts]] and again [[repo:explain-repo/src/dup2.ts]].\n')
   await note('docs', 'other', 'Unrelated, see [[repo:explain-repo/src/dup1.ts]].\n')
 }, 120_000)
 
@@ -167,6 +168,29 @@ describe('find_symbols refs: explain', () => {
     const chained = chain.reduce((n, t) => n + tokens(t), 0)
     console.log(`explain: 1 call, ${tokens(one)} tokens; multi-call path: ${chain.length} calls, ${chained} tokens`)
     expect(tokens(one)).toBeLessThan(chained)
+  })
+
+  it('cites a note once, whatever link form it uses (`code:`, `repo:name:path`, `repo:name/path`)', async () => {
+    const json = await explain({ query: 'src/dup2.ts:1' })
+    expect((json.cites as Array<{ at: string }>).map((c) => c.at.split('#')[0])).toEqual(['docs/other-forms'])
+  })
+
+  it('a repository shared without the vault shows no citing note; with the vault it does', async () => {
+    const member = await createActiveUser()
+    const reader = await connect(member.email, 'explain-member')
+    await app.inject({ method: 'POST', url: `/api/repositories/${repoId}/shares`, headers: { cookie }, body: { granteeType: 'user', granteeId: member.id } })
+    const before = await ask(reader, { query: 'persist' })
+    expect(before.isError, before.text.slice(0, 200)).toBe(false)
+    expect(JSON.parse(before.text).cites).toEqual([])
+    expect(before.text).not.toContain('why-persist')
+    expect(before.text).not.toContain(vaultId)
+    await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/shares`, headers: { cookie }, body: { granteeType: 'user', granteeId: member.id, permission: 'read' } })
+    expect((await ask(reader, { query: 'persist' })).text).toContain('decisions/why-persist')
+    await reader.close()
+  })
+
+  it('refuses `limit`: the list sizes are fixed', async () => {
+    expect((await ask(owner, { query: 'persist', limit: 3 })).text).toMatch(/INVALID_ARGUMENT/)
   })
 
   it('answers the same bytes twice', async () => {

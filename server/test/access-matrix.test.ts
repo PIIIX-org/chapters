@@ -6,7 +6,7 @@
 // is refused with nothing identifying in the answer. The usage report is
 // the #1034 leak class: a report that lists a read by its note's path after
 // the share that allowed the read is gone.
-import { afterAll, beforeAll, describe, expect } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -158,6 +158,19 @@ describe('read surfaces (#552, #1034)', () => {
   accessMatrix('MCP find_symbols refs: explain', {
     setup: () => shareBoth([RUN, `${MARK}Run`, `docs/${MARK}-cite`]),
     read: (actor) => call(actor, 'find_symbols', { repositoryId, query: `${MARK}Plan`, refs: 'explain' }),
+  })
+  // The repository shared, the vault not: the shared account reads the code but is not told which notes cite it.
+  it('MCP find_symbols refs: explain names no note of a vault that is not shared', async () => {
+    const repoShare = await must('owner', 'POST', `/api/repositories/${repositoryId}/shares`, { granteeType: 'user', granteeId: actors.shared.id })
+    try {
+      const outcome = await call('shared', 'find_symbols', { repositoryId, query: `${MARK}Plan`, refs: 'explain' })
+      expect(outcome.ok).toBe(true)
+      const text = outcome.text
+      expect(text).toContain(FILE)
+      for (const hidden of [`docs/${MARK}-cite`, vaultId]) expect(text).not.toContain(hidden)
+    } finally {
+      await must('owner', 'DELETE', `/api/repositories/${repositoryId}/shares/${repoShare.id as string}`)
+    }
   })
 
   // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.
