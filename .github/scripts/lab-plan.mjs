@@ -6,14 +6,17 @@
 //          else none.
 //   also   extra fast-tier tests: browser (client collab code), backup-restore
 //          (#493: backup or restore code).
-//   bench  all when the PR touches what shapes a search or MCP response
-//          (server/src/search/**, server/src/mcp/**), the extraction path
+//   bench  all when the PR touches what shapes a ranking or the tokens every
+//          suite measures (server/src/search/**, and from the MCP code only
+//          mcp/{response,read-targets,session-reads}.ts: the budget ladder and
+//          the reads), the extraction path
 //          (repositories/{extraction,code-blocks,code-edge,outline,
 //          import-resolution,language}*, text/{blocks,lines,targets}.ts,
 //          notes/note-blocks.ts, config.ts) or the benchmark's premise
 //          inputs (benchmarks/{run.ts,lib/,questions/,baseline.json});
 //          chapters when it touches the wider set the chapters suite
-//          covers (the rest of repositories/, schema, start-up, the image's
+//          covers (the rest of server/src/mcp/**: tool definitions and
+//          contracts, the rest of repositories/, schema, start-up, the image's
 //          dependencies, the lab plumbing, the workflow, the gate); else none.
 //   golds  true with bench=all by path: bench-gate then also requires every
 //          suite to reach at least the reference's goldReached
@@ -48,14 +51,16 @@ export const BENCH_CHAPTERS =
   /^(server\/src\/(search|mcp|repositories|db)\/|server\/src\/(config|index|app)\.ts$|server\/drizzle\/|server\/package\.json$|pnpm-lock\.yaml$|Dockerfile$|docker-compose\.yml$|benchmarks\/(run\.ts$|baseline\.json$|lib\/|questions\/)|lab\/bootstrap\.ts$|lab\/lib\/|lab\/docker-compose\.lab\.yml$|\.github\/workflows\/elara-lab\.yml$|\.github\/actions\/lab-instance\/|\.github\/scripts\/bench-gate\.mjs$|\.github\/scripts\/lab-plan\.mjs$)/
 
 /**
- * Response shaping and token paths (search ranking, MCP response text), the
+ * Ranking and token paths (search ranking; the MCP budget ladder, `response.ts`,
+ * and the range reads, `read-targets.ts` and `session-reads.ts`: they change the
+ * tokens every suite measures, #1066 added 3.8 % to tokens-to-gold), the
  * extraction path (blocks, line ranges, targets, code edges, outlines,
  * languages, config) and the
  * benchmark's premise inputs (run.ts, lib/, questions/, baseline.json):
  * every suite runs, and no suite may lose a gold.
  */
 export const BENCH_ALL =
-  /^(server\/src\/(search|mcp)\/|server\/src\/repositories\/(extraction|code-blocks|code-edge|outline|import-resolution|language)[^/]*$|server\/src\/text\/(blocks|lines|targets)\.ts$|server\/src\/notes\/note-blocks\.ts$|server\/src\/config\.ts$|benchmarks\/(run\.ts$|baseline\.json$|lib\/|questions\/))/
+  /^(server\/src\/search\/|server\/src\/mcp\/(response|read-targets|session-reads)\.ts$|server\/src\/repositories\/(extraction|code-blocks|code-edge|outline|import-resolution|language)[^/]*$|server\/src\/text\/(blocks|lines|targets)\.ts$|server\/src\/notes\/note-blocks\.ts$|server\/src\/config\.ts$|benchmarks\/(run\.ts$|baseline\.json$|lib\/|questions\/))/
 
 /** The plan for a list of changed paths: { tier, also, bench, golds }. */
 export function plan(files) {
