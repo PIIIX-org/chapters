@@ -197,6 +197,19 @@ describe('read surfaces (#552, #1034)', () => {
     setup: () => shareBoth([sourceId, SOURCE], 'listing'),
     read: (actor) => call(actor, 'search', { everywhere: true, query: `${MARK}source` }),
   })
+  // grep (#468) shows the matching lines of a note or a file with their path.
+  accessMatrix('MCP grep in a vault', {
+    setup: () => shareBoth([SOURCE, `${MARK}source`]),
+    read: (actor) => call(actor, 'grep', { vaultId, pattern: `${MARK}source` }),
+  })
+  accessMatrix('MCP grep in a repository', {
+    setup: () => shareBoth([FILE, `${MARK}Plan`]),
+    read: (actor) => call(actor, 'grep', { repositoryId, pattern: `${MARK}Plan` }),
+  })
+  accessMatrix('MCP grep everywhere', {
+    setup: () => shareBoth([SOURCE, `${MARK}source`], 'listing'),
+    read: (actor) => call(actor, 'grep', { everywhere: true, pattern: `${MARK}source` }),
+  })
   accessMatrix('REST GET /api/search (everywhere)', {
     setup: () => shareBoth([sourceId, SOURCE], 'listing'),
     read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/search?q=${MARK}source`)),

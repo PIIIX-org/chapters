@@ -132,6 +132,7 @@ import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
+import { GREP_INPUT, grepAnswer } from './grep.js'
 import {
   DEFAULT_BUDGET,
   Page,
@@ -176,7 +177,7 @@ const EDIT_OPS = z.array(
     editOp('replace_text', {
       find: z.string(),
       replace: z.string(),
-      expectedCount: z.number().int().min(1).optional().describe('Times `find` must occur (default 1)'),
+      expectedCount: intRange('expectedCount', 1, 1_000_000).optional().describe('Times `find` must occur (default 1)'),
     }),
     editOp('insert_before', { anchor: z.string(), text: z.string() }),
     editOp('insert_after', { anchor: z.string(), text: z.string() }),
@@ -1427,9 +1428,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       .min(1)
       .max(200)
       .optional()
-      .describe('Retry key: the same key + arguments within 24 h return the first result (`replayed: true`) and write nothing'),
+      .describe('Same key + arguments from this connection within 24 h replay the first result (`replayed: true`)'),
   }
-  const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: return the result without writing') }
+  const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: the result, nothing written') }
   /** The second sentence of every note write's description (#429): the answer, and where the rest is. */
 
   tool(
@@ -1521,13 +1522,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'writer',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Create an OKF note at `path`, or at `type`/`name`; requires edit access.',
+      description: 'Create an OKF note at `path`, or at `type`/`name`.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: z.string().optional().describe('Full path, or type and name'),
-        type: z.string().optional().describe('First path segment (with name)'),
-        name: z.string().optional().describe('Name slug (with type)'),
-        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Frontmatter map'),
+        type: z.string().optional().describe('Path segment 1 (with name)'),
+        name: z.string().optional().describe('Slug (with type)'),
+        frontmatter: z.looseObject({}).optional().describe('Frontmatter map'),
         body: z.string().optional().describe('Markdown body'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
@@ -1583,21 +1584,21 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Change a note: `ops` (preferred) edit the live text, `body` replaces it merged from `base_rev` or your last read_note, `frontmatter` merges per key; requires edit access.',
+        'Change a note: `ops` (preferred) edit the live text, `body` replaces it merged from `base_rev` or your last read_note, `frontmatter` merges per key.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
-        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Keys to set'),
-        body: z.string().optional().describe('Whole new body'),
-        ops: EDIT_OPS.optional().describe('Applied in order; a find, anchor or heading must match once, else nothing changes'),
+        frontmatter: z.looseObject({}).optional().describe('Keys to set'),
+        body: z.string().optional().describe('New body'),
+        ops: EDIT_OPS.optional().describe('In order; each find, anchor or heading must match once, else nothing changes'),
         replace: z.boolean().optional().describe('true: replace the whole map'),
         removeKeys: z.array(z.string()).optional().describe('Frontmatter keys to delete'),
         // The note's `rev` (its seq, #477), or a revision id (the `rev` before #477, note_history ids, #822).
         base_rev: z
-          .union([z.string(), z.number().int()])
+          .union([z.string(), z.number().refine(Number.isInteger, { error: 'base_rev is an integer or a string' })])
           .optional()
           .describe('`rev` you edited: later changes merge; an overlap is `conflicted`, nothing written'),
-        allowGrowth: z.boolean().optional().describe('true: allow a body that doubles the note'),
+        allowGrowth: z.boolean().optional().describe('true: allow doubling the note'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -1792,14 +1793,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Append `text` as whole lines to the live note, so concurrent appends all land; `createIfMissing: true` creates it; requires edit access.',
+        'Append `text` as whole lines to the live note, so concurrent appends all land; `createIfMissing: true` creates it.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
-        text: z.string().describe('Lines to append'),
-        createIfMissing: z.boolean().optional().describe('true: create the note if missing'),
-        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Merged per top-level key'),
-        allowGrowth: z.boolean().optional().describe('true: allow text that doubles the note'),
+        text: z.string().describe('Lines'),
+        createIfMissing: z.boolean().optional().describe('true: create if missing'),
+        frontmatter: z.looseObject({}).optional().describe('Merged per key'),
+        allowGrowth: z.boolean().optional().describe('true: allow doubling the note'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -1837,12 +1838,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Create the note at `path`, or replace its whole body (merged from your last read) and merge `frontmatter` when it exists, in one step that concurrent callers cannot race; requires edit access.',
+        'Create the note at `path`, or replace its whole body (merged from your last read) and merge `frontmatter` when it exists, in one step that concurrent callers cannot race.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
         body: z.string().describe('Whole body'),
-        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Merged per top-level key'),
+        frontmatter: z.looseObject({}).optional().describe('Merged per key'),
         allowGrowth: z.boolean().optional().describe('true: write a body that doubles the note (else quarantined)'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
@@ -1878,7 +1879,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Rename a note (a slug) or move it (a full path); links using its old full path are rewritten; requires edit access.',
+      description: 'Rename a note (a slug) or move it (a full path); links using its old full path are rewritten.',
       inputSchema: {
         vaultId: VAULT_ID,
         from: z.string().describe('Current note path'),
@@ -1908,7 +1909,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       destructive: true,
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Move a note to the trash (`id` for restore_note); requires edit access.',
+      description: 'Move a note to the trash (`id` for restore_note).',
       inputSchema: { vaultId: VAULT_ID, path: NOTE_PATH, ...IDEMPOTENCY_ARG },
     },
     async ({ idempotency_key: key, ...args }: { path: string; idempotency_key?: string }, { vaultId: target }) => {
@@ -1932,7 +1933,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'read',
       pinPermission: 'edit',
-      description: 'List the trashed notes of a vault as `{notes}`, most recently deleted first; requires edit access.',
+      description: 'List the trashed notes of a vault as `{notes}`, most recently deleted first.',
       inputSchema: {
         vaultId: VAULT_ID,
         limit: z.number().int().min(1).max(100).optional().describe('Page size (default 50)'),
@@ -1962,7 +1963,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Restore a trashed note by `noteId`; requires edit access.',
+      description: 'Restore a trashed note by `noteId`.',
       inputSchema: {
         vaultId: VAULT_ID,
         noteId: UUID_ARG.describe('Note id from list_trash'),
@@ -2080,7 +2081,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Restore a note to a recorded revision (from note_history), as a new revision; requires edit access.',
+      description: 'Restore a note to a recorded revision (from note_history), as a new revision.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -2967,6 +2968,24 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         narrow: args.symbols === false ? [] : ['symbols: false'],
       }
     },
+  )
+
+  tool(
+    'grep',
+    {
+      scope: 'vault-or-repo',
+      capability: 'read',
+      profile: 'reader',
+      description: 'Regex over note and code lines: located hits in path order.',
+      inputSchema: {
+        ...GREP_INPUT,
+        vaultId: UUID_ARG.optional().describe('Vault to search'),
+        repositoryId: UUID_ARG.optional().describe('Repository to search'),
+        everywhere: z.boolean().optional().describe('All accessible (account tokens)'),
+      },
+      budget: 'list',
+    },
+    async (args: { pattern: string; path?: string; context?: number }, { resources }, page) => grepAnswer(resources, args, page),
   )
 
   tool(

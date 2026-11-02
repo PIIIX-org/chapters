@@ -26,7 +26,7 @@ const FAMILIES = [
     description: 'The note tools: reads, writes and their answers (rev, status, merges, conflicts, quarantine, idempotency_key, dry_run), trash and history.',
   },
   { slug: 'repositories', heading: '3. ', description: 'The repository tools: parameters, answers and limits.' },
-  { slug: 'search', heading: '4. ', description: 'search, find_symbols and orient: parameters and answers.' },
+  { slug: 'search', heading: '4. ', description: 'search, grep, find_symbols and orient: parameters and answers.' },
   { slug: 'graph', heading: '5. ', description: 'graph, find_graph_path and graph perspectives: parameters, answers and edge rows.' },
   { slug: 'teams', heading: '6. ', description: 'The team and user tools: parameters and answers.' },
   { slug: 'export', heading: '7. ', description: 'The export, notification and usage report tools: parameters and answers.' },

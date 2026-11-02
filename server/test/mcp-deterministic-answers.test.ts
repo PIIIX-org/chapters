@@ -201,16 +201,17 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
 
   // Blocks get their ids last, in the order of their labels (no row references a block id).
   const owned = await db
-    .select({ id: blocks.id, ownerId: blocks.ownerId, kind: blocks.kind, innerPath: blocks.innerPath, startLine: blocks.startLine })
+    .select({ id: blocks.id, blockId: blocks.blockId, ownerId: blocks.ownerId, kind: blocks.kind, innerPath: blocks.innerPath, startLine: blocks.startLine })
     .from(blocks)
     .where(inArray(blocks.containerId, [vaultId, repoId]))
   const blockLabels = owned
-    .map((b) => ({ old: b.id, label: `<block:${ownerLabel.get(b.ownerId) ?? b.ownerId}:${b.kind}:${b.innerPath}:${b.startLine}>` }))
+    .map((b) => ({ old: b.id, blockId: b.blockId, label: `<block:${ownerLabel.get(b.ownerId) ?? b.ownerId}:${b.kind}:${b.innerPath}:${b.startLine}>` }))
     .sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
   if (new Set(blockLabels.map((b) => b.label)).size !== blockLabels.length) throw new Error('two blocks share a label: their id order would be random')
   const renamed = blockLabels.map((b, i) => ({ ...b, id: idAt(i) }))
   await db.execute(sql`UPDATE blocks b SET id = u.id FROM jsonb_to_recordset(${JSON.stringify(renamed)}::jsonb) AS u(old uuid, id uuid) WHERE b.id = u.old`)
-  for (const b of renamed) labels.push([b.id, b.label])
+  // A block's text id (`b_…`, grep's hits) is a hash of its owner's id: it differs per database like the uuids.
+  for (const b of renamed) labels.push([b.id, b.label], [b.blockId, `${b.label}#`])
   for (const [id, label] of ownerLabel) labels.push([id, label])
   // Names carry the container's first 8 id characters (`name#1a2b3c4d`).
   labels.push([vaultId.slice(0, 8), '<vault8>'], [repoId.slice(0, 8), '<repository8>'])
@@ -319,6 +320,9 @@ const QUESTIONS: Question[] = [
   { name: 'find_symbols refs at', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'src/upload.ts:5', refs: 'at' }) },
   { name: 'find_symbols refs candidates of a name defined three times', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse', refs: 'callers' }) },
   { name: 'find_symbols refs one of three by path', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse', refs: 'references', path: 'src/upload.ts' }) },
+  { name: 'grep code, one name in three files, with context', tool: 'grep', args: (w) => ({ repositoryId: w.repoId, pattern: 'function parse|def parse', context: 1 }) },
+  { name: 'grep notes, two notes with one body', tool: 'grep', args: (w) => ({ vaultId: w.vaultId, pattern: '(?i)checksum every' }) },
+  { name: 'grep everywhere under a glob', tool: 'grep', args: () => ({ everywhere: true, pattern: '\\bupload\\b', path: '{src,guides}/**' }) },
   { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }) },
   { name: 'graph repository communities', tool: 'graph', args: (w) => ({ repositoryId: w.repoId }) },
   {
