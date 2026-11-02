@@ -167,7 +167,7 @@ const UUID_ARG = z
 /** The target vault (repository): a pinned connection may omit it, an account connection names it. */
 const VAULT_ID = UUID_ARG.optional().describe('Vault id; omit when pinned')
 const REPOSITORY_ID = UUID_ARG.optional().describe('Repository id; omit when pinned')
-const NOTE_PATH = z.string().describe('Note path')
+const NOTE_PATH = z.string().describe('Note path, e.g. concepts/name')
 
 /** One `edit_note` op (#408); each op object takes only its own keys. */
 const editOp = (op: EditOp['op'], shape: z.ZodRawShape) => strictArgs(`edit_note ops[] ${op}`, { op: z.literal(op), ...shape })
@@ -1522,7 +1522,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'writer',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Create a note at `path`, or at `type`/`name`; needs edit access.' + WRITE_DOC,
+      description: 'Create an OKF note at `path`, or at `type`/`name`; needs edit access.' + WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
         path: z.string().optional().describe('Full path, or type + name'),
@@ -1592,8 +1592,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         frontmatter: z.record(z.string(), z.unknown()).optional().describe('Keys to set; others kept'),
         body: z.string().optional().describe('New whole body (not with ops)'),
         ops: EDIT_OPS.optional().describe('In order; each find, anchor or heading must match once, else no change'),
-        replace: z.boolean().optional().describe('true: frontmatter replaces all'),
-        removeKeys: z.array(z.string()).optional().describe('Keys to delete'),
+        replace: z.boolean().optional().describe('true: frontmatter replaces the whole map'),
+        removeKeys: z.array(z.string()).optional().describe('Frontmatter keys to delete'),
         // The note's `rev` (its seq, #477), or a revision id (the `rev` before #477, note_history ids, #822).
         base_rev: z
           .union([z.string(), z.number().int()])
@@ -1794,7 +1794,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Append `text` as whole lines, so concurrent appends land `createIfMissing: true` creates the note; needs edit access.' +
+        'Append `text` as whole lines so concurrent appends land (use for logs); `createIfMissing: true` creates the note; needs edit access.' +
         WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
