@@ -176,7 +176,7 @@ const EDIT_OPS = z.array(
     editOp('replace_text', {
       find: z.string(),
       replace: z.string(),
-      expectedCount: z.number().int().min(1).optional().describe('Times `find` must occur (default 1); all are replaced'),
+      expectedCount: z.number().int().min(1).optional().describe('Times `find` must occur (default 1)'),
     }),
     editOp('insert_before', { anchor: z.string(), text: z.string() }),
     editOp('insert_after', { anchor: z.string(), text: z.string() }),
@@ -188,8 +188,8 @@ const EDIT_OPS = z.array(
     editOp('prepend', { text: z.string() }),
     editOp('delete_block', { find: z.string() }),
     editOp('frontmatter_set', { key: z.string(), value: z.unknown() }),
-    editOp('frontmatter_add', { key: z.string(), value: z.unknown().describe('Added to the list at `key`') }),
-    editOp('frontmatter_remove', { key: z.string(), value: z.unknown().optional().describe('Removed from the list at `key`; none: key deleted') }),
+    editOp('frontmatter_add', { key: z.string(), value: z.unknown().describe('Added to list `key`') }),
+    editOp('frontmatter_remove', { key: z.string(), value: z.unknown().optional().describe('Removed from list `key`; none: key deleted') }),
   ]),
 )
 
@@ -1427,9 +1427,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       .min(1)
       .max(200)
       .optional()
-      .describe('Send one when you may retry after a lost connection: the same key + arguments from this connection within 24 h returns the first result (`replayed: true`), writes nothing'),
+      .describe('Retry key: the same key + arguments within 24 h return the first result (`replayed: true`) and write nothing'),
   }
-  const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: return the result (status, diff_stats, note) without writing') }
+  const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: return the result without writing') }
   /** The second sentence of every note write's description (#429): the answer, and where the rest is. */
 
   tool(
@@ -1524,7 +1524,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description: 'Create an OKF note at `path`, or at `type`/`name`; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
-        path: z.string().optional().describe('Full note path; or give type and name'),
+        path: z.string().optional().describe('Full path, or type and name'),
         type: z.string().optional().describe('First path segment (with name)'),
         name: z.string().optional().describe('Name slug (with type)'),
         frontmatter: z.record(z.string(), z.unknown()).optional().describe('Frontmatter map'),
@@ -1583,21 +1583,21 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Change a note: `ops` (preferred) edit the live text in place, `body` replaces the whole body merged from `base_rev` or your last read_note, `frontmatter` merges per key; requires edit access.',
+        'Change a note: `ops` (preferred) edit the live text, `body` replaces it merged from `base_rev` or your last read_note, `frontmatter` merges per key; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
-        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Keys to set; others kept'),
-        body: z.string().optional().describe('New whole body (not with ops)'),
-        ops: EDIT_OPS.optional().describe('Edits applied in order to the live text; a find, anchor or heading must match once, else nothing changes'),
-        replace: z.boolean().optional().describe('true: frontmatter replaces the whole map'),
+        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Keys to set'),
+        body: z.string().optional().describe('Whole new body'),
+        ops: EDIT_OPS.optional().describe('Applied in order; a find, anchor or heading must match once, else nothing changes'),
+        replace: z.boolean().optional().describe('true: replace the whole map'),
         removeKeys: z.array(z.string()).optional().describe('Frontmatter keys to delete'),
         // The note's `rev` (its seq, #477), or a revision id (the `rev` before #477, note_history ids, #822).
         base_rev: z
           .union([z.string(), z.number().int()])
           .optional()
-          .describe('`rev` of the content you edited: changes made since merge; an overlap is `conflicted`, nothing written'),
-        allowGrowth: z.boolean().optional().describe('true: write a body that doubles the note (else quarantined)'),
+          .describe('`rev` you edited: later changes merge; an overlap is `conflicted`, nothing written'),
+        allowGrowth: z.boolean().optional().describe('true: allow a body that doubles the note'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -1792,14 +1792,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Append `text` as whole lines to the live note, so concurrent appends all land (for logs); `createIfMissing: true` creates the note; requires edit access.',
+        'Append `text` as whole lines to the live note, so concurrent appends all land; `createIfMissing: true` creates it; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
         text: z.string().describe('Lines to append'),
         createIfMissing: z.boolean().optional().describe('true: create the note if missing'),
         frontmatter: z.record(z.string(), z.unknown()).optional().describe('Merged per top-level key'),
-        allowGrowth: z.boolean().optional().describe('true: write text that doubles the note (else quarantined)'),
+        allowGrowth: z.boolean().optional().describe('true: allow text that doubles the note'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -3036,11 +3036,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault-or-repo',
       capability: 'read',
       profile: 'reader',
-      description: 'Where to start: a repository\'s most-used definitions and a vault\'s most-linked notes, 10 per level; `path` goes one level down.',
+      description: 'Where to start: a repository\'s most-used definitions, a vault\'s most-linked notes; 10 per level, `path` descends.',
       inputSchema: {
         repositoryId: REPOSITORY_ID,
         vaultId: VAULT_ID,
-        query: z.string().optional().describe('Words to favour'),
+        query: z.string().optional().describe('Favour these words'),
         focus: z.array(z.string()).optional().describe('Files or folders in play'),
         path: z.string().optional().describe('Folder level'),
       },
