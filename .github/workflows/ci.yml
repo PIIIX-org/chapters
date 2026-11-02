@@ -85,7 +85,12 @@ jobs:
       # crosses it now and then (261.9 ms on the merge-queue run 41394097308,
       # which ejected #1065 after its all-suite bench had started). A real
       # regression fails both attempts.
+      # Not on merge-queue commits (master decision 2026-11-02, #905): there
+      # the p95 was 345-620 ms on both attempts (runs 41419086373, 41446064501)
+      # against 194-225 ms on PR runs, so every queue entry was ejected once.
+      # The PR head's run and every dev push still enforce the 250 ms bound.
       - name: Test collab-s3-perf alone (#905)
+        if: github.event_name != 'merge_group'
         run: pnpm -C server exec vitest run test/collab-s3-perf.test.ts --pool=forks --maxWorkers=1 --retry=1
         env:
           DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
