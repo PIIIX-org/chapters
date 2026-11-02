@@ -29,6 +29,8 @@ const test: LabTest = {
     // A caller and a test of the plan: the sites the code queries (#470) list.
     const run = `src/${mark}-run.ts`
     const runTest = `src/${mark}-run.test.ts`
+    // Added by a second sync, so `changed_since` (#471) has a change to name.
+    const added = `src/${mark}-added.ts`
 
     // ------------------------------------------------------------ accounts
     const password = `Lab-${crypto.randomUUID()}`
@@ -59,6 +61,9 @@ const test: LabTest = {
     }, 240_000, 2_000)
     // A note that cites the plan file: `find_symbols` with `refs: "explain"` (#675) names it to readers of its vault only.
     await mcp.owner.must('create_note', { vaultId, type: 'docs', name: `${mark}-cite`, body: `Why the plan: [[repo:${repoName}/${file}]].` })
+    await copyIntoLocalRepo(ctx, writeTree({ [added]: `export const ${mark}Added = 1\n` }), repoName)
+    await rest.owner.must('POST', `/api/repositories/${repositoryId}/sync`, {})
+    await settleRepo(ctx, repositoryId, 'lab-matrix-repo-added', { stallMs: 60_000, timeoutMs: 240_000, minFiles: 4 })
     const fileRow = await rest.owner.get<{ id: string }>(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`)
     const fileId = fileRow.json?.id ?? ''
     data.fixtures = { vaultId, repositoryId, sourceId: sourceNote.id, fileId, repoSettle: repoSettle.outcome, embedded: embedded === true }
@@ -95,6 +100,7 @@ const test: LabTest = {
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
       { name: 'MCP find_symbols refs: explain', identifiers: [run, `${mark}Run`, `docs/${mark}-cite`], share, read: viaMcp('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' }) },
+      { name: 'MCP browse_repository changed_since', identifiers: [added], share, read: viaMcp('browse_repository', { repositoryId, changed_since: '2000-01-01' }) },
       ...(['references', 'callers', 'impact'] as const).map((refs) => ({
         name: `MCP find_symbols refs: ${refs}`,
         identifiers: [run, `${mark}Run`],

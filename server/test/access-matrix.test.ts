@@ -31,6 +31,9 @@ const FILE_BODY = `export function ${MARK}Plan(): string {\n  return 'launch win
 const RUN = `src/${MARK}-run.ts`
 const RUN_BODY = `import { ${MARK}Plan } from './${MARK}-plan'\n\nexport function ${MARK}Run(): string {\n  return ${MARK}Plan()\n}\n`
 const RUN_TEST = `src/${MARK}-run.test.ts`
+// Added by a second sync, so `changed_since` (#471) has a change to name.
+const ADDED = `src/${MARK}-added.ts`
+const ADDED_BODY = `export const ${MARK}Added = 1\n`
 const RUN_TEST_BODY = `import { ${MARK}Plan } from './${MARK}-plan'\n\ntest('plan', () => {\n  ${MARK}Plan()\n})\n`
 
 interface Account {
@@ -115,6 +118,7 @@ beforeAll(async () => {
     { path: RUN_TEST, content: RUN_TEST_BODY },
   ]
   await syncRepositoryFiles(repositoryId, files, files.map((f) => f.path))
+  await syncRepositoryFiles(repositoryId, [{ path: ADDED, content: ADDED_BODY }], [...files.map((f) => f.path), ADDED])
   await flushExtraction()
   await flushEmbeddings()
   const file = await rest('owner', 'GET', `/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(FILE)}`)
@@ -171,6 +175,10 @@ describe('read surfaces (#552, #1034)', () => {
     } finally {
       await must('owner', 'DELETE', `/api/repositories/${repositoryId}/shares/${repoShare.id as string}`)
     }
+  })
+  accessMatrix('MCP browse_repository changed_since', {
+    setup: () => shareBoth([ADDED]),
+    read: (actor) => call(actor, 'browse_repository', { repositoryId, changed_since: '2000-01-01' }),
   })
 
   // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.

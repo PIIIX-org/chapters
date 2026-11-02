@@ -783,6 +783,8 @@ export const repositories = pgTable(
      * (`computeTreeHash`). Written by every sync; null until one runs.
      */
     treeHash: text('tree_hash'),
+    /** The `seq` of the newest `repository_versions` row (#471, migration 0063); 0 before the first sync. */
+    versionSeq: integer('version_seq').notNull().default(0),
     /** Staleness signal for the polling fallback scheduler. */
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
     /**
@@ -966,6 +968,42 @@ export const codeEdges = pgTable(
     index('code_edges_name_idx').on(t.repositoryId, t.targetName),
     check('code_edges_kind_check', sql`kind in ('call', 'reference', 'import', 'test')`),
     check('code_edges_confidence_check', sql`confidence in ('resolved', 'textual')`),
+  ],
+)
+
+/**
+ * The history the index keeps of itself (#471, migration 0063): one row per index version a sync recorded, in `seq`
+ * order. The first is the repository's baseline. `commit` is the commit it named, when one was known.
+ */
+export const repositoryVersions = pgTable(
+  'repository_versions',
+  {
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    commit: text('commit'),
+    treeHash: text('tree_hash'),
+    indexedAt: timestamp('indexed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.repositoryId, t.seq] })],
+)
+
+/** What a version added, modified or deleted against the one before it (#471); a sync that stopped leaves its rows under the next `seq`. */
+export const repositoryChanges = pgTable(
+  'repository_changes',
+  {
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    path: text('path').notNull(),
+    /** 'added' | 'modified' | 'deleted'. */
+    kind: text('kind').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.repositoryId, t.seq, t.path] }),
+    check('repository_changes_kind_check', sql`kind in ('added', 'modified', 'deleted')`),
   ],
 )
 
