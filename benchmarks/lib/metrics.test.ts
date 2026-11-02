@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   aggregate,
+  exactAtK,
   dcg,
   dedupe,
   estimateTokens,
@@ -177,11 +178,12 @@ test('median', () => {
 })
 
 test('aggregate: means over questions, misses cost the miss price', () => {
-  const base = { judgments: rel(['a', 1]), callsToGold: 2, tokensToAllGold: null, precision: 0.5, recall: 1, tokens: 300, calls: 2, ms: 10 }
+  const gold = [{ path: 'a', start: 10, end: 12 }]
+  const base = { judgments: rel(['a', 1]), gold, hits: [] as Array<{ path: string; start: number; end: number } | null>, abstained: false, callsToGold: 2, tokensToAllGold: null, precision: 0.5, recall: 1, tokens: 300, calls: 2, ms: 10 }
   const outcomes: QuestionOutcome[] = [
-    { ...base, ranking: ['a'], tokensToGold: 100 },
-    { ...base, ranking: ['x', 'y', 'z', 'w', 'v', 'a'], tokensToGold: 300 },
-    { ...base, ranking: ['x'], tokensToGold: null, callsToGold: null, precision: 0, recall: 0 },
+    { ...base, ranking: ['a'], hits: [{ path: 'a', start: 9, end: 20 }], tokensToGold: 100 },
+    { ...base, ranking: ['x', 'y', 'z', 'w', 'v', 'a'], hits: [null, { path: 'a', start: 11, end: 11 }], tokensToGold: 300 },
+    { ...base, ranking: ['x'], abstained: true, tokensToGold: null, callsToGold: null, precision: 0, recall: 0 },
   ]
   const a = aggregate(outcomes, 1000, 15)
   assert.equal(a.questions, 3)
@@ -190,6 +192,10 @@ test('aggregate: means over questions, misses cost the miss price', () => {
   assert.equal(a.hit10, 0.6667)
   assert.equal(a.mrr, Math.round(((1 + 1 / 6) / 3) * 10_000) / 10_000)
   assert.equal(a.goldReached, 2)
+  assert.equal(a.goldReachedRate, 0.6667)
+  assert.equal(a.exact1, 0.3333)
+  assert.equal(a.exact5, 0.6667)
+  assert.equal(a.abstained, 0.3333)
   assert.equal(a.tokensToGold, Math.round((100 + 300 + 1000) / 3))
   assert.equal(a.tokensToGoldMedian, 300)
   assert.equal(a.tokensToGoldReached, 200) // (100 + 300) / 2, the miss left out
@@ -198,4 +204,25 @@ test('aggregate: means over questions, misses cost the miss price', () => {
   assert.equal(a.linePrecision, 0.3333)
   assert.equal(a.lineRecall, 0.6667)
   assert.ok(a.ndcg10 >= 0 && a.ndcg10 <= 1)
+})
+
+test('an answer that abstained scores no exact hit, whatever locations it offered (#1058 review)', () => {
+  const gold = [{ path: 'a', start: 1, end: 2 }]
+  const base = { judgments: rel(['a', 1]), gold, hits: [{ path: 'a', start: 1, end: 2 }], callsToGold: 1, tokensToAllGold: 1, precision: 1, recall: 1, tokens: 1, calls: 1, ms: 1, ranking: ['a'], tokensToGold: 1 }
+  const a = aggregate([{ ...base, abstained: false }, { ...base, abstained: true }], 1000, 15)
+  assert.equal(a.exact1, 0.5)
+  assert.equal(a.exact5, 0.5)
+  assert.equal(a.abstained, 0.5)
+})
+
+test('exactAtK: the first k returned locations overlap a gold range of the same file', () => {
+  const gold = [{ path: 'a.ts', start: 10, end: 12 }, { path: 'b.ts', start: 1, end: 1 }]
+  const at = (path: string, start: number, end: number) => ({ path, start, end })
+  assert.equal(exactAtK([at('a.ts', 12, 40)], gold, 1), 1, 'one shared line is an overlap')
+  assert.equal(exactAtK([at('a.ts', 13, 40)], gold, 1), 0, 'the next line is not')
+  assert.equal(exactAtK([at('c.ts', 10, 12)], gold, 1), 0, 'another file is not')
+  assert.equal(exactAtK([null, at('b.ts', 1, 9)], gold, 1), 0, 'the second place is not first')
+  assert.equal(exactAtK([null, at('b.ts', 1, 9)], gold, 5), 1)
+  assert.equal(exactAtK([null, null, null, null, null, at('a.ts', 10, 10)], gold, 5), 0, 'the sixth is past k')
+  assert.equal(exactAtK([], gold, 1), 0)
 })

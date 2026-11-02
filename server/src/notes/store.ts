@@ -30,6 +30,7 @@ import {
   markFolded,
   notesNeedingFold,
   readNoteCrdt,
+  recordRebase,
   rememberStoredState,
   seedDocument,
   setFoldError,
@@ -467,7 +468,10 @@ async function foldCrdt(tx: Tx, row: StoredNote, crdt: NoteCrdt, detail: Record<
  * Non-overlapping changes from both sides are kept; on an overlap ours (the
  * editors' typing) stays and theirs is recoverable from its revision. The
  * merge is applied as a diff on top of the CRDT state (never a rebuild),
- * appended as a `rebase` update, then folded as a `merge` revision.
+ * appended as a `rebase` update, then folded as a `merge` revision. The
+ * update's items are recorded on `note_crdt` (#891): every rebase path (boot,
+ * a write, the relay's load) comes through here, and the relay refuses a
+ * stale client that lacks them and holds items of its own.
  */
 async function rebaseLocked(tx: Tx, row: StoredNote, crdt: NoteCrdt): Promise<CaughtUp> {
   await revisionAtSeq(tx, row.id, 'out-of-band')
@@ -489,6 +493,7 @@ async function rebaseLocked(tx: Tx, row: StoredNote, crdt: NoteCrdt): Promise<Ca
   if (conflict) console.warn(`[collab] note ${row.id}: rebase kept the editors' text where the row changed behind the store too`)
   const update = compileChange(cloneDocument(crdt.doc), { frontmatter: withType(merged.frontmatter, row.type), body: merged.body })
   const appended = await appendUpdate(tx, crdt, update, SYSTEM_ACTOR, { kind: 'rebase', conflict })
+  if (appended) await recordRebase(tx, crdt.noteId, update)
   const folded = await foldCrdt(tx, row, crdt, { kind: 'merge', conflict })
   return { ...folded, rebased: appended ? update : null }
 }

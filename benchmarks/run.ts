@@ -21,7 +21,7 @@ import { LabContext, loadEnv } from '../lab/lib/context.ts'
 import { exec } from '../lab/lib/docker.ts'
 import { connectLocalRepo, copyIntoLocalRepo, repoProgress, settleRepo } from '../lab/lib/fixlab.ts'
 import { assertLabBaseUrl } from './lib/guard.ts'
-import { aggregate, linePrecisionRecall, pairedTokensToGold, type Aggregate, type QuestionOutcome } from './lib/metrics.ts'
+import { aggregate, exactAtK, linePrecisionRecall, pairedTokensToGold, type Aggregate, type QuestionOutcome } from './lib/metrics.ts'
 import { CAPS, GREP, missCost, runElara, runGrep, type ElaraTools, type PolicyRun } from './lib/policies.ts'
 import { fingerprint, judgments, parseGold, validateSuite, type Question, type Suite } from './lib/questions.ts'
 import { fileReader, grepTools } from './lib/ripgrep.ts'
@@ -112,12 +112,21 @@ function elaraTools(repositoryId: string): ElaraTools {
       const r = await mcp.call('read_file', { repositoryId, path, ...(cursor ? { cursor } : {}) })
       return { text: r.text, ms: r.ms, ok: r.ok }
     },
+    async readSpan(path, start, end) {
+      const r = await mcp.call('read_file', { repositoryId, path, targets: [{ lines: `${start}-${end}` }] })
+      return { text: r.text, ms: r.ms, ok: r.ok }
+    },
   }
 }
 
 interface PolicyRow {
   rank: number | null
   ranking: string[]
+  /** The first five returned locations, `path#La-Lb` (null where a result names none), and whether the first / one of them overlaps gold (#1058). */
+  located: Array<string | null>
+  exact1: boolean
+  exact5: boolean
+  abstained: boolean
   tokensToGold: number | null
   callsToGold: number | null
   tokensToAllGold: number | null
@@ -138,6 +147,9 @@ function outcome(q: Question, run: PolicyRun): { outcome: QuestionOutcome; row: 
   const o: QuestionOutcome = {
     ranking: run.ranking,
     judgments: j,
+    hits: run.hits,
+    gold,
+    abstained: run.abstained,
     tokensToGold: ep.tokensToGold,
     callsToGold: ep.callsToGold,
     tokensToAllGold: ep.tokensToAllGold,
@@ -150,6 +162,11 @@ function outcome(q: Question, run: PolicyRun): { outcome: QuestionOutcome; row: 
   const row: PolicyRow = {
     rank: rankIndex < 0 ? null : rankIndex + 1,
     ranking: run.ranking.slice(0, 10),
+    located: run.hits.slice(0, 5).map((h) => (h ? `${h.path}#L${h.start}-L${h.end}` : null)),
+    // The locations of an answer that abstained (`ambiguous`, `no_match`) are what it offered instead of one, not its answer.
+    exact1: !run.abstained && exactAtK(run.hits, gold, 1) === 1,
+    exact5: !run.abstained && exactAtK(run.hits, gold, 5) === 1,
+    abstained: run.abstained,
     tokensToGold: o.tokensToGold,
     callsToGold: o.callsToGold,
     tokensToAllGold: o.tokensToAllGold,
@@ -218,13 +235,14 @@ for (const p of prepared) {
     elara: aggregate(outcomes.elara, miss.tokens, miss.calls),
     grep: aggregate(outcomes.grep, miss.tokens, miss.calls),
   }
+  const paired = pairedTokensToGold(outcomes.elara, outcomes.grep)
   results[s.suite] = {
     fingerprint: fingerprint(s, CONFIG),
     repo: s.repo,
     questions: s.questions.length,
     index,
     aggregate: agg,
-    paired: pairedTokensToGold(outcomes.elara, outcomes.grep),
+    paired,
     perQuestion,
   }
   md.push(
@@ -235,6 +253,16 @@ for (const p of prepared) {
     '| metric | elara | grep |',
     '|---|---|---|',
     ...(Object.keys(agg.elara) as Array<keyof Aggregate>).map((k) => `| ${k} | ${agg.elara[k]} | ${agg.grep[k]} |`),
+    '',
+    `Paired (questions both reach): ${paired.questions}; Elara ÷ grep tokens-to-gold ${paired.grep > 0 ? (paired.elara / paired.grep).toFixed(2) : '-'} (exit criterion: at most 1).`,
+    '',
+    '| question | outcome | tokens-to-gold | first returned location |',
+    '|---|---|---|---|',
+    ...perQuestion.map((q) => {
+      const e = q.elara
+      const outcome = e.tokensToGold === null ? (e.abstained ? 'gold not reached (abstained)' : 'gold not reached') : e.exact1 ? 'exact' : e.abstained ? 'abstained' : 'first location not on gold'
+      return `| ${q.id} | ${outcome} | ${e.tokensToGold ?? '-'} | ${e.located[0] ?? '-'} |`
+    }),
     '',
   )
 }

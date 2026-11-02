@@ -43,6 +43,14 @@ const MIN_BUDGET = 256
 const MAX_BUDGET = 25_000
 
 /**
+ * An integer from `min` to `max`, checked but not listed: `minimum` and `maximum` cost every
+ * reader tool that has a bound about 25 characters of the reader budget (as `budget_tokens`'
+ * range, below); a call outside it is refused with a message that states the range.
+ */
+export const intRange = (name: string, min: number, max: number) =>
+  z.number().refine((n) => Number.isInteger(n) && n >= min && n <= max, { error: `${name} is an integer from ${min} to ${max}` })
+
+/**
  * The arguments every budgeted tool takes, with its kind's default in the
  * description. What a token is and how the cursor is used are said once,
  * in `initialize.instructions` (#435, instructions.ts). The range is
@@ -59,7 +67,7 @@ export function budgetArgs(kind: BudgetKind): z.ZodRawShape {
       .refine((n) => Number.isInteger(n) && n >= MIN_BUDGET && n <= MAX_BUDGET, { error: `budget_tokens is an integer from ${MIN_BUDGET} to ${MAX_BUDGET}` })
       .optional()
       .describe(`Default ${DEFAULT_BUDGET[kind]}`),
-    cursor: z.string().optional().describe('Next page'),
+    cursor: z.string().optional().describe('Next'),
   }
 }
 

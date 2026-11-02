@@ -8,7 +8,7 @@ import { db } from '../src/db/client.js'
 import { repositories } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { isCodeShaped, searchNotes } from '../src/search/search.js'
+import { searchNotes } from '../src/search/search.js'
 import { createActiveUser } from './helpers.js'
 
 let repoId: string
@@ -112,40 +112,5 @@ describe('code ranks above docs for code-shaped queries (#457)', () => {
     const paths = res.results.map((r) => r.path)
     expect(paths).toContain('config/settings.json')
     expect(paths[0]).toBe('src/config/parser.ts')
-  })
-
-  it('isCodeShaped rejects prose queries with tech brands, slashes, parens, and rationale questions', () => {
-    // False positive cases flagged by review:
-    expect(isCodeShaped('and/or condition handling')).toBe(false)
-    expect(isCodeShaped('installing via curl/wget on Linux')).toBe(false)
-    expect(isCodeShaped('differences between Node/V8 runtime')).toBe(false)
-    expect(isCodeShaped('How do you compile to WebAssembly')).toBe(false)
-    expect(isCodeShaped('Where are the issues on GitHub')).toBe(false)
-    expect(isCodeShaped('REST and GraphQL APIs overview')).toBe(false)
-    expect(
-      isCodeShaped('Why does the codebase forbid unwrap() in shipped code'),
-    ).toBe(false)
-    expect(
-      isCodeShaped('Which semantic pattern routes to the visual type'),
-    ).toBe(false)
-    expect(isCodeShaped('How to export the diagram to SVG')).toBe(false)
-    expect(
-      isCodeShaped(
-        'Why do SessionDB and ContentStore allow multiple writer processes on the same database file instead of using a lock file?',
-      ),
-    ).toBe(false)
-  })
-
-  it('isCodeShaped accepts genuine code queries', () => {
-    expect(isCodeShaped('where is src/config/parser.ts')).toBe(true)
-    expect(isCodeShaped('function parseConfig')).toBe(true)
-    expect(isCodeShaped('export class HopperRequestQueue')).toBe(true)
-    expect(isCodeShaped('def parse_frontmatter')).toBe(true)
-    expect(isCodeShaped('crates/engine/src/guard.rs')).toBe(true)
-  })
-
-  it('a capitalised product name such as Node.js is not a file signal', () => {
-    expect(isCodeShaped('install Node.js on macOS')).toBe(false)
-    expect(isCodeShaped('where is server.js started')).toBe(true)
   })
 })

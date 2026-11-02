@@ -9,10 +9,11 @@ interface UnmergedNoticeProps {
 /**
  * This browser kept text from an earlier session that never reached the
  * relay, and the relay's copy of the note no longer shares any history with it
- * (the note was re-created, or its sync state was lost). Merging the two would
- * put the whole note in twice, so `useCollabDoc` leaves it out of the document
- * and the person decides: the text is right here to copy, and it stays in this
- * browser until they discard it.
+ * (the note was re-created, or its sync state was lost); or the relay refused
+ * this tab's document because the note's text was rebased on the server under
+ * it (#891). Merging either would put text in twice, so `useCollabDoc` leaves
+ * it out of the document and the person decides: the text is right here to
+ * copy, and it stays in this browser until they discard it.
  */
 export function UnmergedNotice({ text, onDiscard }: UnmergedNoticeProps) {
   return (

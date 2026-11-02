@@ -139,6 +139,9 @@ function outcome(gold: LineRange[], j: Judgments, run: RereadRun): { outcome: Qu
     outcome: {
       ranking: run.ranking,
       judgments: j,
+      hits: [],
+      gold,
+      abstained: false,
       tokensToGold: ep.tokensToGold,
       callsToGold: ep.callsToGold,
       tokensToAllGold: ep.tokensToAllGold,
