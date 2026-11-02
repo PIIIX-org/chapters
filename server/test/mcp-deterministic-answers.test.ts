@@ -293,6 +293,8 @@ interface Question {
   args: (w: World) => Args
   /** Why `dev` answers it differently in the other database: its cross-database case is `it.fails` until that issue is fixed. */
   differs?: string
+  /** The answer is the repository's push history (#471), which differs between the worlds by construction: asked twice in one world only. */
+  history?: true
 }
 
 /** Each node's semantic neighbours were those that existed when it was embedded (fixed: its pinned case below passes). */
@@ -339,6 +341,8 @@ const QUESTIONS: Question[] = [
   },
   { name: 'browse_repository', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId }) },
   { name: 'browse_repository folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, path: 'src' }) },
+  { name: 'browse_repository changed_since', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, changed_since: '2000-01-01' }), history: true },
+  { name: 'browse_repository changed_since folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, changed_since: '2000-01-01', path: 'src' }), history: true },
   ...NOTES.map((n): Question => ({ name: `read_note ${n.path}`, tool: 'read_note', args: (w) => ({ vaultId: w.vaultId, path: n.path }) })),
   ...FILES.map((f): Question => ({ name: `read_file ${f.path}`, tool: 'read_file', args: (w) => ({ repositoryId: w.repoId, path: f.path }) })),
   { name: 'repository_status', tool: 'repository_status', args: (w) => ({ repositoryId: w.repoId }) },
@@ -357,7 +361,7 @@ describe('read tools answer deterministically (#473)', () => {
   })
 
   describe('another database, rows in reverse physical and id order: the same bytes once ids and times are masked', () => {
-    for (const q of QUESTIONS) {
+    for (const q of QUESTIONS.filter((q) => !q.history)) {
       const test = q.differs ? it.fails : it
       test(`${q.name}${q.differs ? ` (differs on dev: ${q.differs})` : ''}`, async () => {
         const other = mask(B, await ask(B, q.tool, q.args(B)))

@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { and, asc, eq, notInArray, sql, type SQL } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { db } from '../db/client.js'
-import { blocks, jobs, repositories, repositoryFiles } from '../db/schema.js'
+import { blocks, jobs, repositories, repositoryChanges, repositoryFiles, repositoryVersions } from '../db/schema.js'
 import { kickSemanticEdges, removeSemanticNodes } from '../search/semantic-edges.js'
 import { detectLanguage } from './language.js'
 import { enqueueExtractions, extractionJobKeySql, hasCurrentBlocksSql, scheduleImportReresolution } from './extraction-queue.js'
@@ -99,6 +99,8 @@ export async function syncRepositoryFiles(
   let manifestChanged = false
   // A path created or deleted can change what the imports that tried it resolve to (#1008).
   const createdOrDeleted: string[] = []
+  // What this sync changed, for the version it records (#471).
+  const changes: Array<{ path: string; kind: 'added' | 'modified' | 'deleted' }> = []
 
   for (const file of changedOrNewFiles) {
     // Pushed content is text the client chose to send, so a stray NUL is
@@ -126,6 +128,7 @@ export async function syncRepositoryFiles(
     if (current) {
       await db.update(repositoryFiles).set(values).where(eq(repositoryFiles.id, current.id))
       toExtract.push(current.id)
+      changes.push({ path: file.path, kind: 'modified' })
       result.updated += 1
     } else {
       const [inserted] = await db
@@ -138,6 +141,7 @@ export async function syncRepositoryFiles(
         .returning({ id: repositoryFiles.id })
       if (inserted) toExtract.push(inserted.id)
       createdOrDeleted.push(file.path)
+      changes.push({ path: file.path, kind: 'added' })
       result.created += 1
     }
     if (isResolutionManifest(file.path)) manifestChanged = true
@@ -172,18 +176,39 @@ export async function syncRepositoryFiles(
     kickSemanticEdges()
     result.deleted = toDelete.length
     if (toDelete.some((r) => isResolutionManifest(r.path))) manifestChanged = true
-    for (const r of toDelete) createdOrDeleted.push(r.path)
+    for (const r of toDelete) {
+      createdOrDeleted.push(r.path)
+      changes.push({ path: r.path, kind: 'deleted' })
+    }
     // The delete also takes a batch file outside currentPaths.
     for (const path of hashByPath.keys()) if (!currentPathSet.has(path)) hashByPath.delete(path)
   }
 
-  await db
-    .update(repositories)
-    .set({
-      treeHash: computeTreeHash(hashByPath),
-      ...(indexed.commit !== undefined ? { lastSyncedCommit: indexed.commit } : {}),
-    })
-    .where(eq(repositories.id, repositoryId))
+  // The tree hash, the commit and, when files or the commit changed, the version they make (#471). A repository's
+  // first version is its baseline: no changes are recorded against nothing.
+  await db.transaction(async (tx) => {
+    const [before] = await tx
+      .select({ commit: repositories.lastSyncedCommit, seq: repositories.versionSeq })
+      .from(repositories)
+      .where(eq(repositories.id, repositoryId))
+      .for('update')
+    if (!before) return
+    const commit = indexed.commit !== undefined ? indexed.commit : before.commit
+    const treeHash = computeTreeHash(hashByPath)
+    const record = before.seq === 0 || changes.length > 0 || commit !== before.commit
+    await tx
+      .update(repositories)
+      .set({ treeHash, lastSyncedCommit: commit, ...(record ? { versionSeq: before.seq + 1 } : {}) })
+      .where(eq(repositories.id, repositoryId))
+    if (!record) return
+    const seq = before.seq + 1
+    await tx.insert(repositoryVersions).values({ repositoryId, seq, commit, treeHash })
+    if (before.seq > 0) {
+      for (let i = 0; i < changes.length; i += 1000) {
+        await tx.insert(repositoryChanges).values(changes.slice(i, i + 1000).map((c) => ({ repositoryId, seq, ...c })))
+      }
+    }
+  })
 
   if (manifestChanged || createdOrDeleted.length > 0) {
     scheduleImportReresolution(repositoryId, { manifests: manifestChanged, paths: createdOrDeleted })
