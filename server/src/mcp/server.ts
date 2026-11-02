@@ -80,6 +80,7 @@ import { serializeNote } from '../notes/okf.js'
 import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
+import { changedFilesAnswer } from './changes.js'
 import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { skippedField } from '../repositories/fs-scan.js'
@@ -2226,16 +2227,18 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'repository',
       capability: 'read',
       profile: 'reader',
-      description: "List a repository's files (path, language, size), by path.",
+      description: "List repository files (path, language, size) by path.",
       inputSchema: {
         repositoryId: REPOSITORY_ID,
         path: z.string().optional().describe('Folder, e.g. `src/lib`'),
+        changed_since: z.string().optional().describe('Commit SHA or date: files changed since'),
       },
       budget: 'list',
     },
-    async (args: { path?: string }, { repositoryId: target }, page) => {
+    async (args: { path?: string; changed_since?: string }, { repositoryId: target }, page) => {
       await requireRepositoryAccess(target)
       const folder = args.path?.replace(/^\/+|\/+$/g, '') || null
+      if (args.changed_since !== undefined) return changedFilesAnswer(target, args.changed_since, folder, await repositoryIndexedVersion(target), page)
       // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
       const rows = await listRepositoryFilesPage(target, { folder, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 })
       const files = rows.slice(0, BROWSE_PAGE)
@@ -3010,7 +3013,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'reader',
       // The kinds are the `kind` enum (#450): naming them again in the description would cost reader tokens twice.
       description:
-        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets, without reading whole files. `refs`: the sites of the symbol `query` names.',
+        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets. `refs`: the sites of the symbol `query` names.',
       inputSchema: {
         query: z.string().describe('Name, signature or meaning'),
         kind: z.enum(SYMBOL_KINDS).optional().describe('Symbol kind'),
@@ -3090,7 +3093,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Query the knowledge graph of notes and code: one node per community by default, or nodes with `community`, `aggregate: "none"` or `neighborsOf`; `limit` keeps the first. Edges carry direction, relation, confidence and evidence (`path#La-Lb`).',
+        'Query the knowledge graph of notes and code: one node per community by default, or nodes with `community`, `aggregate: "none"` or `neighborsOf`. Edges carry direction, relation, confidence and evidence (`path#La-Lb`).',
       inputSchema: {
         vaultId: UUID_ARG.optional().describe('Vault graph'),
         repositoryId: UUID_ARG.optional().describe('Repository graph'),
@@ -3210,7 +3213,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Find the shortest path between two notes, concepts or code files in the knowledge graph: `{found, distance}`, the nodes in order and one edge row per step.',
+        'Find the shortest path between two notes, concepts or code files in the graph: `{found, distance}`, nodes in order, one edge row per step.',
       inputSchema: {
         source: z.string().describe('Node id, path or name'),
         target: z.string().describe('Node id, path or name'),
