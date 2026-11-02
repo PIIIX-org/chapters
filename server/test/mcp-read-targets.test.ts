@@ -313,8 +313,10 @@ describe('outline instead of a large body (#417)', () => {
 
     // Without `outline` the body is paged, as before (the outline is opt-in); `outline: true` outlines a note that fits.
     const paged = await read('read_note', { path: 'docs/handbook' })
-    expect(paged.body).toBe(first.body)
-    expect(paged.lines).toEqual(first.lines)
+    // The first page carries the routing hint (#674), a few tokens the continued page does not: it starts the same and may end sooner.
+    expect(paged.hint).toEqual(expect.stringContaining('`outline: true`'))
+    expect((first.body as string).startsWith(paged.body as string)).toBe(true)
+    expect((paged.lines as number[])[0]).toBe(bodyStart)
     const small = await read('read_note', { path: 'docs/guide', outline: true })
     expect((small.outline as OutlineEntry[]).map((e) => e.heading ?? '')).toEqual(['', 'Setup', 'Setup > Linux', 'Setup > macOS', 'Usage', 'Usage > Flags'])
     // A note that fits comes back whole, as before.
