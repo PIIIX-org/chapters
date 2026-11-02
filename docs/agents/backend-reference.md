@@ -2952,13 +2952,16 @@ bare repository is content only, shared by the callers of a vault, at
 a request from the live notes as `<path>.md` in the projector's file form,
 as a SNAPSHOT and never a history (a purged or replaced note's text must not
 stay readable through an old commit, and no purge hook reaches this
-repository): one root commit written with `git fast-import --force`, then
-`reflog expire` and `gc --prune=now` drop the previous commit and its
-objects (the commit message holds the sha256 fingerprint of all paths and
-file hashes, so an unchanged vault costs one query and one `git log`, and
-the same content is the same commit: fixed author, newest `updated_at` as
-date). After a change a client's `git pull` refuses the unrelated history;
-it runs `git fetch && git reset --hard origin/main` or clones again. A
+repository): two commits, an EMPTY root (fixed author, date and message, so
+its id is stable across rebuilds and vaults) and the snapshot, its only
+child, rewritten with `git fast-import --force` on each change while
+`reflog expire` and `gc --prune=now` drop the previous snapshot and its
+objects (the snapshot's message holds the sha256 fingerprint of all paths
+and file hashes, so an unchanged vault costs one query and one `git log`,
+and the same content is the same commit: fixed author, newest `updated_at`
+as date). After a change a client's `git pull` is a forced non-fast-forward
+of that one commit and refuses; `git pull --rebase` (no local commits),
+`git fetch && git reset --hard origin/main` or a new clone update it. A
 gzip request is inflated under a 1 MiB cap (413 above it, a bomb included). Served by spawning
 `git upload-pack --stateless-rpc` (git is in the image, no new dependency).
 A derived cache: leave it out of backups; `sweepVaultRemotes` removes the

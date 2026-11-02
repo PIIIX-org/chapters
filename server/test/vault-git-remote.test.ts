@@ -130,7 +130,7 @@ describe('a vault is a read-only git remote (#677)', () => {
     await expect(readFile(join(again.dir, 'pushed.md'), 'utf8')).rejects.toThrow()
   })
 
-  it('serves a snapshot, never a history: after a change `git pull` refuses the replaced root, `fetch` + `reset` updates, and the old text is gone from the server', async () => {
+  it('serves a snapshot on a stable empty root: after a change a plain `git pull` refuses, `pull --rebase` and `fetch` + `reset` update, and the old text is gone from the server', async () => {
     const token = await mint({ name: 'git-fetch', scope: 'account', access: 'read' })
     const c = await clone(token)
     expect(c.ok, c.out).toBe(true)
@@ -140,11 +140,13 @@ describe('a vault is a read-only git remote (#677)', () => {
     expect((await git(['pull', '--quiet'], c.dir)).out).not.toMatch(/fatal|error/)
     expect((await git(['rev-parse', 'HEAD'], c.dir)).out.trim()).toBe(head)
     const remote = vaultRemoteDir(vaultId)
+    const root = (await git(['rev-list', '--max-parents=0', 'main'], remote)).out.trim()
+    const emptyTree = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
     const oldBlob = (await git(['rev-parse', 'HEAD:beta.md'], remote)).out.trim()
     expect((await git(['cat-file', '-e', oldBlob], remote)).ok).toBe(true)
 
     await updateNote(vaultId, 'beta', { body: 'Beta is about storks now.\n' })
-    // The replaced root is unrelated to the clone's history: pull refuses, as documented.
+    // The snapshot was replaced, not extended: a fast-forward pull refuses, as documented.
     const pull = await git(['pull', '--quiet', '--ff-only'], c.dir)
     expect(pull.ok).toBe(false)
     const fetched = await git(['fetch', '--quiet', 'origin'], c.dir)
@@ -152,10 +154,26 @@ describe('a vault is a read-only git remote (#677)', () => {
     expect((await git(['reset', '--quiet', '--hard', 'origin/main'], c.dir)).ok).toBe(true)
     expect(await readFile(join(c.dir, 'beta.md'), 'utf8')).toContain('storks')
     expect((await git(['rev-parse', 'HEAD'], c.dir)).out.trim()).not.toBe(head)
-    // One commit, and the replaced note's blob and the previous commit are not in the repository any more.
-    expect((await git(['rev-list', '--all', '--count'], remote)).out.trim()).toBe('1')
+    // Two commits: the empty root, the same id as before, and the snapshot; the replaced note's blob and the previous snapshot are gone.
+    expect((await git(['rev-list', '--all', '--count'], remote)).out.trim()).toBe('2')
+    expect((await git(['rev-list', '--max-parents=0', 'main'], remote)).out.trim()).toBe(root)
+    expect((await git(['rev-parse', 'main^{tree}'], remote)).out.trim()).not.toBe(emptyTree)
+    expect((await git(['ls-tree', root], remote)).out.trim()).toBe('')
     expect((await git(['cat-file', '-e', oldBlob], remote)).ok).toBe(false)
     expect((await git(['cat-file', '-e', head], remote)).ok).toBe(false)
+  })
+
+  it('`git pull --rebase` of an unmodified clone moves it to the new snapshot', async () => {
+    const token = await mint({ name: 'git-rebase', scope: 'account', access: 'read' })
+    const c = await clone(token)
+    expect(c.ok, c.out).toBe(true)
+    await git(['config', 'user.email', 'a@b.c'], c.dir)
+    await git(['config', 'user.name', 'a'], c.dir)
+    await createNote(vaultId, { path: 'gamma', body: 'Gamma is about cranes.\n' })
+    const pull = await git(['pull', '--rebase', '--quiet'], c.dir)
+    expect(pull.ok, pull.out).toBe(true)
+    expect(await readFile(join(c.dir, 'gamma.md'), 'utf8')).toContain('cranes')
+    expect((await git(['status', '--porcelain'], c.dir)).out.trim()).toBe('')
   })
 
   it('refuses a gzip bomb and an oversized or malformed request without inflating it', async () => {

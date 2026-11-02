@@ -8,10 +8,12 @@
  * through an old commit, and no purge hook reaches this repository. It is built lazily, on a request, and only when the
  * content changed: the one commit's message carries the fingerprint of what it holds (sha256 over each path and the
  * hash of its file, in path order), so a request for an unchanged vault costs one query and one `git log`. A change
- * writes a new ROOT commit (`git fast-import --force`, a fixed author and the newest note's `updated_at` as date, so
- * the same content is the same commit), then drops the old commit and every object only it held (`reflog expire`,
- * `gc --prune=now`). A client's `git pull` therefore refuses the unrelated history: it updates with
- * `git fetch && git reset --hard origin/main`, or clones again.
+ * writes the snapshot commit anew (`git fast-import --force`, a fixed author and the newest note's `updated_at` as date, so
+ * the same content is the same commit), then drops the old snapshot and every object only it held (`reflog expire`,
+ * `gc --prune=now`). History is two commits: an EMPTY root (fixed author, date and message: the same id in every
+ * rebuild) and the snapshot, its only child, replaced on each change. A client's `git pull` after a change is a
+ * forced non-fast-forward of that one commit: `git pull --rebase` (no local commits) or
+ * `git fetch && git reset --hard origin/main` update it, and no purged text survives on the server.
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -86,7 +88,11 @@ async function build(vaultId: string): Promise<string> {
     lines.push(Buffer.from(`blob\nmark :${i + 1}\ndata ${f.data.length}\n`), f.data, Buffer.from('\n'))
   })
   const who = `Elara <elara@localhost> ${when} +0000`
-  lines.push(Buffer.from(`commit ${BRANCH}\ncommitter ${who}\ndata ${Buffer.byteLength(message)}\n${message}`))
+  // The stable root: an empty commit with a fixed author, date and message, so its id is the same in every rebuild and
+  // in every vault, and a client's `git pull --rebase` has a common base. The snapshot is its only child.
+  const rootMessage = 'Elara vault remote\n'
+  lines.push(Buffer.from(`commit ${BRANCH}\nmark :${files.length + 1}\ncommitter Elara <elara@localhost> 0 +0000\ndata ${rootMessage.length}\n${rootMessage}\n`))
+  lines.push(Buffer.from(`commit ${BRANCH}\ncommitter ${who}\ndata ${Buffer.byteLength(message)}\n${message}from :${files.length + 1}\n`))
   lines.push(Buffer.from('deleteall\n'))
   files.forEach((f, i) => lines.push(Buffer.from(`M 100644 :${i + 1} ${quotePath(f.path)}\n`)))
   lines.push(Buffer.from('\ndone\n'))
