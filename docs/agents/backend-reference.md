@@ -3520,7 +3520,7 @@ from their note's body by the `note_links` catch-up jobs (#472, see **Link
 catch-up** below), queued before `listen`.
 
 **Shared work by content** (#684 part B, `repositories/blob-cache.ts`,
-migration 0063): blocks, edges and imports stay one set of rows per
+migration 0064): blocks, edges and imports stay one set of rows per
 repository file (ids, access and cascade deletes are per repository).
 What is a function of the content alone is reused. `processFile` takes a
 block's vector, when the file's own blocks lack it, from a code block with

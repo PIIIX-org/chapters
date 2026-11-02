@@ -1027,7 +1027,7 @@ export const blocks = pgTable(
     unique('blocks_owner_block').on(t.ownerType, t.ownerId, t.blockId),
     // The unique index also serves (owner_type, owner_id) lookups.
     index('blocks_container_idx').on(t.containerId),
-    // A code block's vector by its embed key, for reuse between a repository's account siblings (#684, migration 0063).
+    // A code block's vector by its embed key, for reuse between a repository's account siblings (#684, migration 0064).
     index('blocks_code_embed_key_idx')
       .on(t.embedKey)
       .where(sql`owner_type = 'code' AND embedding IS NOT NULL`),
