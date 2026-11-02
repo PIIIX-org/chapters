@@ -17,7 +17,14 @@ import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+import { execFile } from 'node:child_process'
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { accessMatrix, mcpOutcome, restOutcome, type Actor, type MatrixFixture, type ReadOutcome } from './helpers/access-matrix.js'
+
+const execFileP = promisify(execFile)
 
 type Args = Record<string, unknown>
 
@@ -37,6 +44,7 @@ interface Account {
   id: string
   cookie: string
   mcp: Client
+  token: string
 }
 
 let app: FastifyInstance
@@ -63,6 +71,25 @@ async function call(actor: Actor, name: string, args: Args): Promise<ReadOutcome
   return mcpOutcome(await actors[actor].mcp.callTool({ name, arguments: args }))
 }
 
+/** `git clone` of the vault with the actor's token, as a ReadOutcome: the cloned paths and files, or git's refusal (#677). */
+async function cloneVault(actor: Actor): Promise<ReadOutcome> {
+  resetRateLimits()
+  const dir = await mkdtemp(join(tmpdir(), 'matrix-clone-'))
+  const url = baseUrl.replace('http://', `http://elara:${actors[actor].token}@`) + `/git/vaults/${vaultId}`
+  try {
+    await execFileP('git', ['-c', 'credential.helper=', 'clone', '--quiet', url, dir], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', HOME: tmpdir() } })
+    const files = (await readdir(dir, { recursive: true })).filter((f) => f.endsWith('.md')).sort()
+    const text = (await Promise.all(files.map(async (f) => `${f}\n${await readFile(join(dir, f), 'utf8')}`))).join('\n')
+    return { ok: true, denied: false, text }
+  } catch (err) {
+    const e = err as { stderr?: string }
+    const text = e.stderr ?? String(err)
+    return { ok: false, denied: /error: (403|404)|not found/.test(text), text }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
 async function account(role: 'admin' | 'member', name: string): Promise<Account> {
   const user = await createActiveUser({ role })
   const cookie = await loginCookie(app, user.email)
@@ -76,7 +103,7 @@ async function account(role: 'admin' | 'member', name: string): Promise<Account>
   const mcp = new Client({ name: 'access-matrix-test', version: '0.0.0' })
   await mcp.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }))
   clients.push(mcp)
-  return { id: user.id, cookie, mcp }
+  return { id: user.id, cookie, mcp, token }
 }
 
 /** Shares the vault and the repository with the shared account; the fixture's `revoke` takes both away. */
@@ -142,6 +169,12 @@ describe('read surfaces (#552, #1034)', () => {
   accessMatrix('REST GET /api/vaults/:id/notes/*', {
     setup: () => shareBoth([sourceId, SOURCE, `${MARK}source`]),
     read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/vaults/${vaultId}/notes/${SOURCE}`)),
+  })
+
+  // The vault as a git remote (#677): a clone is a read of every note, with the vault's access on every request.
+  accessMatrix('git clone of a vault', {
+    setup: () => shareBoth([SOURCE, `${MARK}source orbital checklist`]),
+    read: (actor) => cloneVault(actor),
   })
 
   accessMatrix('MCP read_file', {

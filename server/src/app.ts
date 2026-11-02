@@ -23,6 +23,7 @@ import { graphRoutes } from './graph/routes.js'
 import { searchRoutes } from './search/routes.js'
 import { syncRoutes } from './sync/routes.js'
 import { mcpRoutes } from './mcp/routes.js'
+import { vaultGitRoutes } from './git-remote/routes.js'
 import { exportRoutes } from './export/routes.js'
 import { teamRoutes } from './vaults/team-routes.js'
 import { mcpConnectionRoutes } from './vaults/mcp-connection-routes.js'
@@ -178,6 +179,7 @@ export async function buildApp(
   })
 
   mcpRoutes(app)
+  vaultGitRoutes(app)
   repositoryPushRoutes(app)
   repositoryWebhookRoutes(app)
   // Root-level, not under /api: issuers redirect back to /auth/callback.

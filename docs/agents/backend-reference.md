@@ -2938,6 +2938,31 @@ what's already indexed: unchanged content hashes are no-ops, changed/
 new files upsert, anything no longer present is **hard-deleted** (git
 is the history record, not Chapters).
 
+**Vault git remote** (#677, read-only slice; `server/src/git-remote/`):
+`GET /git/vaults/:vaultId/info/refs?service=git-upload-pack` and
+`POST /git/vaults/:vaultId/git-upload-pack` (smart HTTP, unprefixed like
+`/mcp`) serve `git clone`/`fetch`/`pull` of a vault; `receive-pack` is 403.
+`routes.ts` authenticates an MCP token (Basic password or Bearer,
+`resolveMcpToken`: live revoke/expiry) and authorises on EVERY request:
+account scope, or a vault pin equal to the path's vault, `read_note` in
+the allow-list if one is set, and `resolveAccess(user, vault)`; anything
+else is the 404 a missing vault gets (a repository pin included). The
+bare repository is content only, shared by the callers of a vault, at
+`DATA_DIR/git-remotes/<vaultId>.git` (`vault-remote.ts`): built lazily on
+a request from the live notes as `<path>.md` in the projector's file form,
+with `git fast-import`, one commit on top of the previous head per change of
+content (the head's message holds the sha256 fingerprint of all paths and
+file hashes, so an unchanged vault costs one query and one `git log`), a
+fixed author and the newest `updated_at` as commit date. Served by spawning
+`git upload-pack --stateless-rpc` (git is in the image, no new dependency).
+A derived cache: leave it out of backups; `sweepVaultRemotes` removes the
+repositories of deleted vaults at boot. A rebuild holds the vault's notes in
+memory once. Not covered: push (see #677's plan: structural diff against
+the served base, compare-and-set per note, conflicts as proposals) and
+attachments. `test/vault-git-remote.test.ts` covers scopes, revoke,
+allow-list, push refusal, fetch and delete; the `git clone of a vault`
+matrix is in both access matrices.
+
 1. **git** (`git-sync.ts`, `git-mirror.ts`, #684) — fetches into a
    persistent bare, shallow mirror per repository
    (`DATA_DIR/git-mirrors/<repositoryId>.git`); details under "Git
