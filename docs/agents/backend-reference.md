@@ -2961,7 +2961,7 @@ and file hashes, so an unchanged vault costs one query and one `git log`,
 and the same content is the same commit: fixed author, newest `updated_at`
 as date). After a change a client's `git pull` is a forced non-fast-forward
 of that one commit and refuses; `git pull --rebase` (no local commits),
-`git fetch && git reset --hard origin/main` or a new clone update it. A
+`git fetch && git reset --hard origin/main` or a new clone update it. The manual's clone example sends the token as a header (`git -c http.extraHeader="Authorization: Bearer …" clone`), never as URL userinfo (a token in the URL lands in `.git/config` and shell history, and the secret scan reads the manuals). A body that is not a pkt-line upload request is a 400. A
 gzip request is inflated under a 1 MiB cap (413 above it, a bomb included). Served by spawning
 `git upload-pack --stateless-rpc` (git is in the image, no new dependency).
 A derived cache: leave it out of backups; `sweepVaultRemotes` removes the

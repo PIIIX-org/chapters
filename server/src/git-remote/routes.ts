@@ -97,7 +97,10 @@ export function vaultGitRoutes(app: FastifyInstance) {
         }
       }
       const dir = await ensureVaultRemote(vaultId)
-      return reply.header('content-type', 'application/x-git-upload-pack-result').header('cache-control', 'no-cache').send(await upload(dir, [], request))
+      // git exits non-zero for a body that is not a pkt-line upload request: the client's fault, not a server error.
+      const result = await upload(dir, [], request).catch(() => null)
+      if (!result) return reply.code(400).send({ error: 'not a git upload-pack request' })
+      return reply.header('content-type', 'application/x-git-upload-pack-result').header('cache-control', 'no-cache').send(result)
     })
   })
 }

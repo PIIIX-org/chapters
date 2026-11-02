@@ -176,6 +176,17 @@ describe('a vault is a read-only git remote (#677)', () => {
     expect((await git(['status', '--porcelain'], c.dir)).out.trim()).toBe('')
   })
 
+  it('the Bearer header form (http.extraHeader, no userinfo in the URL) clones, and a body that is not a pkt-line request is a 400', async () => {
+    const token = await mint({ name: 'git-header', scope: 'account', access: 'read' })
+    const dir = await mkdtemp(join(tmpdir(), 'vault-clone-'))
+    dirs.push(dir)
+    const cloned = await git(['-c', `http.extraHeader=Authorization: Bearer ${token}`, 'clone', '--quiet', `${baseUrl}/git/vaults/${vaultId}`, dir])
+    expect(cloned.ok, cloned.out).toBe(true)
+    expect(await readFile(join(dir, 'beta.md'), 'utf8')).toContain('Beta')
+    const bad = await app.inject({ method: 'POST', url: `/git/vaults/${vaultId}/git-upload-pack`, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/x-git-upload-pack-request' }, payload: Buffer.from('this is not pkt-line') })
+    expect(bad.statusCode).toBe(400)
+  })
+
   it('refuses a gzip bomb and an oversized or malformed request without inflating it', async () => {
     const token = await mint({ name: 'git-bomb', scope: 'account', access: 'read' })
     const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/x-git-upload-pack-request', 'content-encoding': 'gzip' }
