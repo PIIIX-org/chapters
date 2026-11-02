@@ -9,6 +9,7 @@ import { blocks, repositoryFiles } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { createHash } from 'node:crypto'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // #676: `find_symbols` takes an overlay, the agent's `git diff --no-renames` against the indexed commit. A symbol
@@ -17,6 +18,7 @@ import { createActiveUser, loginCookie } from './helpers.js'
 
 const COMMIT = 'fedcba9876543210fedcba9876543210fedcba98'
 const STORE = 'export function keep(): number {\n  return 1\n}\n\nexport function doomed(): number {\n  return 2\n}\n'
+const NOTES = 'plain text, not source\n'
 const OTHER = 'export function untouchedThing(): number {\n  return 3\n}\n'
 
 let app: FastifyInstance
@@ -25,7 +27,7 @@ let stranger: Client
 let repoId: string
 
 type Hit = { id: string; path: string; name: string; startLine: number; endLine: number; snippet?: string | null }
-type Answer = { commit?: string; overlay?: boolean; results: Hit[] }
+type Answer = { commit?: string; overlay?: boolean; skipped?: string[]; stale?: string[]; results: Hit[]; truncated: unknown }
 
 async function connect(email: string, name: string, port: number): Promise<Client> {
   const cookie = await loginCookie(app, email)
@@ -83,7 +85,8 @@ beforeAll(async () => {
   owner = await connect(user.email, 'overlay-owner', port)
   stranger = await connect((await createActiveUser()).email, 'overlay-stranger', port)
   repoId = (await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'overlay-repo', ingestionMethod: 'agent_push' } })).json<{ id: string }>().id
-  const files = { 'src/store.ts': STORE, 'src/other.ts': OTHER }
+  const files: Record<string, string> = { 'src/store.ts': STORE, 'src/other.ts': OTHER, 'notes.txt': NOTES }
+  for (let i = 0; i < 4; i++) files[`src/many/checksum${i}.ts`] = `export function checksum${i}(): number {\n  return ${i}\n}\n`
   await syncRepositoryFiles(repoId, Object.entries(files).map(([path, content]) => ({ path, content })), Object.keys(files), { commit: COMMIT })
   await flushExtraction()
 }, 120_000)
@@ -145,5 +148,48 @@ describe('find_symbols overlay', () => {
     const real = await ask(stranger, { query: 'keep', overlay: OVERLAY })
     expect(real.isError).toBe(true)
     expect(real.text).toBe(missing.text)
+  })
+
+  it('puts what the edit declares before the base hits: with more base matches than the page holds it is still returned', async () => {
+    const added = '--- /dev/null\n+++ b/src/added.ts\n@@ -0,0 +1,3 @@\n+export function checksumAdded(): number {\n+  return 5\n+}\n'
+    expect((await find('checksum', undefined, { limit: 2 })).results.map((r) => r.name)).not.toContain('checksumAdded')
+    const json = await find('checksum', added, { limit: 2 })
+    expect(json.results[0]).toMatchObject({ name: 'checksumAdded', path: 'src/added.ts', startLine: 1 })
+    expect(json.results).toHaveLength(2)
+    expect(json.truncated).not.toBe(false)
+  })
+
+  it('honours `kind` and a punctuation-only query matches no overlay symbol', async () => {
+    const mixed = '--- /dev/null\n+++ b/src/shapes.ts\n@@ -0,0 +1,4 @@\n+export class Shape {}\n+export function shapeOf(): Shape {\n+  return new Shape()\n+}\n'
+    expect((await find('shape', mixed, { kind: 'class' })).results.map((r) => r.name)).toEqual(['Shape'])
+    expect((await find('shape', mixed)).results.map((r) => r.name).sort()).toEqual(['Shape', 'shapeOf'])
+    expect((await find('. _', mixed)).results.filter((r) => r.id.startsWith('overlay:'))).toEqual([])
+  })
+
+  it('a changed file that is not source has no symbols and is not an error; one that is not indexed is skipped and said so', async () => {
+    const diff = '--- a/notes.txt\n+++ b/notes.txt\n@@ -1,1 +1,2 @@\n plain text, not source\n+export function inText() {}\n' +
+      '--- a/src/ghost.ts\n+++ b/src/ghost.ts\n@@ -1,1 +1,1 @@\n-a\n+b\n' +
+      '--- a/src/gone.ts\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-a\n' + OVERLAY.replace(/^diff --git.*\n/gm, '').replace(/^new file mode.*\n/gm, '')
+    const json = await find('brandNew', diff)
+    expect(json.skipped).toEqual(['src/ghost.ts', 'src/gone.ts'])
+    expect(json.results.map((r) => r.name)).toEqual(['brandNew'])
+    expect((await find('inText', diff)).results).toEqual([])
+  })
+
+  it('flags a diff whose old blob is not the indexed content, and not one whose blob is', async () => {
+    const blob = createHash('sha1').update(`blob ${Buffer.byteLength(STORE)}\0`).update(STORE).digest('hex')
+    const withIndex = (id: string) => OVERLAY.replace('--- a/src/store.ts', `index ${id}..abcdef0 100644\n--- a/src/store.ts`)
+    expect((await find('keep', withIndex(blob.slice(0, 7)))).stale).toBeUndefined()
+    expect((await find('keep', withIndex('1234567'))).stale).toEqual(['src/store.ts'])
+  })
+
+  it('reads at most 2 MiB of changed source in one call', async () => {
+    const big = 'x\n'.repeat(350_000)
+    const paths = ['src/big1.txt.ts', 'src/big2.txt.ts', 'src/big3.txt.ts'].map((p) => p.replace('.txt', ''))
+    await db.insert(repositoryFiles).values(paths.map((path) => ({ repositoryId: repoId, path, language: 'typescript', content: big, contentHash: path, size: big.length })))
+    const diff = paths.map((p) => `--- a/${p}\n+++ b/${p}\n@@ -1,1 +1,1 @@\n-x\n+y\n`).join('')
+    const r = await ask(owner, { query: 'big', overlay: diff })
+    expect(r.isError).toBe(true)
+    expect(r.text).toMatch(/over 2 MiB/)
   })
 })

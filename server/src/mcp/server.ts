@@ -3040,9 +3040,10 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const searched = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 + (patches ? OVERLAY_SPARE : 0), accountId: auth.user.id })
       const { results: found, ...head } = searched
       // On base + overlay (#676): the hits as the edited files declare them; the head's `commit`/`tree` is the base.
-      const results = patches ? await overlayHits(repoIds[0]!, patches, args.query, found, { kind: args.kind, limit: limit + 1 }) : found
+      const overlaid = patches ? await overlayHits(repoIds[0]!, patches, args.query, found, { kind: args.kind, limit: limit + 1 }) : null
+      const results = overlaid ? overlaid.hits : found
       return {
-        head: { ...head, ...(repoIds.length === 1 ? await repositoryIndexedVersion(repoIds[0]!) : {}), ...(patches ? { overlay: true } : {}) },
+        head: { ...head, ...(repoIds.length === 1 ? await repositoryIndexedVersion(repoIds[0]!) : {}), ...(overlaid ? { overlay: true, ...(overlaid.skipped.length > 0 ? { skipped: overlaid.skipped } : {}), ...(overlaid.stale.length > 0 ? { stale: overlaid.stale } : {}) } : {}) },
         sections: [
           ranked({
             name: 'results',

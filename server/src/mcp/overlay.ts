@@ -20,8 +20,9 @@ export type OverlayResult = Omit<SymbolSearchResult, 'fileId'> & { fileId: strin
 /**
  * `find_symbols` on base + overlay (#676): the base hits outside the overlay's files, with the symbols the overlay's
  * added and modified files declare that match `query` (every word in the symbol's name or path, `kind` when given;
- * lexical, not the hybrid ranking). Order: overlay symbols named exactly `query`, the base hits in their order, the
- * other overlay symbols by path and line. A file the overlay deletes or changes has none of its indexed hits, so a
+ * lexical, not the hybrid ranking). Order: the overlay's symbols first (named exactly `query`, then the others by
+ * path and line: what the agent's edit declares is what it asks about, and base hits must not push it out), then the
+ * base hits in their order. A file the overlay deletes or changes has none of its indexed hits, so a
  * symbol the overlay removes is not found. Overlay hits have no `fileId` (the file is not indexed so) and the id
  * `overlay:<path>:<line>:<name>`. Nothing is stored. `limit` is the length of the answer.
  */
@@ -31,7 +32,7 @@ export async function overlayHits(
   query: string,
   base: readonly SymbolSearchResult[],
   opts: { kind?: string; limit: number },
-): Promise<OverlayResult[]> {
+): Promise<{ hits: OverlayResult[]; skipped: string[]; stale: string[] }> {
   let found
   try {
     found = await overlaySymbols(repositoryId, patches)
@@ -40,7 +41,8 @@ export async function overlayHits(
     throw err
   }
   const wanted = query.toLowerCase()
-  const words = wanted.split(/[^a-z0-9_.]+/).filter(Boolean)
+  // A word has a letter or digit: a query of punctuation alone matches nothing here.
+  const words = wanted.split(/[^a-z0-9_.]+/).filter((w) => /[a-z0-9]/.test(w))
   const exact: OverlayResult[] = []
   const rest: OverlayResult[] = []
   for (const s of found.symbols) {
@@ -62,5 +64,5 @@ export async function overlayHits(
     }
     ;(s.name.toLowerCase() === wanted || inner.toLowerCase() === wanted ? exact : rest).push(hit)
   }
-  return [...exact, ...base.filter((r) => !found.changed.has(r.path)), ...rest].slice(0, opts.limit)
+  return { hits: [...exact, ...rest, ...base.filter((r) => !found.changed.has(r.path))].slice(0, opts.limit), skipped: found.skipped, stale: found.stale }
 }

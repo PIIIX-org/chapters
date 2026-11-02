@@ -4,6 +4,7 @@
  * writes: the overlay is one call's, never part of the shared index. A hunk is checked against the indexed content
  * line by line, so a diff made against another commit is refused, naming the file, not guessed at.
  */
+import { createHash } from 'node:crypto'
 import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositoryFiles } from '../db/schema.js'
@@ -13,6 +14,8 @@ import { extractStructure, isSupportedLanguage, type ExtractedSymbol } from './e
 /** Bytes of diff and files it changes one call takes. */
 export const OVERLAY_MAX_BYTES = 200_000
 export const OVERLAY_MAX_FILES = 50
+/** Characters of file content one call parses (the diff cap bounds the diff, not the files it changes). */
+export const OVERLAY_MAX_PARSED = 2 * 1024 * 1024
 
 /** A refused overlay: the MCP layer shows its message as `INVALID_ARGUMENT` on `overlay`. */
 export class OverlayError extends Error {}
@@ -26,6 +29,8 @@ interface Hunk {
 
 export interface FilePatch {
   path: string
+  /** The abbreviated blob id of the old file from git's `index` line, when the diff has one. */
+  oldBlob?: string
   status: 'added' | 'modified' | 'deleted'
   hunks: Hunk[]
 }
@@ -36,7 +41,7 @@ export function parseOverlay(diff: string): FilePatch[] {
   const lines = diff.split('\n')
   if (lines.at(-1) === '') lines.pop()
   const patches: FilePatch[] = []
-  let current: { from: string | null; to: string | null; patch: FilePatch | null } | null = null
+  let current: { from: string | null; to: string | null; patch: FilePatch | null; oldBlob?: string } | null = null
   const finish = () => {
     if (current?.patch) patches.push(current.patch)
     current = null
@@ -50,6 +55,9 @@ export function parseOverlay(diff: string): FilePatch[] {
     if (line.startsWith('diff --git ')) {
       finish()
       current = { from: null, to: null, patch: null }
+    } else if (line.startsWith('index ') && current) {
+      const m = /^index ([0-9a-f]{7,64})\.\.[0-9a-f]+/.exec(line)
+      if (m && !/^0+$/.test(m[1]!)) current.oldBlob = m[1]
     } else if (/^(rename|copy) (from|to) /.test(line) || /^similarity index /.test(line)) {
       throw new OverlayError('renames and copies are not supported: make the diff with `git diff --no-renames`')
     } else if (/^(Binary files|GIT binary patch)/.test(line)) {
@@ -61,7 +69,7 @@ export function parseOverlay(diff: string): FilePatch[] {
       current.to = stripped(lines[i + 1]!.slice(4))
       const path = current.to ?? current.from
       if (path === null) throw new OverlayError('a file header names no file')
-      current.patch = { path, status: current.from === null ? 'added' : current.to === null ? 'deleted' : 'modified', hunks: [] }
+      current.patch = { path, ...(current.oldBlob ? { oldBlob: current.oldBlob } : {}), status: current.from === null ? 'added' : current.to === null ? 'deleted' : 'modified', hunks: [] }
       i++
     } else if (line.startsWith('@@')) {
       const m = /^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/.exec(line)
@@ -93,7 +101,7 @@ export function applyHunks(path: string, base: string, hunks: readonly Hunk[]): 
   for (const h of hunks) {
     const start = h.oldCount === 0 ? h.oldStart : h.oldStart - 1
     if (start < at || start > old.length) throw new OverlayError(`a hunk does not apply to ${path}: the overlay is not a diff against the indexed content`)
-    out.push(...old.slice(at, start))
+    for (let k = at; k < start; k++) out.push(old[k]!)
     at = start
     for (const l of h.lines) {
       const text = l.slice(1)
@@ -106,7 +114,7 @@ export function applyHunks(path: string, base: string, hunks: readonly Hunk[]): 
       at++
     }
   }
-  out.push(...old.slice(at))
+  for (let k = at; k < old.length; k++) out.push(old[k]!)
   return out.join('\n')
 }
 
@@ -119,23 +127,38 @@ export interface OverlaySymbol extends ExtractedSymbol {
 /**
  * The symbols of the overlay's added and modified files, computed in memory from the indexed content plus the
  * hunks (`path` order, then line), and the paths whose indexed symbols the overlay replaces (every changed file).
- * A file the extractor does not read has no symbols.
+ * A file the extractor does not read has no symbols. `skipped`: changed files that are not in the index (nothing to
+ * apply the diff to; left out, the rest is answered). `stale`: files whose stored content is not the blob the diff
+ * says it was made against (git's `index` line), so the diff is against another commit; their hunks applied anyway.
+ * At most `OVERLAY_MAX_PARSED` characters are parsed, edge sites are not extracted.
  */
-export async function overlaySymbols(repositoryId: string, patches: readonly FilePatch[]): Promise<{ symbols: OverlaySymbol[]; changed: Set<string> }> {
+export async function overlaySymbols(
+  repositoryId: string,
+  patches: readonly FilePatch[],
+): Promise<{ symbols: OverlaySymbol[]; changed: Set<string>; skipped: string[]; stale: string[] }> {
   const modified = patches.filter((p) => p.status !== 'added').map((p) => p.path)
   const stored = modified.length === 0 ? [] : await db.select({ path: repositoryFiles.path, content: repositoryFiles.content }).from(repositoryFiles).where(and(eq(repositoryFiles.repositoryId, repositoryId), inArray(repositoryFiles.path, modified)))
   const contents = new Map(stored.map((f) => [f.path, f.content]))
   const symbols: OverlaySymbol[] = []
+  const skipped: string[] = []
+  const stale: string[] = []
+  let parsed = 0
   for (const p of [...patches].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
-    if (p.status === 'deleted') continue
     const base = p.status === 'added' ? '' : contents.get(p.path)
-    if (base === undefined) throw new OverlayError(`${p.path} is not in the indexed repository: the overlay is not a diff against the indexed content`)
+    if (base === undefined) {
+      skipped.push(p.path)
+      continue
+    }
+    if (p.oldBlob && p.status !== 'added' && createHash('sha1').update(`blob ${Buffer.byteLength(base)}\0`).update(base).digest('hex').slice(0, p.oldBlob.length) !== p.oldBlob.toLowerCase()) stale.push(p.path)
+    if (p.status === 'deleted') continue
     const language = detectLanguage(p.path)
     if (!isSupportedLanguage(language)) continue
     const content = applyHunks(p.path, base, p.hunks)
+    parsed += content.length
+    if (parsed > OVERLAY_MAX_PARSED) throw new OverlayError(`the files the overlay changes are over ${OVERLAY_MAX_PARSED / (1024 * 1024)} MiB of source to read: leave some out`)
     const lines = content.split('\n')
-    const { symbols: found } = await extractStructure(language, content, p.path)
+    const { symbols: found } = await extractStructure(language, content, p.path, { edges: false })
     for (const s of found) symbols.push({ ...s, path: p.path, snippet: [...lines.slice(s.startLine - 1, Math.min(s.endLine, s.startLine + 7)).join('\n')].slice(0, 400).join('') })
   }
-  return { symbols, changed: new Set(patches.map((p) => p.path)) }
+  return { symbols, changed: new Set(patches.map((p) => p.path)), skipped, stale }
 }
