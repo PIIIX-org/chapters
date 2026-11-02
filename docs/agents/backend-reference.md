@@ -2962,6 +2962,40 @@ what's already indexed: unchanged content hashes are no-ops, changed/
 new files upsert, anything no longer present is **hard-deleted** (git
 is the history record, not Chapters).
 
+**Vault git remote** (#677, read-only slice; `server/src/git-remote/`):
+`GET /git/vaults/:vaultId/info/refs?service=git-upload-pack` and
+`POST /git/vaults/:vaultId/git-upload-pack` (smart HTTP, unprefixed like
+`/mcp`) serve `git clone`/`fetch`/`pull` of a vault; `receive-pack` is 403.
+`routes.ts` authenticates an MCP token (Basic password or Bearer,
+`resolveMcpToken`: live revoke/expiry) and authorises on EVERY request:
+account scope, or a vault pin equal to the path's vault, `read_note` in
+the allow-list if one is set, and `resolveAccess(user, vault)`; anything
+else is the 404 a missing vault gets (a repository pin included). The
+bare repository is content only, shared by the callers of a vault, at
+`DATA_DIR/git-remotes/<vaultId>.git` (`vault-remote.ts`): built lazily on
+a request from the live notes as `<path>.md` in the projector's file form,
+as a SNAPSHOT and never a history (a purged or replaced note's text must not
+stay readable through an old commit, and no purge hook reaches this
+repository): two commits, an EMPTY root (fixed author, date and message, so
+its id is stable across rebuilds and vaults) and the snapshot, its only
+child, rewritten with `git fast-import --force` on each change while
+`reflog expire` and `gc --prune=now` drop the previous snapshot and its
+objects (the snapshot's message holds the sha256 fingerprint of all paths
+and file hashes, so an unchanged vault costs one query and one `git log`,
+and the same content is the same commit: fixed author, newest `updated_at`
+as date). After a change a client's `git pull` is a forced non-fast-forward
+of that one commit and refuses; `git pull --rebase` (no local commits),
+`git fetch && git reset --hard origin/main` or a new clone update it. The manual's clone example sends the token as a header (`git -c http.extraHeader="Authorization: Bearer …" clone`), never as URL userinfo (a token in the URL lands in `.git/config` and shell history, and the secret scan reads the manuals). A body that is not a pkt-line upload request is a 400. A
+gzip request is inflated under a 1 MiB cap (413 above it, a bomb included). Served by spawning
+`git upload-pack --stateless-rpc` (git is in the image, no new dependency).
+A derived cache: leave it out of backups; `sweepVaultRemotes` removes the
+repositories of deleted vaults at boot. A rebuild holds the vault's notes in
+memory once. Not covered: push (see #677's plan: structural diff against
+the served base, compare-and-set per note, conflicts as proposals) and
+attachments. `test/vault-git-remote.test.ts` covers scopes, revoke,
+allow-list, push refusal, fetch and delete; the `git clone of a vault`
+matrix is in both access matrices.
+
 1. **git** (`git-sync.ts`, `git-mirror.ts`, #684) — fetches into a
    persistent bare, shallow mirror per repository
    (`DATA_DIR/git-mirrors/<repositoryId>.git`); details under "Git
