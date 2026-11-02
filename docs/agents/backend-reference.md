@@ -388,6 +388,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0052; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), `keyword_head` (the path's and symbols' name lexemes, the leg's **Fields**; migration 0059) and GIN trigram `repository_files_path_trgm_idx` on `path` (#455 part 2), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424). `edge_note` (migration 0061) says when its code edges were capped |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0); `lookup_keys` (migration 0053, #1008, GIN-indexed) the `lookupKey` of every path the resolver tried, as `<repository id>:<key>`, null for rows written before 0053 until the boot backfill; a deleted target sets `resolved_target_file_id` to null (it deleted the row before 0053) |
+| `repositoryVersions`, `repositoryChanges` | (migration 0063, #471) the index's own history: a version per sync that changed files or the commit (`seq`, commit, tree hash, `indexed_at`; `repositories.version_seq` is the newest) and the paths it added, modified or deleted; `browse_repository`'s `changed_since` reads them |
 | `codeEdges` | (migration 0061, #469) symbol-level call, reference, import and test edges of each file, with the enclosing symbol, the target symbol block and `resolved`/`textual`; see **Code edges** in §5.10 |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -1544,6 +1545,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     asks (the #1014 failure). A relaxed or trigram row (#455 part 2) never counts
     as exact. The boost is a pure function of the row, and `byScore`'s
     tie-breaks are unchanged.
+    For code-shaped queries (#457: at least two independent code signals, or one
+    strong one, such as a `file.ext` token; never a plain English word), code
+    hits receive a bounded boost `CODE_BOOST = 0.0008` (about 3 RRF positions)
+    over documentation, plans and data (`resourceType: 'note'`, or repository files
+    with doc or data extensions, `.json`, `.yml`, `.toml` among them, README-type
+    names, or under a `doc`, `docs`, `plan`, `plans`, `wiki`, `spec` or `specs` folder at
+    any depth). Prose queries are untouched, and a doc that genuinely answers
+    the question still wins.
   - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a
     repeated query text comes from the in-process query-embedding cache
     (§5.11) without running the embedder.
@@ -2682,6 +2691,21 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     rows from other notes of the vault. Both lists are `ranked` sections
     (11 fetched for the `">10"` total) and fit the budget by the ladder; no
     ranking or response code is shared with `search`.
+    With `changed_since` (#471, `mcp/changes.ts` over `repositories/changes.ts`)
+    it lists the files changed after a commit or a date instead, from the
+    index's own history: `syncRepositoryFiles` records a `repository_versions`
+    row (commit, tree, `indexed_at`; `repositories.version_seq` counts them)
+    whenever a sync changed files or the commit; each path it added,
+    modified or deleted goes to `repository_changes` in the transaction of
+    that file's write, under the next `seq`, so a sync that stops midway
+    leaves its changes for the next one (migration 0063). The last
+    `VERSIONS_KEPT` (200) versions are kept. The backup does not carry them
+    and `onRestore` resets `version_seq` to 0. A
+    repository's first version is a baseline with no changes (migration 0063
+    gives existing ones a baseline). The git mirror is depth 1, so this is not
+    git history and dates are sync times. The versions after the one the commit
+    or date names are folded per path in SQL and paged by path like the plain
+    listing; a commit no version recorded is `INVALID_ARGUMENT`.
   - `browse_vault` (#425) pages in SQL the same way, one code path for
     the root (the empty folder) and a folder (`notes/store.ts`), reading
     only the page: `browseNotesPage` reads 500 + 1 live notes after the
@@ -3624,6 +3648,30 @@ target's path, symbol and line) and `symbolCandidates`; indexes
 `blocks_symbol_name_idx` (a repository's symbol blocks by bare name, for
 resolution). `find_symbols` with `refs` and `GET /repositories/:id/code-refs`
 read them (**Code queries**, next).
+
+**Routing hints** (#674; `mcp/routing-hints.ts`, one pure function of the
+request shape, unit-tested as a table in `mcp-routing-hints-rules.test.ts`,
+the answers in `mcp-routing-hints.test.ts`): `search` and the body answers of
+`read_note` / `read_file` put a one-sentence `hint` in the head when the
+request has a cheaper route; `undefined` (so absent in the JSON) otherwise.
+Rules: `search` over exactly one repository and no vault with literal text (a
+quoted phrase, or one space-free token with code punctuation; prose with a
+bracket gets none) hints ``rg -n -F -- '<text>'`` in a checked-out repo (single
+quotes: inert in a shell, tested by running `sh`); a text over 400 lines read
+from the top with no `targets`, `outline` or `cursor` hints the outline, or
+`targets: [{lines}]` when it has none (JSON, lockfiles, logs), and nothing when
+a session answer is a `same_as` reference (`withHint`). **Decision**: the hint never replaces an answer. The issue
+allows a short hint "instead of an expensive answer", but the server cannot
+know whether the caller has a checkout, and a refusal would strand an
+Elara-only agent; replacing needs the caller to say so (a parameter, which
+costs reader tokens, or a harness change) and is not done here. Budget: no
+description or parameter changed (reader 7,984, writer 15,512, admin
+`tools/list` 41,371 characters, as on dev ff955476); the hint is inside the
+page's own budget, so a budgeted page is no longer, it shows a line or two
+less. What the benchmark measures: its scripted agent never reads a hint, so
+the exact-string questions' cost is unchanged by this PR (and not improved);
+making them cheaper needs the agent to take the hint (a harness change, not
+done: `benchmarks/**`).
 
 **Code queries** (#470; `repositories/code-queries.ts` the store queries,
 `repositories/code-refs.ts` the answer both surfaces share, `mcp/code-queries.ts`
