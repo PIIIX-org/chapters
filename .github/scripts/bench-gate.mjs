@@ -70,7 +70,8 @@ const FRACTION_METRICS = new Set(['hit5', 'exact1', 'goldReachedRate'])
  */
 export const HOLDOUT = 'holdout'
 export const RANKING_PATHS = [
-  /^server\/src\/(search|mcp)\//,
+  /^server\/src\/search\//,
+  /^server\/src\/mcp\/(response|read-targets|session-reads)\.ts$/,
   // What decides an agent's answer besides search and MCP: the extraction path (lab-plan.mjs `BENCH_ALL`).
   /^server\/src\/repositories\/(extraction|code-blocks|code-edge|outline|import-resolution|language)[^/]*$/,
   /^server\/src\/text\/(blocks|lines|targets)\.ts$/,
