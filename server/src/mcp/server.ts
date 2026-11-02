@@ -131,6 +131,7 @@ import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
+import { GREP_INPUT, grepAnswer } from './grep.js'
 import {
   DEFAULT_BUDGET,
   Page,
@@ -1426,9 +1427,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       .min(1)
       .max(200)
       .optional()
-      .describe('Send one when you may retry after a lost connection: the same key + arguments from this connection within 24 h returns the first result (`replayed: true`), writes nothing'),
+      .describe('Retry-safe: the same key + arguments within 24 h replays the first result (`replayed: true`)'),
   }
-  const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: return the result (status, diff_stats, note) without writing') }
+  const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: the result, nothing written') }
   /** The second sentence of every note write's description (#429): the answer, and where the rest is. */
   const WRITE_DOC = ' Answers with `rev`, `status` (`retry`: nothing written, send it again) and `indexed` (manual: elara://manual/notes).'
 
@@ -2970,6 +2971,24 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         narrow: args.symbols === false ? [] : ['symbols: false'],
       }
     },
+  )
+
+  tool(
+    'grep',
+    {
+      scope: 'vault-or-repo',
+      capability: 'read',
+      profile: 'reader',
+      description: 'Regex over note and code lines: located hits in path order.',
+      inputSchema: {
+        ...GREP_INPUT,
+        vaultId: UUID_ARG.optional().describe('Vault to search'),
+        repositoryId: UUID_ARG.optional().describe('Repository to search'),
+        everywhere: z.boolean().optional().describe('All accessible (account tokens)'),
+      },
+      budget: 'list',
+    },
+    async (args: { pattern: string; path?: string; context?: number }, { resources }, page) => grepAnswer(resources, args, page),
   )
 
   tool(

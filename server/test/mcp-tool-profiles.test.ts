@@ -24,6 +24,7 @@ const READER = [
   'find_graph_path',
   'find_symbols',
   'graph',
+  'grep',
   'list_repositories',
   'list_vaults',
   'read_file',
@@ -141,9 +142,9 @@ describe('tools/list per profile (#428)', () => {
 
   it('pinned reader tokens list the reader tools their scope reaches', async () => {
     const vault = await mint({ name: 'profiles-vault-reader', scope: 'vault', vaultId, profile: 'reader' })
-    expect(await listed(vault.client)).toEqual(['browse_vault', 'find_graph_path', 'graph', 'read_note', 'search'])
+    expect(await listed(vault.client)).toEqual(['browse_vault', 'find_graph_path', 'graph', 'grep', 'read_note', 'search'])
     const repo = await mint({ name: 'profiles-repo-reader', scope: 'repository', repositoryId, profile: 'reader' })
-    expect(await listed(repo.client)).toEqual(['browse_repository', 'find_graph_path', 'find_symbols', 'graph', 'read_file', 'search'])
+    expect(await listed(repo.client)).toEqual(['browse_repository', 'find_graph_path', 'find_symbols', 'graph', 'grep', 'read_file', 'search'])
   })
 
   it('a reader token lists no prompts; writer and admin tokens keep them (owner decision on #930)', async () => {
