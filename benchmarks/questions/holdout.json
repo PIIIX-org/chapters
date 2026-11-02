@@ -1,0 +1,353 @@
+{
+  "suite": "holdout",
+  "description": "A Go service (prometheus/node_exporter): where/how/identifier/architecture/config questions. The held-out suite: its questions are never used to tune ranking constants, and no PR that touches search, MCP or the Elara policy may write or lower its baseline (#1059).",
+  "repo": {
+    "url": "https://github.com/prometheus/node_exporter",
+    "commit": "3af7d9f3d6a1b583a0a00801385dbec79f84c411"
+  },
+  "source": "Written for #1059 by reading the pinned commit: 20 questions in the mix of the five tuned suites, evidence file:line checked against it.",
+  "questions": [
+    {
+      "id": "Q01",
+      "category": "where",
+      "question": "Where does a single collector's failure get turned into a success flag and a duration metric instead of failing the whole scrape, and how is a 'no data' result treated differently from a real error?",
+      "keywords": [
+        "success",
+        "duration"
+      ],
+      "relevant": [
+        "collector/collector.go"
+      ],
+      "gold": [
+        "collector/collector.go:32-43",
+        "collector/collector.go:158-177",
+        "collector/collector.go:194-199"
+      ]
+    },
+    {
+      "id": "Q02",
+      "category": "where",
+      "question": "Where does the HTTP handler accept per-request collector filters in the query string and refuse a request that sends both kinds?",
+      "keywords": [
+        "exclude"
+      ],
+      "relevant": [
+        "node_exporter.go"
+      ],
+      "gold": [
+        "node_exporter.go:74-92",
+        "node_exporter.go:94-114"
+      ]
+    },
+    {
+      "id": "Q03",
+      "category": "where",
+      "question": "Where does the textfile collector report the modification time of each file it read and a scrape-error flag, and what makes it skip a whole file?",
+      "keywords": [
+        "textfile",
+        "timestamp"
+      ],
+      "relevant": [
+        "collector/textfile.go"
+      ],
+      "gold": [
+        "collector/textfile.go:160-180",
+        "collector/textfile.go:269-282",
+        "collector/textfile.go:302-304",
+        "collector/textfile.go:317-327"
+      ]
+    },
+    {
+      "id": "Q04",
+      "category": "where",
+      "question": "Where is the default list of filesystem types and mount points that the filesystem collector ignores on Linux defined?",
+      "keywords": [
+        "mount.?points?",
+        "fs.?types?"
+      ],
+      "relevant": [
+        "collector/filesystem_linux.go",
+        "collector/filesystem_common.go"
+      ],
+      "gold": [
+        "collector/filesystem_linux.go:35-38"
+      ]
+    },
+    {
+      "id": "Q05",
+      "category": "how",
+      "question": "How does the flag that disables all default collectors decide which collectors stay enabled when some were turned on explicitly on the command line?",
+      "keywords": [
+        "disable.defaults",
+        "default"
+      ],
+      "relevant": [
+        "collector/collector.go",
+        "node_exporter.go"
+      ],
+      "gold": [
+        "collector/collector.go:56",
+        "collector/collector.go:83-103",
+        "node_exporter.go:179-182",
+        "node_exporter.go:195-197"
+      ]
+    },
+    {
+      "id": "Q06",
+      "category": "how",
+      "question": "How are the CPU time counters read from the kernel protected against counters that move backwards, for example after a CPU hotplug, and what is the threshold?",
+      "keywords": [
+        "hotplug",
+        "backwards"
+      ],
+      "relevant": [
+        "collector/cpu_linux.go"
+      ],
+      "gold": [
+        "collector/cpu_linux.go:59",
+        "collector/cpu_linux.go:412-431",
+        "collector/cpu_linux.go:490-496"
+      ]
+    },
+    {
+      "id": "Q07",
+      "category": "how",
+      "question": "How does the filesystem collector avoid hanging on an unresponsive network mount, and how long does it wait before giving up on one?",
+      "keywords": [
+        "stuck",
+        "timeout",
+        "unresponsive"
+      ],
+      "relevant": [
+        "collector/filesystem_linux.go"
+      ],
+      "gold": [
+        "collector/filesystem_linux.go:40-46",
+        "collector/filesystem_linux.go:85-95",
+        "collector/filesystem_linux.go:111-130",
+        "collector/filesystem_linux.go:159-180"
+      ]
+    },
+    {
+      "id": "Q08",
+      "category": "how",
+      "question": "How do the include and exclude flags of the network device collector interact, and what happens when the old whitelist or blacklist names are still used?",
+      "keywords": [
+        "whitelist",
+        "blacklist",
+        "device.?include",
+        "device.?exclude"
+      ],
+      "relevant": [
+        "collector/netdev_common.go",
+        "collector/device_filter.go"
+      ],
+      "gold": [
+        "collector/netdev_common.go:31-36",
+        "collector/netdev_common.go:54-83",
+        "collector/device_filter.go:37-41"
+      ]
+    },
+    {
+      "id": "Q09",
+      "category": "how",
+      "question": "Which block devices does the disk statistics collector ignore by default on Linux, and how can that be overridden?",
+      "keywords": [
+        "diskstats",
+        "ignored?",
+        "device.?exclude"
+      ],
+      "relevant": [
+        "collector/diskstats_linux.go",
+        "collector/diskstats_common.go"
+      ],
+      "gold": [
+        "collector/diskstats_linux.go:39",
+        "collector/diskstats_common.go:93-117"
+      ]
+    },
+    {
+      "id": "Q10",
+      "category": "identifier",
+      "question": "What does registerCollector do with its isDefaultEnabled argument, and what command-line flag does it create?",
+      "keywords": [
+        "registerCollector"
+      ],
+      "relevant": [
+        "collector/collector.go"
+      ],
+      "gold": [
+        "collector/collector.go:59-75"
+      ]
+    },
+    {
+      "id": "Q11",
+      "category": "identifier",
+      "question": "How does NewNodeCollector treat a filter that names a collector that is missing or disabled, and does it reuse collectors it already built?",
+      "keywords": [
+        "NewNodeCollector"
+      ],
+      "relevant": [
+        "collector/collector.go"
+      ],
+      "gold": [
+        "collector/collector.go:105-137"
+      ]
+    },
+    {
+      "id": "Q12",
+      "category": "identifier",
+      "question": "What does pushMetric do with nil pointer values and with value types it does not know?",
+      "keywords": [
+        "pushMetric"
+      ],
+      "relevant": [
+        "collector/collector.go"
+      ],
+      "gold": [
+        "collector/collector.go:201-244"
+      ]
+    },
+    {
+      "id": "Q13",
+      "category": "identifier",
+      "question": "Which error value means a collector found nothing to report without failing, and which function tests for it?",
+      "keywords": [
+        "ErrNoData",
+        "IsNoDataError"
+      ],
+      "relevant": [
+        "collector/collector.go"
+      ],
+      "gold": [
+        "collector/collector.go:194-199",
+        "collector/collector.go:164-169"
+      ]
+    },
+    {
+      "id": "Q14",
+      "category": "identifier",
+      "question": "How does deviceFilter.ignored combine its ignore pattern and its accept pattern?",
+      "keywords": [
+        "deviceFilter",
+        "ignored"
+      ],
+      "relevant": [
+        "collector/device_filter.go"
+      ],
+      "gold": [
+        "collector/device_filter.go:20-41"
+      ]
+    },
+    {
+      "id": "Q15",
+      "category": "architecture",
+      "question": "How does a metric collector plug into the exporter: how does it register itself, and how do build tags decide which platforms and collectors get compiled in?",
+      "keywords": [
+        "registerCollector",
+        "go:build"
+      ],
+      "relevant": [
+        "collector/textfile.go",
+        "collector/filesystem_common.go",
+        "collector/collector.go"
+      ],
+      "gold": [
+        "collector/textfile.go:14",
+        "collector/textfile.go:52-54",
+        "collector/filesystem_common.go:14",
+        "collector/filesystem_common.go:94-96",
+        "collector/collector.go:59-75"
+      ]
+    },
+    {
+      "id": "Q16",
+      "category": "architecture",
+      "question": "How are the exporter's own process and Go runtime metrics kept apart from the node metrics, and when are they included in the response?",
+      "keywords": [
+        "exporter.?metrics",
+        "registry"
+      ],
+      "relevant": [
+        "node_exporter.go"
+      ],
+      "gold": [
+        "node_exporter.go:42-50",
+        "node_exporter.go:59-64",
+        "node_exporter.go:147-172",
+        "node_exporter.go:204"
+      ]
+    },
+    {
+      "id": "Q17",
+      "category": "architecture",
+      "question": "How does the exporter limit the number of scrapes handled at the same time, and where does that limit come from?",
+      "keywords": [
+        "max.?requests",
+        "in.?flight"
+      ],
+      "relevant": [
+        "node_exporter.go"
+      ],
+      "gold": [
+        "node_exporter.go:48",
+        "node_exporter.go:56",
+        "node_exporter.go:154",
+        "node_exporter.go:169",
+        "node_exporter.go:204"
+      ]
+    },
+    {
+      "id": "Q18",
+      "category": "config",
+      "question": "What sets the number of processors the Go runtime may use for the exporter, from which flag or environment variable, and what is the default?",
+      "keywords": [
+        "GOMAXPROCS"
+      ],
+      "relevant": [
+        "node_exporter.go"
+      ],
+      "gold": [
+        "node_exporter.go:183-185",
+        "node_exporter.go:201-202"
+      ]
+    },
+    {
+      "id": "Q19",
+      "category": "config",
+      "question": "Which flags tell the exporter where to find the proc and sys filesystems and the root filesystem, and how are they meant to be used when it runs in a container?",
+      "keywords": [
+        "rootfs",
+        "procfs",
+        "sysfs"
+      ],
+      "relevant": [
+        "collector/paths.go",
+        "README.md"
+      ],
+      "gold": [
+        "collector/paths.go:24-30",
+        "collector/paths.go:40-42",
+        "README.md:43-54"
+      ]
+    },
+    {
+      "id": "Q20",
+      "category": "config",
+      "question": "What do I have to set to make the textfile collector read metrics from a directory, which files does it pick up, and how should a file be written so it is read atomically?",
+      "keywords": [
+        "textfile",
+        "\\.prom"
+      ],
+      "relevant": [
+        "collector/textfile.go",
+        "README.md"
+      ],
+      "gold": [
+        "collector/textfile.go:36",
+        "collector/textfile.go:212-214",
+        "README.md:361-370"
+      ]
+    }
+  ]
+}
