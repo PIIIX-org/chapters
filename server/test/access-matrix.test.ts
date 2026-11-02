@@ -148,6 +148,15 @@ describe('read surfaces (#552, #1034)', () => {
     setup: () => shareBoth([FILE, `${MARK}Plan`]),
     read: (actor) => call(actor, 'read_file', { repositoryId, path: FILE }),
   })
+  // The grep target (#423) reads the same text through targets: the same access, every page.
+  accessMatrix('MCP read_note grep', {
+    setup: () => shareBoth([SOURCE, `${MARK}source`]),
+    read: (actor) => call(actor, 'read_note', { vaultId, path: SOURCE, targets: [{ grep: 'orbital' }] }),
+  })
+  accessMatrix('MCP read_file grep', {
+    setup: () => shareBoth([FILE, `${MARK}Plan`]),
+    read: (actor) => call(actor, 'read_file', { repositoryId, path: FILE, targets: [{ grep: 'launch' }] }),
+  })
   accessMatrix('REST GET /api/repositories/:id/files/content', {
     setup: () => shareBoth([fileId, FILE, `${MARK}Plan`]),
     read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(FILE)}`)),

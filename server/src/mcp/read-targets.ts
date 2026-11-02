@@ -34,15 +34,15 @@ import { editDistance, strictArgs } from './strict-input.js'
 /** Most targets one read takes (checked by `checkReadArgs`, not in the schema: tools/list pays for every keyword). */
 export const MAX_TARGETS = 20
 
-export type TargetKind = 'lines' | 'block' | 'heading' | 'symbol'
+export type TargetKind = 'lines' | 'block' | 'heading' | 'symbol' | 'grep'
 export type Target = Partial<Record<TargetKind, string>>
 
-/** The `targets` argument of `tool`, with the target kinds it reads. */
+/** The `targets` argument of `tool`, with the target kinds it reads (`Parts`: the initialize instructions say what it does, #435). */
 export function targetsArg(tool: string, kinds: readonly TargetKind[]) {
   return z
     .array(strictArgs(`${tool} targets[]`, Object.fromEntries(kinds.map((kind) => [kind, z.string().optional()]))))
     .optional()
-    .describe('Parts to read')
+    .describe('Parts')
 }
 
 /** A document targets resolve in; every line range is in the numbering of `text`. */
@@ -56,7 +56,14 @@ export interface TargetDocument {
   symbols: ReadonlyArray<{ path: string; lines: LineRange }> | string
 }
 
-const KINDS: readonly TargetKind[] = ['lines', 'block', 'heading', 'symbol']
+const KINDS: readonly TargetKind[] = ['lines', 'block', 'heading', 'symbol', 'grep']
+
+/** Lines of context a `grep` target shows either side of a matching line. */
+const GREP_CONTEXT = 1
+/** A `grep` pattern is a short literal. */
+const MAX_GREP_PATTERN = 200
+/** A document over this many tokens (characters / 4) names `grep` and `outline` in `narrow` once a read cuts it (#423). */
+const LARGE_TOKENS = 20_000
 
 /** How many candidates an ambiguous heading or symbol suggests. */
 const AMBIGUOUS_SHOWN = 5
@@ -68,7 +75,37 @@ export function targetSections(doc: TargetDocument, targets: readonly Target[]):
   const starts = lineStarts(doc.text)
   // Suggestions for every target of this read share one bounded amount of edit-distance work.
   const work = { cells: SUGGESTION_CELLS }
-  return targets.map((target) => {
+  let grepped = false
+  return targets.flatMap((target) => {
+    if (target.grep !== undefined && KINDS.every((kind) => kind === 'grep' || target[kind] === undefined)) {
+      // `matches`: the lines holding the pattern (literal; case-insensitive unless it has an uppercase letter) with
+      // GREP_CONTEXT lines either side, as `grep -n` prints them: `n:` a match, `n-` its context, `--` between
+      // ranges that do not touch. One text section, so the budget cuts it at a line, `truncated` counts its lines
+      // and the cursor continues it (its guard is the text, recomputed from the document on every page).
+      const pattern = target.grep
+      if (pattern === '' || pattern.length > MAX_GREP_PATTERN || grepped) {
+        const why = grepped ? 'a read takes one grep target' : `grep is a text of 1 to ${MAX_GREP_PATTERN} characters`
+        return [textSection({ name: 'targets', text: '', lines: false, part: { ...target, error: envelope('INVALID_ARGUMENT', why) } })]
+      }
+      grepped = true
+      const fold = pattern === pattern.toLowerCase()
+      let found = ''
+      let shownTo = 0
+      for (let line = 1; line <= starts.length; line++) {
+        const text = wholeLines(doc.text, line, line, starts)
+        if (!(fold ? text.toLowerCase() : text).includes(pattern)) continue
+        const from = Math.max(1, line - GREP_CONTEXT)
+        // Context of the previous match already printed counts as printed; a gap gets `--`.
+        if (shownTo > 0 && from > shownTo + 1) found += '--\n'
+        for (let n = Math.max(from, shownTo + 1); n <= Math.min(starts.length, line + GREP_CONTEXT); n++) {
+          const row = wholeLines(doc.text, n, n, starts)
+          const hit = n === line || (fold ? row.toLowerCase() : row).includes(pattern)
+          found += `${n}${hit ? ':' : '-'}${row.endsWith('\n') ? row : `${row}\n`}`
+        }
+        shownTo = Math.min(starts.length, line + GREP_CONTEXT)
+      }
+      return [textSection({ name: 'matches', text: found })]
+    }
     const resolved = resolve(doc, target, starts.length, work)
     if ('error' in resolved) return textSection({ name: 'targets', text: '', lines: false, part: { ...target, error: resolved.error } })
     const [a, b] = resolved.lines
@@ -78,7 +115,7 @@ export function targetSections(doc: TargetDocument, targets: readonly Target[]):
 
 function resolve(doc: TargetDocument, target: Target, total: number, work: { cells: number }): Resolved {
   const kinds = KINDS.filter((kind) => target[kind] !== undefined)
-  if (kinds.length !== 1) return { error: envelope('INVALID_ARGUMENT', 'a target names one of lines, block, heading or symbol') }
+  if (kinds.length !== 1) return { error: envelope('INVALID_ARGUMENT', 'a target names one of lines, block, heading, symbol or grep') }
   const kind = kinds[0]!
   const value = target[kind]!
   if (kind === 'lines') {
@@ -217,6 +254,12 @@ export function outlineNarrow(entries: readonly OutlineEntry[]): string[] {
   const target = first?.heading !== undefined ? { heading: first.heading } : first?.symbol !== undefined ? { symbol: first.symbol } : null
   return [...(target ? [`targets: [${JSON.stringify(target)}]`] : []), 'outline: false']
 }
+
+/**
+ * What a read cut by its budget suggests for a document over LARGE_TOKENS (#423): find the passage with a `grep` target,
+ * or list the outline, before paging the rest.
+ */
+export const largeNarrow = (text: string): string[] => (text.length > LARGE_TOKENS * 4 ? ['targets: [{"grep":"<text>"}]', 'outline: true'] : [])
 
 /** A read's outline and what its targets resolve in, besides the text. */
 export type DocumentParts = Omit<TargetDocument, 'text'> & { outline: OutlineEntry[] }

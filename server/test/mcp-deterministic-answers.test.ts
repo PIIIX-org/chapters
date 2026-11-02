@@ -341,6 +341,9 @@ const QUESTIONS: Question[] = [
   { name: 'browse_repository folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, path: 'src' }) },
   ...NOTES.map((n): Question => ({ name: `read_note ${n.path}`, tool: 'read_note', args: (w) => ({ vaultId: w.vaultId, path: n.path }) })),
   ...FILES.map((f): Question => ({ name: `read_file ${f.path}`, tool: 'read_file', args: (w) => ({ repositoryId: w.repoId, path: f.path }) })),
+  // The grep target (#423) searches the text it reads: the same lines in the same order, whatever the ids.
+  { name: 'read_file grep', tool: 'read_file', args: (w) => ({ repositoryId: w.repoId, path: 'src/upload.ts', targets: [{ grep: 'export function' }] }) },
+  { name: 'read_note grep', tool: 'read_note', args: (w) => ({ vaultId: w.vaultId, path: 'index', targets: [{ grep: 'upload' }] }) },
   { name: 'repository_status', tool: 'repository_status', args: (w) => ({ repositoryId: w.repoId }) },
 ]
 
