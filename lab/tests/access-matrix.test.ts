@@ -29,6 +29,8 @@ const test: LabTest = {
     // A caller and a test of the plan: the sites the code queries (#470) list.
     const run = `src/${mark}-run.ts`
     const runTest = `src/${mark}-run.test.ts`
+    // Added by a second sync, so `changed_since` (#471) has a change to name.
+    const added = `src/${mark}-added.ts`
 
     // ------------------------------------------------------------ accounts
     const password = `Lab-${crypto.randomUUID()}`
@@ -57,6 +59,9 @@ const test: LabTest = {
       )
       return rows[0]?.n === 1 ? true : undefined
     }, 240_000, 2_000)
+    await copyIntoLocalRepo(ctx, writeTree({ [added]: `export const ${mark}Added = 1\n` }), repoName)
+    await rest.owner.must('POST', `/api/repositories/${repositoryId}/sync`, {})
+    await settleRepo(ctx, repositoryId, 'lab-matrix-repo-added', { stallMs: 60_000, timeoutMs: 240_000, minFiles: 4 })
     const fileRow = await rest.owner.get<{ id: string }>(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`)
     const fileId = fileRow.json?.id ?? ''
     data.fixtures = { vaultId, repositoryId, sourceId: sourceNote.id, fileId, repoSettle: repoSettle.outcome, embedded: embedded === true }
@@ -92,6 +97,7 @@ const test: LabTest = {
       { name: 'REST GET /api/vaults/:id/notes/*', identifiers: [sourceNote.id, source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/notes/${source}`) },
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
+      { name: 'MCP browse_repository changed_since', identifiers: [added], share, read: viaMcp('browse_repository', { repositoryId, changed_since: '2000-01-01' }) },
       ...(['references', 'callers', 'impact'] as const).map((refs) => ({
         name: `MCP find_symbols refs: ${refs}`,
         identifiers: [run, `${mark}Run`],
@@ -109,6 +115,9 @@ const test: LabTest = {
       { name: 'REST GET /api/repositories/:id/code-refs (at)', identifiers: [`${mark}Run`, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/code-refs?refs=at&query=${encodeURIComponent(`${run}:4`)}`) },
       { name: 'MCP search in a vault', identifiers: [sourceNote.id, source], share, read: viaMcp('search', { vaultId, query: `${mark}source` }) },
       { name: 'MCP search everywhere', identifiers: [sourceNote.id, source], kind: 'listing', share, read: viaMcp('search', { everywhere: true, query: `${mark}source` }) },
+      { name: 'MCP grep in a vault', identifiers: [source, `${mark}source`], share, read: viaMcp('grep', { vaultId, pattern: `${mark}source` }) },
+      { name: 'MCP grep in a repository', identifiers: [file, `${mark}Plan`], share, read: viaMcp('grep', { repositoryId, pattern: `${mark}Plan` }) },
+      { name: 'MCP grep everywhere', identifiers: [source, `${mark}source`], kind: 'listing', share, read: viaMcp('grep', { everywhere: true, pattern: `${mark}source` }) },
       { name: 'REST GET /api/search (everywhere)', identifiers: [sourceNote.id, source], kind: 'listing', share, read: viaRest(`/api/search?q=${mark}source`) },
       { name: 'REST GET /api/vaults/:id/backlinks/*', identifiers: [sourceNote.id, source], share, read: viaRest(`/api/vaults/${vaultId}/backlinks/${target}`) },
       { name: 'MCP graph neighborsOf the target', identifiers: [source], share, read: viaMcp('graph', { vaultId, neighborsOf: target, edgeTypes: ['extracted'] }) },

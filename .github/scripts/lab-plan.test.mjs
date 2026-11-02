@@ -30,8 +30,8 @@ describe('plan', () => {
     assert.equal(plan(['server/src/export/backup.ts']).bench, 'none')
   })
 
-  it('search, MCP or benchmark changes run every suite and require the golds', () => {
-    for (const file of ['server/src/search/fusion.ts', 'server/src/mcp/tools/read.ts', 'benchmarks/questions/rea.json', 'benchmarks/lib/policies.ts', 'benchmarks/run.ts',
+  it('search, the MCP budget ladder and reads, extraction or benchmark changes run every suite and require the golds', () => {
+    for (const file of ['server/src/search/fusion.ts', 'server/src/mcp/response.ts', 'server/src/mcp/read-targets.ts', 'server/src/mcp/session-reads.ts', 'benchmarks/questions/rea.json', 'benchmarks/lib/policies.ts', 'benchmarks/run.ts',
       'server/src/repositories/extraction.ts', 'server/src/repositories/extraction-queue.ts', 'server/src/repositories/extraction-languages.ts', 'server/src/repositories/code-blocks.ts',
       'server/src/repositories/code-edges.ts', 'server/src/repositories/code-edge-rules.ts', 'server/src/repositories/outline.ts',
       'server/src/repositories/import-resolution.ts', 'server/src/repositories/language.ts', 'server/src/text/blocks.ts', 'server/src/text/lines.ts', 'server/src/text/targets.ts',
@@ -52,6 +52,16 @@ describe('plan', () => {
     for (const file of ['server/src/repositories/store.ts', 'server/src/repositories/git-sync.ts', 'server/src/repositories/routes.ts', 'server/src/repositories/scheduler.ts', 'server/src/text/other.ts']) {
       assert.equal(plan([file]).golds, false, file)
     }
+  })
+
+  it('the rest of the MCP code (tool definitions, contracts, new tools) runs the chapters suite only', () => {
+    for (const file of ['server/src/mcp/server.ts', 'server/src/mcp/tools/read.ts', 'server/src/mcp/code-queries.ts', 'server/src/mcp/grep.ts', 'server/src/mcp/prompts.ts', 'server/src/mcp/response-shapes.ts', 'server/src/mcp/sub/read-targets.ts']) {
+      const p = plan([file])
+      assert.equal(p.bench, 'chapters', file)
+      assert.equal(p.golds, false, file)
+    }
+    // A mixed PR takes the larger plan.
+    assert.deepEqual(plan(['server/src/mcp/server.ts', 'server/src/mcp/response.ts']).bench, 'all')
   })
 
   it('the wider chapters set runs the chapters suite only, without the golds floor', () => {
@@ -80,7 +90,8 @@ describe('plan', () => {
   })
 
   it('prints key=value lines for $GITHUB_OUTPUT', () => {
-    assert.equal(outputs(plan(['server/src/mcp/server.ts'])), 'tier=fast\nalso=\nbench=all\ngolds=true')
+    assert.equal(outputs(plan(['server/src/mcp/response.ts'])), 'tier=fast\nalso=\nbench=all\ngolds=true')
+    assert.equal(outputs(plan(['server/src/mcp/server.ts'])), 'tier=fast\nalso=\nbench=chapters\ngolds=false')
     const dir = mkdtempSync(join(tmpdir(), 'lab-plan-'))
     const list = join(dir, 'changed.txt')
     writeFileSync(list, 'docs/x.md\r\nserver/src/db/schema.ts\n\n')

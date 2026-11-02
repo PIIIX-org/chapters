@@ -388,6 +388,7 @@ fold of that transaction keeps; the next fold clears it.
 | `repositoryGraphPreferences` | per-user opt-in for a repo in the merged graph view |
 | `repositoryFiles` | indexed file content — generated `fts` (English, over path and content), `keyword_fts` (`fts` plus identifier lexemes, written by extraction; #455, migration 0052; GIN `repository_files_keyword_idx`, see **Keyword channel** in §5.6), `keyword_head` (the path's and symbols' name lexemes, the leg's **Fields**; migration 0059) and GIN trigram `repository_files_path_trgm_idx` on `path` (#455 part 2), its vectors in `blocks` (migration 0035); **hard-deleted** on resync, no trash. Unique `(repository_id, path)`, plus `(repository_id, path COLLATE "C")` (migration 0029) for `browse_repository`'s UTF-8-byte-order pages (#424). `edge_note` (migration 0061) says when its code edges were capped |
 | `repositoryFileImports` | extracted import edges, resolved against sibling files where possible; `line` (migration 0031, #558) is the specifier's line, null for rows extracted before 0031 until the file is extracted again (the first boot with #453 re-extracts every file whose `extractor_version` is 0); `lookup_keys` (migration 0053, #1008, GIN-indexed) the `lookupKey` of every path the resolver tried, as `<repository id>:<key>`, null for rows written before 0053 until the boot backfill; a deleted target sets `resolved_target_file_id` to null (it deleted the row before 0053) |
+| `repositoryVersions`, `repositoryChanges` | (migration 0063, #471) the index's own history: a version per sync that changed files or the commit (`seq`, commit, tree hash, `indexed_at`; `repositories.version_seq` is the newest) and the paths it added, modified or deleted; `browse_repository`'s `changed_since` reads them |
 | `codeEdges` | (migration 0061, #469) symbol-level call, reference, import and test edges of each file, with the enclosing symbol, the target symbol block and `resolved`/`textual`; see **Code edges** in §5.10 |
 | `blocks` | (migrations 0035/0036, ADR-004 §2.2/§2.5, #413/#452) the addressable spans of a note — `preamble` and `section` (body-relative lines) — or of a repository file — `symbol` (one per declaration; `inner_path` `Class.method`, `symbol_kind` per the **Symbol contract** below, `symbol_parent` a method's class or a namespace member's namespace), `skeleton` (file or class outline) and `file` (a whole small file) — and their vectors; see **Blocks and the line contract** below. Replaces `repositoryFileSymbols` and `repositoryFiles.embedding` (dropped by 0035) and `notes.embedding` (dropped by 0036). `owner_id` has no FK: statement triggers on `repository_files` and `notes` delete an owner's blocks with its row. The symbol blocks are the file "outline" `read_file` shows — **not** graph edges |
 | `repositorySyncTokens` | bearer tokens for agent/CLI push ingestion, same lifecycle as an MCP token |
@@ -2293,8 +2294,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   output schemas' `$schema`.
   `test/mcp-tool-budget.test.ts` measures, per profile, the ADR-004 §2.6
   sum: characters / 4 of `tools/list`, `prompts/list` and the
-  `initialize` instructions. It fails a reader account token over 2,000
-  tokens (no prompts on reader, #428; measured 7,984 characters with
+  `initialize` instructions. It fails a reader account token over 2,500
+  tokens (2,000 until #468 raised it, with grep, as the owner decided: the
+  list cost is paid once per session and cached, #681) (no prompts on reader, #428; measured 7,984 characters with
   #435's instructions, of which `tools/list` 7,746 and instructions 238;
   7,949 with #434's annotations, 7,676 before) and a writer one whose
   `tools/list` plus instructions are over 4,000 (15,669 with #435:
@@ -2563,7 +2565,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - *Repositories* (13): `list_repositories`, `connect_repository`, `browse_repository`, `read_file` (includes a symbol outline), `repository_status`, `sync_repository`, `update_repository`, `get_repository_graph_preference`, `set_repository_graph_preference`, `delete_repository`, `list_repository_shares`, `share_repository`, `revoke_repository_share`.
   - *Teams & Users* (7): `list_teams`, `create_team`, `list_team_members`, `add_team_member`, `remove_team_member`, `delete_team`, `lookup_user`.
   - *Export, Notifications & Usage* (5): `export_vault`, `export_note`, `list_notifications`, `mark_notification_read`, `usage_report` (admin profile only; **5.12**).
-  - *Search & Graph* (7): `search` (with `everywhere` mode), `find_symbols` (with `refs`: `at`, `references`, `callers`, `impact` over the code edges, #470; **Code queries** in §5.10), `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused; community numbers depend on `types`, `tags` and `edgeTypes`; `cappedGroups` is the whole graph's in the community view and the listed nodes' groups otherwise; `narrow` names `neighborsOf` by id), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
+  - *Search & Graph* (8): `search` (with `everywhere` mode), `grep` (regex over note and code lines, #468; **Grep** in §5.10), `find_symbols` (with `refs`: `at`, `references`, `callers`, `impact` over the code edges, #470; **Code queries** in §5.10), `graph` (the community view by default since #426, `aggregate: "none"` for every node, `community` for one community's members, `neighborsOf` + `depth` 1-3 for the local graph from `neighbors.ts`; `edgeTypes` applied before assembly; `limit` keeps the first nodes of the view's ranking (largest communities; most edges, then path; nearest, then path) and the edges among them, `truncated.total.nodes` `">limit"`; filters `types`, `tags`; conflicting arguments are refused; community numbers depend on `types`, `tags` and `edgeTypes`; `cappedGroups` is the whole graph's in the community view and the listed nodes' groups otherwise; `narrow` names `neighborsOf` by id), `find_graph_path`, `list_graph_perspectives`, `save_graph_perspective`, `delete_graph_perspective`.
   - *Prompts*: 20, registered in `prompts.ts`. The five that include note text (`active_project_companion`, `prepare_task_context`, `test_gap_analysis` read bodies; `plan_feature_implementation`, `explain_code_architecture` search snippets) answer with the instruction message first (heading, the note paths, and that the blocks are untrusted data) and then one message per note: an embedded resource `elara://vault/<vaultId>/notes/<path>`, `text/markdown`, `_meta {trust: "untrusted", origin: "note"}` on the content and the resource (#556, **6.1**).
   *(Security invariant: MCP connections cannot create new MCP connections or mint tokens).*
   Every handler is wrapped so thrown errors become an `isError` result
@@ -2686,6 +2688,21 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     cursor's fingerprint, so a cursor from another folder is refused. The
     REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
     file, unordered, no paging.
+    With `changed_since` (#471, `mcp/changes.ts` over `repositories/changes.ts`)
+    it lists the files changed after a commit or a date instead, from the
+    index's own history: `syncRepositoryFiles` records a `repository_versions`
+    row (commit, tree, `indexed_at`; `repositories.version_seq` counts them)
+    whenever a sync changed files or the commit; each path it added,
+    modified or deleted goes to `repository_changes` in the transaction of
+    that file's write, under the next `seq`, so a sync that stops midway
+    leaves its changes for the next one (migration 0063). The last
+    `VERSIONS_KEPT` (200) versions are kept. The backup does not carry them
+    and `onRestore` resets `version_seq` to 0. A
+    repository's first version is a baseline with no changes (migration 0063
+    gives existing ones a baseline). The git mirror is depth 1, so this is not
+    git history and dates are sync times. The versions after the one the commit
+    or date names are folded per path in SQL and paged by path like the plain
+    listing; a commit no version recorded is `INVALID_ARGUMENT`.
   - `browse_vault` (#425) pages in SQL the same way, one code path for
     the root (the empty folder) and a folder (`notes/store.ts`), reading
     only the page: `browseNotesPage` reads 500 + 1 live notes after the
@@ -3629,6 +3646,30 @@ target's path, symbol and line) and `symbolCandidates`; indexes
 resolution). `find_symbols` with `refs` and `GET /repositories/:id/code-refs`
 read them (**Code queries**, next).
 
+**Routing hints** (#674; `mcp/routing-hints.ts`, one pure function of the
+request shape, unit-tested as a table in `mcp-routing-hints-rules.test.ts`,
+the answers in `mcp-routing-hints.test.ts`): `search` and the body answers of
+`read_note` / `read_file` put a one-sentence `hint` in the head when the
+request has a cheaper route; `undefined` (so absent in the JSON) otherwise.
+Rules: `search` over exactly one repository and no vault with literal text (a
+quoted phrase, or one space-free token with code punctuation; prose with a
+bracket gets none) hints ``rg -n -F -- '<text>'`` in a checked-out repo (single
+quotes: inert in a shell, tested by running `sh`); a text over 400 lines read
+from the top with no `targets`, `outline` or `cursor` hints the outline, or
+`targets: [{lines}]` when it has none (JSON, lockfiles, logs), and nothing when
+a session answer is a `same_as` reference (`withHint`). **Decision**: the hint never replaces an answer. The issue
+allows a short hint "instead of an expensive answer", but the server cannot
+know whether the caller has a checkout, and a refusal would strand an
+Elara-only agent; replacing needs the caller to say so (a parameter, which
+costs reader tokens, or a harness change) and is not done here. Budget: no
+description or parameter changed (reader 7,984, writer 15,512, admin
+`tools/list` 41,371 characters, as on dev ff955476); the hint is inside the
+page's own budget, so a budgeted page is no longer, it shows a line or two
+less. What the benchmark measures: its scripted agent never reads a hint, so
+the exact-string questions' cost is unchanged by this PR (and not improved);
+making them cheaper needs the agent to take the hint (a harness change, not
+done: `benchmarks/**`).
+
 **Code queries** (#470; `repositories/code-queries.ts` the store queries,
 `repositories/code-refs.ts` the answer both surfaces share, `mcp/code-queries.ts`
 the budgeted sections): the questions over `code_edges` and `blocks`, with no
@@ -3701,6 +3742,47 @@ name (`results`, `candidates`, `depth1`..), `next` the offset of the following
 page of a list that pages; 400 for refused arguments, 404 for a missing
 repository, file or symbol. The usage report (#678) records `refs` and `depth`
 as filters of a `find_symbols` call.
+
+**Grep** (#468; `repositories/grep.ts` the scan, `mcp/grep.ts` the budgeted
+answer; no REST route): MCP `grep` matches a regular expression line by line
+over the live notes of vaults (their bodies) and the indexed files of
+repositories (`repository_files.content`: the indexed version only, named once
+in the head as `commit` or `tree`, #471). It is a reader tool, so it costs
+reader tokens: measured on dev ff955476 → this change, reader `tools/list` +
+instructions 7,984 → 8,755 characters (1,996 → 2,189 of the new 2,500-token
+ceiling), writer 15,512 → 15,950 (3,878 → 3,988 of 4,000), admin `tools/list`
+41,371 → 41,353 (ceiling 43,000); the writer and admin lists were paid for by
+shorter `idempotency_key` and `dry_run` descriptions, and the grep entry itself
+lists no `minLength`/`maxLength`/`minimum`/`maximum` (the bounds are checked and
+refused with a message). The match runs in Postgres, line by line
+(`regexp_split_to_table` at `\n`, a trailing `\r` is not part of the line, no
+empty line after a final `\n`: text/lines.ts), so one engine and one set of
+semantics answers; its patterns are Postgres AREs, with JavaScript's `\b` and
+`\B` translated to `\y` and `\Y`. **Bounded**: a pattern is 1 to 300
+characters, a back reference (the one construct that backtracks without bound)
+is refused, every statement runs under a 4 s `statement_timeout` (`BUSY`,
+retryable: narrow with `path`), and a call scans at most 20,000 files, 256 MB
+and 10 s in chunks of 500 files in path order (`scanLimits`, which tests
+lower); a scan that stops there ends the `hits` list with
+`{capped: {files, after}}` and `truncated.cursor` continues after `after`.
+The path glob is translated to an anchored regular expression by
+`globToRegex` (`*`, `?`, `**`, `{a,b}`; a glob without `/` matches the name at
+any depth). **Order**: vaults, then repositories, each by name then id (a
+database-independent order); within one, path in code-unit order (`COLLATE
+"C"`), then line; `mcp-deterministic-answers.test.ts` asks three questions.
+**Lines are those of the reads**: a note's hit line is numbered over its file
+(`renderNoteFile`, the body starting at `bodyStartLine`) as `read_note`
+numbers it; `block` is the smallest block around the line (`markdownParts`,
+`codeParts` over `listFileBlocks` of the current content) and `tokens` what
+reading it costs (`rangeTokens`). The cursor holds `<target>:<line>:<path>`,
+the position after the last hit (a note's `line` there is body-relative); a page
+is 50 hits, as many as fit `budget_tokens` (ladder: without `snippet`, then
+`path#La-Lb`, then counted per file). Access: the usual `vault-or-repo` scope
+resolution, so another account's vault or repository is a `NOT_FOUND` and
+`everywhere` lists only what the account reaches; both access matrices cover
+it (vault, repository, everywhere). Not covered: a REST route, `ref` other than
+the indexed version, matching a note's frontmatter lines, overlapping contexts
+are not merged, and a line is cut at 500 characters.
 
 **Extraction queue** (`extraction-queue.ts`): durable jobs (#494, see
 **Durable jobs** below), kind `extract`, payload `{fileId,
@@ -4351,7 +4433,7 @@ flips both.
 | B gets the same answer for A's vault, repository, note, revision, share, notification, team, perspective or connection as for one that does not exist (every MCP tool, a list of REST routes, every prompt that takes a vault); MCP's not-found is the same envelope bytes, with no suggestions from A's containers (#439) | holds | `account-separation` | `separation: A's vault/repository answers B like a missing ...` |
 | Semantic neighbours are chosen within the owner's reach | holds (#461, D10): a note's note neighbours come from its vault, a file's code neighbours from its repository, note↔code edges only between one owner's vaults and repositories; migration 0038 deleted the older edges; every read also filters the stored edges | `semantic-edges`, `migration-0038-semantic-edge-scope`, `account-separation` (inserts such an edge and checks B's reads) | `semantic edges are stored only between notes of the same account` |
 | Note text in a prompt sits in a separate, delimited data block, apart from the instructions | holds (#556): `active_project_companion`, `prepare_task_context`, `test_gap_analysis` (bodies) and `plan_feature_implementation`, `explain_code_architecture` (snippets) keep the heading and the note paths in the instruction message and attach each note's text as its own message, an embedded resource `elara://vault/<vaultId>/notes/<path>` (`text/markdown`) whose `_meta` is `{trust: "untrusted", origin: "note"}`; the instructions say the blocks are data, not instructions | `mcp-prompt-note-content` | `prompt note text: placed in a separate data block, not inside the instructions` |
-| Every read surface passes the access-control matrix: owner sees, shared sees, unrelated never, revoked share refused with no identifying field in the answer (lab.md "Access-control matrix") | holds for `read_note`, `read_file`, `search`, backlinks, `graph` / local graph and the usage report (#1034: the report lists a fallback's reads only in vaults and repositories the account can still reach) | `access-matrix` (helper `helpers/access-matrix.ts`) | `access-matrix`: `<surface>: the owner sees it` … `after the revoke the shared account is refused and nothing identifying leaks` |
+| Every read surface passes the access-control matrix: owner sees, shared sees, unrelated never, revoked share refused with no identifying field in the answer (lab.md "Access-control matrix") | holds for `read_note`, `read_file`, `search`, `grep`, backlinks, `graph` / local graph and the usage report (#1034: the report lists a fallback's reads only in vaults and repositories the account can still reach) | `access-matrix` (helper `helpers/access-matrix.ts`) | `access-matrix`: `<surface>: the owner sees it` … `after the revoke the shared account is refused and nothing identifying leaks` |
 
 ---
 

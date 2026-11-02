@@ -34,7 +34,7 @@ Elara is a team knowledge base and codebase mapping platform built on four found
 
 ### 1. Navigation Protocol: Pick the Cheaper Tool
 When exploring a project or answering questions about architecture, concepts, or code:
-- **Pick the cheaper tool.** Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions that span repos. In one checked-out repo, try Elara `search` first for natural-language questions; for an exact identifier or string, `grep`/`glob` plus a ranged read is cheaper ([benchmark](https://github.com/PIIIX-org/chapters/blob/dev/benchmarks/README.md)). Never read a whole file when a line range or outline will do.
+- **Pick the cheaper tool.** Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions that span repos. In one checked-out repo, try Elara `search` first for natural-language questions; for an exact identifier or string, `grep` (Elara's, or `rg` locally) plus a ranged read is cheaper ([benchmark](https://github.com/PIIIX-org/chapters/blob/dev/benchmarks/README.md)). Never read a whole file when a line range or outline will do. Elara says so itself: a `search` for literal text in one repository, and a read of a long text from the top, carry a `hint` naming the cheaper route (`rg -n -F`, `outline: true` then `targets`); the answer is still given.
 - **Step 1 — Search & Symbols**:
   - Run `search` (or `/elara-search` / legacy `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
   - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, methods, classes, interfaces, types or enums with exact declaration line numbers without reading whole files.
@@ -204,9 +204,9 @@ Exports a vault zip archive or single note markdown file.
 
 ---
 
-## Elara MCP Tool Reference (61 Tools)
+## Elara MCP Tool Reference (62 Tools)
 
-Elara exposes 61 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Its **profile** (`reader` < `writer` < `admin`) is the tool set it lists and may call: `reader` has `list_vaults`, `list_repositories`, `browse_vault`, `browse_repository`, `search`, `read_note`, `read_file`, `find_symbols`, `graph` and `find_graph_path`; `writer` adds `create_note`, `edit_note` and `append_note`; `admin` has every tool. API tokens minted without a profile, and every token minted before profiles, are `admin`; the Settings and vault forms start at the profile matching the access level. Through the API, account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A pinned token never gets more than its user's permission on the pin: with a read-only vault share the token is `read` (asking for more is refused). The Settings and vault forms start at `write`, or at `read` for a read-only vault member. `tools/list` shows a token only the tools it can call (allow-list, access level, profile, scope; on a pinned token also the user's current permission on the pin, so owner-only tools such as `list_vault_shares` appear only to the owner, and tools that need edit access such as `list_trash` or `note_history` only to an editor). A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, `<tool> needs the writer profile; this connection has the reader profile ...`); ask the user for a token with that capability or profile instead of retrying.
+Elara exposes 62 tools across 7 functional domains. **Capability** is the token access level a tool needs: a token is `read`, `write` or `admin` (ordered), chosen when it is minted, and may also carry a tool allow-list and an expiry. Its **profile** (`reader` < `writer` < `admin`) is the tool set it lists and may call: `reader` has `list_vaults`, `list_repositories`, `browse_vault`, `browse_repository`, `search`, `grep`, `read_note`, `read_file`, `find_symbols`, `graph` and `find_graph_path`; `writer` adds `create_note`, `edit_note` and `append_note`; `admin` has every tool. API tokens minted without a profile, and every token minted before profiles, are `admin`; the Settings and vault forms start at the profile matching the access level. Through the API, account tokens default to `admin`; vault- and repository-pinned tokens default to `write`, so they cannot share, update, trash or purge their pin or erase history unless the owner minted them with `admin`. A pinned token never gets more than its user's permission on the pin: with a read-only vault share the token is `read` (asking for more is refused). The Settings and vault forms start at `write`, or at `read` for a read-only vault member. `tools/list` shows a token only the tools it can call (allow-list, access level, profile, scope; on a pinned token also the user's current permission on the pin, so owner-only tools such as `list_vault_shares` appear only to the owner, and tools that need edit access such as `list_trash` or `note_history` only to an editor). A refusal names the missing capability (`<tool> needs the admin capability; this connection has write access ...`, `<tool> is not in this connection's tool allow-list`, `<tool> needs the writer profile; this connection has the reader profile ...`); ask the user for a token with that capability or profile instead of retrying.
 
 ### 1. Vault Management (14 tools)
 | Tool | Scope | Capability | Description |
@@ -250,7 +250,7 @@ Elara exposes 61 tools across 7 functional domains. **Capability** is the token 
 | :--- | :--- | :--- | :--- |
 | `list_repositories` | Account | `read` | List all connected codebase repositories. |
 | `connect_repository` | Account | `admin` | Connect a repo (git URL or local filesystem path). |
-| `browse_repository` | Repo/Account | `read` | List a repository's indexed files by path, in pages; `path` lists one folder's subtree. |
+| `browse_repository` | Repo/Account | `read` | List a repository's indexed files by path, in pages; `path` lists one folder's subtree; `changed_since` (commit or date) only the files changed since. |
 | `read_file` | Repo/Account | `read` | Read a code file from line 1, in pages of `budget_tokens`; `targets` reads symbols, line ranges, blocks or headings in one call, `outline: true` lists its symbols. |
 | `repository_status` | Repo/Account | `read` | Check sync state, last sync time, last sync error, `filesPendingExtraction`, `extractionFailures` and `skipped` (files left out, by reason). |
 | `sync_repository` | Repo/Account | `write` | Trigger immediate synchronization of a repository. |
@@ -262,10 +262,11 @@ Elara exposes 61 tools across 7 functional domains. **Capability** is the token 
 | `share_repository` | Repo/Account | `admin` | Share read access with a user or team. |
 | `revoke_repository_share` | Repo/Account | `admin` | Revoke repository read access. |
 
-### 4. Search & AST Code Symbols (2 tools)
+### 4. Search & AST Code Symbols (3 tools)
 | Tool | Scope | Capability | Description |
 | :--- | :--- | :--- | :--- |
 | `search` | Any | `read` | Hybrid search (lexical + semantic) across notes and code with `symbols` support. |
+| `grep` | Any | `read` | Regex over note and indexed code lines (path glob, context lines): located hits `{path, line, block, tokens, snippet}` in path then line order, capped, paged by cursor. |
 | `find_symbols` | Repository/Account | `read` | Keyword and semantic search for code symbols (functions, methods, classes, interfaces, types, enums, exported consts, namespaces) with file path and line range. Vault-scoped tokens are refused. |
 
 ### 5. Knowledge Graph & Perspectives (5 tools)
