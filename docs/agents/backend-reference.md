@@ -3519,6 +3519,27 @@ stale target until its file is extracted again. Wikilink rows without lines or a
 from their note's body by the `note_links` catch-up jobs (#472, see **Link
 catch-up** below), queued before `listen`.
 
+**Shared work by content** (#684 part B, `repositories/blob-cache.ts`,
+migration 0063): blocks, edges and imports stay one set of rows per
+repository file (ids, access and cascade deletes are per repository).
+What is a function of the content alone is reused. `processFile` takes a
+block's vector, when the file's own blocks lack it, from a code block with
+the same `embed_key` (model + embedded text) in another repository **of the
+same account** (`repositories.owner_id`; `vectorsInAccount`, served by the
+partial index `blocks_code_embed_key_idx`): what comes back is the vector
+the caller's own text embeds to, so no content is read, but the lookup never
+crosses accounts (a 64-bit key is not where one account's rows stand in for
+another's), and another account's identical file is embedded again. A reused
+vector counts as new to the file for the semantic edge refresh (#1007), like
+an embedded one. `parsed()` keeps the symbols, imports and sites of a content
+in this process (2,000 entries, least recently used out), keyed by
+`EXTRACTOR_VERSION`, the language label, the grammar the extension selects
+and the content hash, so a second repository or branch with the same blob is
+not parsed again; `parseCacheStats` counts parses and reuses. A sync with no
+change parses and embeds nothing and a one-file change re-processes one
+file (#684 part A, `test/repository-git-mirror.test.ts`);
+`test/blob-sharing.test.ts` and `test/blob-parse-cache.test.ts` cover this part.
+
 **Code edges** (`code-edge-rules.ts`, `code-edges.ts`, table `code_edges`,
 migration 0061, #469, ADR-004 §2.8): the symbol-level edges #470
 (`symbol_at`, `references`, `callers`, `impact`, `tests_for`) and #534 (the

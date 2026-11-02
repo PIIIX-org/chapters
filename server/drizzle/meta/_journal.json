@@ -372,6 +372,13 @@
       "when": 1793700000000,
       "tag": "0062_note_crdt_rebase_clock",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1793750000000,
+      "tag": "0063_blocks_code_embed_key",
+      "breakpoints": true
     }
   ]
 }

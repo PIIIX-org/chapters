@@ -1027,6 +1027,10 @@ export const blocks = pgTable(
     unique('blocks_owner_block').on(t.ownerType, t.ownerId, t.blockId),
     // The unique index also serves (owner_type, owner_id) lookups.
     index('blocks_container_idx').on(t.containerId),
+    // A code block's vector by its embed key, for reuse between a repository's account siblings (#684, migration 0063).
+    index('blocks_code_embed_key_idx')
+      .on(t.embedKey)
+      .where(sql`owner_type = 'code' AND embedding IS NOT NULL`),
     // A repository's symbol blocks by bare name, for code edge resolution (#469, migration 0061; code-edges.ts `SYMBOL_NAME`).
     index('blocks_symbol_name_idx')
       .on(t.containerId, sql`(CASE WHEN symbol_parent IS NULL THEN inner_path ELSE substr(inner_path, length(symbol_parent) + 2) END)`)
