@@ -132,17 +132,9 @@ describe('S3 performance acceptance (§11)', () => {
       expect(p(0.95)).toBeLessThan(BUDGET_MS)
     } finally {
       providers.forEach((p) => p.destroy())
-      // Isolate the next attempt (#905): the last tab leaving unloads the document with a fold of the 1 MiB note. Wait
-      // for the relay to drop it and for the fold's revision to land, so a `--retry` does not measure under this load.
-      await waitFor(() => collab.hocuspocus.getDocumentsCount() === 0)
-      let last = -1
-      await waitFor(async () => {
-        const n = await revisionCount(note.id)
-        const settled = n === last
-        last = n
-        await new Promise((r) => setTimeout(r, 500))
-        return settled
-      })
+      // Isolate the next attempt (#905): the last tab leaving unloads the document with a fold of the 1 MiB note; wait
+      // for the relay to drop it and finish the fold, so a `--retry` does not measure under this load.
+      await collab.idle()
     }
   }, 120_000)
 })
