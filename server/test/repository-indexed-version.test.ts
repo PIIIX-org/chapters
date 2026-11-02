@@ -283,6 +283,19 @@ describe('agent push takes an optional commit', () => {
     }
   })
 
+  it('browse_repository changed_since lists what the pushes after a commit changed (#471)', async () => {
+    const { repoId, push } = await pushRepo()
+    const NEXT = 'fedcba9876543210fedcba9876543210fedcba98'
+    await push({ files, currentPaths: ['src/thrust.ts'], commit: COMMIT })
+    await push({ files: [{ path: 'src/drag.ts', content: 'export const drag = 1\n' }], currentPaths: ['src/thrust.ts', 'src/drag.ts'], commit: NEXT })
+    const answer = JSON.parse(await callText('browse_repository', { repositoryId: repoId, changed_since: COMMIT.slice(0, 12) })) as {
+      commit: string
+      files: Array<{ path: string; kind: string }>
+    }
+    expect(answer.commit).toBe(NEXT)
+    expect(answer.files).toEqual([{ path: 'src/drag.ts', kind: 'added', language: 'typescript', size: 22 }])
+  })
+
   it('read_file says when the outline lags its content: index pending, then failed', async () => {
     const { repoId, push } = await pushRepo()
     await push({ files, currentPaths: ['src/thrust.ts'], commit: COMMIT })

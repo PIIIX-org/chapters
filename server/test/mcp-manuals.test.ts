@@ -156,7 +156,7 @@ describe('tool manuals as MCP resources (#429)', () => {
     const repo = await mint({ name: 'manuals-repo', scope: 'repository', repositoryId, profile: 'reader' })
     expect(await manuals(repo)).toEqual(['conventions', 'repositories', 'search', 'graph'].map(uri))
     expect(entries(await read(repo, 'repositories'))).toEqual(['browse_repository', 'read_file'])
-    expect(entries(await read(repo, 'search'))).toEqual(['search', 'find_symbols'])
+    expect(entries(await read(repo, 'search'))).toEqual(['search', 'grep', 'find_symbols'])
 
     const limited = await mint({ name: 'manuals-allow-list', scope: 'account', access: 'admin', allowedTools: ['search'] })
     expect(await manuals(limited)).toEqual(['conventions', 'search'].map(uri))

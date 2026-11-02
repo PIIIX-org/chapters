@@ -114,6 +114,8 @@ export const BACKUP_TABLES: BackupTable[] = [
       lastSyncedAt: null,
       lastSyncedCommit: null,
       treeHash: null,
+      // The version history is not in the archive either: the next sync records a new baseline (#471).
+      versionSeq: 0,
       lastSyncError: null,
       lastWebhookAt: null,
     }),

@@ -201,16 +201,17 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
 
   // Blocks get their ids last, in the order of their labels (no row references a block id).
   const owned = await db
-    .select({ id: blocks.id, ownerId: blocks.ownerId, kind: blocks.kind, innerPath: blocks.innerPath, startLine: blocks.startLine })
+    .select({ id: blocks.id, blockId: blocks.blockId, ownerId: blocks.ownerId, kind: blocks.kind, innerPath: blocks.innerPath, startLine: blocks.startLine })
     .from(blocks)
     .where(inArray(blocks.containerId, [vaultId, repoId]))
   const blockLabels = owned
-    .map((b) => ({ old: b.id, label: `<block:${ownerLabel.get(b.ownerId) ?? b.ownerId}:${b.kind}:${b.innerPath}:${b.startLine}>` }))
+    .map((b) => ({ old: b.id, blockId: b.blockId, label: `<block:${ownerLabel.get(b.ownerId) ?? b.ownerId}:${b.kind}:${b.innerPath}:${b.startLine}>` }))
     .sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))
   if (new Set(blockLabels.map((b) => b.label)).size !== blockLabels.length) throw new Error('two blocks share a label: their id order would be random')
   const renamed = blockLabels.map((b, i) => ({ ...b, id: idAt(i) }))
   await db.execute(sql`UPDATE blocks b SET id = u.id FROM jsonb_to_recordset(${JSON.stringify(renamed)}::jsonb) AS u(old uuid, id uuid) WHERE b.id = u.old`)
-  for (const b of renamed) labels.push([b.id, b.label])
+  // A block's text id (`b_…`, grep's hits) is a hash of its owner's id: it differs per database like the uuids.
+  for (const b of renamed) labels.push([b.id, b.label], [b.blockId, `${b.label}#`])
   for (const [id, label] of ownerLabel) labels.push([id, label])
   // Names carry the container's first 8 id characters (`name#1a2b3c4d`).
   labels.push([vaultId.slice(0, 8), '<vault8>'], [repoId.slice(0, 8), '<repository8>'])
@@ -293,6 +294,8 @@ interface Question {
   args: (w: World) => Args
   /** Why `dev` answers it differently in the other database: its cross-database case is `it.fails` until that issue is fixed. */
   differs?: string
+  /** The answer is the repository's push history (#471), which differs between the worlds by construction: asked twice in one world only. */
+  history?: true
 }
 
 /** Each node's semantic neighbours were those that existed when it was embedded (fixed: its pinned case below passes). */
@@ -319,6 +322,9 @@ const QUESTIONS: Question[] = [
   { name: 'find_symbols refs at', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'src/upload.ts:5', refs: 'at' }) },
   { name: 'find_symbols refs candidates of a name defined three times', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse', refs: 'callers' }) },
   { name: 'find_symbols refs one of three by path', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse', refs: 'references', path: 'src/upload.ts' }) },
+  { name: 'grep code, one name in three files, with context', tool: 'grep', args: (w) => ({ repositoryId: w.repoId, pattern: 'function parse|def parse', context: 1 }) },
+  { name: 'grep notes, two notes with one body', tool: 'grep', args: (w) => ({ vaultId: w.vaultId, pattern: '(?i)checksum every' }) },
+  { name: 'grep everywhere under a glob', tool: 'grep', args: () => ({ everywhere: true, pattern: '\\bupload\\b', path: '{src,guides}/**' }) },
   { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }) },
   { name: 'graph repository communities', tool: 'graph', args: (w) => ({ repositoryId: w.repoId }) },
   {
@@ -339,6 +345,8 @@ const QUESTIONS: Question[] = [
   },
   { name: 'browse_repository', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId }) },
   { name: 'browse_repository folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, path: 'src' }) },
+  { name: 'browse_repository changed_since', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, changed_since: '2000-01-01' }), history: true },
+  { name: 'browse_repository changed_since folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, changed_since: '2000-01-01', path: 'src' }), history: true },
   ...NOTES.map((n): Question => ({ name: `read_note ${n.path}`, tool: 'read_note', args: (w) => ({ vaultId: w.vaultId, path: n.path }) })),
   ...FILES.map((f): Question => ({ name: `read_file ${f.path}`, tool: 'read_file', args: (w) => ({ repositoryId: w.repoId, path: f.path }) })),
   { name: 'repository_status', tool: 'repository_status', args: (w) => ({ repositoryId: w.repoId }) },
@@ -357,7 +365,7 @@ describe('read tools answer deterministically (#473)', () => {
   })
 
   describe('another database, rows in reverse physical and id order: the same bytes once ids and times are masked', () => {
-    for (const q of QUESTIONS) {
+    for (const q of QUESTIONS.filter((q) => !q.history)) {
       const test = q.differs ? it.fails : it
       test(`${q.name}${q.differs ? ` (differs on dev: ${q.differs})` : ''}`, async () => {
         const other = mask(B, await ask(B, q.tool, q.args(B)))

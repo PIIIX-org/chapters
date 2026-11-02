@@ -643,7 +643,7 @@ its own, never against production (the runner refuses any other base
 URL), and gates their median. Which suites run is decided by the paths a
 PR to `dev` changes (`lab-plan.mjs`): **all six suites, and no suite may
 lose a gold**, when it touches what shapes a response and its tokens,
-`server/src/search/**` or `server/src/mcp/**`, the extraction path
+`server/src/search/**` or `server/src/mcp/{response,read-targets,session-reads}.ts` (the budget ladder and the reads: they change the tokens every suite measures; the rest of `server/src/mcp/**`, tool definitions and contracts, runs the `chapters` suite only), the extraction path
 (`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`,
 `server/src/text/{blocks,lines,targets}.ts`,
 `server/src/notes/note-blocks.ts`, `server/src/config.ts`), or the
@@ -675,7 +675,7 @@ tier (`chapters` 45 min, `all` 240 min; measured 4 to 10 and 86 to 176
 min (six suites, run 41324770132: 86, 173 and 176 min), the all-suites spread being embedding throughput on the runner), so a
 failed or timed-out instance cancels the others, and the gate then stops
 at once naming the missing `bench-results-<n>` artifact instead of
-waiting for the slowest instance. A PR that touches `server/src/search/**`, `server/src/mcp/**` or
+waiting for the slowest instance. A PR that touches `server/src/search/**`, `server/src/mcp/{response,read-targets,session-reads}.ts`, the extraction path or
 `benchmarks/lib/policies.ts` cannot write or lower the held-out suite's
 (`holdout`) baseline and cannot argue a regression on it away with a label
 (#1059); one that changes a ranking constant or fusion rule shows the all-suite
@@ -944,6 +944,13 @@ A red check on the queue commit removes the entry; fix, re-verdict if the
 head moved, and enqueue again. The first PR through the queue was #1056
 (60813a6). Rollback: delete ruleset 26310472 and set `strict` back to
 `true` on `dev`'s classic protection and in ruleset 24421063.
+
+One exception to "every required check": the `checks` step **Test
+collab-s3-perf alone (#905)** is skipped on `merge_group` (master decision
+2026-11-02). On queue commits its p95 was 345-657 ms on both attempts
+(runs 41419086373, 41446064501), against 194-225 ms on PR runs, so it
+ejected nearly every entry once. The PR head's run and every push to `dev`
+still enforce the unchanged 250 ms bound; #905 tracks the root cause.
 
 A status belongs to a **commit, not a PR**, and a promotion's head (the
 tip of `dev`) can also be the head of other PRs. So:
