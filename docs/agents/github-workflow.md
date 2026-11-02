@@ -947,7 +947,7 @@ head moved, and enqueue again. The first PR through the queue was #1056
 
 One exception to "every required check": the `checks` step **Test
 collab-s3-perf alone (#905)** is skipped on `merge_group` (master decision
-2026-11-02). On queue commits its p95 was 345-620 ms on both attempts
+2026-11-02). On queue commits its p95 was 345-657 ms on both attempts
 (runs 41419086373, 41446064501), against 194-225 ms on PR runs, so it
 ejected nearly every entry once. The PR head's run and every push to `dev`
 still enforce the unchanged 250 ms bound; #905 tracks the root cause.
