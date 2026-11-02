@@ -7,8 +7,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { outputs, plan } from './lab-plan.mjs'
+import { outputs, plan, reuseFrom } from './lab-plan.mjs'
 
 const SCRIPT = fileURLToPath(new URL('./lab-plan.mjs', import.meta.url))
 
@@ -99,5 +100,97 @@ describe('plan', () => {
     assert.equal(res.status, 0, res.stderr)
     assert.equal(res.stdout.trim(), 'tier=fast\nalso=\nbench=chapters\ngolds=false')
     assert.notEqual(spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' }).status, 0)
+  })
+})
+
+// #1071: a review-record head reuses its parent's green results.
+const GATE_URL = 'https://github.com/PIIIX-org/chapters/actions/runs/1/job/2'
+const run = (name, conclusion, id = 1, slug = 'github-actions') => ({ id, name, conclusion, app: { slug }, html_url: name === 'bench-gate' ? GATE_URL : `https://x/${name}` })
+const green = { check_runs: [run('plan', 'success'), run('lab', 'success'), run('bench (1)', 'success'), run('bench (2)', 'success'), run('bench (3)', 'success'), run('bench-gate', 'success')] }
+const record = { parents: [{ sha: 'p' }], files: [{ filename: 'docs/reviews/1043-abc.md' }] }
+
+describe('reuseFrom', () => {
+  it('a head that changes only docs/reviews/ with a green parent reuses the parent bench-gate run', () => {
+    assert.equal(reuseFrom(record, green), GATE_URL)
+    // A skipped lab (a PR with no image change) and a renamed record are fine.
+    const skippedLab = { check_runs: green.check_runs.map((c) => (c.name === 'lab' ? run('lab', 'skipped') : c)) }
+    assert.equal(reuseFrom({ parents: [{}], files: [{ filename: 'docs/reviews/archive/2026-11/a.md', previous_filename: 'docs/reviews/a.md' }] }, skippedLab), GATE_URL)
+  })
+
+  it('a red, cancelled, missing or unfinished parent does not reuse', () => {
+    for (const bad of ['failure', 'cancelled', 'timed_out', null]) {
+      assert.equal(reuseFrom(record, { check_runs: green.check_runs.map((c) => (c.name === 'bench-gate' ? run('bench-gate', bad) : c)) }), null, `gate ${bad}`)
+      assert.equal(reuseFrom(record, { check_runs: green.check_runs.map((c) => (c.name === 'bench (2)' ? run('bench (2)', bad) : c)) }), null, `bench ${bad}`)
+      assert.equal(reuseFrom(record, { check_runs: green.check_runs.map((c) => (c.name === 'lab' ? run('lab', bad) : c)) }), null, `lab ${bad}`)
+    }
+    assert.equal(reuseFrom(record, { check_runs: green.check_runs.filter((c) => c.name !== 'bench-gate') }), null)
+    assert.equal(reuseFrom(record, { check_runs: [] }), null)
+    assert.equal(reuseFrom(record, undefined), null)
+    // A check of another app named bench-gate is not the workflow's.
+    assert.equal(reuseFrom(record, { check_runs: [run('bench-gate', 'success', 1, 'other-app')] }), null)
+  })
+
+  it('the latest run of a name decides: a rerun that passed after a failure reuses, a later failure does not', () => {
+    const rerun = { check_runs: [run('bench-gate', 'failure', 1), run('bench-gate', 'success', 2), ...green.check_runs.filter((c) => c.name !== 'bench-gate')] }
+    assert.equal(reuseFrom(record, rerun), GATE_URL)
+    const later = { check_runs: [run('bench-gate', 'success', 1), run('bench-gate', 'failure', 2), ...green.check_runs.filter((c) => c.name !== 'bench-gate')] }
+    assert.equal(reuseFrom(record, later), null)
+  })
+
+  it('any other path in the diff, a merge commit, no parent or no files does not reuse', () => {
+    assert.equal(reuseFrom({ parents: [{}], files: [{ filename: 'docs/reviews/a.md' }, { filename: 'server/src/search/x.ts' }] }, green), null)
+    assert.equal(reuseFrom({ parents: [{}], files: [{ filename: 'docs/reviews.md' }] }, green), null)
+    assert.equal(reuseFrom({ parents: [{}], files: [{ filename: 'docs/reviews/a.md', previous_filename: 'server/src/search/x.ts' }] }, green), null)
+    assert.equal(reuseFrom({ parents: [{}, {}], files: record.files }, green), null)
+    assert.equal(reuseFrom({ parents: [], files: record.files }, green), null)
+    assert.equal(reuseFrom({ parents: [{}], files: [] }, green), null)
+    assert.equal(reuseFrom({ parents: [{}], files: Array.from({ length: 300 }, (_, i) => ({ filename: `docs/reviews/${i}.md` })) }, green), null)
+    assert.equal(reuseFrom({ parents: [{}] }, green), null)
+    assert.equal(reuseFrom(null, green), null)
+  })
+})
+
+describe('lab-plan.mjs with a head commit and the parent checks', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'lab-plan-reuse-'))
+  const write = (name, value) => {
+    const file = join(dir, name)
+    writeFileSync(file, typeof value === 'string' ? value : JSON.stringify(value))
+    return file
+  }
+  // The whole PR changes the search ranking (the all-suite plan); its last commit adds a review record.
+  const files = write('changed.txt', 'server/src/search/fusion.ts\ndocs/reviews/1-abc.md\n')
+  const planWith = (head, checks) => {
+    const res = spawnSync(process.execPath, [SCRIPT, '--files', files, '--head-commit', write('head.json', head), '--parent-checks', write('checks.json', checks)], { encoding: 'utf8' })
+    assert.equal(res.status, 0, res.stderr)
+    return res.stdout.trim()
+  }
+
+  it('a review-record head with a green parent plans nothing and names the parent run', () => {
+    assert.equal(planWith(record, green), `tier=none\nalso=\nbench=none\ngolds=false\nreuse=${GATE_URL}`)
+  })
+
+  it('red parent, mixed diff or unreadable input plans as today (every suite, the golds floor)', () => {
+    const today = 'tier=fast\nalso=\nbench=all\ngolds=true'
+    assert.equal(planWith(record, { check_runs: green.check_runs.map((c) => (c.name === 'bench-gate' ? run('bench-gate', 'failure') : c)) }), today)
+    assert.equal(planWith({ parents: [{}], files: [{ filename: 'docs/reviews/a.md' }, { filename: 'server/src/search/fusion.ts' }] }, green), today)
+    assert.equal(planWith('not json', green), today)
+    assert.equal(planWith(record, 'not json'), today)
+    // Without the API inputs (a merge_group run passes none) it is the plan from the files.
+    const res = spawnSync(process.execPath, [SCRIPT, '--files', files], { encoding: 'utf8' })
+    assert.equal(res.stdout.trim(), today)
+  })
+})
+
+describe('the workflow wiring (#1071)', () => {
+  const workflow = readFileSync(fileURLToPath(new URL('../workflows/elara-lab.yml', import.meta.url)), 'utf8')
+
+  it('only a pull_request event passes the head commit and the parent checks: a merge_group run never reuses', () => {
+    assert.match(workflow, /if \[ "\$GITHUB_EVENT_NAME" = pull_request \] && gh api "repos\/\$GITHUB_REPOSITORY\/commits\/\$HEAD_SHA"/)
+    assert.equal(workflow.split('--head-commit').length - 1, 1)
+  })
+
+  it('the gate job runs for a reuse and skips its steps, naming the parent run', () => {
+    assert.match(workflow, /if: always\(\) && \(needs\.plan\.outputs\.bench != 'none' \|\| needs\.plan\.outputs\.reuse != ''\)/)
+    assert.match(workflow, /name: Reuse the parent's results/)
   })
 })
