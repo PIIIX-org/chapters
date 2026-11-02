@@ -481,5 +481,10 @@ describe('grep target: a large document is searched, not paged (#423)', () => {
     expect((a.truncated as { narrow: string[] }).narrow).toEqual(expect.arrayContaining(['targets: [{"grep":"<text>"}]', 'outline: true']))
     const small = await read('read_file', { path: 'src/store.ts' })
     expect(small.truncated).toBe(false)
+    // The outline answer carries the grep hint too, and no second `outline: true`.
+    const outlined = await read('read_file', { path: 'src/big.ts', outline: true })
+    const narrow = (outlined.truncated as { narrow: string[] }).narrow
+    expect(narrow).toContain('targets: [{"grep":"<text>"}]')
+    expect(narrow).not.toContain('outline: true')
   })
 })

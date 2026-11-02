@@ -259,7 +259,8 @@ export function outlineNarrow(entries: readonly OutlineEntry[]): string[] {
  * What a read cut by its budget suggests for a document over LARGE_TOKENS (#423): find the passage with a `grep` target,
  * or list the outline, before paging the rest.
  */
-export const largeNarrow = (text: string): string[] => (text.length > LARGE_TOKENS * 4 ? ['targets: [{"grep":"<text>"}]', 'outline: true'] : [])
+export const largeNarrow = (text: string, outlined = false): string[] =>
+  text.length > LARGE_TOKENS * 4 ? ['targets: [{"grep":"<text>"}]', ...(outlined ? [] : ['outline: true'])] : []
 
 /** A read's outline and what its targets resolve in, besides the text. */
 export type DocumentParts = Omit<TargetDocument, 'text'> & { outline: OutlineEntry[] }

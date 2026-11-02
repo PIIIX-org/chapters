@@ -1506,7 +1506,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           // The body is sent as plain text after the JSON, not as an escaped string in it (#445); withheld for the outline.
           textSection({ name: 'body', text: note.body, lines: true, block: true, firstLine: bodyStart, withheld: outline !== null }),
         ],
-        narrow: outline ? outlineNarrow(outline) : largeNarrow(note.body),
+        narrow: outline ? [...outlineNarrow(outline), ...largeNarrow(note.body, true)] : largeNarrow(note.body),
         rendered,
       })
       const outline = await outlineFirst(args.outline, page.at, () => parts().outline)
@@ -2332,7 +2332,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       }
       const content = (withheld: boolean) => textSection({ name: 'content', text: file.content, lines: true, withheld })
       const outline = await outlineFirst(args.outline, page.at, async () => (await parts()).outline)
-      if (outline) return inSession(session, doc, { head: located, sections: [outlineSection(outline), content(true)], narrow: outlineNarrow(outline) }, page.at)
+      if (outline) return inSession(session, doc, { head: located, sections: [outlineSection(outline), content(true)], narrow: [...outlineNarrow(outline), ...largeNarrow(file.content, true)] }, page.at)
       // The body answer as before #417: the content by pages, the symbol list after its last page.
       const symbols = (await listFileSymbols(file.id)).sort((a, b) => a.startLine - b.startLine || compareCodeUnits(a.name, b.name))
       return inSession(

@@ -2764,7 +2764,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `test/mcp-response-envelope.test.ts` drives each
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
     each ladder level.
-  - **Result handles** (#423, ADR-004 A2): a very large document or
+  - **Result handles** (#423, ADR-004 A2; deviates from D5's stored
+    handle: nothing stored, no expiry, no cross-account state): a very large document or
     result is not inlined and not stored. The handle is stateless:
     the document's version (`rev` or `hash`), `total_lines`, the cursor
     and the `grep` target. The cursor binds the arguments and the
@@ -2784,7 +2785,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     another kind is an `INVALID_ARGUMENT` item in `targets`. A read cut
     by its budget of a document over 20,000 tokens (`largeNarrow`) adds
     `targets: [{"grep":"<text>"}]` and `outline: true` to
-    `truncated.narrow`; smaller documents answer as before, so the
+    `truncated.narrow` (on an outline answer, the `grep` hint only); smaller documents answer as before, so the
     premise benchmark's reads do not change unless one of its files is
     that large. `test/mcp-read-targets.test.ts` covers it.
   `search` and `graph` call
