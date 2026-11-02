@@ -550,6 +550,7 @@ const readSteps: Step[] = [
   { tool: 'search', args: () => ({ query: 'helper', repositoryId: fx.pushRepoId }), contains: 'src/helper.ts' },
   { tool: 'search', args: () => ({ query: 'credentials', everywhere: true }), contains: 'docs/credentials' },
   { tool: 'find_symbols', args: () => ({ query: 'run', everywhere: true }), contains: '"name":"run"' },
+  { tool: 'orient', args: () => ({ repositoryId: fx.pushRepoId, vaultId: fx.vaultId }), contains: 'src/' },
   { tool: 'graph', args: () => ({ vaultId: fx.vaultId, aggregate: 'none' }), contains: 'docs/credentials' },
   { tool: 'graph', args: () => ({ repositoryId: fx.pushRepoId, aggregate: 'none' }), contains: 'src/service.ts' },
   { tool: 'graph', args: () => ({ repositoryId: fx.pushRepoId, neighborsOf: 'src/service.ts', depth: 3 }), contains: 'src/service.ts' },

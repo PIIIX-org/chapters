@@ -142,9 +142,9 @@ A token's `tools/list` shows only the tools it can call: its allow-list, its acc
 
 ### Key MCP Capabilities
 
-- **61 tools**, documented with their exact parameters in [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md):
+- **62 tools**, documented with their exact parameters in [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md):
   - `list_vaults`, `browse_vault`, `read_note`, `create_note`, `edit_note`, `append_note`, `upsert_note`, `delete_note`
-  - `list_repositories`, `browse_repository`, `read_file`, `find_symbols`, `repository_status`
+  - `list_repositories`, `browse_repository`, `read_file`, `find_symbols`, `orient` (a ranked map of where to start), `repository_status`
   - `search` (hybrid full-text + 384d semantic search with permission scoping)
   - `graph` (nodes and edges with Louvain communities) and `find_graph_path` (shortest path, breadth-first)
   - `audit_okf_conformance` (structural validation against OKF v0.2)
@@ -175,7 +175,7 @@ chapters/
 │   ├── src/auth/               # Sessions, OIDC, MFA, lockout
 │   ├── src/sync/               # Hocuspocus WebSocket relay for live Yjs sync
 │   ├── src/graph/              # Graph assembly, Louvain communities, shortest path
-│   ├── src/mcp/                # Model Context Protocol server (61 tools, 20 prompts)
+│   ├── src/mcp/                # Model Context Protocol server (62 tools, 20 prompts)
 │   ├── src/notes/              # OKF v0.2 parser, validation, and disk storage
 │   ├── src/repositories/       # Git/local ingestion, Tree-sitter extraction, import resolution
 │   ├── src/search/             # Hybrid search (Postgres full-text + pgvector) and embeddings

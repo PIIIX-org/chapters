@@ -80,6 +80,7 @@ import { serializeNote } from '../notes/okf.js'
 import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
+import { orientAnswer } from './orient.js'
 import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { skippedField } from '../repositories/fs-scan.js'
@@ -175,12 +176,12 @@ const EDIT_OPS = z.array(
     editOp('replace_text', {
       find: z.string(),
       replace: z.string(),
-      expectedCount: z.number().int().min(1).optional().describe('How many times `find` must occur (default 1); all are replaced'),
+      expectedCount: z.number().int().min(1).optional().describe('Times `find` must occur (default 1); all are replaced'),
     }),
     editOp('insert_before', { anchor: z.string(), text: z.string() }),
     editOp('insert_after', { anchor: z.string(), text: z.string() }),
     editOp('replace_section', {
-      heading: z.string().describe('"## Plan" (the whole heading line) or "Plan" (its text)'),
+      heading: z.string().describe('"## Plan" or "Plan"'),
       content: z.string(),
     }),
     editOp('append', { text: z.string() }),
@@ -188,7 +189,7 @@ const EDIT_OPS = z.array(
     editOp('delete_block', { find: z.string() }),
     editOp('frontmatter_set', { key: z.string(), value: z.unknown() }),
     editOp('frontmatter_add', { key: z.string(), value: z.unknown().describe('Added to the list at `key`') }),
-    editOp('frontmatter_remove', { key: z.string(), value: z.unknown().optional().describe('Removed from the list at `key`; without it the key is deleted') }),
+    editOp('frontmatter_remove', { key: z.string(), value: z.unknown().optional().describe('Removed from the list at `key`; none: key deleted') }),
   ]),
 )
 
@@ -1430,7 +1431,6 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   }
   const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: return the result (status, diff_stats, note) without writing') }
   /** The second sentence of every note write's description (#429): the answer, and where the rest is. */
-  const WRITE_DOC = ' Answers with `rev`, `status` (`retry`: nothing written, send it again) and `indexed` (manual: elara://manual/notes).'
 
   tool(
     'read_note',
@@ -1521,7 +1521,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'writer',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Create an OKF note at `path`, or at `type`/`name`; requires edit access.' + WRITE_DOC,
+      description: 'Create an OKF note at `path`, or at `type`/`name`; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: z.string().optional().describe('Full note path; or give type and name'),
@@ -1583,8 +1583,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Change a note: `ops` (preferred) edit the live text in place, `body` replaces the whole body merged from `base_rev` or your last read_note, `frontmatter` merges per key; requires edit access.' +
-        WRITE_DOC,
+        'Change a note: `ops` (preferred) edit the live text in place, `body` replaces the whole body merged from `base_rev` or your last read_note, `frontmatter` merges per key; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -1793,8 +1792,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Append `text` as whole lines to the live note, so concurrent appends all land (use it for logs instead of read_note + edit_note); `createIfMissing: true` creates the note; requires edit access.' +
-        WRITE_DOC,
+        'Append `text` as whole lines to the live note, so concurrent appends all land (for logs); `createIfMissing: true` creates the note; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -1839,8 +1837,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Create the note at `path`, or replace its whole body (merged from your last read) and merge `frontmatter` when it exists, in one step that concurrent callers cannot race; requires edit access.' +
-        WRITE_DOC,
+        'Create the note at `path`, or replace its whole body (merged from your last read) and merge `frontmatter` when it exists, in one step that concurrent callers cannot race; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -1881,7 +1878,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Rename a note (a slug) or move it (a full path); links using its old full path are rewritten; requires edit access.' + WRITE_DOC,
+      description: 'Rename a note (a slug) or move it (a full path); links using its old full path are rewritten; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
         from: z.string().describe('Current note path'),
@@ -1911,7 +1908,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       destructive: true,
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Move a note to the trash (`id` for restore_note); requires edit access.' + WRITE_DOC,
+      description: 'Move a note to the trash (`id` for restore_note); requires edit access.',
       inputSchema: { vaultId: VAULT_ID, path: NOTE_PATH, ...IDEMPOTENCY_ARG },
     },
     async ({ idempotency_key: key, ...args }: { path: string; idempotency_key?: string }, { vaultId: target }) => {
@@ -1965,7 +1962,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Restore a trashed note by `noteId`; requires edit access.' + WRITE_DOC,
+      description: 'Restore a trashed note by `noteId`; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
         noteId: UUID_ARG.describe('Note id from list_trash'),
@@ -2083,7 +2080,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Restore a note to a recorded revision (from note_history), as a new revision; requires edit access.' + WRITE_DOC,
+      description: 'Restore a note to a recorded revision (from note_history), as a new revision; requires edit access.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -3031,6 +3028,25 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         narrow: args.kind ? [] : ['kind: "function"'],
       }
     },
+  )
+
+  tool(
+    'orient',
+    {
+      scope: 'vault-or-repo',
+      capability: 'read',
+      profile: 'reader',
+      description: 'Where to start: a repository\'s most-used definitions and a vault\'s most-linked notes, 10 per level; `path` goes one level down.',
+      inputSchema: {
+        repositoryId: REPOSITORY_ID,
+        vaultId: VAULT_ID,
+        query: z.string().optional().describe('Words to favour'),
+        focus: z.array(z.string()).optional().describe('Files or folders in play'),
+        path: z.string().optional().describe('Folder level'),
+      },
+      budget: 'list',
+    },
+    async (args: { query?: string; focus?: string[]; path?: string }, { resources }) => orientAnswer(resources, args),
   )
 
   /** A community edge's identity in a page guard and in the order edges are listed. */

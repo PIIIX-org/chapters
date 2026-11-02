@@ -143,6 +143,7 @@ function argsFor(tool: string, fx: Fixtures, v: VaultFixture | undefined, r: Rep
     save_graph_perspective: () => ({ vaultId, name: `lab-perspective-${seq()}` }),
     search: () => ({ query: 'lab marker probe', vaultId, repositoryId, symbols: true, limit: 50 }),
     graph: () => ({ vaultId, repositoryId }),
+    orient: () => ({ vaultId, repositoryId }),
     find_graph_path: () =>
       v
         ? { vaultId, source: v.probe, target: v.renameFrom }
@@ -507,7 +508,7 @@ const test: LabTest = {
     ]
     // The reader profile on a vault pin (#428): the vault-reachable reader tools only, and a
     // tool outside the profile is refused even though the token's write access would allow it.
-    const READER_ON_VAULT = ['browse_vault', 'find_graph_path', 'graph', 'read_note', 'search']
+    const READER_ON_VAULT = ['browse_vault', 'find_graph_path', 'graph', 'orient', 'read_note', 'search']
     const readerListed = (await readerProfile.listTools()).map((t) => t.name).sort()
     capChecks.push(
       {
