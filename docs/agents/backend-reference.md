@@ -3529,7 +3529,7 @@ same account** (`repositories.owner_id`; `vectorsInAccount`, served by the
 partial index `blocks_code_embed_key_idx`): what comes back is the vector
 the caller's own text embeds to, so no content is read, but the lookup never
 crosses accounts (a 64-bit key is not where one account's rows stand in for
-another's), and another account's identical file is embedded again. A reused
+another's), and another account's identical file is embedded again. A block's embedded text includes the file's path, so the same content at another path embeds again (sharing serves clones and forks, not moved files). The index is on `embed_key` alone: the account filter is a join, not an index column, so `(embed_key, container_id)` would not narrow it, and a text held by many repositories costs one row scan per holder, bounded by the repositories' count. A reused
 vector counts as new to the file for the semantic edge refresh (#1007), like
 an embedded one. `parsed()` keeps the symbols, imports and sites of a content
 in this process (2,000 entries, least recently used out), keyed by

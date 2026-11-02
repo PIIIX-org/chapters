@@ -1,6 +1,8 @@
 // #684 part B: the same file content in a second repository of the same account reuses the vectors of the
 // first instead of embedding again (blocks and edges stay per-repository rows). Another account's content is
-// never looked at: a vector is a function of model and text, but the lookup is kept inside one account.
+// never looked at: a vector is a function of model and text, but the lookup is kept inside one account. The
+// embedded text includes the path (`embedText`), so the same content at another path embeds again: sharing is for
+// clones and forks, not moved files.
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { and, eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
@@ -9,7 +11,21 @@ import { flushExtraction, scheduleMissingExtractions } from '../src/repositories
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushEmbeddings, scheduleMissingEmbeddings } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
+import type * as Extraction from '../src/repositories/extraction.js'
 import { createActiveUser } from './helpers.js'
+
+// The parses that run: every call of extractStructure, by file path (an existing export, so this counts on dev too).
+const parses = vi.hoisted(() => [] as string[])
+vi.mock('../src/repositories/extraction.js', async (importOriginal) => {
+  const real = await importOriginal<typeof Extraction>()
+  return {
+    ...real,
+    extractStructure: (language: string, content: string, path: string) => {
+      parses.push(path)
+      return real.extractStructure(language, content, path)
+    },
+  }
+})
 
 const createdRepositoryIds: string[] = []
 beforeAll(async () => {
@@ -75,8 +91,11 @@ describe('vectors are shared by embed key between the repositories of one accoun
     expect(first.length).toBeGreaterThanOrEqual(FILES.length)
 
     const b = await newRepo(owner.id, 'blob-b')
+    parses.length = 0
     const second = await sync(b, FILES)
     expect(second).toEqual([])
+    // Equal contents are parsed once per process, whichever repository holds them.
+    expect(parses).toEqual([])
     expect(await vectors(b)).toEqual(await vectors(a))
   })
 
