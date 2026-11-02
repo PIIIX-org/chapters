@@ -385,7 +385,7 @@ describe('the held-out suite (#1059)', () => {
     const report = evaluate({ results: better, baseline: own, baseBaseline: base(), pr: pr(['bench-suite-change'], 'Bench-suite-change: the harness moved'), changed: changedSearch })
     assert.match(failures(report), /holdout: benchmarks\/baseline.json changes the held-out entry in a PR that touches search, MCP or the Elara policy/)
     // The policy file and the MCP code count too; a PR that touches neither may record it.
-    for (const file of ['benchmarks/lib/policies.ts', 'server/src/mcp/server.ts']) {
+    for (const file of ['benchmarks/lib/policies.ts', 'server/src/mcp/response.ts']) {
       assert.match(failures(evaluate({ results: better, baseline: own, baseBaseline: base(), pr: pr(), changed: [file] })), /changes the held-out entry/, file)
     }
     const recorded = run({ hit5: 0.9 }, { suites: ['s', HOLDOUT] })
@@ -406,9 +406,16 @@ describe('the held-out suite (#1059)', () => {
     assert.doesNotMatch(failures(evaluate({ results: gone, baseline: baselineOf(gone), baseBaseline: base(), pr: pr(), changed: ['docs/x.md'] })), /not in this run/)
   })
 
-  it('the extraction path and a renamed file lock it too, and its report shows numbers only', () => {
+  it('a tool definition or contract edit does not lock it: only the ladder and the reads do', () => {
     const better = moved({ hit5: 0.9 })
-    for (const file of ['server/src/repositories/extraction-queue.ts', 'server/src/text/blocks.ts', 'server/src/notes/note-blocks.ts', 'server/src/config.ts']) {
+    for (const file of ['server/src/mcp/server.ts', 'server/src/mcp/code-queries.ts', 'server/src/mcp/prompts.ts']) {
+      assert.doesNotMatch(failures(evaluate({ results: better, baseline: baselineOf(better), baseBaseline: base(), pr: pr(), changed: [file] })), /changes the held-out entry/, file)
+    }
+  })
+
+  it('the extraction path, the ladder and a renamed file lock it too, and its report shows numbers only', () => {
+    const better = moved({ hit5: 0.9 })
+    for (const file of ['server/src/repositories/extraction-queue.ts', 'server/src/text/blocks.ts', 'server/src/notes/note-blocks.ts', 'server/src/config.ts', 'server/src/mcp/response.ts', 'server/src/mcp/read-targets.ts', 'server/src/mcp/session-reads.ts']) {
       assert.match(failures(evaluate({ results: better, baseline: baselineOf(better), baseBaseline: base(), pr: pr(), changed: [file] })), /changes the held-out entry/, file)
     }
     // A file moved out of `server/src/search/` lists both its names (the workflow adds `previous_filename`): the old one locks.

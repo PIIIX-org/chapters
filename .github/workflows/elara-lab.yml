@@ -31,8 +31,10 @@ name: Elara lab
 #   chapters  PRs to dev that change the rest of repositories/, schema,
 #             server start-up, the image's dependencies or the lab plumbing
 #             (~9 min)
-#   all       PRs to dev that change search or MCP (server/src/search/**,
-#             server/src/mcp/**: what shapes a response and its tokens),
+#   all       PRs to dev that change search (server/src/search/**) or the MCP
+#             budget ladder and reads (server/src/mcp/{response,read-targets,
+#             session-reads}.ts: they change the tokens every suite measures;
+#             the rest of server/src/mcp/** runs the chapters suite only),
 #             the extraction path (repositories/{extraction,code-blocks,
 #             code-edge,outline,import-resolution,language}*,
 #             text/{blocks,lines,targets}.ts, notes/note-blocks.ts,
