@@ -3609,6 +3609,27 @@ target's path, symbol and line) and `symbolCandidates`; indexes
 resolution). `find_symbols` with `refs` and `GET /repositories/:id/code-refs`
 read them (**Code queries**, next).
 
+**Routing hints** (#674; `mcp/routing-hints.ts`, one pure function of the
+request shape, unit-tested as a table in `mcp-routing-hints-rules.test.ts`,
+the answers in `mcp-routing-hints.test.ts`): `search` and the body answers of
+`read_note` / `read_file` put a one-sentence `hint` in the head when the
+request has a cheaper route; `undefined` (so absent in the JSON) otherwise.
+Rules: `search` over exactly one repository and no vault with literal text (a
+quoted string, or code punctuation) hints `rg -n -F` in a checked-out repo; a
+text over 400 lines read from the top with no `targets`, `outline` or `cursor`
+hints the outline. **Decision**: the hint never replaces an answer. The issue
+allows a short hint "instead of an expensive answer", but the server cannot
+know whether the caller has a checkout, and a refusal would strand an
+Elara-only agent; replacing needs the caller to say so (a parameter, which
+costs reader tokens, or a harness change) and is not done here. Budget: no
+description or parameter changed (reader 7,984, writer 15,512, admin
+`tools/list` 41,371 characters, as on dev ff955476); the hint is inside the
+page's own budget, so a budgeted page is no longer, it shows a line or two
+less. What the benchmark measures: its scripted agent never reads a hint, so
+the exact-string questions' cost is unchanged by this PR (and not improved);
+making them cheaper needs the agent to take the hint (a harness change, not
+done: `benchmarks/**`).
+
 **Code queries** (#470; `repositories/code-queries.ts` the store queries,
 `repositories/code-refs.ts` the answer both surfaces share, `mcp/code-queries.ts`
 the budgeted sections): the questions over `code_edges` and `blocks`, with no

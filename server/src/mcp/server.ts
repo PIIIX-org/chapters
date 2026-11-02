@@ -131,6 +131,7 @@ import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
+import { routingHint } from './routing-hints.js'
 import {
   DEFAULT_BUDGET,
   Page,
@@ -1497,6 +1498,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         indexed: await noteIndexed(note.row.id, note.row.seq),
         ...lines,
         ...foldError,
+        hint: routingHint({ tool: 'read_note', lines: lines.total_lines, targets: false, outline: args.outline === true, continued: page.at !== null }),
       }
       const answer = (outline: OutlineEntry[] | null): Budgeted => ({
         head,
@@ -2338,7 +2340,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         session,
         doc,
         {
-          head,
+          head: { ...head, hint: routingHint({ tool: 'read_file', lines: totalLines(file.content), targets: false, outline: false, continued: page.at !== null }) },
           sections: [
             outlineSection(null),
             content(false),
@@ -2952,7 +2954,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id })
       return {
         // One repository: its indexed version, once in the head (#471).
-        head: { ...head, ...(resources.repositoryIds.length === 1 ? await repositoryIndexedVersion(resources.repositoryIds[0]!) : {}) },
+        head: {
+          ...head,
+          ...(resources.repositoryIds.length === 1 ? await repositoryIndexedVersion(resources.repositoryIds[0]!) : {}),
+          hint: routingHint({ tool: 'search', query: args.query, vaults: resources.vaultIds.length, repositories: resources.repositoryIds.length }),
+        },
         sections: [
           ranked({
             name: 'results',
