@@ -150,7 +150,7 @@ benchmark change (below).
   by more than the tolerance in either direction (an improvement must be
   recorded in the same PR), or its fingerprint or index outcome differs.
 - **Golds lost** (red, `--require-golds`; the workflow passes it on PRs to
-  `dev` that touch `server/src/search/**`, `server/src/mcp/**`, the
+  `dev` that touch `server/src/search/**`, `server/src/mcp/{response,read-targets,session-reads}.ts`, the
   extraction path or the benchmark's premise inputs, where every suite
   runs): a suite's `goldReached` is below the
   base baseline's. No tolerance: a question whose gold stops being reached
@@ -181,7 +181,7 @@ prometheus/node_exporter) is a sixth suite whose questions are **never used to
 tune a ranking constant**. Because a PR records its own baseline, nothing else
 would notice a change that memorises the other five. So:
 
-- A PR that touches `server/src/search/**`, `server/src/mcp/**` or
+- A PR that touches `server/src/search/**`, `server/src/mcp/{response,read-targets,session-reads}.ts`, the extraction path or
   `benchmarks/lib/policies.ts` cannot write or lower the `holdout` entry of
   `baseline.json` (the gate fails if the entry differs from the base's), and a
   regression on `holdout` is red with **no label escape**
@@ -229,7 +229,7 @@ after).
 
 | tier | when | suites |
 |---|---|---|
-| all | PRs to `dev` that touch `server/src/search/`, `server/src/mcp/`, the extraction path (`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`, `server/src/text/{blocks,lines,targets}.ts`, `server/src/notes/note-blocks.ts`, `server/src/config.ts`) or the benchmark's premise inputs (`benchmarks/run.ts`, `lib/`, `questions/`, `baseline.json`): the gate also requires every suite's golds; nightly on `dev`, every PR to `prod` (promotion), by hand | all six |
+| all | PRs to `dev` that touch `server/src/search/`, `server/src/mcp/{response,read-targets,session-reads}.ts` (the budget ladder and the reads: they change the tokens every suite measures), the extraction path (`server/src/repositories/{extraction,code-blocks,code-edge,outline,import-resolution,language}*`, `server/src/text/{blocks,lines,targets}.ts`, `server/src/notes/note-blocks.ts`, `server/src/config.ts`) or the benchmark's premise inputs (`benchmarks/run.ts`, `lib/`, `questions/`, `baseline.json`): the gate also requires every suite's golds; nightly on `dev`, every PR to `prod` (promotion), by hand | all six |
 | chapters | PRs to `dev` that touch the rest of `server/src/repositories/`, `server/src/db/`, `server/src/{index,app}.ts`, `server/drizzle/`, `server/package.json`, `pnpm-lock.yaml`, `Dockerfile`, `docker-compose.yml`, the lab plumbing it uses, the workflow, the plan or the gate | `chapters` |
 
 The path rules are `.github/scripts/lab-plan.mjs` (unit tests next to it).
