@@ -1544,6 +1544,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     asks (the #1014 failure). A relaxed or trigram row (#455 part 2) never counts
     as exact. The boost is a pure function of the row, and `byScore`'s
     tie-breaks are unchanged.
+    For code-shaped queries (#457: at least two independent code signals, or one
+    strong one, such as a `file.ext` token; never a plain English word), code
+    hits receive a bounded boost `CODE_BOOST = 0.0008` (about 3 RRF positions)
+    over documentation, plans and data (`resourceType: 'note'`, or repository files
+    with doc or data extensions, `.json`, `.yml`, `.toml` among them, README-type
+    names, or under a `doc`, `docs`, `plan`, `plans`, `wiki`, `spec` or `specs` folder at
+    any depth). Prose queries are untouched, and a doc that genuinely answers
+    the question still wins.
   - **Query vector** (#684): `queryVector` embeds through `embedQuery`, so a
     repeated query text comes from the in-process query-embedding cache
     (§5.11) without running the embedder.
