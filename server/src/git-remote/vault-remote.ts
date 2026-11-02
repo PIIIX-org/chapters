@@ -4,11 +4,14 @@
  * grepped locally. It holds content only and is the same for everyone who may read the vault: access is checked on every
  * request by routes.ts, never by this repository.
  *
- * It is built lazily, on a request, and only when the content changed: the head commit's message carries the
- * fingerprint of what it holds (sha256 over each path and the hash of its file, in path order), so a request for an
- * unchanged vault costs one query and one `git log`. A change adds one commit on top of the previous head (so `git pull`
- * moves on, and history grows by the fetches of changed content, not by edits), written with `git fast-import`: a fixed
- * author and a commit date of the newest note's `updated_at`, so the same content is the same tree.
+ * It is a SNAPSHOT of the live notes and never a history: a purged or replaced note's text must not stay readable
+ * through an old commit, and no purge hook reaches this repository. It is built lazily, on a request, and only when the
+ * content changed: the one commit's message carries the fingerprint of what it holds (sha256 over each path and the
+ * hash of its file, in path order), so a request for an unchanged vault costs one query and one `git log`. A change
+ * writes a new ROOT commit (`git fast-import --force`, a fixed author and the newest note's `updated_at` as date, so
+ * the same content is the same commit), then drops the old commit and every object only it held (`reflog expire`,
+ * `gc --prune=now`). A client's `git pull` therefore refuses the unrelated history: it updates with
+ * `git fetch && git reset --hard origin/main`, or clones again.
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -75,7 +78,8 @@ async function build(vaultId: string): Promise<string> {
     const message = (await runGit(['log', '-1', '--format=%B', BRANCH], dir)).toString('utf8')
     if (FINGERPRINT.exec(message)?.[1] === fingerprint) return dir
   }
-  const when = Math.floor(Math.max(0, ...rows.map((r) => r.updatedAt.getTime())) / 1000)
+  // A reduce: spreading a large vault's rows into Math.max overflows the call stack.
+  const when = Math.floor(rows.reduce((newest, r) => Math.max(newest, r.updatedAt.getTime()), 0) / 1000)
   const message = `Vault notes\n\nelara-vault-fingerprint: ${fingerprint}\n`
   const lines: Buffer[] = []
   files.forEach((f, i) => {
@@ -83,11 +87,13 @@ async function build(vaultId: string): Promise<string> {
   })
   const who = `Elara <elara@localhost> ${when} +0000`
   lines.push(Buffer.from(`commit ${BRANCH}\ncommitter ${who}\ndata ${Buffer.byteLength(message)}\n${message}`))
-  if (head) lines.push(Buffer.from(`from ${head}\n`))
   lines.push(Buffer.from('deleteall\n'))
   files.forEach((f, i) => lines.push(Buffer.from(`M 100644 :${i + 1} ${quotePath(f.path)}\n`)))
   lines.push(Buffer.from('\ndone\n'))
-  await runGit(['fast-import', '--quiet', '--done'], dir, Buffer.concat(lines))
+  await runGit(['fast-import', '--quiet', '--force', '--done'], dir, Buffer.concat(lines))
+  // Nothing of the previous snapshot stays: not its commit, not a reflog entry, not an object only it referenced.
+  await runGit(['reflog', 'expire', '--expire=now', '--all'], dir)
+  await runGit(['gc', '--prune=now', '--quiet'], dir)
   return dir
 }
 

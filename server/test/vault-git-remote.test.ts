@@ -8,6 +8,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { gzipSync } from 'node:zlib'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { eq } from 'drizzle-orm'
@@ -129,20 +130,45 @@ describe('a vault is a read-only git remote (#677)', () => {
     await expect(readFile(join(again.dir, 'pushed.md'), 'utf8')).rejects.toThrow()
   })
 
-  it('a changed note is in the next fetch (a pull moves on), a deleted one is gone, and equal content is the same commit', async () => {
+  it('serves a snapshot, never a history: after a change `git pull` refuses the replaced root, `fetch` + `reset` updates, and the old text is gone from the server', async () => {
     const token = await mint({ name: 'git-fetch', scope: 'account', access: 'read' })
     const c = await clone(token)
     expect(c.ok, c.out).toBe(true)
     const head = (await git(['rev-parse', 'HEAD'], c.dir)).out.trim()
+    // Unchanged content: the same commit, and a pull has nothing to do.
     expect((await clone(token)).ok).toBe(true)
     expect((await git(['pull', '--quiet'], c.dir)).out).not.toMatch(/fatal|error/)
     expect((await git(['rev-parse', 'HEAD'], c.dir)).out.trim()).toBe(head)
+    const remote = vaultRemoteDir(vaultId)
+    const oldBlob = (await git(['rev-parse', 'HEAD:beta.md'], remote)).out.trim()
+    expect((await git(['cat-file', '-e', oldBlob], remote)).ok).toBe(true)
 
     await updateNote(vaultId, 'beta', { body: 'Beta is about storks now.\n' })
-    const pull = await git(['pull', '--quiet'], c.dir)
-    expect(pull.ok, pull.out).toBe(true)
+    // The replaced root is unrelated to the clone's history: pull refuses, as documented.
+    const pull = await git(['pull', '--quiet', '--ff-only'], c.dir)
+    expect(pull.ok).toBe(false)
+    const fetched = await git(['fetch', '--quiet', 'origin'], c.dir)
+    expect(fetched.ok, fetched.out).toBe(true)
+    expect((await git(['reset', '--quiet', '--hard', 'origin/main'], c.dir)).ok).toBe(true)
     expect(await readFile(join(c.dir, 'beta.md'), 'utf8')).toContain('storks')
     expect((await git(['rev-parse', 'HEAD'], c.dir)).out.trim()).not.toBe(head)
+    // One commit, and the replaced note's blob and the previous commit are not in the repository any more.
+    expect((await git(['rev-list', '--all', '--count'], remote)).out.trim()).toBe('1')
+    expect((await git(['cat-file', '-e', oldBlob], remote)).ok).toBe(false)
+    expect((await git(['cat-file', '-e', head], remote)).ok).toBe(false)
+  })
+
+  it('refuses a gzip bomb and an oversized or malformed request without inflating it', async () => {
+    const token = await mint({ name: 'git-bomb', scope: 'account', access: 'read' })
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/x-git-upload-pack-request', 'content-encoding': 'gzip' }
+    const bomb = gzipSync(Buffer.alloc(64 * 1024 * 1024))
+    expect(bomb.length).toBeLessThan(200_000)
+    const res = await app.inject({ method: 'POST', url: `/git/vaults/${vaultId}/git-upload-pack`, headers, payload: bomb })
+    expect(res.statusCode).toBe(413)
+    const bad = await app.inject({ method: 'POST', url: `/git/vaults/${vaultId}/git-upload-pack`, headers, payload: Buffer.from('not gzip') })
+    expect(bad.statusCode).toBe(413)
+    const big = await app.inject({ method: 'POST', url: `/git/vaults/${vaultId}/git-upload-pack`, headers: { ...headers, 'content-encoding': 'identity' }, payload: Buffer.alloc(2 * 1024 * 1024) })
+    expect(big.statusCode).toBe(413)
   })
 
   it('a deleted note is gone from the next fetch, and the repository of a deleted vault is swept', async () => {
@@ -153,7 +179,8 @@ describe('a vault is a read-only git remote (#677)', () => {
     const c = await clone(token, id)
     expect(c.ok, c.out).toBe(true)
     await softDeleteNote(id, 'drop')
-    expect((await git(['pull', '--quiet'], c.dir)).ok).toBe(true)
+    expect((await git(['fetch', '--quiet', 'origin'], c.dir)).ok).toBe(true)
+    expect((await git(['reset', '--quiet', '--hard', 'origin/main'], c.dir)).ok).toBe(true)
     expect((await git(['ls-files'], c.dir)).out.trim()).toBe('keep.md')
 
     expect(existsSync(vaultRemoteDir(id))).toBe(true)

@@ -1,11 +1,15 @@
 import { spawn } from 'node:child_process'
 import { gunzipSync } from 'node:zlib'
+
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { logSecurityEvent } from '../auth/security-events.js'
 import { resolveAccess, UUID_REGEX } from '../vaults/permissions.js'
 import { resolveMcpToken } from '../vaults/mcp-connection-routes.js'
 import { checkRateLimit } from '../mcp/rate-limit.js'
 import { ensureVaultRemote } from './vault-remote.js'
+
+/** An upload-pack request names refs and wants: a few KiB. The cap holds for the body and for what it inflates to. */
+const MAX_REQUEST_BYTES = 1024 * 1024
 
 /**
  * A vault as a read-only git remote (#677; vault-remote.ts): smart HTTP, upload-pack only, so `git clone`, `fetch` and
@@ -79,11 +83,19 @@ export function vaultGitRoutes(app: FastifyInstance) {
 
     instance.get('/git/vaults/:vaultId/info/refs', advertise)
 
-    instance.post('/git/vaults/:vaultId/git-upload-pack', async (req: FastifyRequest<{ Params: { vaultId: string } }>, reply) => {
+    instance.post('/git/vaults/:vaultId/git-upload-pack', { bodyLimit: MAX_REQUEST_BYTES }, async (req: FastifyRequest<{ Params: { vaultId: string } }>, reply) => {
       const vaultId = await authorise(req, reply)
       if (vaultId === null) return reply
       const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)
-      const request = req.headers['content-encoding'] === 'gzip' ? gunzipSync(raw) : raw
+      let request = raw
+      if (req.headers['content-encoding'] === 'gzip') {
+        // Inflated under a cap: a few KiB of zeros must not become gigabytes.
+        try {
+          request = gunzipSync(raw, { maxOutputLength: MAX_REQUEST_BYTES })
+        } catch {
+          return reply.code(413).send({ error: 'request too large or not gzip' })
+        }
+      }
       const dir = await ensureVaultRemote(vaultId)
       return reply.header('content-type', 'application/x-git-upload-pack-result').header('cache-control', 'no-cache').send(await upload(dir, [], request))
     })

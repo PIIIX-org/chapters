@@ -2950,10 +2950,16 @@ else is the 404 a missing vault gets (a repository pin included). The
 bare repository is content only, shared by the callers of a vault, at
 `DATA_DIR/git-remotes/<vaultId>.git` (`vault-remote.ts`): built lazily on
 a request from the live notes as `<path>.md` in the projector's file form,
-with `git fast-import`, one commit on top of the previous head per change of
-content (the head's message holds the sha256 fingerprint of all paths and
-file hashes, so an unchanged vault costs one query and one `git log`), a
-fixed author and the newest `updated_at` as commit date. Served by spawning
+as a SNAPSHOT and never a history (a purged or replaced note's text must not
+stay readable through an old commit, and no purge hook reaches this
+repository): one root commit written with `git fast-import --force`, then
+`reflog expire` and `gc --prune=now` drop the previous commit and its
+objects (the commit message holds the sha256 fingerprint of all paths and
+file hashes, so an unchanged vault costs one query and one `git log`, and
+the same content is the same commit: fixed author, newest `updated_at` as
+date). After a change a client's `git pull` refuses the unrelated history;
+it runs `git fetch && git reset --hard origin/main` or clones again. A
+gzip request is inflated under a 1 MiB cap (413 above it, a bomb included). Served by spawning
 `git upload-pack --stateless-rpc` (git is in the image, no new dependency).
 A derived cache: leave it out of backups; `sweepVaultRemotes` removes the
 repositories of deleted vaults at boot. A rebuild holds the vault's notes in
