@@ -26,6 +26,9 @@ const test: LabTest = {
     const target = `docs/${mark}-target`
     const source = `docs/${mark}-source`
     const file = `src/${mark}-plan.ts`
+    // A caller and a test of the plan: the sites the code queries (#470) list.
+    const run = `src/${mark}-run.ts`
+    const runTest = `src/${mark}-run.test.ts`
 
     // ------------------------------------------------------------ accounts
     const password = `Lab-${crypto.randomUUID()}`
@@ -41,7 +44,11 @@ const test: LabTest = {
     await mcp.owner.must('create_note', { vaultId, type: 'docs', name: `${mark}-target`, body: 'the target note' })
     const sourceNote = await mcp.owner.must<{ id: string }>('create_note', { vaultId, type: 'docs', name: `${mark}-source`, body: `${mark}source orbital checklist, see [[${target}]].` })
     const repoName = ctx.uniq('lab-matrix-repo')
-    await copyIntoLocalRepo(ctx, writeTree({ [file]: `export const ${mark}Plan = 'launch window'\n` }), repoName)
+    await copyIntoLocalRepo(ctx, writeTree({
+      [file]: `export function ${mark}Plan(): string {\n  return 'launch window'\n}\n`,
+      [run]: `import { ${mark}Plan } from './${mark}-plan'\n\nexport function ${mark}Run(): string {\n  return ${mark}Plan()\n}\n`,
+      [runTest]: `import { ${mark}Plan } from './${mark}-plan'\n\ntest('plan', () => {\n  ${mark}Plan()\n})\n`,
+    }), repoName)
     const repositoryId = (await connectLocalRepo(ctx, repoName)).id
     const repoSettle = await settleRepo(ctx, repositoryId, 'lab-matrix-repo', { stallMs: 60_000, timeoutMs: 240_000 })
     const embedded = await poll(async () => {
@@ -85,6 +92,21 @@ const test: LabTest = {
       { name: 'REST GET /api/vaults/:id/notes/*', identifiers: [sourceNote.id, source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/notes/${source}`) },
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
+      ...(['references', 'callers', 'impact'] as const).map((refs) => ({
+        name: `MCP find_symbols refs: ${refs}`,
+        identifiers: [run, `${mark}Run`],
+        share,
+        read: viaMcp('find_symbols', { repositoryId, query: `${mark}Plan`, refs }),
+      })),
+      { name: 'MCP find_symbols refs: tests', identifiers: [runTest, `${mark}Plan`], share, read: viaMcp('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'tests' }) },
+      { name: 'MCP find_symbols refs: at', identifiers: [`${mark}Run`, `${mark}Plan`], share, read: viaMcp('find_symbols', { repositoryId, query: `${run}:4`, refs: 'at' }) },
+      ...(['references', 'callers', 'impact', 'tests'] as const).map((refs) => ({
+        name: `REST GET /api/repositories/:id/code-refs (${refs})`,
+        identifiers: refs === 'tests' ? [runTest, `${mark}Plan`] : [run, `${mark}Run`],
+        share,
+        read: viaRest(`/api/repositories/${repositoryId}/code-refs?refs=${refs}&query=${mark}Plan`),
+      })),
+      { name: 'REST GET /api/repositories/:id/code-refs (at)', identifiers: [`${mark}Run`, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/code-refs?refs=at&query=${encodeURIComponent(`${run}:4`)}`) },
       { name: 'MCP search in a vault', identifiers: [sourceNote.id, source], share, read: viaMcp('search', { vaultId, query: `${mark}source` }) },
       { name: 'MCP search everywhere', identifiers: [sourceNote.id, source], kind: 'listing', share, read: viaMcp('search', { everywhere: true, query: `${mark}source` }) },
       { name: 'REST GET /api/search (everywhere)', identifiers: [sourceNote.id, source], kind: 'listing', share, read: viaRest(`/api/search?q=${mark}source`) },

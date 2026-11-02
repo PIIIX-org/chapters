@@ -57,10 +57,12 @@ Every change — code, spec, doc — follows the same loop:
    fix commits to the same PR referencing the issue (`refs #N`), and
    when fixed, close the issue as solved (`closes #N` in the fixing
    commit/PR comment).
-6. **Merge** into `dev` (merge commit, delete branch) once review is
-   clean and CI is green. **As of 2026-08-27 the agent merges its own
-   PRs again**: open the PR, wait for CI to pass, then merge. Do not
-   merge on red or pending CI. (History: auto-merge was authorized
+6. **Merge** into `dev` once review is clean and CI is green. **As of
+   2026-08-27 the agent merges its own PRs again**: open the PR, wait for
+   CI to pass, then add it to the merge queue (since 2026-11-01; see
+   **Landing a PR on `dev`**), which merges it with a merge commit; delete
+   the branch after. Do not enqueue on red or pending CI. (History:
+   auto-merge was authorized
    2026-07-15, revoked 2026-07-20 with the owner merging personally,
    and re-authorized 2026-08-27.) Promotion `dev → prod` still needs
    the owner's explicit OK each time — that has never changed.
@@ -542,7 +544,7 @@ always gives the same text.
   `GITHUB_REPOSITORY` or the `origin` remote), then commit STATE.md if it
   changed. Don't run it in every fix PR: a PR's own `Closes #N` changes
   the data when it merges, so the block it commits is already stale, and
-  parallel PRs would all conflict on the block under strict protection.
+  parallel PRs would all conflict on the block.
   The nightly `refresh` job catches up. Without `--write` the
   script only prints the block and says whether the file is current. It
   keeps the file's line endings.
@@ -653,8 +655,8 @@ the image's dependencies, the lab plumbing, the workflow or the gate; all
 five suites also run nightly, on every PR to `prod` and by hand
 (`-f tier=none -f bench=all`). The gate
 (`.github/scripts/bench-gate.mjs`, base copy on PRs) fails when Elara's
-hit@5 drops by more than one question of a suite or its mean
-tokens-to-gold rises by more than 10 % against the **base** commit's
+hit@5, exact@1 or gold-reached rate drops by more than one question of a
+suite (#1058) or its mean tokens-to-gold rises by more than 10 % against the **base** commit's
 `benchmarks/baseline.json`; with `--require-golds` (the all-suites path
 rule) when any suite's `goldReached` is below the base baseline's, with no
 tolerance; when the suite changed (questions, keywords, policy config or
@@ -822,21 +824,27 @@ not testing) and compares the process identity it reports (`bootId`,
 
 ## Branch protection and the review gate
 
-Two layers of rules apply to `dev` and `prod`, and both must pass:
+Rules apply to `dev` and `prod` in layers, and all must pass:
 
 - **Classic branch protection** on each branch: `enforce_admins: true`
-  (admins cannot bypass it), `strict: true` (the PR must be up to date with
-  its base), and the required status checks in the table below (#574).
+  (admins cannot bypass it), the required status checks in the table below
+  (#574), and `strict` — `true` on `prod` (the PR must be up to date with
+  its base), `false` on `dev`, where the merge queue tests every PR on the
+  current tip instead (2026-11-01).
 - **Repository ruleset 24421063, "Require CI green before merge"**
   (`gh api repos/PIIIX-org/chapters/rulesets/24421063`). It targets `dev`,
   `prod` and `main` and has no bypass actors
   (`current_user_can_bypass: never`). Rules:
   - `pull_request`: changes go through a PR, 0 approvals,
     `dismiss_stale_reviews_on_push`, all three merge methods allowed.
-  - `required_status_checks`: `checks` (integration 15368), strict.
+  - `required_status_checks`: `checks` (integration 15368), not strict
+    (since 2026-11-01, for the merge queue).
 
   `gh api repos/PIIIX-org/chapters/rules/branches/<branch>` lists the
-  ruleset rules in force on a branch. #574 does not change the ruleset.
+  ruleset rules in force on a branch. #574 did not change this ruleset;
+  the merge queue (2026-11-01) turned its strict setting off.
+- **Repository ruleset 26310472, "dev merge queue"**, on `dev` only: a
+  `merge_queue` rule with the settings under **Merge queue settings**.
 
 Required status checks (classic protection, #574):
 
@@ -877,7 +885,9 @@ Otherwise the first promotion is the first run of that configuration, and
 a red one blocks it. Rollback for either branch (and the emergency hotfix
 path under **Promotion to prod**):
 `gh api -X PATCH repos/PIIIX-org/chapters/branches/<branch>/protection/required_status_checks --input <file>`
-with `{"strict": true, "checks": [{"context": "checks", "app_id": 15368}]}`.
+with `{"strict": true, "checks": [{"context": "checks", "app_id": 15368}]}`
+(for `dev`, also see the merge-queue rollback under **Landing a PR on
+`dev`**).
 App 15368 is GitHub Actions. It owns the job check runs and also the
 `review-verdict` status, which the workflow posts with its token.
 
@@ -904,13 +914,31 @@ rebase queue, fails closed), and sets the status on the queue commit, so
 queued is picked up by re-running the newest **Review verdict** run of the
 queue commit.
 
-**Merge queue settings.** The merge method is **merge commit**: the
-verdict check needs the PR head as the queue commit's second parent and
-fails closed otherwise. The maximum group size is **1**: `lab-plan` and
-`review-verdict` resolve only the PR named in the queue branch, so a
-grouped commit would carry other PRs' changes unplanned and unreviewed.
-The status-check timeout is **at least 240 minutes**, the `bench` job's
-all-suite budget.
+**Merge queue settings** (ruleset 26310472, enabled 2026-11-01). The merge
+method is **merge commit**: the verdict check needs the PR head as the
+queue commit's second parent and fails closed otherwise. The maximum group
+size is **1** (`max_entries_to_build` and `max_entries_to_merge` 1,
+grouping `ALLGREEN`): `lab-plan` and `review-verdict` resolve only the PR
+named in the queue branch, so a grouped commit would carry other PRs'
+changes unplanned and unreviewed. The status-check timeout is **300
+minutes**, above the `bench` job's 240-minute all-suite budget.
+
+**Landing a PR on `dev`.** Once the PR's own checks are green and its
+`VERDICT: MERGE` is posted, add it to the queue; there is no "Update
+branch" step, because the queue builds `dev` + the PR and runs every
+required check on that commit (`merge_group`). Auto-merge is off for the
+repository, so `gh pr merge` refuses on a queued branch ("Auto merge is not
+allowed"); enqueue directly:
+
+```sh
+id=$(gh api graphql -f query='query{repository(owner:"PIIIX-org",name:"chapters"){pullRequest(number:<N>){id}}}' --jq .data.repository.pullRequest.id)
+gh api graphql -f query='mutation($id:ID!){enqueuePullRequest(input:{pullRequestId:$id}){mergeQueueEntry{position}}}' -F id=$id
+```
+
+A red check on the queue commit removes the entry; fix, re-verdict if the
+head moved, and enqueue again. The first PR through the queue was #1056
+(60813a6). Rollback: delete ruleset 26310472 and set `strict` back to
+`true` on `dev`'s classic protection and in ruleset 24421063.
 
 A status belongs to a **commit, not a PR**, and a promotion's head (the
 tip of `dev`) can also be the head of other PRs. So:
@@ -972,8 +1000,8 @@ record by branch. `.github/scripts/review-archive.mjs` does the move
 (`node .github/scripts/review-archive.mjs --write`; without `--write` it
 lists what is due; `--days` changes the age; token and repository as for
 `state-md.mjs`) and the workflow **`review-archive.yml`** runs it every
-Sunday at 03:00 UTC (not at the STATE.md hour: under strict protection
-two bot PRs merged back to back cost an extra CI cycle; or by `gh workflow
+Sunday at 03:00 UTC (not at the STATE.md hour: two bot PRs to `dev` go
+through the merge queue one at a time; or by `gh workflow
 run review-archive.yml --ref
 dev`): with `STATE_MD_TOKEN` it force-pushes `bot/review-archive` (one
 commit of renames on top of `dev`; the job fails if the commit is anything

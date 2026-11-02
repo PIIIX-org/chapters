@@ -26,7 +26,12 @@ const TARGET = `docs/${MARK}-target`
 const SOURCE = `docs/${MARK}-source`
 const SOURCE_BODY = `${MARK}source orbital checklist, see [[${TARGET}]].`
 const FILE = `src/${MARK}-plan.ts`
-const FILE_BODY = `export const ${MARK}Plan = 'launch window'\n`
+const FILE_BODY = `export function ${MARK}Plan(): string {\n  return 'launch window'\n}\n`
+// A caller and a test of the plan: the sites the code queries (#470) list.
+const RUN = `src/${MARK}-run.ts`
+const RUN_BODY = `import { ${MARK}Plan } from './${MARK}-plan'\n\nexport function ${MARK}Run(): string {\n  return ${MARK}Plan()\n}\n`
+const RUN_TEST = `src/${MARK}-run.test.ts`
+const RUN_TEST_BODY = `import { ${MARK}Plan } from './${MARK}-plan'\n\ntest('plan', () => {\n  ${MARK}Plan()\n})\n`
 
 interface Account {
   id: string
@@ -102,7 +107,12 @@ beforeAll(async () => {
   await must('owner', 'POST', `/api/vaults/${vaultId}/notes`, { type: 'docs', name: `${MARK}-target`, body: 'the target note' })
   sourceId = (await must('owner', 'POST', `/api/vaults/${vaultId}/notes`, { type: 'docs', name: `${MARK}-source`, body: SOURCE_BODY })).id as string
   repositoryId = (await must('owner', 'POST', '/api/repositories', { name: `matrix-${MARK}`, ingestionMethod: 'agent_push' })).id as string
-  await syncRepositoryFiles(repositoryId, [{ path: FILE, content: FILE_BODY }], [FILE])
+  const files = [
+    { path: FILE, content: FILE_BODY },
+    { path: RUN, content: RUN_BODY },
+    { path: RUN_TEST, content: RUN_TEST_BODY },
+  ]
+  await syncRepositoryFiles(repositoryId, files, files.map((f) => f.path))
   await flushExtraction()
   await flushEmbeddings()
   const file = await rest('owner', 'GET', `/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(FILE)}`)
@@ -141,6 +151,32 @@ describe('read surfaces (#552, #1034)', () => {
   accessMatrix('REST GET /api/repositories/:id/files/content', {
     setup: () => shareBoth([fileId, FILE, `${MARK}Plan`]),
     read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(FILE)}`)),
+  })
+
+  // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.
+  for (const refs of ['references', 'callers', 'impact'] as const) {
+    accessMatrix(`MCP find_symbols refs: ${refs}`, {
+      setup: () => shareBoth([RUN, `${MARK}Run`]),
+      read: (actor) => call(actor, 'find_symbols', { repositoryId, query: `${MARK}Plan`, refs }),
+    })
+  }
+  accessMatrix('MCP find_symbols refs: tests', {
+    setup: () => shareBoth([RUN_TEST, `${MARK}Plan`]),
+    read: (actor) => call(actor, 'find_symbols', { repositoryId, query: `${MARK}Plan`, refs: 'tests' }),
+  })
+  accessMatrix('MCP find_symbols refs: at', {
+    setup: () => shareBoth([`${MARK}Run`, `${MARK}Plan`]),
+    read: (actor) => call(actor, 'find_symbols', { repositoryId, query: `${RUN}:4`, refs: 'at' }),
+  })
+  for (const refs of ['references', 'callers', 'impact', 'tests'] as const) {
+    accessMatrix(`REST GET /api/repositories/:id/code-refs (${refs})`, {
+      setup: () => shareBoth(refs === 'tests' ? [RUN_TEST, `${MARK}Plan`] : [RUN, `${MARK}Run`]),
+      read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/code-refs?refs=${refs}&query=${MARK}Plan`)),
+    })
+  }
+  accessMatrix('REST GET /api/repositories/:id/code-refs (at)', {
+    setup: () => shareBoth([`${MARK}Run`, `${MARK}Plan`]),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/code-refs?refs=at&query=${encodeURIComponent(`${RUN}:4`)}`)),
   })
 
   accessMatrix('MCP search in a vault', {

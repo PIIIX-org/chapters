@@ -507,6 +507,13 @@ export const noteCrdt = pgTable(
     foldedThrough: bigint('folded_through', { mode: 'number' }).notNull().default(0),
     foldedSeq: bigint('folded_seq', { mode: 'number' }).notNull(),
     foldError: text('fold_error'),
+    /**
+     * The latest rebase's items (ADR-003 §5.4, #891, migration 0062): the client id it wrote them under
+     * (the server process's SERVER_CLIENT_ID) and that client's clock just past them. Null: no rebase
+     * recorded. The relay refuses a stale client that lacks them (sync/collab-server.ts `missedRebase`).
+     */
+    rebaseClient: bigint('rebase_client', { mode: 'number' }),
+    rebaseClock: bigint('rebase_clock', { mode: 'number' }),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
