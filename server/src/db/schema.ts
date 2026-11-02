@@ -989,11 +989,13 @@ export const repositoryVersions = pgTable(
   (t) => [primaryKey({ columns: [t.repositoryId, t.seq] })],
 )
 
-/** What a version added, modified or deleted against the one before it (#471). */
+/** What a version added, modified or deleted against the one before it (#471); a sync that stopped leaves its rows under the next `seq`. */
 export const repositoryChanges = pgTable(
   'repository_changes',
   {
-    repositoryId: uuid('repository_id').notNull(),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
     seq: integer('seq').notNull(),
     path: text('path').notNull(),
     /** 'added' | 'modified' | 'deleted'. */
@@ -1001,7 +1003,6 @@ export const repositoryChanges = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.repositoryId, t.seq, t.path] }),
-    foreignKey({ columns: [t.repositoryId, t.seq], foreignColumns: [repositoryVersions.repositoryId, repositoryVersions.seq] }).onDelete('cascade'),
     check('repository_changes_kind_check', sql`kind in ('added', 'modified', 'deleted')`),
   ],
 )

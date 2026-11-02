@@ -28,7 +28,12 @@ export async function changedFilesAnswer(
   }
   const files = answer.files.slice(0, CHANGES_PAGE).map(({ path, kind, language, size }) => ({ path, kind, ...(kind === 'deleted' ? {} : { language, size }) }))
   return {
-    head: { ...version, ...(answer.base ? { since: { ...(answer.base.commit ? { commit: answer.base.commit } : {}), at: answer.base.at } } : {}) },
+    // `since: null`: the date predates the history, which starts at `historyStartsAt` (its first version's files are not changes).
+    head: {
+      ...version,
+      since: answer.base ? { ...(answer.base.commit ? { commit: answer.base.commit } : {}), at: answer.base.at } : null,
+      ...(answer.historyStartsAt ? { historyStartsAt: answer.historyStartsAt } : {}),
+    },
     sections: [
       keyset({
         name: 'files',

@@ -5,9 +5,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { repositoryVersions } from '../src/db/schema.js'
+import { repositoryChanges, repositoryVersions } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { syncRepositoryFiles } from '../src/repositories/store.js'
+import { VERSIONS_KEPT, syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -119,10 +119,21 @@ describe('browse_repository changed_since', () => {
     expect(recent.files.map((f) => f.path)).toEqual(['d.ts', 'e.ts', 'src/c.ts'])
   })
 
-  it('a date before the first version reports every recorded change; `path` narrows to a folder', async () => {
-    expect((await changed({ changed_since: '2000-01-01' })).files.map((f) => f.path)).toEqual(['a.ts', 'b.ts', 'e.ts', 'src/c.ts'])
+  it('a date before the first version says the history starts later (`since: null`, `historyStartsAt`), and lists the changes after it; `path` narrows to a folder', async () => {
+    const before = (await changed({ changed_since: '2000-01-01' })) as Answer & { historyStartsAt?: string }
+    expect(before.since).toBeNull()
+    expect(before.historyStartsAt).toBe((await db.select().from(repositoryVersions).where(eq(repositoryVersions.seq, 1)))[0]!.indexedAt.toISOString())
+    expect(before.files.map((f) => f.path)).toEqual(['a.ts', 'b.ts', 'e.ts', 'src/c.ts'])
     const json = await changed({ changed_since: C1, path: 'src' })
     expect(json.files.map((f) => f.path)).toEqual(['src/c.ts'])
+  })
+
+  it('a date-time without an offset is UTC, whatever the server TZ', async () => {
+    const hourAgo = new Date(Date.now() - 1800 * 1000).toISOString().slice(0, 19)
+    const bare = await changed({ changed_since: hourAgo })
+    const zoned = await changed({ changed_since: `${hourAgo}Z` })
+    expect(bare.since).toEqual(zoned.since)
+    expect(bare.since?.commit).toBe(C2)
   })
 
   it('refuses a commit it never indexed and a value that is neither a commit nor a date', async () => {
@@ -152,6 +163,33 @@ describe('browse_repository changed_since', () => {
     expect([...page1.files, ...second.files].map((f) => f.path)).toEqual(paths)
     expect(second.truncated).toBe(false)
   })
+
+  it('a sync that stops midway leaves its changes for the next one: nothing is lost from the history', async () => {
+    const R = await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'changed-since-stopped', ingestionMethod: 'agent_push' } })
+    const id = R.json<{ id: string }>().id
+    await syncRepositoryFiles(id, [file('x.ts', 'one'), file('y.ts', 'one')], ['x.ts', 'y.ts'], { commit: C1 })
+    const broken = { path: 'z.ts', get content(): string { throw new Error('connection lost') } }
+    await expect(syncRepositoryFiles(id, [file('x.ts', 'two'), file('w.ts', 'new'), broken], ['x.ts', 'y.ts', 'w.ts', 'z.ts'], { commit: C2 })).rejects.toThrow('connection lost')
+    // Retried: x and w are already written, so this sync changes only z; all three are version 2's changes.
+    await syncRepositoryFiles(id, [file('x.ts', 'two'), file('w.ts', 'new'), file('z.ts', 'new')], ['x.ts', 'y.ts', 'w.ts', 'z.ts'], { commit: C2 })
+    const r = await ask(agent, { repositoryId: id, changed_since: C1 })
+    expect((JSON.parse(r.text) as Answer).files.map((f) => [f.path, f.kind])).toEqual([['w.ts', 'added'], ['x.ts', 'modified'], ['z.ts', 'added']])
+  })
+
+  it('keeps the last VERSIONS_KEPT versions and their changes', async () => {
+    const R = await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'changed-since-pruned', ingestionMethod: 'agent_push' } })
+    const id = R.json<{ id: string }>().id
+    const paths: string[] = []
+    for (let i = 0; i < VERSIONS_KEPT + 3; i += 1) {
+      paths.push(`p${i}.ts`)
+      await syncRepositoryFiles(id, [file(`p${i}.ts`, 'x')], [...paths])
+    }
+    const versions = await db.select().from(repositoryVersions).where(eq(repositoryVersions.repositoryId, id))
+    expect(versions).toHaveLength(VERSIONS_KEPT)
+    expect(Math.min(...versions.map((v) => v.seq))).toBe(4)
+    const changes = await db.select().from(repositoryChanges).where(eq(repositoryChanges.repositoryId, id))
+    expect(changes).toHaveLength(VERSIONS_KEPT)
+  }, 120_000)
 
   it('an unchanged sync records no version; an empty commit-only sync records one with no changes', async () => {
     const before = await db.select().from(repositoryVersions).where(eq(repositoryVersions.repositoryId, repoId))

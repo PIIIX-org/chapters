@@ -30,6 +30,9 @@ export interface SyncResult {
  * it once: the commit when one is known, else the tree hash, else nothing
  * (never synced).
  */
+/** Index versions a repository keeps for `changed_since` (#471); older ones and their changes are dropped. */
+export const VERSIONS_KEPT = 200
+
 export type IndexedVersion = { commit: string } | { tree: string } | Record<string, never>
 
 export function indexedVersion(r: { lastSyncedCommit: string | null; treeHash: string | null }): IndexedVersion {
@@ -99,8 +102,20 @@ export async function syncRepositoryFiles(
   let manifestChanged = false
   // A path created or deleted can change what the imports that tried it resolve to (#1008).
   const createdOrDeleted: string[] = []
-  // What this sync changed, for the version it records (#471).
-  const changes: Array<{ path: string; kind: 'added' | 'modified' | 'deleted' }> = []
+  // The version this sync's changes belong to (#471): the one it records at its end. Each change is written in the
+  // transaction of its file's write, so a sync that stops midway leaves its changes under that version number and the
+  // next sync records them (a repository with no version yet records none: its first version is the baseline).
+  const [started] = await db.select({ seq: repositories.versionSeq }).from(repositories).where(eq(repositories.id, repositoryId))
+  const pendingSeq = (started?.seq ?? 0) + 1
+  const recordChange = async (tx: Pick<typeof db, 'select' | 'insert' | 'delete'>, path: string, kind: 'added' | 'modified' | 'deleted') => {
+    if (pendingSeq === 1) return
+    const where = and(eq(repositoryChanges.repositoryId, repositoryId), eq(repositoryChanges.seq, pendingSeq), eq(repositoryChanges.path, path))
+    const [earlier] = await tx.select({ kind: repositoryChanges.kind }).from(repositoryChanges).where(where)
+    // Within one version: added then changed stays added, added then deleted is nothing, deleted then added is changed.
+    const net = earlier?.kind === 'added' ? (kind === 'deleted' ? null : 'added') : earlier?.kind === 'deleted' && kind === 'added' ? 'modified' : kind
+    if (net === null) await tx.delete(repositoryChanges).where(where)
+    else await tx.insert(repositoryChanges).values({ repositoryId, seq: pendingSeq, path, kind: net }).onConflictDoUpdate({ target: [repositoryChanges.repositoryId, repositoryChanges.seq, repositoryChanges.path], set: { kind: net } })
+  }
 
   for (const file of changedOrNewFiles) {
     // Pushed content is text the client chose to send, so a stray NUL is
@@ -126,22 +141,27 @@ export async function syncRepositoryFiles(
       updatedAt: new Date(),
     }
     if (current) {
-      await db.update(repositoryFiles).set(values).where(eq(repositoryFiles.id, current.id))
+      await db.transaction(async (tx) => {
+        await tx.update(repositoryFiles).set(values).where(eq(repositoryFiles.id, current.id))
+        await recordChange(tx, file.path, 'modified')
+      })
       toExtract.push(current.id)
-      changes.push({ path: file.path, kind: 'modified' })
       result.updated += 1
     } else {
-      const [inserted] = await db
-        .insert(repositoryFiles)
-        .values(values)
-        .onConflictDoUpdate({
-          target: [repositoryFiles.repositoryId, repositoryFiles.path],
-          set: values,
-        })
-        .returning({ id: repositoryFiles.id })
+      const inserted = await db.transaction(async (tx) => {
+        const [row] = await tx
+          .insert(repositoryFiles)
+          .values(values)
+          .onConflictDoUpdate({
+            target: [repositoryFiles.repositoryId, repositoryFiles.path],
+            set: values,
+          })
+          .returning({ id: repositoryFiles.id })
+        await recordChange(tx, file.path, 'added')
+        return row
+      })
       if (inserted) toExtract.push(inserted.id)
       createdOrDeleted.push(file.path)
-      changes.push({ path: file.path, kind: 'added' })
       result.created += 1
     }
     if (isResolutionManifest(file.path)) manifestChanged = true
@@ -169,6 +189,7 @@ export async function syncRepositoryFiles(
         )
         .returning({ id: repositoryFiles.id })
       const deletedNow = deleted.map((r) => r.id)
+      for (const r of toDelete) await recordChange(tx, r.path, 'deleted')
       await removeSemanticNodes(tx, 'code', repositoryId, deletedNow)
       const gone = new Set(deletedNow)
       await reresolveAfterChange(tx, repositoryId, deletedNow, [...definitions.values()], near.filter((id) => !gone.has(id)))
@@ -176,16 +197,13 @@ export async function syncRepositoryFiles(
     kickSemanticEdges()
     result.deleted = toDelete.length
     if (toDelete.some((r) => isResolutionManifest(r.path))) manifestChanged = true
-    for (const r of toDelete) {
-      createdOrDeleted.push(r.path)
-      changes.push({ path: r.path, kind: 'deleted' })
-    }
+    for (const r of toDelete) createdOrDeleted.push(r.path)
     // The delete also takes a batch file outside currentPaths.
     for (const path of hashByPath.keys()) if (!currentPathSet.has(path)) hashByPath.delete(path)
   }
 
-  // The tree hash, the commit and, when files or the commit changed, the version they make (#471). A repository's
-  // first version is its baseline: no changes are recorded against nothing.
+  // The tree hash, the commit and, when files or the commit changed (changes recorded above, here or by a sync that
+  // stopped), the version they make (#471). The versions older than the last VERSIONS_KEPT are dropped with their changes.
   await db.transaction(async (tx) => {
     const [before] = await tx
       .select({ commit: repositories.lastSyncedCommit, seq: repositories.versionSeq })
@@ -195,19 +213,21 @@ export async function syncRepositoryFiles(
     if (!before) return
     const commit = indexed.commit !== undefined ? indexed.commit : before.commit
     const treeHash = computeTreeHash(hashByPath)
-    const record = before.seq === 0 || changes.length > 0 || commit !== before.commit
+    const seq = before.seq + 1
+    // Another sync recorded a version since this one started: its changes join the next one.
+    if (seq !== pendingSeq && pendingSeq > 1) {
+      await tx.update(repositoryChanges).set({ seq }).where(and(eq(repositoryChanges.repositoryId, repositoryId), eq(repositoryChanges.seq, pendingSeq)))
+    }
+    const [pending] = await tx.select({ n: sql<number>`count(*)::int` }).from(repositoryChanges).where(and(eq(repositoryChanges.repositoryId, repositoryId), eq(repositoryChanges.seq, seq)))
+    const record = before.seq === 0 || (pending?.n ?? 0) > 0 || commit !== before.commit
     await tx
       .update(repositories)
-      .set({ treeHash, lastSyncedCommit: commit, ...(record ? { versionSeq: before.seq + 1 } : {}) })
+      .set({ treeHash, lastSyncedCommit: commit, ...(record ? { versionSeq: seq } : {}) })
       .where(eq(repositories.id, repositoryId))
     if (!record) return
-    const seq = before.seq + 1
     await tx.insert(repositoryVersions).values({ repositoryId, seq, commit, treeHash })
-    if (before.seq > 0) {
-      for (let i = 0; i < changes.length; i += 1000) {
-        await tx.insert(repositoryChanges).values(changes.slice(i, i + 1000).map((c) => ({ repositoryId, seq, ...c })))
-      }
-    }
+    await tx.delete(repositoryVersions).where(and(eq(repositoryVersions.repositoryId, repositoryId), sql`${repositoryVersions.seq} <= ${seq - VERSIONS_KEPT}`))
+    await tx.delete(repositoryChanges).where(and(eq(repositoryChanges.repositoryId, repositoryId), sql`${repositoryChanges.seq} <= ${seq - VERSIONS_KEPT}`))
   })
 
   if (manifestChanged || createdOrDeleted.length > 0) {

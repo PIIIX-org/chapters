@@ -2671,8 +2671,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     it lists the files changed after a commit or a date instead, from the
     index's own history: `syncRepositoryFiles` records a `repository_versions`
     row (commit, tree, `indexed_at`; `repositories.version_seq` counts them)
-    whenever a sync changed files or the commit, and the paths it added,
-    modified or deleted in `repository_changes` (migration 0063). A
+    whenever a sync changed files or the commit; each path it added,
+    modified or deleted goes to `repository_changes` in the transaction of
+    that file's write, under the next `seq`, so a sync that stops midway
+    leaves its changes for the next one (migration 0063). The last
+    `VERSIONS_KEPT` (200) versions are kept. The backup does not carry them
+    and `onRestore` resets `version_seq` to 0. A
     repository's first version is a baseline with no changes (migration 0063
     gives existing ones a baseline). The git mirror is depth 1, so this is not
     git history and dates are sync times. The versions after the one the commit

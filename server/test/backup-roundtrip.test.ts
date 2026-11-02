@@ -42,6 +42,8 @@ import { restoreBackup } from '../src/export/restore.js'
 import { issueBackupCodes } from '../src/auth/mfa.js'
 import { createNote, readNote, saveAsset, softDeleteNote, trashFile, updateNote } from '../src/notes/store.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import { repositoryChanges, repositoryVersions } from '../src/db/schema.js'
+import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { createSyncToken, resolveSyncToken } from '../src/repositories/sync-tokens.js'
 import { createActiveUser, loginCookie, TEST_PASSWORD, uniqueEmail, wipeInstance } from './helpers.js'
 
@@ -590,4 +592,21 @@ describe('instance backup round trip (#409)', () => {
     expect(legacy.rows.slice(lines.length).map((r) => r.type)).toEqual(['instance_restored', 'after_the_restore'])
     await wipeInstance()
   })
+
+  it('restores a repository without its index history: the next sync records a new baseline (#471)', async () => {
+    await wipeInstance()
+    await restoreBackup(archive)
+    await syncRepositoryFiles(fixture.repoId, [{ path: 'a.ts', content: 'one' }], ['a.ts'], { commit: '1'.repeat(40) })
+    await syncRepositoryFiles(fixture.repoId, [{ path: 'b.ts', content: 'two' }], ['a.ts', 'b.ts'], { commit: '2'.repeat(40) })
+    expect((await db.select().from(repositories).where(eq(repositories.id, fixture.repoId)))[0]!.versionSeq).toBe(2)
+    const withHistory = await buildInstanceBackup()
+    await wipeInstance()
+    await restoreBackup(withHistory)
+    expect((await db.select().from(repositories).where(eq(repositories.id, fixture.repoId)))[0]!.versionSeq).toBe(0)
+    expect(await db.select().from(repositoryVersions).where(eq(repositoryVersions.repositoryId, fixture.repoId))).toEqual([])
+    // Without the reset the first sync would be version 3 and list every file as added.
+    await syncRepositoryFiles(fixture.repoId, [{ path: 'a.ts', content: 'one' }, { path: 'b.ts', content: 'two' }], ['a.ts', 'b.ts'], { commit: '3'.repeat(40) })
+    expect(await db.select().from(repositoryChanges).where(eq(repositoryChanges.repositoryId, fixture.repoId))).toEqual([])
+    expect((await db.select().from(repositoryVersions).where(eq(repositoryVersions.repositoryId, fixture.repoId))).map((v) => v.seq)).toEqual([1])
+  }, 60_000)
 })
