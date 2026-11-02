@@ -81,8 +81,12 @@ jobs:
           TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           ADMIN_DATABASE_URL: postgres://elara:elara@localhost:5432/elara
           DATA_DIR: ${{ runner.temp }}/elara-test-data
+      # One retry, same 250 ms bound: alone on a shared runner the p95 still
+      # crosses it now and then (261.9 ms on the merge-queue run 41394097308,
+      # which ejected #1065 after its all-suite bench had started). A real
+      # regression fails both attempts.
       - name: Test collab-s3-perf alone (#905)
-        run: pnpm -C server exec vitest run test/collab-s3-perf.test.ts --pool=forks --maxWorkers=1
+        run: pnpm -C server exec vitest run test/collab-s3-perf.test.ts --pool=forks --maxWorkers=1 --retry=1
         env:
           DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
           TEST_DATABASE_URL: postgres://elara:elara@localhost:5432/elara_test
