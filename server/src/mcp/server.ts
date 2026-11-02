@@ -80,6 +80,7 @@ import { serializeNote } from '../notes/okf.js'
 import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
+import { explainAnswer } from './explain.js'
 import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { skippedField } from '../repositories/fs-scan.js'
@@ -3006,19 +3007,28 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
         limit: intRange('limit', 1, 50).optional().describe('Max results'),
-        refs: z.enum(REFS).optional().describe('Sites of a symbol; at: `path:line`'),
+        refs: z.enum([...REFS, 'explain']).optional().describe('Sites of a symbol; at: `path:line`; explain: sites, notes'),
         path: z.string().optional().describe('File of the definition'),
         depth: intRange('depth', 1, 3).optional().describe('impact levels; default 2'),
       },
       budget: 'list',
     },
     async (
-      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs; path?: string; depth?: number },
+      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs | 'explain'; path?: string; depth?: number },
       { repositoryId },
       page,
     ) => {
-      refsArguments(args)
       // null: an account-scoped connection with no repositoryId, or `everywhere`.
+      if (args.refs === 'explain') {
+        if (!repositoryId) throw new McpToolError('INVALID_ARGUMENT', '`refs` reads one repository: pass `repositoryId`', { field: 'repositoryId' })
+        if (args.depth !== undefined) throw new McpToolError('INVALID_ARGUMENT', '`depth` goes with `refs: "impact"`', { field: 'depth' })
+        await requireRepositoryAccess(repositoryId)
+        // The vaults whose notes may cite the code: every readable one for an account token, none for a pinned one.
+        const vaultIds = auth.connection.scope === 'account' ? (await listAccessibleVaults(auth.user.id)).map((v) => v.id) : []
+        return explainAnswer(repositoryId, args, vaultIds, await repositoryIndexedVersion(repositoryId))
+      }
+      const rest = { ...args, refs: args.refs }
+      refsArguments(rest)
       if (repositoryId) await requireRepositoryAccess(repositoryId)
       if (args.refs !== undefined) {
         if (!repositoryId) throw new McpToolError('INVALID_ARGUMENT', '`refs` reads one repository: pass `repositoryId`', { field: 'repositoryId' })

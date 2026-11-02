@@ -323,6 +323,9 @@ const QUESTIONS: Question[] = [
   { name: 'grep code, one name in three files, with context', tool: 'grep', args: (w) => ({ repositoryId: w.repoId, pattern: 'function parse|def parse', context: 1 }) },
   { name: 'grep notes, two notes with one body', tool: 'grep', args: (w) => ({ vaultId: w.vaultId, pattern: '(?i)checksum every' }) },
   { name: 'grep everywhere under a glob', tool: 'grep', args: () => ({ everywhere: true, pattern: '\\bupload\\b', path: '{src,guides}/**' }) },
+  { name: 'find_symbols refs explain a symbol with callers and a citing note', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'upload', refs: 'explain' }) },
+  { name: 'find_symbols refs explain at a line', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'src/upload.ts:5', refs: 'explain' }) },
+  { name: 'find_symbols refs explain candidates of a name defined three times', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse', refs: 'explain' }) },
   { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }) },
   { name: 'graph repository communities', tool: 'graph', args: (w) => ({ repositoryId: w.repoId }) },
   {

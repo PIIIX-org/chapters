@@ -106,6 +106,8 @@ beforeAll(async () => {
   vaultId = (await must('owner', 'POST', '/api/vaults', { name: `matrix ${MARK}` })).id as string
   await must('owner', 'POST', `/api/vaults/${vaultId}/notes`, { type: 'docs', name: `${MARK}-target`, body: 'the target note' })
   sourceId = (await must('owner', 'POST', `/api/vaults/${vaultId}/notes`, { type: 'docs', name: `${MARK}-source`, body: SOURCE_BODY })).id as string
+  // A note that cites the plan file: `find_symbols` with `refs: "explain"` (#675) names it to readers of its vault only.
+  await must('owner', 'POST', `/api/vaults/${vaultId}/notes`, { type: 'docs', name: `${MARK}-cite`, body: `Why the plan: [[repo:matrix-${MARK}/${FILE}]].` })
   repositoryId = (await must('owner', 'POST', '/api/repositories', { name: `matrix-${MARK}`, ingestionMethod: 'agent_push' })).id as string
   const files = [
     { path: FILE, content: FILE_BODY },
@@ -151,6 +153,11 @@ describe('read surfaces (#552, #1034)', () => {
   accessMatrix('REST GET /api/repositories/:id/files/content', {
     setup: () => shareBoth([fileId, FILE, `${MARK}Plan`]),
     read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(FILE)}`)),
+  })
+
+  accessMatrix('MCP find_symbols refs: explain', {
+    setup: () => shareBoth([RUN, `${MARK}Run`, `docs/${MARK}-cite`]),
+    read: (actor) => call(actor, 'find_symbols', { repositoryId, query: `${MARK}Plan`, refs: 'explain' }),
   })
 
   // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.

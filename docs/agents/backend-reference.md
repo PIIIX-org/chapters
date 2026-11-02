@@ -2667,6 +2667,17 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     cursor's fingerprint, so a cursor from another folder is refused. The
     REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
     file, unordered, no paging.
+  - `find_symbols` with `refs: "explain"` (#675, `mcp/explain.ts`, data in
+    `repositories/explain.ts`) composes the code questions with the notes that
+    cite the definition's file in one answer: the definition (`symbol`, `at:
+    path#La-Lb`, declaration line, the head's `commit`/`tree`), `callers`
+    (`codeSites`, member guesses left out), `tests` and `cites`, three
+    `ranked` sections the ladder packs. `cites` reads `note_links` rows whose
+    target is `repo:<name or id>/<path>` in the vaults `listAccessibleVaults`
+    returns for an account token (none for a pinned one), with the link's
+    lines turned into lines of the note's file as backlinks do (#472);
+    `fresh` is note `updated_at` >= file `updated_at`. The MCP-only `explain`
+    value is not in `REFS`, so the REST `code-refs` route does not take it.
   - `browse_vault` (#425) pages in SQL the same way, one code path for
     the root (the empty folder) and a folder (`notes/store.ts`), reading
     only the page: `browseNotesPage` reads 500 + 1 live notes after the

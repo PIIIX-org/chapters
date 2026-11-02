@@ -57,6 +57,8 @@ const test: LabTest = {
       )
       return rows[0]?.n === 1 ? true : undefined
     }, 240_000, 2_000)
+    // A note that cites the plan file: `find_symbols` with `refs: "explain"` (#675) names it to readers of its vault only.
+    await mcp.owner.must('create_note', { vaultId, type: 'docs', name: `${mark}-cite`, body: `Why the plan: [[repo:${repoName}/${file}]].` })
     const fileRow = await rest.owner.get<{ id: string }>(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`)
     const fileId = fileRow.json?.id ?? ''
     data.fixtures = { vaultId, repositoryId, sourceId: sourceNote.id, fileId, repoSettle: repoSettle.outcome, embedded: embedded === true }
@@ -92,6 +94,7 @@ const test: LabTest = {
       { name: 'REST GET /api/vaults/:id/notes/*', identifiers: [sourceNote.id, source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/notes/${source}`) },
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
+      { name: 'MCP find_symbols refs: explain', identifiers: [run, `${mark}Run`, `docs/${mark}-cite`], share, read: viaMcp('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' }) },
       ...(['references', 'callers', 'impact'] as const).map((refs) => ({
         name: `MCP find_symbols refs: ${refs}`,
         identifiers: [run, `${mark}Run`],
