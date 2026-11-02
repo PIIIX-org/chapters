@@ -81,6 +81,7 @@ import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projecto
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { OVERLAY_SPARE, overlayHits, readOverlay } from './overlay.js'
+import { changedFilesAnswer } from './changes.js'
 import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { skippedField } from '../repositories/fs-scan.js'
@@ -133,6 +134,7 @@ import { openSession } from '../cache/session.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
 import { GREP_INPUT, grepAnswer } from './grep.js'
+import { LONG_TEXT_LINES, routingHint, withHint } from './routing-hints.js'
 import {
   DEFAULT_BUDGET,
   Page,
@@ -190,7 +192,7 @@ const EDIT_OPS = z.array(
     editOp('delete_block', { find: z.string() }),
     editOp('frontmatter_set', { key: z.string(), value: z.unknown() }),
     editOp('frontmatter_add', { key: z.string(), value: z.unknown().describe('Added to the list at `key`') }),
-    editOp('frontmatter_remove', { key: z.string(), value: z.unknown().optional().describe('Removed from the list at `key`; without it the key is deleted') }),
+    editOp('frontmatter_remove', { key: z.string(), value: z.unknown().optional().describe('Removed from list `key`; none: key deleted') }),
   ]),
 )
 
@@ -1511,7 +1513,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         rendered,
       })
       const outline = await outlineFirst(args.outline, page.at, () => parts().outline)
-      return inSession(session, doc, answer(outline), page.at)
+      // The routing hint (#674) goes with a body page, unless the answer is a session reference.
+      const hint =
+        outline === null
+          ? routingHint({ tool: 'read_note', lines: lines.total_lines, targets: false, outline: false, continued: page.at !== null, structured: lines.total_lines <= LONG_TEXT_LINES || parts().outline.length > 1 })
+          : undefined
+      return withHint(inSession(session, doc, answer(outline), page.at), hint)
     },
   )
 
@@ -1529,8 +1536,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         path: z.string().optional().describe('Full note path; or give type and name'),
         type: z.string().optional().describe('First path segment (with name)'),
         name: z.string().optional().describe('Name slug (with type)'),
-        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Frontmatter map'),
-        body: z.string().optional().describe('Markdown body'),
+        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Frontmatter'),
+        body: z.string().optional().describe('Body'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -1592,14 +1599,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         path: NOTE_PATH,
         frontmatter: z.record(z.string(), z.unknown()).optional().describe('Keys to set; others kept'),
         body: z.string().optional().describe('New whole body (not with ops)'),
-        ops: EDIT_OPS.optional().describe('Edits applied in order to the live text; a find, anchor or heading must match once, else nothing changes'),
+        ops: EDIT_OPS.optional().describe('In order; each find, anchor or heading must match once, else nothing changes'),
         replace: z.boolean().optional().describe('true: frontmatter replaces the whole map'),
         removeKeys: z.array(z.string()).optional().describe('Frontmatter keys to delete'),
         // The note's `rev` (its seq, #477), or a revision id (the `rev` before #477, note_history ids, #822).
         base_rev: z
           .union([z.string(), z.number().int()])
           .optional()
-          .describe('`rev` of the content you edited: changes made since merge; an overlap is `conflicted`, nothing written'),
+          .describe('`rev` you edited: later changes merge; an overlap is `conflicted`, nothing written'),
         allowGrowth: z.boolean().optional().describe('true: write a body that doubles the note (else quarantined)'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
@@ -2221,16 +2228,18 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'repository',
       capability: 'read',
       profile: 'reader',
-      description: "List a repository's files (path, language, size), by path.",
+      description: "List repository files (path, language, size) by path.",
       inputSchema: {
         repositoryId: REPOSITORY_ID,
         path: z.string().optional().describe('Folder, e.g. `src/lib`'),
+        changed_since: z.string().optional().describe('Commit SHA or date: files changed since'),
       },
       budget: 'list',
     },
-    async (args: { path?: string }, { repositoryId: target }, page) => {
+    async (args: { path?: string; changed_since?: string }, { repositoryId: target }, page) => {
       await requireRepositoryAccess(target)
       const folder = args.path?.replace(/^\/+|\/+$/g, '') || null
+      if (args.changed_since !== undefined) return changedFilesAnswer(target, args.changed_since, folder, await repositoryIndexedVersion(target), page)
       // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
       const rows = await listRepositoryFilesPage(target, { folder, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 })
       const files = rows.slice(0, BROWSE_PAGE)
@@ -2336,7 +2345,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       if (outline) return inSession(session, doc, { head: located, sections: [outlineSection(outline), content(true)], narrow: outlineNarrow(outline) }, page.at)
       // The body answer as before #417: the content by pages, the symbol list after its last page.
       const symbols = (await listFileSymbols(file.id)).sort((a, b) => a.startLine - b.startLine || compareCodeUnits(a.name, b.name))
-      return inSession(
+      const hint = routingHint({ tool: 'read_file', lines: totalLines(file.content), targets: false, outline: false, continued: page.at !== null, structured: symbols.length > 0 || MARKDOWN_PATH.test(file.path) })
+      return withHint(inSession(
         session,
         doc,
         {
@@ -2349,7 +2359,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           ],
         },
         page.at,
-      )
+      ), hint)
     },
   )
 
@@ -2954,7 +2964,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id })
       return {
         // One repository: its indexed version, once in the head (#471).
-        head: { ...head, ...(resources.repositoryIds.length === 1 ? await repositoryIndexedVersion(resources.repositoryIds[0]!) : {}) },
+        head: {
+          ...head,
+          ...(resources.repositoryIds.length === 1 ? await repositoryIndexedVersion(resources.repositoryIds[0]!) : {}),
+          hint: routingHint({ tool: 'search', query: args.query, vaults: resources.vaultIds.length, repositories: resources.repositoryIds.length }),
+        },
         sections: [
           ranked({
             name: 'results',
@@ -3090,7 +3104,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Query the knowledge graph of notes and code: one node per community by default, or nodes with `community`, `aggregate: "none"` or `neighborsOf`; `limit` keeps the first. Edges carry direction, relation, confidence and evidence (`path#La-Lb`).',
+        'Query the knowledge graph of notes and code: one node per community by default, or nodes with `community`, `aggregate: "none"` or `neighborsOf`. Edges carry direction, relation, confidence and evidence (`path#La-Lb`).',
       inputSchema: {
         vaultId: UUID_ARG.optional().describe('Vault graph'),
         repositoryId: UUID_ARG.optional().describe('Repository graph'),
@@ -3210,7 +3224,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Find the shortest path between two notes, concepts or code files in the knowledge graph: `{found, distance}`, the nodes in order and one edge row per step.',
+        'Find the shortest path between two notes, concepts or code files in the graph: `{found, distance}`, nodes in order, one edge row per step.',
       inputSchema: {
         source: z.string().describe('Node id, path or name'),
         target: z.string().describe('Node id, path or name'),

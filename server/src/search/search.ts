@@ -419,6 +419,11 @@ const RRF_K = 60
 /** Exact and identifier matches always outrank fuzzy ones in fusion (#456). */
 const EXACT_BOOST = 1
 /**
+ * The boost a code hit gets over docs and plans on a code-shaped query (#457): about 3 RRF positions near the top
+ * of a leg, far below `EXACT_BOOST`, so a doc that genuinely answers the question still wins.
+ */
+const CODE_BOOST = 0.0008
+/**
  * The `hnsw.ef_search` of a vector leg over `blocks` (HNSW returns at most
  * that many rows, and each leg keeps only some kinds: file-level blocks, or
  * symbol blocks, so the default 40 would leave it short of `CANDIDATES`).
@@ -977,6 +982,81 @@ function isExactNote(path: string, frontmatter: unknown, ctx: ExactContext): boo
   return title !== '' && ctx.whole.has(title)
 }
 
+const PROSE_TERMS: Record<string, true> = {
+  github: true, webassembly: true, javascript: true, typescript: true, postgresql: true, mongodb: true,
+  graphql: true, devops: true, openai: true, chatgpt: true, anthropic: true, claude: true, gemini: true,
+  vscode: true, nextjs: true, nuxtjs: true, nodejs: true, fastapi: true, dockerhub: true, macos: true,
+  ios: true, ipados: true, watchos: true, iphone: true, ipad: true, imac: true, quicktime: true, webkit: true,
+  apis: true, uuids: true, urls: true, uris: true, sdks: true, adrs: true, prs: true, ips: true, vms: true, dbs: true, cpus: true, gpus: true,
+  'and/or': true, 'curl/wget': true, 'node/v8': true, 'input/output': true, 'read/write': true, 'client/server': true,
+  'true/false': true, 'yes/no': true, 'on/off': true, 'up/down': true, 'in/out': true, 'either/or': true, 'before/after': true,
+}
+
+const CODE_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|c|cpp|cc|cxx|h|hpp|rb|php|cs|swift|kt|scala|sh|bash|sql)$/i
+const CODE_PATH = /(?:^|\/)(?:src|server|client|lib|crates|pkg|internal)\/[a-zA-Z0-9_.-]+/i
+const DECL_KEYWORD = /\b(?:function|def|fn|class|interface|struct|enum)\s+[a-zA-Z_$][a-zA-Z0-9_$]*/i
+const CAMEL_IDENTIFIER = /(?:\p{Ll}\p{Lu}|\p{Lu}{2,}\p{Ll})/u
+const SNAKE_IDENTIFIER = /^[a-zA-Z0-9]+_[a-zA-Z0-9_]+$/
+
+/**
+ * Classifies whether a query is code-shaped (#457) based on explicit syntactic
+ * features (code file extensions, paths in source trees, declaration constructs).
+ * Architectural rationale questions ('why') and pure prose queries remain untouched.
+ */
+export function isCodeShaped(query: string): boolean {
+  const qLower = query.trim().toLowerCase()
+  if (/^(?:why\b|how\s+come\b)/i.test(qLower)) return false
+  if (DECL_KEYWORD.test(query)) return true
+
+  const tokens = query.trim().split(/\s+/).filter(Boolean)
+  let signals = 0
+  let strongSignal = false
+
+  for (const token of tokens) {
+    const cleaned = token.replace(/^[^\p{L}\p{N}_$]+|[^\p{L}\p{N}_$]+$/gu, '')
+    const cleanedLower = cleaned.toLowerCase()
+    const tokenLower = token.toLowerCase()
+
+    if (cleanedLower in PROSE_TERMS || tokenLower in PROSE_TERMS) continue
+
+    // A capitalised `Node.js`, `Vue.js` or `Next.js` is a product name, not a file.
+    if (CODE_EXTENSIONS.test(cleaned) && !/^\p{Lu}[\p{Ll}\p{N}]*\.js$/u.test(cleaned)) {
+      strongSignal = true
+      signals += 2
+      continue
+    }
+
+    if (CODE_PATH.test(token)) {
+      strongSignal = true
+      signals += 2
+      continue
+    }
+
+    if (CAMEL_IDENTIFIER.test(cleaned) && !cleanedLower.endsWith('s') && cleaned.length >= 4) {
+      signals += 1
+    }
+
+    if (SNAKE_IDENTIFIER.test(cleaned) && cleaned.length >= 5) {
+      signals += 1
+    }
+  }
+
+  return strongSignal || signals >= 2
+}
+
+/** Whether a hit represents documentation/prose rather than executable source code (#457). */
+function isDocHit(resourceType: ResourceType, path: string): boolean {
+  if (resourceType === 'note') return true
+  if (resourceType === 'symbol') return false
+  const lower = path.toLowerCase()
+  // Prose, and data or configuration: a config file is not the code an identifier question looks for.
+  if (/\.(?:md|markdown|mdx|rst|txt|adoc|org|json|jsonc|ya?ml|toml|ini|lock|csv)$/i.test(lower)) return true
+  if (/(?:^|\/)(?:docs?|plans?|wiki|specs?)(?:\/|$)/i.test(lower)) return true
+  const base = lower.split('/').pop() ?? lower
+  if (/^(?:readme|changelog|contributing|license|notice)(?:\..+)?$/i.test(base)) return true
+  return false
+}
+
 /** The answer to an empty query or an empty scope: nothing was searched. */
 const NOTHING: SearchResponse<never> = { status: 'no_match', retrieval_mode: 'none', degraded: false, results: [] }
 
@@ -1081,6 +1161,7 @@ export async function searchNotes(
   // Reciprocal Rank Fusion — rank-based, no score normalization to tune.
   const fusionStarted = performance.now()
   const ctx = queryExactContext(query)
+  const codeShaped = isCodeShaped(query)
   const merged = new Map<string, SearchResult>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
@@ -1103,7 +1184,8 @@ export async function searchNotes(
           language: resourceType === 'code' ? row.language : undefined,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution + (exact ? EXACT_BOOST : 0),
+          score:
+            contribution + (exact ? EXACT_BOOST : 0) + (codeShaped && !isDocHit(resourceType, row.path) ? CODE_BOOST : 0),
         })
       }
     })
@@ -1132,7 +1214,7 @@ export async function searchNotes(
           endLine: row.end_line,
           updated: row.updated_at.slice(0, 10),
           snippet: row.snippet,
-          score: contribution + (exact ? EXACT_BOOST : 0),
+          score: contribution + (exact ? EXACT_BOOST : 0) + (codeShaped ? CODE_BOOST : 0),
         })
       }
     })

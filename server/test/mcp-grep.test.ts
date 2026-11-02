@@ -8,7 +8,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { repositoryFiles } from '../src/db/schema.js'
+import { blocks, repositoryFiles } from '../src/db/schema.js'
+import { and, eq } from 'drizzle-orm'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
@@ -132,6 +133,33 @@ describe('grep over code (#468)', () => {
     expect(at((await grep({ repositoryId: repoId, pattern: '\\bnormalize\\b', path: 'src/store.ts' })).json.hits)).toEqual(['src/store.ts:3', 'src/store.ts:7'])
     expect(at((await grep({ repositoryId: repoId, pattern: '(?i)^func normalize', path: '*.go' })).json.hits)).toEqual(['cmd/main.go:3'])
     expect(at((await grep({ repositoryId: repoId, pattern: '[[:space:]]*return [a-z]+?\\(x\\)' })).json.hits)).toEqual(['lib/util.py:5', 'src/handler.ts:4'])
+  })
+})
+
+describe('the block a hit names (#1083)', () => {
+  it('is the symbol block when a file block starts on the same line, whatever the block ids sort like', async () => {
+    // A file that is one function: its `symbol` block and its file block have one span, so the kind decides, not the row order.
+    await syncRepositoryFiles(repoId, [{ path: 'tiny/only.py', content: 'def only(x):\n    return x\n' }], [...Object.keys(FILES), 'tiny/only.py'])
+    await flushExtraction()
+    const [file] = await db.select({ id: repositoryFiles.id }).from(repositoryFiles).where(and(eq(repositoryFiles.repositoryId, repoId), eq(repositoryFiles.path, 'tiny/only.py')))
+    const rows = await db.select().from(blocks).where(eq(blocks.ownerId, file!.id))
+    const symbol = rows.find((b) => b.kind === 'symbol' && b.startLine === 1)!
+    const spanning = rows.filter((b) => b.kind !== 'symbol' && b.startLine === 1 && b.endLine - b.startLine === symbol.endLine - symbol.startLine)
+    // Precondition: some other block has the symbol's exact span, else this case proves nothing.
+    expect(spanning.length, 'a block of the same span as the symbol').toBeGreaterThan(0)
+    const original = rows.map((b) => [b.id, b.blockId] as const)
+    try {
+      for (const [lowFirst, label] of [[true, 'symbol id first'], [false, 'symbol id last']] as const) {
+        // Re-key the blocks so the symbol's id sorts first or last among the file's blocks.
+        const ordered = [...rows].sort((a, b) => (a.id === symbol.id ? -1 : b.id === symbol.id ? 1 : 0) * (lowFirst ? 1 : -1))
+        for (const [i, b] of ordered.entries()) await db.update(blocks).set({ blockId: `b_order${lowFirst ? 'a' : 'b'}${String(i).padStart(4, '0')}` }).where(eq(blocks.id, b.id))
+        const r = await grep({ repositoryId: repoId, pattern: '^def only', path: 'tiny/only.py' })
+        const symbolId = (await db.select({ blockId: blocks.blockId }).from(blocks).where(eq(blocks.id, symbol.id)))[0]!.blockId
+        expect(r.json.hits[0].block, label).toBe(symbolId)
+      }
+    } finally {
+      for (const [id, blockId] of original) await db.update(blocks).set({ blockId }).where(eq(blocks.id, id))
+    }
   })
 })
 

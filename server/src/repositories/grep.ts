@@ -4,7 +4,8 @@ import { notes, repositories, repositoryFiles, vaults } from '../db/schema.js'
 import { bodyStartLine, renderNoteFile } from '../notes/projector.js'
 import { lineStarts, sliceLines, totalLines } from '../text/lines.js'
 import type { LineRange } from '../text/targets.js'
-import { codeParts, markdownParts, rangeTokens } from '../mcp/read-targets.js'
+import { rangeTokens } from '../mcp/read-targets.js'
+import { noteBlocks } from '../notes/note-blocks.js'
 import { listFileBlocks } from './store.js'
 
 /**
@@ -35,6 +36,8 @@ export const scanLimits = { files: 20_000, bytes: 256 * 1024 * 1024, ms: 10_000,
 const CHUNK_FILES = 500
 /** A line shown is cut here (a minified bundle is one line). */
 const LINE_CHARS = 500
+/** Block kinds of one span, most specific first. */
+const KIND_RANK = ['symbol', 'section', 'preamble', 'skeleton', 'file']
 /** The line a position past a whole file is at. */
 const PAST_FILE = 2_147_483_647
 
@@ -256,18 +259,24 @@ export async function grep(
     text: string
     starts: number[]
     offset: number
-    blocks: ReadonlyArray<{ block: string; lines: LineRange }>
+    blocks: ReadonlyArray<{ block: string; kind: string; innerPath: string; lines: LineRange }>
   }
   const docs = new Map<string, Doc>()
   for (const row of noteRows) {
     const path = shown.find((f) => f.id === row.id)!.path
     const file = renderNoteFile({ frontmatter: row.frontmatter, frontmatterSrc: null, body: row.body })
     const offset = bodyStartLine({ frontmatter: row.frontmatter, frontmatterSrc: null }) - 1
-    docs.set(row.id, { text: file, starts: lineStarts(file), offset, blocks: markdownParts(row.id, path, row.body, file, offset).blocks })
+    docs.set(row.id, { text: file, starts: lineStarts(file), offset, blocks: noteBlocks(row.id, path, row.body)
+        .filter((b) => b.endLine >= b.startLine)
+        .map((b) => ({ block: b.blockId, kind: b.kind, innerPath: b.innerPath, lines: [b.startLine + offset, b.endLine + offset] as LineRange })),
+    })
   }
   for (const row of fileRows) {
     const { blocks } = await listFileBlocks(row.id, row.contentHash)
-    docs.set(row.id, { text: row.content, starts: lineStarts(row.content), offset: 0, blocks: codeParts(blocks, row.content).blocks })
+    docs.set(row.id, { text: row.content, starts: lineStarts(row.content), offset: 0, blocks: blocks
+        .filter((b) => b.endLine >= b.startLine)
+        .map((b) => ({ block: b.blockId, kind: b.kind, innerPath: b.innerPath, lines: [b.startLine, b.endLine] as LineRange })),
+    })
   }
 
   // A note or file deleted since the scan has no hit.
@@ -279,7 +288,17 @@ export async function grep(
     const line = f.n + doc.offset
     const first = Math.max(1, line - args.context)
     const last = Math.min(totalLines(doc.text), line + args.context)
-    const block = doc.blocks.filter((b) => b.lines[0] <= line && line <= b.lines[1]).sort((a, b) => a.lines[1] - a.lines[0] - (b.lines[1] - b.lines[0]))[0]
+    // The smallest block holding the line; blocks of one span (a file's `parse` symbol and its `file` block) by kind, then inner
+    // path, never by id or row order (ids differ per database: #473, #1083). A block id decides only blocks equal in all of them.
+    const block = doc.blocks
+      .filter((b) => b.lines[0] <= line && line <= b.lines[1])
+      .sort(
+        (a, b) =>
+          a.lines[1] - a.lines[0] - (b.lines[1] - b.lines[0]) ||
+          KIND_RANK.indexOf(a.kind) - KIND_RANK.indexOf(b.kind) ||
+          (a.innerPath < b.innerPath ? -1 : a.innerPath > b.innerPath ? 1 : 0) ||
+          (a.block < b.block ? -1 : a.block > b.block ? 1 : 0),
+      )[0]
     const snippet = sliceLines(doc.text, first, last, doc.starts)
       .split('\n')
       .map((l) => (l.length > LINE_CHARS ? l.slice(0, LINE_CHARS) : l))

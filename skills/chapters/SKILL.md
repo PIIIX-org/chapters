@@ -35,7 +35,7 @@ Elara is a team knowledge base and codebase mapping platform built on four found
 
 ### 1. Navigation Protocol: Pick the Cheaper Tool
 When exploring a project or answering questions about architecture, concepts, or code:
-- **Pick the cheaper tool.** Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions that span repos. In one checked-out repo, try Elara `search` first for natural-language questions; for an exact identifier or string, `grep` (Elara's, or `rg` locally) plus a ranged read is cheaper ([benchmark](https://github.com/PIIIX-org/chapters/blob/dev/benchmarks/README.md)). Never read a whole file when a line range or outline will do.
+- **Pick the cheaper tool.** Use Elara for cross-repo questions, notes, decisions, history, verified claims, and code questions that span repos. In one checked-out repo, try Elara `search` first for natural-language questions; for an exact identifier or string, `grep` (Elara's, or `rg` locally) plus a ranged read is cheaper ([benchmark](https://github.com/PIIIX-org/chapters/blob/dev/benchmarks/README.md)). Never read a whole file when a line range or outline will do. Elara says so itself: a `search` for literal text in one repository, and a read of a long text from the top, carry a `hint` naming the cheaper route (`rg -n -F`, `outline: true` then `targets`); the answer is still given.
 - **Step 1 — Search & Symbols**:
   - Run `search` (or `/elara-search` / legacy `/chapters-search`) with a query to find relevant notes and code files using hybrid (lexical + vector) retrieval.
   - Run `find_symbols` (or `/elara-symbols` / legacy `/chapters-symbols`) to pinpoint specific functions, methods, classes, interfaces, types or enums with exact declaration line numbers without reading whole files.
@@ -251,7 +251,7 @@ Elara exposes 62 tools across 7 functional domains. **Capability** is the token 
 | :--- | :--- | :--- | :--- |
 | `list_repositories` | Account | `read` | List all connected codebase repositories. |
 | `connect_repository` | Account | `admin` | Connect a repo (git URL or local filesystem path). |
-| `browse_repository` | Repo/Account | `read` | List a repository's indexed files by path, in pages; `path` lists one folder's subtree. |
+| `browse_repository` | Repo/Account | `read` | List a repository's indexed files by path, in pages; `path` lists one folder's subtree; `changed_since` (commit or date) only the files changed since. |
 | `read_file` | Repo/Account | `read` | Read a code file from line 1, in pages of `budget_tokens`, with its symbol outline. |
 | `repository_status` | Repo/Account | `read` | Check sync state, last sync time, last sync error, `filesPendingExtraction`, `extractionFailures` and `skipped` (files left out, by reason). |
 | `sync_repository` | Repo/Account | `write` | Trigger immediate synchronization of a repository. |
