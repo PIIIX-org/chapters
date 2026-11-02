@@ -4,15 +4,16 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
-import { notes, repositories, vaults } from '../src/db/schema.js'
+import { notes, repositories, repositoryFiles, vaults } from '../src/db/schema.js'
 import { createNote } from '../src/notes/store.js'
 import { renderNoteFile } from '../src/notes/projector.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
-import { bestPlace, matchTerms, SNIPPET_CHARS, snippetAround } from '../src/search/locate.js'
+import { bestPlace, LOCATE_HITS, LOCATE_MAX_CHARS, locateHits, matchTerms, SNIPPET_CHARS, snippetAround } from '../src/search/locate.js'
+import { embedQuery } from '../src/search/embeddings.js'
 import { lineStarts } from '../src/text/lines.js'
-import { searchNotes } from '../src/search/search.js'
+import { searchNotes, type SearchResult } from '../src/search/search.js'
 import { createActiveUser } from './helpers.js'
 
 let vaultId: string
@@ -117,5 +118,61 @@ describe('locating a match', () => {
     expect(snippetAround(text, text.indexOf('NEEDLE'), ['needle'])).toContain('<b>NEEDLE</b>')
     // Whole words only, as ts_headline marks them.
     expect(snippetAround('SCOPEMARK scope probe', 0, ['scope'])).toBe('SCOPEMARK <b>scope</b> probe')
+  })
+})
+
+describe('hits no term occurs in, big documents and many hits (#414 review)', () => {
+  it('a code file no term occurs in points at the symbol nearest to the query vector', async () => {
+    const [file] = await db.select().from(repositoryFiles).where(eq(repositoryFiles.path, 'src/gateway.ts'))
+    const hit: SearchResult = { resourceType: 'code', id: file!.id, containerId: repoId, path: file!.path, channel: 'vector', snippet: 'old', score: 1, updated: '2026-11-01' }
+    const vec = JSON.stringify(await embedQuery('rotateQuokkaSecret token renewed', null))
+    await locateHits([hit], 'zzqqx wwvvk', new Map(), vec)
+    expect(hit.heading).toBe('rotateQuokkaSecret')
+    expect(hit.block).toMatch(/^b_[a-z2-7]{12}$/)
+    expect(hit.startLine).toBe(25)
+    expect(hit.tokens).toBeGreaterThan(5)
+    // Without a vector there is nothing to point at: the hit stays a file hit.
+    const bare: SearchResult = { ...hit, startLine: undefined, endLine: undefined, block: undefined, heading: undefined, tokens: undefined, snippet: 'old' }
+    await locateHits([bare], 'zzqqx wwvvk', new Map())
+    expect(bare.startLine).toBeUndefined()
+    expect(bare.snippet).toBe('old')
+  })
+
+  it('a note over the read limit still points at the block its vector leg found, without tokens or a new snippet', async () => {
+    const big = `# Big\n\n${'filler line that goes on and on and on\n'.repeat(Math.ceil(LOCATE_MAX_CHARS / 38) + 10)}\n## Tail\n\nthe zephyrkey rotation section\n`
+    const row = await createNote(vaultId, { path: 'docs/big', body: big })
+    await flushExtraction()
+    await flushEmbeddings()
+    const res = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, 'zephyrkey rotation section', 10)
+    const hit = res.results.find((r) => r.path === 'docs/big')
+    expect(hit).toBeDefined()
+    if (hit!.channel !== 'keyword') {
+      expect(hit!.block).toMatch(/^b_[a-z2-7]{12}$/)
+      expect(hit!.startLine).toBeGreaterThan(1)
+    }
+    expect(hit!.tokens).toBeUndefined()
+    expect(row.id).toBe(hit!.id)
+  })
+
+  it('only the first LOCATE_HITS hits are located', async () => {
+    const [row] = await db.select().from(notes).where(eq(notes.path, 'docs/guide'))
+    const many: SearchResult[] = Array.from({ length: LOCATE_HITS + 5 }, () => ({ resourceType: 'note', id: row!.id, containerId: vaultId, path: 'docs/guide', channel: 'keyword', snippet: 'old', score: 1, updated: '2026-11-01' }))
+    await locateHits(many, 'zephyrkey', new Map())
+    expect(many.filter((h) => h.block !== undefined)).toHaveLength(LOCATE_HITS)
+    expect(many.at(-1)!.snippet).toBe('old')
+  })
+
+  it('finds the place with the most distinct terms in one pass, however many occurrences there are', () => {
+    const noise = Array.from({ length: 3000 }, () => 'alpha alpha alpha alpha').join('\n')
+    const text = `${noise}\n\n\n\n\n\n\n\n\n\n\n\n\n\n\nbeta here\ngamma there and alpha too\n`
+    const place = bestPlace(text, lineStarts(text), ['alpha', 'beta', 'gamma'])!
+    expect(place.line).toBeGreaterThan(3000)
+    // Characters whose lower case is longer shift every index: no place at all.
+    expect(bestPlace('İstanbul alpha', lineStarts('İstanbul alpha'), ['alpha'])).toBeNull()
+  })
+
+  it('acronyms of three capitals are terms, and a snippet keeps its first word when the text breaks there', () => {
+    expect(matchTerms('how does the API handle RAG')).toEqual(['api', 'handle', 'rag'])
+    expect(snippetAround('word '.repeat(5) + 'NEEDLE ' + 'tail '.repeat(100), 25)).toMatch(/^(word |NEEDLE)/)
   })
 })
