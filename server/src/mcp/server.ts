@@ -131,7 +131,7 @@ import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
-import { routingHint } from './routing-hints.js'
+import { LONG_TEXT_LINES, routingHint, withHint } from './routing-hints.js'
 import {
   DEFAULT_BUDGET,
   Page,
@@ -1498,7 +1498,6 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         indexed: await noteIndexed(note.row.id, note.row.seq),
         ...lines,
         ...foldError,
-        hint: routingHint({ tool: 'read_note', lines: lines.total_lines, targets: false, outline: args.outline === true, continued: page.at !== null }),
       }
       const answer = (outline: OutlineEntry[] | null): Budgeted => ({
         head,
@@ -1511,7 +1510,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         rendered,
       })
       const outline = await outlineFirst(args.outline, page.at, () => parts().outline)
-      return inSession(session, doc, answer(outline), page.at)
+      // The routing hint (#674) goes with a body page, unless the answer is a session reference.
+      const hint =
+        outline === null
+          ? routingHint({ tool: 'read_note', lines: lines.total_lines, targets: false, outline: false, continued: page.at !== null, structured: lines.total_lines <= LONG_TEXT_LINES || parts().outline.length > 1 })
+          : undefined
+      return withHint(inSession(session, doc, answer(outline), page.at), hint)
     },
   )
 
@@ -2336,11 +2340,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       if (outline) return inSession(session, doc, { head: located, sections: [outlineSection(outline), content(true)], narrow: outlineNarrow(outline) }, page.at)
       // The body answer as before #417: the content by pages, the symbol list after its last page.
       const symbols = (await listFileSymbols(file.id)).sort((a, b) => a.startLine - b.startLine || compareCodeUnits(a.name, b.name))
-      return inSession(
+      const hint = routingHint({ tool: 'read_file', lines: totalLines(file.content), targets: false, outline: false, continued: page.at !== null, structured: symbols.length > 0 || MARKDOWN_PATH.test(file.path) })
+      return withHint(inSession(
         session,
         doc,
         {
-          head: { ...head, hint: routingHint({ tool: 'read_file', lines: totalLines(file.content), targets: false, outline: false, continued: page.at !== null }) },
+          head,
           sections: [
             outlineSection(null),
             content(false),
@@ -2349,7 +2354,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           ],
         },
         page.at,
-      )
+      ), hint)
     },
   )
 

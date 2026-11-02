@@ -26,19 +26,37 @@ const MAX_LITERAL = 80
 
 export type RoutingRequest =
   | { tool: 'search'; query: string; vaults: number; repositories: number }
-  | { tool: 'read_file' | 'read_note'; lines: number; targets: boolean; outline: boolean; continued: boolean }
+  | {
+      tool: 'read_file' | 'read_note'
+      lines: number
+      targets: boolean
+      outline: boolean
+      continued: boolean
+      /** The text has an outline to take (symbols, headings); JSON, lockfiles and logs have none. */
+      structured: boolean
+    }
 
 export function routingHint(req: RoutingRequest): string | undefined {
   if (req.tool === 'search') {
     if (req.vaults !== 0 || req.repositories !== 1) return undefined
     const query = req.query.trim()
     if (query === '' || query.length > MAX_LITERAL || /[\r\n]/.test(query)) return undefined
-    const quoted = /^(["'`]).+\1$/.test(query)
-    const code = /[(){}[\]<>=;\\|^$*+]|::|->/.test(query)
-    if (!quoted && !code) return undefined
+    // A quoted phrase (a closing quote of the same kind, none inside), or one token with no space that has code
+    // punctuation (`foo(bar)`, `std::move`, `a=>b`): prose with a bracket or an operator in it is a question for search.
+    const quoted = query.length >= 3 && /^["'`]/.test(query) && query.at(-1) === query[0] && !query.slice(1, -1).includes(query[0]!)
+    const call = !/\s/.test(query) && /[(){}[\]<>=;\\|^$*+]|::|->/.test(query)
+    if (!quoted && !call) return undefined
     const literal = quoted ? query.slice(1, -1) : query
-    return `exact text, not meaning: in a checked-out repo \`rg -n -F ${JSON.stringify(literal)}\` lists every occurrence for less than a ranked search`
+    // Single quotes after `--`: `$(..)`, `${..}`, backticks, `!` and a leading `-` are inert in a POSIX shell.
+    return `exact text, not meaning: in a checked-out repo \`rg -n -F -- '${literal.replace(/'/g, "'\\''")}'\` lists every occurrence for less than a ranked search`
   }
   if (req.targets || req.outline || req.continued || req.lines <= LONG_TEXT_LINES) return undefined
-  return `${req.lines} lines: \`outline: true\`, then \`targets\`, cost less than every page`
+  return req.structured
+    ? `${req.lines} lines: \`outline: true\`, then \`targets\`, cost less than every page`
+    : `${req.lines} lines: \`targets: [{lines: "a-b"}]\` costs less than every page`
+}
+
+/** `answer` with `hint` in its head, unless a session reference (`same_as`) replaced its text: that answer is short already. */
+export function withHint<T extends { head: Record<string, unknown>; sections: ReadonlyArray<{ kind: string; ref?: unknown }> }>(answer: T, hint: string | undefined): T {
+  return hint === undefined || answer.sections.some((s) => s.ref !== undefined) ? answer : { ...answer, head: { ...answer.head, hint } }
 }

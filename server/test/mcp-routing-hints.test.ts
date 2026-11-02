@@ -46,7 +46,9 @@ beforeAll(async () => {
     ['src/long.ts', 'src/short.ts'],
   )
   await flushExtraction()
-  await createNote(vaultId, { path: 'notes/long', body: `${Array.from({ length: 450 }, (_, i) => `line ${i + 1}`).join('\n')}\n` })
+  const lines = Array.from({ length: 450 }, (_, i) => `line ${i + 1}`)
+  await createNote(vaultId, { path: 'notes/long', body: `# Long\n\n## Part\n\n${lines.join('\n')}\n` })
+  await createNote(vaultId, { path: 'notes/log', body: `${lines.join('\n')}\n` })
   await createNote(vaultId, { path: 'notes/short', body: 'connection reset by peer\n' })
   const minted = await app.inject({ method: 'POST', url: '/api/mcp-connections', headers: { cookie }, body: { name: 'hints', scope: 'account' } })
   agent = new Client({ name: 'hints', version: '0.0.0' })
@@ -61,7 +63,7 @@ afterAll(async () => {
 describe('routing hints (#674)', () => {
   it('search for literal text in one repository still answers, with the rg hint in the head and in structuredContent', async () => {
     const r = await call('search', { repositoryId: repoId, query: '"connection reset by peer"' })
-    expect(r.json.hint).toBe('exact text, not meaning: in a checked-out repo `rg -n -F "connection reset by peer"` lists every occurrence for less than a ranked search')
+    expect(r.json.hint).toBe("exact text, not meaning: in a checked-out repo `rg -n -F -- 'connection reset by peer'` lists every occurrence for less than a ranked search")
     expect(r.json.results.map((h: Json) => h.path)).toContain('src/short.ts')
     expect(r.structured?.hint).toBe(r.json.hint)
   })
@@ -91,6 +93,15 @@ describe('routing hints (#674)', () => {
       expect((await call(tool, { ...args, outline: true })).json.hint, `${tool} outline`).toBeUndefined()
       expect((await call(tool, { ...args, targets: [{ lines: '1-3' }] })).json.hint, `${tool} targets`).toBeUndefined()
     }
+    // No outline to take (a log): line targets.
+    expect((await call('read_note', { vaultId, path: 'notes/log', budget_tokens: 256 })).json.hint).toMatch(/^45\d lines: `targets: \[\{lines: "a-b"\}\]` costs less/)
+    // A session re-read answers `same_as`, short already: no hint.
+    const session = { session_id: 'hints-session-1' }
+    const first = await call('read_file', { repositoryId: repoId, path: 'src/long.ts', ...session, budget_tokens: 25_000 })
+    expect(first.json.hint).toMatch(/lines/)
+    const again = await call('read_file', { repositoryId: repoId, path: 'src/long.ts', ...session, budget_tokens: 25_000 })
+    expect(JSON.stringify(again.json)).toContain('same_as')
+    expect(again.json.hint).toBeUndefined()
     expect((await call('read_file', { repositoryId: repoId, path: 'src/short.ts' })).json.hint).toBeUndefined()
     expect((await call('read_note', { vaultId, path: 'notes/short' })).json.hint).toBeUndefined()
   })

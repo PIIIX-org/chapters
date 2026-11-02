@@ -3615,9 +3615,12 @@ the answers in `mcp-routing-hints.test.ts`): `search` and the body answers of
 `read_note` / `read_file` put a one-sentence `hint` in the head when the
 request has a cheaper route; `undefined` (so absent in the JSON) otherwise.
 Rules: `search` over exactly one repository and no vault with literal text (a
-quoted string, or code punctuation) hints `rg -n -F` in a checked-out repo; a
-text over 400 lines read from the top with no `targets`, `outline` or `cursor`
-hints the outline. **Decision**: the hint never replaces an answer. The issue
+quoted phrase, or one space-free token with code punctuation; prose with a
+bracket gets none) hints ``rg -n -F -- '<text>'`` in a checked-out repo (single
+quotes: inert in a shell, tested by running `sh`); a text over 400 lines read
+from the top with no `targets`, `outline` or `cursor` hints the outline, or
+`targets: [{lines}]` when it has none (JSON, lockfiles, logs), and nothing when
+a session answer is a `same_as` reference (`withHint`). **Decision**: the hint never replaces an answer. The issue
 allows a short hint "instead of an expensive answer", but the server cannot
 know whether the caller has a checkout, and a refusal would strand an
 Elara-only agent; replacing needs the caller to say so (a parameter, which
