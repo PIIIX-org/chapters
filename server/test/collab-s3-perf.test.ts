@@ -34,7 +34,9 @@ let collab: CollabRelay
 let port: number
 let token: string
 let vaultId: string
-const providers: HocuspocusProvider[] = []
+// CI reruns a failed attempt once (`--retry=1`, #905): each attempt types into
+// its own note and closes its own providers, so a rerun measures afresh.
+let attempt = 0
 
 async function waitFor(check: () => boolean | Promise<boolean>, ms = 30_000): Promise<void> {
   const start = Date.now()
@@ -57,7 +59,6 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  providers.forEach((p) => p.destroy())
   await collab.destroy()
   await app.close()
 })
@@ -76,56 +77,62 @@ function bigBody(): string {
 
 describe('S3 performance acceptance (§11)', () => {
   it(`save-to-visible p95 < ${BUDGET_MS} ms while folding a 1 MiB note with 3 typists`, async () => {
-    const note = await createNote(vaultId, { path: 'docs/big-typed', body: bigBody() })
+    attempt += 1
+    const note = await createNote(vaultId, { path: `docs/big-typed-${attempt}`, body: bigBody() })
     const sent = new Map<string, { at: number; typist: number; acked?: number; seen: Map<number, number> }>()
-    const typists = [0, 1, 2].map((typist) => {
-      const provider = new HocuspocusProvider({ url: `ws://127.0.0.1:${port}/collab`, name: `${vaultId}/~${note.id}`, token, document: new Y.Doc() })
-      providers.push(provider)
-      const text = provider.document.getText('body')
-      text.observe((event) => {
-        if (event.transaction.local) return
-        for (const op of event.delta) {
-          if (typeof op.insert !== 'string') continue
-          const key = /\[k\d+-\d+\]/.exec(op.insert)?.[0]
-          const entry = key ? sent.get(key) : undefined
-          if (entry && !entry.seen.has(typist)) entry.seen.set(typist, performance.now())
-        }
+    const providers: HocuspocusProvider[] = []
+    try {
+      const typists = [0, 1, 2].map((typist) => {
+        const provider = new HocuspocusProvider({ url: `ws://127.0.0.1:${port}/collab`, name: `${vaultId}/~${note.id}`, token, document: new Y.Doc() })
+        providers.push(provider)
+        const text = provider.document.getText('body')
+        text.observe((event) => {
+          if (event.transaction.local) return
+          for (const op of event.delta) {
+            if (typeof op.insert !== 'string') continue
+            const key = /\[k\d+-\d+\]/.exec(op.insert)?.[0]
+            const entry = key ? sent.get(key) : undefined
+            if (entry && !entry.seen.has(typist)) entry.seen.set(typist, performance.now())
+          }
+        })
+        provider.on('unsyncedChanges', ({ number }: { number: number }) => {
+          if (number !== 0) return
+          const now = performance.now()
+          for (const entry of sent.values()) if (entry.typist === typist && entry.acked === undefined) entry.acked = now
+        })
+        return { provider, text }
       })
-      provider.on('unsyncedChanges', ({ number }: { number: number }) => {
-        if (number !== 0) return
-        const now = performance.now()
-        for (const entry of sent.values()) if (entry.typist === typist && entry.acked === undefined) entry.acked = now
-      })
-      return { provider, text }
-    })
-    await waitFor(() => typists.every(({ provider, text }) => provider.isSynced && text.length > 0))
+      await waitFor(() => typists.every(({ provider, text }) => provider.isSynced && text.length > 0))
 
-    const foldsBefore = await revisionCount(note.id)
-    // Each typist types at its own place (start, middle, end), staggered so the three interleave.
-    await Promise.all(
-      typists.map(async ({ text }, typist) => {
-        await new Promise((r) => setTimeout(r, typist * (KEYSTROKE_GAP_MS / 3)))
-        for (let n = 0; n < KEYSTROKES_PER_TYPIST; n++) {
-          const key = `[k${typist}-${n}]`
-          const at = typist === 0 ? 0 : typist === 1 ? Math.floor(text.length / 2) : text.length
-          sent.set(key, { at: performance.now(), typist, seen: new Map() })
-          text.insert(at, key)
-          await new Promise((r) => setTimeout(r, KEYSTROKE_GAP_MS))
-        }
-      }),
-    )
-    await waitFor(() => [...sent.values()].every((e) => e.acked !== undefined && e.seen.size === 2))
+      const foldsBefore = await revisionCount(note.id)
+      // Each typist types at its own place (start, middle, end), staggered so the three interleave.
+      await Promise.all(
+        typists.map(async ({ text }, typist) => {
+          await new Promise((r) => setTimeout(r, typist * (KEYSTROKE_GAP_MS / 3)))
+          for (let n = 0; n < KEYSTROKES_PER_TYPIST; n++) {
+            const key = `[k${typist}-${n}]`
+            const at = typist === 0 ? 0 : typist === 1 ? Math.floor(text.length / 2) : text.length
+            sent.set(key, { at: performance.now(), typist, seen: new Map() })
+            text.insert(at, key)
+            await new Promise((r) => setTimeout(r, KEYSTROKE_GAP_MS))
+          }
+        }),
+      )
+      await waitFor(() => [...sent.values()].every((e) => e.acked !== undefined && e.seen.size === 2))
 
-    const latencies = [...sent.values()].map((e) => Math.max(e.acked!, ...e.seen.values()) - e.at).sort((a, b) => a - b)
-    const p = (q: number) => latencies[Math.min(latencies.length - 1, Math.ceil(latencies.length * q) - 1)]!
-    const folds = (await revisionCount(note.id)) - foldsBefore
-    // stdout, not console.log: the suite hides console output of passing tests, and CI's numbers go in the PR.
-    process.stdout.write(
-      `[S3 perf] ${latencies.length} keystrokes, ${folds} folds of the 1 MiB note: p50 ${p(0.5).toFixed(1)} ms, p95 ${p(0.95).toFixed(1)} ms, max ${p(1).toFixed(1)} ms\n`,
-    )
-    // The relay folded the big note while the typists typed.
-    expect(folds).toBeGreaterThan(0)
-    expect(p(0.95)).toBeLessThan(BUDGET_MS)
+      const latencies = [...sent.values()].map((e) => Math.max(e.acked!, ...e.seen.values()) - e.at).sort((a, b) => a - b)
+      const p = (q: number) => latencies[Math.min(latencies.length - 1, Math.ceil(latencies.length * q) - 1)]!
+      const folds = (await revisionCount(note.id)) - foldsBefore
+      // stdout, not console.log: the suite hides console output of passing tests, and CI's numbers go in the PR.
+      process.stdout.write(
+        `[S3 perf] ${latencies.length} keystrokes, ${folds} folds of the 1 MiB note: p50 ${p(0.5).toFixed(1)} ms, p95 ${p(0.95).toFixed(1)} ms, max ${p(1).toFixed(1)} ms\n`,
+      )
+      // The relay folded the big note while the typists typed.
+      expect(folds).toBeGreaterThan(0)
+      expect(p(0.95)).toBeLessThan(BUDGET_MS)
+    } finally {
+      providers.forEach((p) => p.destroy())
+    }
   }, 120_000)
 })
 
