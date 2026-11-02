@@ -92,8 +92,8 @@ const test: LabTest = {
       { name: 'REST GET /api/vaults/:id/notes/*', identifiers: [sourceNote.id, source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/notes/${source}`) },
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
-      { name: 'MCP orient: repository map', identifiers: [file, `${mark}Plan`], share, read: viaMcp('orient', { repositoryId }) },
-      { name: 'MCP orient: vault outline', identifiers: [source], share, read: viaMcp('orient', { vaultId, path: 'docs' }) },
+      { name: 'MCP orient: repository map', identifiers: [file, `${mark}Plan`], share, read: viaMcp('orient', { repositoryId, query: `${mark}Plan`, focus: [file] }) },
+      { name: 'MCP orient: vault outline', identifiers: [source], share, read: viaMcp('orient', { vaultId, path: 'docs', query: `${mark}source` }) },
       ...(['references', 'callers', 'impact'] as const).map((refs) => ({
         name: `MCP find_symbols refs: ${refs}`,
         identifiers: [run, `${mark}Run`],

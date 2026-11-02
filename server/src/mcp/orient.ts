@@ -2,6 +2,10 @@ import { repositoryMap, vaultOutline, ORIENT_ENTRIES, type OrientFolder, type Or
 import { repositoryIndexedVersion } from '../repositories/store.js'
 import { folderOf, ranked, type Budgeted } from './response.js'
 
+/** Characters of `query` and of each `focus` entry, and focus entries, `orient` reads. */
+const MAX_QUERY = 200
+const MAX_FOCUS = 5
+
 /**
  * `orient` (#534): where to start in a repository and a vault, one level at a time. Each list is the first
  * `ORIENT_ENTRIES` of a ranking (repositories/orient.ts), `">10"` in `truncated.total` when more exist; the level is
@@ -13,7 +17,8 @@ export async function orientAnswer(
   args: { query?: string; focus?: string[]; path?: string },
 ): Promise<Budgeted> {
   const folder = args.path?.replace(/^\/+|\/+$/g, '') || null
-  const opts = { query: args.query, focus: args.focus, folder }
+  // Bounded: `focus` is unnested per candidate row in SQL.
+  const opts = { query: args.query?.slice(0, MAX_QUERY), focus: args.focus?.slice(0, MAX_FOCUS).map((f) => f.slice(0, MAX_QUERY)), folder }
   const sections: Budgeted['sections'] = []
   let head: Record<string, unknown> = {}
   for (const repositoryId of resources.repositoryIds) {

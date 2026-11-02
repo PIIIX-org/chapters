@@ -156,11 +156,11 @@ describe('read surfaces (#552, #1034)', () => {
   // orient (#534) names definitions with their paths and lines, and notes by path.
   accessMatrix('MCP orient: repository map', {
     setup: () => shareBoth([FILE, `${MARK}Plan`]),
-    read: (actor) => call(actor, 'orient', { repositoryId }),
+    read: (actor) => call(actor, 'orient', { repositoryId, query: `${MARK}Plan`, focus: [FILE] }),
   })
   accessMatrix('MCP orient: vault outline', {
     setup: () => shareBoth([SOURCE]),
-    read: (actor) => call(actor, 'orient', { vaultId, path: 'docs' }),
+    read: (actor) => call(actor, 'orient', { vaultId, path: 'docs', query: `${MARK}source` }),
   })
 
   // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.

@@ -1,6 +1,6 @@
 # Elara MCP Tool Reference
 
-Parameters, scopes, capabilities, and return shapes for the 60 Elara MCP tools and 20 MCP prompts. Every entry is taken from the zod input schemas and handlers in `server/src/mcp/server.ts` and `server/src/mcp/prompts.ts`. If this file and the code disagree, the code wins.
+Parameters, scopes, capabilities, and return shapes for the 62 Elara MCP tools and 20 MCP prompts. Every entry is taken from the zod input schemas and handlers in `server/src/mcp/server.ts` and `server/src/mcp/prompts.ts`. If this file and the code disagree, the code wins.
 
 ## Transport and conventions
 

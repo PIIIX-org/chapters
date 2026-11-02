@@ -189,3 +189,12 @@ describe('orient: access', () => {
     expect(vault.text).not.toContain('concepts')
   })
 })
+
+describe('orient: bounds', () => {
+  it('reads at most 5 focus entries and 200 characters of each', async () => {
+    const focus = ['x', 'x', 'x', 'x', 'x', 'src/lib/c.ts'].map((f) => f.padEnd(300, 'q').replace(/^src\/lib\/c.tsq*$/, 'src/lib/c.ts'))
+    const json = await orient({ repositoryId: repoId, focus })
+    // The sixth entry, the one that would favour c, is not read.
+    expect(json.symbols![0]).toMatchObject({ symbol: 'core' })
+  })
+})

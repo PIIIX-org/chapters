@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="#overview"><img src="assets/badges/badge-okf.svg" alt="Format: OKF v0.2 ISO 8601"/></a>
-  <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 60 Tools and 20 Prompts"/></a>
+  <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 62 Tools and 20 Prompts"/></a>
   <a href="LICENSE"><img src="assets/badges/badge-license.svg" alt="License: MIT Open Source"/></a>
 </p>
 
@@ -74,7 +74,7 @@ flowchart TD
   end
 
   subgraph Consumers ["Consumption & Agent Layer"]
-    MCP["Model Context Protocol (MCP)\n60 Tools · 20 Prompts"]
+    MCP["Model Context Protocol (MCP)\n62 Tools · 20 Prompts"]
     UI["Fastify + React Client\nDark Observatory Shell"]
     AGENTS["AI Agents\nCursor · Claude · Antigravity"]
     HUMANS["Engineering Teams\nReal-Time Collaborative Editing"]
