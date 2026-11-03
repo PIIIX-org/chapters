@@ -1527,6 +1527,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     Keyword rows
     always count. The gate cuts a suffix of a distance-ordered list, so the
     RRF ranks of the rows it keeps do not change.
+  - **No frontmatter in MCP hits** (#419): the MCP `search` handler drops `frontmatter` from every hit (it was
+    42 % of a typical note hit's characters, measured in `mcp-search-hits.test.ts`: 665 to 387); `searchNotes` and
+    the REST routes still return it, the client's search overlay shows its tags.
   - **Query router** (#1060, `router.ts`): before the legs run, `searchNotes` asks `routeQuery` whether the query is
     one identifier or one path (only without filters, with symbols for an identifier, at most 6 words). The term is
     the one backticked token, or the one word left once the filler (`where is the ... defined`) is dropped. A path
@@ -2299,7 +2302,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   list cost is paid once per session and cached, #681) (no prompts on reader, #428; measured 7,984 characters with
   #435's instructions, of which `tools/list` 7,746 and instructions 238;
   7,949 with #434's annotations, 7,676 before) and a writer one whose
-  `tools/list` plus instructions are over 4,000 (15,669 with #435:
+  `tools/list` plus instructions are over 4,500 (4,000 until #1090 raised it, after the writer-only text was trimmed to 15,620 characters, 3,905 tokens after the meaning restores of its review; 15,669 with #435:
   15,226 + 443; 15,429 with #434; 15,036 with #433's output schemas,
   14,286 before; its `prompts/list`, 10,042, is reported), reports admin
   (`tools/list` 41,811 with #435, plus 443 of instructions; 42,101 with
@@ -2360,7 +2363,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `elara://manual/conventions` and one per family. Writer and admin (the
   same text) add the whole-`body` merge base (`base_rev`, else this
   token's last `read_note`, paged or not, within `READ_WINDOW_HOURS`,
-  24 h, `last-read.ts`; `ops` edit the live text) and the retry
+  24 h, `last-read.ts`) and the retry
   rule, scoped to note writes ("Retry a note write with the same
   `idempotency_key`": only the note writes take the key, admin's other
   writes refuse it). Keyed on profile only: a

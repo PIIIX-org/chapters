@@ -1436,7 +1436,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   }
   const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: the result, nothing written') }
   /** The second sentence of every note write's description (#429): the answer, and where the rest is. */
-  const WRITE_DOC = ' Answers with `rev`, `status` (`retry`: nothing written, send it again) and `indexed` (manual: elara://manual/notes).'
+  const WRITE_DOC = ' Answers `rev`, `status` (`retry`: not written, resend) and `indexed`.'
 
   tool(
     'read_note',
@@ -1532,12 +1532,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'writer',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Create an OKF note at `path`, or at `type`/`name`; requires edit access.' + WRITE_DOC,
+      description: 'Create an OKF note at `path`, or at `type`/`name`; needs edit access.' + WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
-        path: z.string().optional().describe('Full note path; or give type and name'),
-        type: z.string().optional().describe('First path segment (with name)'),
-        name: z.string().optional().describe('Name slug (with type)'),
+        path: z.string().optional().describe('Full path, or type + name'),
+        type: z.string().optional().describe('First path segment, with name'),
+        name: z.string().optional().describe('Name slug, with type'),
         frontmatter: z.record(z.string(), z.unknown()).optional().describe('Frontmatter'),
         body: z.string().optional().describe('Body'),
         ...IDEMPOTENCY_ARG,
@@ -1594,7 +1594,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Change a note: `ops` (preferred) edit the live text in place, `body` replaces the whole body merged from `base_rev` or your last read_note, `frontmatter` merges per key; requires edit access.' +
+        'Change a note: `ops` (preferred) edit the live text, `body` replaces it (merged from `base_rev` or your last read_note), `frontmatter` merges per key; needs edit access.' +
         WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
@@ -1609,7 +1609,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           .union([z.string(), z.number().int()])
           .optional()
           .describe('`rev` you edited: later changes merge; an overlap is `conflicted`, nothing written'),
-        allowGrowth: z.boolean().optional().describe('true: write a body that doubles the note (else quarantined)'),
+        allowGrowth: z.boolean().optional().describe('true: allow doubling the note (else quarantined)'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -1804,15 +1804,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Append `text` as whole lines to the live note, so concurrent appends all land (use it for logs instead of read_note + edit_note); `createIfMissing: true` creates the note; requires edit access.' +
+        'Append `text` as whole lines so concurrent appends land (use for logs); `createIfMissing: true` creates the note; needs edit access.' +
         WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
         text: z.string().describe('Lines to append'),
-        createIfMissing: z.boolean().optional().describe('true: create the note if missing'),
+        createIfMissing: z.boolean().optional().describe('true: create if missing'),
         frontmatter: z.record(z.string(), z.unknown()).optional().describe('Merged per top-level key'),
-        allowGrowth: z.boolean().optional().describe('true: write text that doubles the note (else quarantined)'),
+        allowGrowth: z.boolean().optional().describe('true: allow doubling the note (else quarantined)'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -1857,7 +1857,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         path: NOTE_PATH,
         body: z.string().describe('Whole body'),
         frontmatter: z.record(z.string(), z.unknown()).optional().describe('Merged per top-level key'),
-        allowGrowth: z.boolean().optional().describe('true: write a body that doubles the note (else quarantined)'),
+        allowGrowth: z.boolean().optional().describe('true: allow doubling the note (else quarantined)'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -2975,12 +2975,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         sections: [
           ranked({
             name: 'results',
-            items: results,
+            // A note hit carries no frontmatter (#419, measured in mcp-search-hits.test.ts): `read_note` has it, REST keeps it for the client's tags.
+            items: results.map((r) => ({ ...r, frontmatter: undefined })),
             id: (r) => `${r.resourceType}:${r.id}`,
             limit,
-            // Down the ladder: without snippet, frontmatter and updated, then the path (`path#La-Lb` for a symbol); counted per path.
+            // Down the ladder: without snippet and updated, then the path (`path#La-Lb` for a symbol); counted per path.
             ladder: {
-              no_context: (r) => ({ ...r, snippet: undefined, frontmatter: undefined, updated: undefined }),
+              no_context: (r) => ({ ...r, snippet: undefined, updated: undefined }),
               locations: (r) => (r.startLine !== undefined && r.endLine !== undefined ? location(r.path, r.startLine, r.endLine) : r.path),
               group: (r) => r.path,
             },
