@@ -2742,8 +2742,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     a pinned connection's wrong id is refused naming the pin
     (`suggestions: ["<id> (<name>)"]`), an account connection's malformed id
     is `INVALID_ARGUMENT` and an id it cannot see `NOT_FOUND` (both with up to
-    5 of its own accessible ids). The accessible ids are read only on a
-    refusal.
+    5 of its own accessible ids, by name then id). A pinned connection's refusal
+    names only its pin (`TOOL_NOT_ALLOWED`, malformed or not), and an id of the
+    other kind is the scope refusal with no suggestions. The accessible ids are
+    read only on a refusal.
   - `browse_vault` (#425) pages in SQL the same way, one code path for
     the root (the empty folder) and a folder (`notes/store.ts`), reading
     only the page: `browseNotesPage` reads 500 + 1 live notes after the

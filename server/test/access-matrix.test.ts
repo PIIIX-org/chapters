@@ -242,6 +242,26 @@ describe('read surfaces (#552, #1034)', () => {
     read: (actor) => call(actor, 'browse_repository', { repositoryId, changed_since: '2000-01-01' }),
   })
 
+  // A refused id names the account's own accessible ids and names (#1101): the object is in the owner's and the shared
+  // account's suggestions only. The refusal is an error answer, so this is the matrix's four cases by hand.
+  it('MCP malformed id: suggestions name the repository and vault to the owner and the shared account only', async () => {
+    const asks = (actor: Actor) => [
+      call(actor, 'browse_repository', { repositoryId: 'not-a-uuid' }),
+      call(actor, 'browse_vault', { vaultId: 'not-a-uuid' }),
+    ]
+    const names = [`matrix-${MARK}`, repositoryId, `matrix ${MARK}`, vaultId]
+    const text = async (actor: Actor) => (await Promise.all(asks(actor))).map((o) => o.text).join('\n')
+    const owner = await text('owner')
+    for (const n of names) expect(owner, `owner ${n}`).toContain(n)
+    expect(await text('unrelated')).not.toMatch(new RegExp(names.map((n) => n.replace(/[()]/g, '\\$&')).join('|')))
+    const fixture = await shareBoth(names)
+    const shared = await text('shared')
+    for (const n of names) expect(shared, `shared ${n}`).toContain(n)
+    await fixture.revoke()
+    const revoked = await text('shared')
+    for (const n of names) expect(revoked, `revoked ${n}`).not.toContain(n)
+  })
+
   // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.
   for (const refs of ['references', 'callers', 'impact'] as const) {
     accessMatrix(`MCP find_symbols refs: ${refs}`, {

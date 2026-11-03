@@ -165,6 +165,26 @@ const test: LabTest = {
       { name: 'MCP usage_report', identifiers: [sourceNote.id, source], kind: 'listing', share, read: readThenReport(viaMcp('usage_report', {})) },
     ]
     for (const m of matrices) checks.push(...(await runAccessMatrix(m)))
+    // A refused id names the account's own ids and names (#1101): the repository is in the owner's and the shared account's suggestions only.
+    const suggested = async (actor: Actor) => (await mcp[actor].call('browse_repository', { repositoryId: 'not-a-uuid' })).text
+    const revokeShare = await share()
+    const phases: Array<[string, string, boolean]> = [
+      ['owner', await suggested('owner'), true],
+      ['shared', await suggested('shared'), true],
+      ['unrelated', await suggested('unrelated'), false],
+    ]
+    await revokeShare()
+    phases.push(['revoked', await suggested('shared'), false])
+    for (const [who, text, expected] of phases) {
+      const named = text.includes(repoName) && text.includes(repositoryId)
+      checks.push({
+        name: `MCP malformed repositoryId: suggestions (${who})`,
+        expected: expected ? 'names the repository' : 'names nothing of it',
+        actual: named ? 'names the repository' : 'names nothing of it',
+        ok: named === expected,
+        severity: named === expected ? 'info' : 'high',
+      })
+    }
     // The repository shared, the vault not (#675): `find_symbols` with `refs: "explain"` names the code, but no note of the unshared vault.
     const onlyRepo = await rest.owner.must<{ id: string }>('POST', `/api/repositories/${repositoryId}/shares`, { granteeType: 'user', granteeId: ids.shared })
     const explained = await mcp.shared.call('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' })

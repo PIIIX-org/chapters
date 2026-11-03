@@ -672,16 +672,25 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
    */
   async function idRefusal(kind: 'vault' | 'repository', requested: string): Promise<McpToolError | null> {
     const field = kind === 'vault' ? 'vaultId' : 'repositoryId'
-    const label = (r: { id: string; name: string }) => `${r.id} (${r.name})`
-    const pin = auth.connection.scope === kind ? (kind === 'vault' ? auth.connection.vaultId : auth.connection.repositoryId) : null
+    const scope = auth.connection.scope
+    // A connection pinned to the other kind may name no id of this one, whatever it is: the scope's own refusal, and no
+    // id or name of the account (#1101 review).
+    if (scope !== 'account' && scope !== kind) return new McpToolError('TOOL_NOT_ALLOWED', `this connection is scoped to a ${scope}, not a ${kind}`, { field })
+    const pin = scope === kind ? (kind === 'vault' ? auth.connection.vaultId : auth.connection.repositoryId) : null
     // The accessible ones are read only to refuse.
     if (pin ? requested === pin : UUID_PATTERN.test(requested)) return null
-    const own = kind === 'vault' ? await listAccessibleVaults(auth.user.id) : await listAccessibleRepositories(auth.user.id)
+    const names = await accessibleIds(kind)
     if (pin) {
-      const named = own.find((r) => r.id === pin)
-      return new McpToolError(UUID_PATTERN.test(requested) ? 'TOOL_NOT_ALLOWED' : 'INVALID_ARGUMENT', `this connection is pinned to a different ${kind}: use ${field} ${named ? label(named) : pin}, or omit it`, { field, suggestions: [named ? label(named) : pin] })
+      const named = names.find((n) => n.startsWith(pin)) ?? pin
+      return new McpToolError('TOOL_NOT_ALLOWED', `this connection is pinned to a different ${kind}: use ${field} ${named}, or omit it`, { field, suggestions: [named] })
     }
-    return new McpToolError('INVALID_ARGUMENT', `${field} is not a UUID: use one of the suggestions`, { field, suggestions: own.slice(0, ID_SUGGESTIONS).map(label) })
+    return new McpToolError('INVALID_ARGUMENT', `${field} is not a UUID: use one of the suggestions`, { field, suggestions: names.slice(0, ID_SUGGESTIONS) })
+  }
+
+  /** The account's accessible vaults or repositories as `<id> (<name>)`, by name then id: the same suggestions every time. */
+  async function accessibleIds(kind: 'vault' | 'repository'): Promise<string[]> {
+    const own = kind === 'vault' ? await listAccessibleVaults(auth.user.id) : await listAccessibleRepositories(auth.user.id)
+    return [...own].sort((x, y) => compareCodeUnits(x.name, y.name) || compareCodeUnits(x.id, y.id)).map((r) => `${r.id} (${r.name})`)
   }
 
   function requireAccountScope(surface: string): void {
@@ -926,13 +935,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       } catch (err) {
         // An id the caller cannot see is a missing one (#439); it names the caller's own ids (#1101).
         const raw0 = (raw ?? {}) as { vaultId?: unknown; repositoryId?: unknown }
-        const unseen = err instanceof McpToolError && err.code === 'NOT_FOUND' && err.message === 'not found' ? (typeof raw0.repositoryId === 'string' ? 'repository' : typeof raw0.vaultId === 'string' ? 'vault' : null) : null
-        if (unseen && auth.connection.scope === 'account') {
-          const own = unseen === 'vault' ? await listAccessibleVaults(auth.user.id) : await listAccessibleRepositories(auth.user.id)
-          const named = own.slice(0, ID_SUGGESTIONS).map((r) => `${r.id} (${r.name})`)
-          const given = unseen === 'vault' ? raw0.vaultId : raw0.repositoryId
-          if (!own.some((r) => r.id === given)) {
-            const result = errorResult(toErrorEnvelope(new McpToolError('NOT_FOUND', 'not found', { suggestions: named })))
+        if (err instanceof McpToolError && err.code === 'NOT_FOUND' && auth.connection.scope === 'account') {
+          // With both ids given, the one the account cannot see is the one named.
+          for (const [kind, given] of [['repository', raw0.repositoryId], ['vault', raw0.vaultId]] as const) {
+            if (typeof given !== 'string') continue
+            const names = await accessibleIds(kind)
+            if (names.some((n) => n.startsWith(`${given} (`))) continue
+            const result = errorResult(toErrorEnvelope(new McpToolError('NOT_FOUND', 'not found', { suggestions: names.slice(0, ID_SUGGESTIONS) })))
             toolErrors.add(result)
             return result
           }
