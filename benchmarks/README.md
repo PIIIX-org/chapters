@@ -574,7 +574,7 @@ Docker, bun): bring the lab up as in `docs/agents/lab.md`, then
 **How to read a run.** `agent-trial-results/summary.md` (also the job
 summary) has one row per task and arm: facts found / total, the false
 claims flagged, tokens in and out, tool calls, wall time, stop reason; then
-totals per arm, and any episode not run. `results.json` adds the model, caps, harness hash and `harnessVersion` (`HARNESS_VERSION` in `lib/arms.ts`, bumped when an arm's tools or prompt change: never compare results of different versions; v2 gave the Elara arm `grep` and, when the server lists it, `orient`, as the reader profile has), index
+totals per arm, and any episode not run. `results.json` adds the model, caps, harness hash and `harnessVersion` (`HARNESS_VERSION` in `lib/arms.ts`, bumped when an arm's tools or prompt change: never compare results of different versions; v2 gave the Elara arm `grep` and `orient`, as the reader profile has), index
 outcome, which facts were found and missed, the sentence of each flagged
 false claim, the full answer and the trace. Compare arms on the same run
 only: models, prices and Elara change between runs. Read the answers before

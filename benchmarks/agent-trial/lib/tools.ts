@@ -29,19 +29,7 @@ export interface Toolset {
  * token is pinned to the trial repository with read access and this
  * allow-list, so the server refuses anything else as well.
  */
-export const ELARA_TOOLS = ['search', 'find_symbols', 'read_file', 'browse_repository', 'repository_status', 'graph', 'find_graph_path', 'grep']
-
-/**
- * Tools of the reader profile that join the arm when the server lists them (`orient`, #1080, is not on every
- * server the trial runs against): the arm gets what the profile has, without failing on an older server.
- */
-export const ELARA_OPTIONAL_TOOLS = ['orient']
-
-/** The allow-list for one server: ELARA_TOOLS plus the optional tools its `tools/list` shows. */
-export function elaraAllow(listed: readonly McpToolInfo[]): string[] {
-  const names = new Set(listed.map((t) => t.name))
-  return [...ELARA_TOOLS, ...ELARA_OPTIONAL_TOOLS.filter((n) => names.has(n))]
-}
+export const ELARA_TOOLS = ['search', 'find_symbols', 'read_file', 'browse_repository', 'repository_status', 'graph', 'find_graph_path', 'grep', 'orient']
 
 /** The subset of an MCP tools/list entry the mapping reads. */
 export interface McpToolInfo {

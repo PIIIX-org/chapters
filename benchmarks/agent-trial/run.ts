@@ -30,7 +30,7 @@ import { judgeAnswer, type JudgeResult } from './lib/judge.ts'
 import { DEFAULT_CAPS, runEpisode, type Caps, type EpisodeResult } from './lib/loop.ts'
 import { httpModel, scriptedModel, type Model } from './lib/model.ts'
 import { checkEvidence, selectTasks, validateTasks, type TaskFile } from './lib/tasks.ts'
-import { ELARA_TOOLS, ELARA_OPTIONAL_TOOLS, elaraAllow, elaraToolset, localToolset, type Toolset } from './lib/tools.ts'
+import { ELARA_TOOLS, elaraToolset, localToolset, type Toolset } from './lib/tools.ts'
 
 const DIR = 'benchmarks/agent-trial'
 const outDir = 'agent-trial-results'
@@ -107,16 +107,13 @@ if (index.outcome !== 'complete') throw new Error(`indexing did not complete (${
 // The Elara arm's token: pinned to the trial repository, read access, only its tools. The
 // `admin` profile (#428), because `repository_status`, its first call, is in no smaller profile;
 // the allow-list is what limits it to ELARA_TOOLS.
-const minted = await ctx.mintToken('admin', ctx.uniq('agent-trial'), 'repository', { repositoryId: repo.id, access: 'read', profile: 'admin', allowedTools: [...ELARA_TOOLS, ...ELARA_OPTIONAL_TOOLS] })
+const minted = await ctx.mintToken('admin', ctx.uniq('agent-trial'), 'repository', { repositoryId: repo.id, access: 'read', profile: 'admin', allowedTools: ELARA_TOOLS })
 const mcp = ctx.mcp(minted.token, 'agent-trial')
-// The allow-list filters `tools/list`, so an optional tool the server lacks is simply not there.
-const listedTools = await mcp.listTools()
-const elaraTools = elaraAllow(listedTools)
 const toolsets: Record<Arm, Toolset> = {
-  elara: elaraToolset(listedTools, async (tool, args, timeoutMs) => {
+  elara: elaraToolset(await mcp.listTools(), async (tool, args, timeoutMs) => {
     const r = await mcp.call(tool, args, timeoutMs)
     return { text: r.text, ok: r.ok }
-  }, elaraTools),
+  }),
   local: localToolset(root),
 }
 
@@ -192,7 +189,7 @@ function flush(complete: boolean): string {
     caps,
     runBudgetMs: RUN_BUDGET_MS,
     index,
-    elaraTools,
+    elaraTools: ELARA_TOOLS,
     totals: totalsByArm,
     notRun,
     tasks: rows.map((r) => ({
@@ -258,7 +255,7 @@ for (const task of tasks) {
       continue
     }
     const model: Model = live ?? scriptedModel(dryRunPlan(task, arm), dryRunAnswer)
-    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id, tools: elaraTools }), prompt: task.prompt, caps })
+    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id, tools: ELARA_TOOLS }), prompt: task.prompt, caps })
     const grade = gradeAnswer(task, episode.answer)
     const row: Row = { task: task.id, arm, episode, grade }
     if (live && judging && episode.answer) {
