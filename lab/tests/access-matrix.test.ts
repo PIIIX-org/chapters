@@ -122,6 +122,8 @@ const test: LabTest = {
       { name: 'MCP read_note grep', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source, targets: [{ grep: 'orbital' }] }) },
       { name: 'MCP read_file grep', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file, targets: [{ grep: 'launch' }] }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
+      { name: 'MCP orient: repository map', identifiers: [file, `${mark}Plan`], share, read: viaMcp('orient', { repositoryId, query: `${mark}Plan`, focus: [file] }) },
+      { name: 'MCP orient: vault outline', identifiers: [source], share, read: viaMcp('orient', { vaultId, path: 'docs', query: `${mark}source` }) },
       { name: 'MCP find_symbols refs: explain', identifiers: [run, `${mark}Run`, `docs/${mark}-cite`], share, read: viaMcp('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' }) },
       {
         name: 'MCP find_symbols overlay',

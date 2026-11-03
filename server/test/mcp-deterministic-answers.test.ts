@@ -359,6 +359,11 @@ const QUESTIONS: Question[] = [
   },
   { name: 'browse_repository', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId }) },
   { name: 'browse_repository folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, path: 'src' }) },
+  // orient (#534): the repository map at the root and one level down, biased by a query and a focus; the vault outline.
+  { name: 'orient repository map', tool: 'orient', args: (w) => ({ repositoryId: w.repoId }) },
+  { name: 'orient repository map level', tool: 'orient', args: (w) => ({ repositoryId: w.repoId, path: 'src' }) },
+  { name: 'orient repository map with query and focus', tool: 'orient', args: (w) => ({ repositoryId: w.repoId, query: 'parse upload', focus: ['src/retry.ts'] }) },
+  { name: 'orient vault outline', tool: 'orient', args: (w) => ({ vaultId: w.vaultId }) },
   { name: 'browse_repository changed_since', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, changed_since: '2000-01-01' }), history: true },
   { name: 'browse_repository changed_since folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, changed_since: '2000-01-01', path: 'src' }), history: true },
   ...NOTES.map((n): Question => ({ name: `read_note ${n.path}`, tool: 'read_note', args: (w) => ({ vaultId: w.vaultId, path: n.path }) })),

@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="#overview"><img src="assets/badges/badge-okf.svg" alt="Format: OKF v0.2 ISO 8601"/></a>
-  <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 60 Tools and 20 Prompts"/></a>
+  <a href="#model-context-protocol-mcp-interface"><img src="assets/badges/badge-mcp.svg" alt="AI MCP: 63 Tools and 20 Prompts"/></a>
   <a href="LICENSE"><img src="assets/badges/badge-license.svg" alt="License: MIT Open Source"/></a>
 </p>
 
@@ -74,7 +74,7 @@ flowchart TD
   end
 
   subgraph Consumers ["Consumption & Agent Layer"]
-    MCP["Model Context Protocol (MCP)\n60 Tools · 20 Prompts"]
+    MCP["Model Context Protocol (MCP)\n63 Tools · 20 Prompts"]
     UI["Fastify + React Client\nDark Observatory Shell"]
     AGENTS["AI Agents\nCursor · Claude · Antigravity"]
     HUMANS["Engineering Teams\nReal-Time Collaborative Editing"]
@@ -142,9 +142,9 @@ A token's `tools/list` shows only the tools it can call: its allow-list, its acc
 
 ### Key MCP Capabilities
 
-- **62 tools**, documented with their exact parameters in [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md):
+- **63 tools**, documented with their exact parameters in [`skills/elara/references/mcp-tools.md`](skills/elara/references/mcp-tools.md):
   - `list_vaults`, `browse_vault`, `read_note`, `create_note`, `edit_note`, `append_note`, `upsert_note`, `delete_note`
-  - `list_repositories`, `browse_repository`, `read_file`, `find_symbols`, `repository_status`
+  - `list_repositories`, `browse_repository`, `read_file`, `find_symbols`, `orient` (a ranked map of where to start), `repository_status`
   - `search` (hybrid full-text + 384d semantic search with permission scoping) and `grep` (a regular expression over note and indexed code lines, as located hits)
   - `graph` (nodes and edges with Louvain communities) and `find_graph_path` (shortest path, breadth-first)
   - `audit_okf_conformance` (structural validation against OKF v0.2)
@@ -175,7 +175,7 @@ chapters/
 │   ├── src/auth/               # Sessions, OIDC, MFA, lockout
 │   ├── src/sync/               # Hocuspocus WebSocket relay for live Yjs sync
 │   ├── src/graph/              # Graph assembly, Louvain communities, shortest path
-│   ├── src/mcp/                # Model Context Protocol server (62 tools, 20 prompts)
+│   ├── src/mcp/                # Model Context Protocol server (63 tools, 20 prompts)
 │   ├── src/notes/              # OKF v0.2 parser, validation, and disk storage
 │   ├── src/repositories/       # Git/local ingestion, Tree-sitter extraction, import resolution
 │   ├── src/search/             # Hybrid search (Postgres full-text + pgvector) and embeddings
