@@ -80,6 +80,7 @@ import { serializeNote } from '../notes/okf.js'
 import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
+import { OVERLAY_SPARE, overlayHits, readOverlay } from './overlay.js'
 import { changedFilesAnswer } from './changes.js'
 import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
@@ -192,7 +193,7 @@ const EDIT_OPS = z.array(
     editOp('delete_block', { find: z.string() }),
     editOp('frontmatter_set', { key: z.string(), value: z.unknown() }),
     editOp('frontmatter_add', { key: z.string(), value: z.unknown().describe('Added to the list at `key`') }),
-    editOp('frontmatter_remove', { key: z.string(), value: z.unknown().optional().describe('Removed from the list at `key`; without it the key is deleted') }),
+    editOp('frontmatter_remove', { key: z.string(), value: z.unknown().optional().describe('Removed from list `key`; none: key deleted') }),
   ]),
 )
 
@@ -1536,8 +1537,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         path: z.string().optional().describe('Full note path; or give type and name'),
         type: z.string().optional().describe('First path segment (with name)'),
         name: z.string().optional().describe('Name slug (with type)'),
-        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Frontmatter map'),
-        body: z.string().optional().describe('Markdown body'),
+        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Frontmatter'),
+        body: z.string().optional().describe('Body'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -1599,14 +1600,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         path: NOTE_PATH,
         frontmatter: z.record(z.string(), z.unknown()).optional().describe('Keys to set; others kept'),
         body: z.string().optional().describe('New whole body (not with ops)'),
-        ops: EDIT_OPS.optional().describe('Edits applied in order to the live text; a find, anchor or heading must match once, else nothing changes'),
+        ops: EDIT_OPS.optional().describe('In order; each find, anchor or heading must match once, else nothing changes'),
         replace: z.boolean().optional().describe('true: frontmatter replaces the whole map'),
         removeKeys: z.array(z.string()).optional().describe('Frontmatter keys to delete'),
         // The note's `rev` (its seq, #477), or a revision id (the `rev` before #477, note_history ids, #822).
         base_rev: z
           .union([z.string(), z.number().int()])
           .optional()
-          .describe('`rev` of the content you edited: changes made since merge; an overlap is `conflicted`, nothing written'),
+          .describe('`rev` you edited: later changes merge; an overlap is `conflicted`, nothing written'),
         allowGrowth: z.boolean().optional().describe('true: write a body that doubles the note (else quarantined)'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
@@ -2953,7 +2954,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         query: z.string().describe('Search text'),
         vaultId: UUID_ARG.optional().describe('Vault to search'),
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Every accessible vault and repository (account tokens)'),
+        everywhere: z.boolean().optional().describe('Everything accessible (account tokens)'),
         symbols: z.boolean().optional().describe('Include code symbols'),
         limit: intRange('limit', 1, 100).optional().describe('Max results'),
       },
@@ -3025,15 +3026,21 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         refs: z.enum(REFS).optional().describe('Sites of a symbol; at: `path:line`'),
         path: z.string().optional().describe('File of the definition'),
         depth: intRange('depth', 1, 3).optional().describe('impact levels; default 2'),
+        overlay: z.string().optional().describe('`git diff --no-renames` vs the indexed commit: searches your edits'),
       },
       budget: 'list',
     },
     async (
-      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs; path?: string; depth?: number },
+      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs; path?: string; depth?: number; overlay?: string },
       { repositoryId },
       page,
     ) => {
-      refsArguments(args)
+      const { overlay, ...refsArgs } = args
+      refsArguments(refsArgs)
+      if (overlay !== undefined && (args.refs !== undefined || !repositoryId)) {
+        throw new McpToolError('INVALID_ARGUMENT', '`overlay` searches the symbols of one repository: pass `repositoryId`, and no `refs`', { field: 'overlay' })
+      }
+      const patches = overlay === undefined ? null : readOverlay(overlay)
       // null: an account-scoped connection with no repositoryId, or `everywhere`.
       if (repositoryId) await requireRepositoryAccess(repositoryId)
       if (args.refs !== undefined) {
@@ -3046,9 +3053,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         : (await listAccessibleRepositories(auth.user.id)).map((r) => r.id)
       const limit = args.limit ?? 20
       // The first `limit` symbols of the ranking, plus one to know whether more match.
-      const { results, ...head } = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1, accountId: auth.user.id })
+      const searched = await findSymbols(repoIds, args.query, { kind: args.kind, limit: limit + 1 + (patches ? OVERLAY_SPARE : 0), accountId: auth.user.id })
+      const { results: found, ...head } = searched
+      // On base + overlay (#676): the hits as the edited files declare them; the head's `commit`/`tree` is the base.
+      const overlaid = patches ? await overlayHits(repoIds[0]!, patches, args.query, found, { kind: args.kind, limit: limit + 1 }) : null
+      const results = overlaid ? overlaid.hits : found
       return {
-        head: { ...head, ...(repoIds.length === 1 ? await repositoryIndexedVersion(repoIds[0]!) : {}) },
+        head: { ...head, ...(repoIds.length === 1 ? await repositoryIndexedVersion(repoIds[0]!) : {}), ...(overlaid ? { overlay: true, ...(overlaid.skipped.length > 0 ? { skipped: overlaid.skipped } : {}), ...(overlaid.stale.length > 0 ? { stale: overlaid.stale } : {}) } : {}) },
         sections: [
           ranked({
             name: 'results',
@@ -3099,7 +3110,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: {
         vaultId: UUID_ARG.optional().describe('Vault graph'),
         repositoryId: UUID_ARG.optional().describe('Repository graph'),
-        types: z.array(z.string()).optional().describe('Keep these note types or code languages'),
+        types: z.array(z.string()).optional().describe('Note types or code languages'),
         tags: z.array(z.string()).optional().describe('Only these tags'),
         aggregate: z.enum(['community', 'none']).optional().describe('Default "community"'),
         // `.int()` would list JS's safe-integer bounds, 55 characters of the reader budget (as budgetArgs).
@@ -3107,7 +3118,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         neighborsOf: z.string().min(1).optional().describe('Node id, path or name'),
         depth: intRange('depth', 1, 3).optional().describe('Edges from neighborsOf; default 1'),
         edgeTypes: z.array(z.enum(EDGE_KINDS)).min(1).optional().describe('Only these edge kinds'),
-        limit: intRange('limit', 1, 1_000).optional().describe('First n nodes and their edges'),
+        limit: intRange('limit', 1, 1_000).optional().describe('First n nodes'),
       },
       budget: 'list',
     },

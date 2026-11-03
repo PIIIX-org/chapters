@@ -2677,6 +2677,22 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     cursor's fingerprint, so a cursor from another folder is refused. The
     REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
     file, unordered, no paging.
+  - `find_symbols` with `overlay` (#676, `mcp/overlay.ts` over
+    `repositories/overlay.ts`) answers on base + overlay without writing:
+    `parseOverlay` reads a `git diff --no-renames` (200 KB, 50 files;
+    renames and binaries refused), `overlaySymbols` applies the hunks to the
+    stored content of the changed files with every context line checked
+    (`OverlayError` -> `INVALID_ARGUMENT` on `overlay`) and runs the
+    existing `extractStructure` on the result in memory, and `overlayHits`
+    drops the base hits of the changed files and merges the lexical matches
+    (exact name first, then the rest, then the base hits: an overlay hit is
+    never pushed out by a full page of base hits); `OVERLAY_MAX_PARSED` (2 MiB)
+    bounds the source parsed per call and `extractStructure` runs with
+    `edges: false`; files not in the index are `skipped`, a diff whose `index`
+    blob differs from the stored content's git blob id is `stale`. The base search is asked for
+    `OVERLAY_SPARE` more hits for what is dropped. No blocks, edges or
+    versions are written; `server/src/search/**` is untouched. The head's
+    `commit`/`tree` is the base and `overlay: true` says it was used.
     With `changed_since` (#471, `mcp/changes.ts` over `repositories/changes.ts`)
     it lists the files changed after a commit or a date instead, from the
     index's own history: `syncRepositoryFiles` records a `repository_versions`

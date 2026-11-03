@@ -120,6 +120,16 @@ const test: LabTest = {
       { name: 'MCP read_note grep', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source, targets: [{ grep: 'orbital' }] }) },
       { name: 'MCP read_file grep', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file, targets: [{ grep: 'launch' }] }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
+      {
+        name: 'MCP find_symbols overlay',
+        identifiers: [file, `${mark}Plan`],
+        share,
+        read: viaMcp('find_symbols', {
+          repositoryId,
+          query: `${mark}Plan`,
+          overlay: `--- a/${file}\n+++ b/${file}\n@@ -1,3 +1,3 @@\n export function ${mark}Plan(): string {\n-  return 'launch window'\n+  return 'launch window, edited'\n }\n`,
+        }),
+      },
       { name: 'MCP browse_repository changed_since', identifiers: [added], share, read: viaMcp('browse_repository', { repositoryId, changed_since: '2000-01-01' }) },
       ...(['references', 'callers', 'impact'] as const).map((refs) => ({
         name: `MCP find_symbols refs: ${refs}`,
