@@ -255,7 +255,7 @@ for (const task of tasks) {
       continue
     }
     const model: Model = live ?? scriptedModel(dryRunPlan(task, arm), dryRunAnswer)
-    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id, tools: ELARA_TOOLS }), prompt: task.prompt, caps })
+    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id, tools: toolsets.elara.specs.map((s) => s.name) }), prompt: task.prompt, caps })
     const grade = gradeAnswer(task, episode.answer)
     const row: Row = { task: task.id, arm, episode, grade }
     if (live && judging && episode.answer) {

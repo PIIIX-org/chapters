@@ -179,7 +179,6 @@ test('toParameters always yields an object schema', () => {
   assert.deepEqual(toParameters({ type: 'object' }), { type: 'object', properties: {} })
 })
 
-test('the Elara arm has the reader profile\'s grep and orient; a server without orient is refused', () => {
-  assert.ok(ELARA_TOOLS.includes('grep') && ELARA_TOOLS.includes('orient'))
+test('a server without orient is refused', () => {
   assert.throws(() => elaraToolset(listed.filter((t) => t.name !== 'orient'), async () => ({ text: '', ok: true })), /does not list orient/)
 })

@@ -462,7 +462,7 @@ the same caps, and run through the same loop:
 | | Elara arm | local arm |
 |---|---|---|
 | source | the lab instance's MCP server, the pinned tree indexed as a `local_path` repository | a checkout of the same tree on the runner (no `.git`) |
-| tools | `search`, `find_symbols`, `read_file`, `browse_repository`, `repository_status`, `graph`, `find_graph_path`, with the server's own schemas; each call is one MCP `tools/call` | `list_files` (glob), `grep` (JavaScript regex, `path:line:text`; `path` `.` or empty = the whole checkout), `read_file` (offset/limit, numbered lines; refuses a path that resolves outside the checkout, symlinks included) |
+| tools | `search`, `find_symbols`, `read_file`, `browse_repository`, `repository_status`, `graph`, `find_graph_path`, `grep`, `orient`, with the server's own schemas (a server that does not list one fails the run); the prompt steers the Elara arm to `orient` first, and the local arm has no equivalent (it has `list_files`); each call is one MCP `tools/call` | `list_files` (glob), `grep` (JavaScript regex, `path:line:text`; `path` `.` or empty = the whole checkout), `read_file` (offset/limit, numbered lines; refuses a path that resolves outside the checkout, symlinks included) |
 | access | a token pinned to the repository, read access, allow-listed to those tools | the checkout only |
 
 Caps per task: 30 tool calls (the round-2 cap), 600,000 tokens in + out
