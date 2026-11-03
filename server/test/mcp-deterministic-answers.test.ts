@@ -294,6 +294,8 @@ interface Question {
   args: (w: World) => Args
   /** Why `dev` answers it differently in the other database: its cross-database case is `it.fails` until that issue is fixed. */
   differs?: string
+  /** The answer is the repository's push history (#471), which differs between the worlds by construction: asked twice in one world only. */
+  history?: true
 }
 
 /** Each node's semantic neighbours were those that existed when it was embedded (fixed: its pinned case below passes). */
@@ -323,6 +325,17 @@ const QUESTIONS: Question[] = [
   { name: 'grep code, one name in three files, with context', tool: 'grep', args: (w) => ({ repositoryId: w.repoId, pattern: 'function parse|def parse', context: 1 }) },
   { name: 'grep notes, two notes with one body', tool: 'grep', args: (w) => ({ vaultId: w.vaultId, pattern: '(?i)checksum every' }) },
   { name: 'grep everywhere under a glob', tool: 'grep', args: () => ({ everywhere: true, pattern: '\\bupload\\b', path: '{src,guides}/**' }) },
+  // The overlay (#676): a changed file's symbols as the diff leaves them, an added file's, the base's elsewhere.
+  {
+    name: 'find_symbols overlay',
+    tool: 'find_symbols',
+    args: (w) => ({
+      repositoryId: w.repoId,
+      query: 'checksum',
+      overlay:
+        '--- a/src/checksum.ts\n+++ b/src/checksum.ts\n@@ -1,4 +1,7 @@\n /** A chunk checksum. */\n+export function checksumAll(chunks: string[]): string[] {\n+  return chunks.map((c) => String(c.length))\n+}\n export function checksum(chunk: string): string {\n   return String(chunk.length)\n }\n',
+    }),
+  },
   { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }) },
   { name: 'graph repository communities', tool: 'graph', args: (w) => ({ repositoryId: w.repoId }) },
   {
@@ -343,8 +356,13 @@ const QUESTIONS: Question[] = [
   },
   { name: 'browse_repository', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId }) },
   { name: 'browse_repository folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, path: 'src' }) },
+  { name: 'browse_repository changed_since', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, changed_since: '2000-01-01' }), history: true },
+  { name: 'browse_repository changed_since folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, changed_since: '2000-01-01', path: 'src' }), history: true },
   ...NOTES.map((n): Question => ({ name: `read_note ${n.path}`, tool: 'read_note', args: (w) => ({ vaultId: w.vaultId, path: n.path }) })),
   ...FILES.map((f): Question => ({ name: `read_file ${f.path}`, tool: 'read_file', args: (w) => ({ repositoryId: w.repoId, path: f.path }) })),
+  // The grep target (#423) searches the text it reads: the same lines in the same order, whatever the ids.
+  { name: 'read_file grep', tool: 'read_file', args: (w) => ({ repositoryId: w.repoId, path: 'src/upload.ts', targets: [{ grep: 'export function' }] }) },
+  { name: 'read_note grep', tool: 'read_note', args: (w) => ({ vaultId: w.vaultId, path: 'index', targets: [{ grep: 'upload' }] }) },
   { name: 'repository_status', tool: 'repository_status', args: (w) => ({ repositoryId: w.repoId }) },
 ]
 
@@ -361,7 +379,7 @@ describe('read tools answer deterministically (#473)', () => {
   })
 
   describe('another database, rows in reverse physical and id order: the same bytes once ids and times are masked', () => {
-    for (const q of QUESTIONS) {
+    for (const q of QUESTIONS.filter((q) => !q.history)) {
       const test = q.differs ? it.fails : it
       test(`${q.name}${q.differs ? ` (differs on dev: ${q.differs})` : ''}`, async () => {
         const other = mask(B, await ask(B, q.tool, q.args(B)))

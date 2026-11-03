@@ -783,6 +783,8 @@ export const repositories = pgTable(
      * (`computeTreeHash`). Written by every sync; null until one runs.
      */
     treeHash: text('tree_hash'),
+    /** The `seq` of the newest `repository_versions` row (#471, migration 0063); 0 before the first sync. */
+    versionSeq: integer('version_seq').notNull().default(0),
     /** Staleness signal for the polling fallback scheduler. */
     lastWebhookAt: timestamp('last_webhook_at', { withTimezone: true }),
     /**
@@ -970,6 +972,42 @@ export const codeEdges = pgTable(
 )
 
 /**
+ * The history the index keeps of itself (#471, migration 0063): one row per index version a sync recorded, in `seq`
+ * order. The first is the repository's baseline. `commit` is the commit it named, when one was known.
+ */
+export const repositoryVersions = pgTable(
+  'repository_versions',
+  {
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    commit: text('commit'),
+    treeHash: text('tree_hash'),
+    indexedAt: timestamp('indexed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.repositoryId, t.seq] })],
+)
+
+/** What a version added, modified or deleted against the one before it (#471); a sync that stopped leaves its rows under the next `seq`. */
+export const repositoryChanges = pgTable(
+  'repository_changes',
+  {
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    seq: integer('seq').notNull(),
+    path: text('path').notNull(),
+    /** 'added' | 'modified' | 'deleted'. */
+    kind: text('kind').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.repositoryId, t.seq, t.path] }),
+    check('repository_changes_kind_check', sql`kind in ('added', 'modified', 'deleted')`),
+  ],
+)
+
+/**
  * Blocks (ADR-004 §2.2, §2.5; #413, #452, migrations 0035, 0036): the
  * addressable spans of a note or a repository file, which are also its
  * embedding chunks. For code (repositories/code-blocks.ts) a file's
@@ -1027,6 +1065,10 @@ export const blocks = pgTable(
     unique('blocks_owner_block').on(t.ownerType, t.ownerId, t.blockId),
     // The unique index also serves (owner_type, owner_id) lookups.
     index('blocks_container_idx').on(t.containerId),
+    // A code block's vector by its embed key, for reuse between a repository's account siblings (#684, migration 0064).
+    index('blocks_code_embed_key_idx')
+      .on(t.embedKey)
+      .where(sql`owner_type = 'code' AND embedding IS NOT NULL`),
     // A repository's symbol blocks by bare name, for code edge resolution (#469, migration 0061; code-edges.ts `SYMBOL_NAME`).
     index('blocks_symbol_name_idx')
       .on(t.containerId, sql`(CASE WHEN symbol_parent IS NULL THEN inner_path ELSE substr(inner_path, length(symbol_parent) + 2) END)`)

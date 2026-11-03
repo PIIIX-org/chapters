@@ -945,6 +945,13 @@ head moved, and enqueue again. The first PR through the queue was #1056
 (60813a6). Rollback: delete ruleset 26310472 and set `strict` back to
 `true` on `dev`'s classic protection and in ruleset 24421063.
 
+One exception to "every required check": the `checks` step **Test
+collab-s3-perf alone (#905)** is skipped on `merge_group` (master decision
+2026-11-02). On queue commits its p95 was 345-657 ms on both attempts
+(runs 41419086373, 41446064501), against 194-225 ms on PR runs, so it
+ejected nearly every entry once. The PR head's run and every push to `dev`
+still enforce the unchanged 250 ms bound; #905 tracks the root cause.
+
 A status belongs to a **commit, not a PR**, and a promotion's head (the
 tip of `dev`) can also be the head of other PRs. So:
 
@@ -995,16 +1002,24 @@ reviewed:`, `Verdict:`, then the findings), committed to the PR branch with
 a `review: <title> (#<pr> at <sha>)` commit before the `VERDICT: MERGE` is
 posted, and linked from that verdict by commit sha
 (`https://github.com/PIIIX-org/chapters/blob/<sha>/docs/reviews/<file>`,
-or the `tree/<sha>/docs/reviews` directory). **Since 2026-11-02 the record
-is committed once, on the MERGE round** (master decision): a commit moves
-the head, and on a PR that runs the all-suite bench (#1053) that cancels a
-run of up to three hours. A `VERDICT: CHANGES` round therefore posts only
-the inline review and the verdict comment (its findings, with the head it
-reviewed); the MERGE record then holds **every round**, each under its own
-`## Round <n> (<head sha>)` heading with the verdict it gave. #1071
-tracks reusing the bench for heads that differ only under `docs/reviews/`,
-after which records go back to one commit per round. Records committed
-before this rule (one per head reviewed) stay as they are. The top-level
+or the `tree/<sha>/docs/reviews` directory). A record
+commit moves the head, which would cancel and restart the all-suite bench
+(#1053, up to three hours), so the `plan` job of `elara-lab.yml` reuses the
+parent's results for it (#1071): when the PR head's only changes from its
+single parent are under `docs/reviews/` (renames included) and the parent's
+`lab`, `bench (n)` and `bench-gate` checks (latest run of each name, from
+`github-actions`) concluded success or skipped with a successful
+`bench-gate`, it plans tier `none` and bench `none`, and the `bench-gate`
+job only reports, with a link to the parent's `bench-gate` run, that the
+parent's results stand (`lab-plan.mjs` `reuseFrom`, tested in
+`lab-plan.test.mjs`). `merge_group` runs never reuse and stay full. Any
+doubt plans as before: another path in the diff, a merge commit as head, a
+parent whose checks are missing, red, cancelled or unfinished (the record
+was pushed while the parent's bench still ran), or an API error. So a
+record may go back to **one commit per round**, but push it only after the
+head it reviews is green: a record pushed on a running head re-runs
+everything. Records committed under the earlier rule (once, on the MERGE
+round, every round in one file) stay as they are. The top-level
 directory holds the records of **open and recently merged PRs only**: once
 a PR has been merged (or closed without
 merging) for more than **7 days**, its records move to

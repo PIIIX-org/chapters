@@ -16,9 +16,9 @@ import type { ToolProfile } from './server.js'
  * other writes refuse it).
  */
 const READ_RULES =
-  'Tools with `budget_tokens` (characters / 4) fit it and end with `truncated`; for more, repeat the call with its `cursor`. ' +
-  'read_note/read_file: `outline: true` maps a body; `targets` reads: {lines:"a-b"}, {heading:"A > B"}, {block}, {symbol} (files). ' +
-  'Manuals: elara://manual/conventions and one per tool family.'
+  'Tools with `budget_tokens` (characters / 4) fit it and end with `truncated`; for more, repeat with its `cursor`. ' +
+  'read_note/read_file: `outline: true` maps a body; `targets` reads: {lines:"a-b"}, {heading:"A > B"}, {block}, {symbol} (files), {grep:"text"}. ' +
+  'Manuals: elara://manual/conventions and one per family.'
 
 const WRITE_RULES =
   ' A whole edit_note `body` merges from `base_rev`, else from your last read_note. Retry a note write with the same `idempotency_key`.'
