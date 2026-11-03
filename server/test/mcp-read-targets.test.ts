@@ -15,7 +15,7 @@
 //   file answers carry `hash`, both carry `total_lines`.
 // - Every read_note answer, ranged or outline, records its rev as the base
 //   a later whole-body edit merges from (#864, #961).
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { and, eq } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -28,7 +28,21 @@ import { createNote, updateNote } from '../src/notes/store.js'
 import { noteBlocks } from '../src/notes/note-blocks.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { SUGGESTION_CELLS } from '../src/mcp/read-targets.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+
+// Edit-distance work, counted per call (cells filled): what the suggestions of missing targets cost.
+const distanceCalls = vi.hoisted(() => [] as number[])
+vi.mock('../src/mcp/strict-input.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/mcp/strict-input.js')>()
+  return {
+    ...actual,
+    editDistance: (a: string, b: string) => {
+      distanceCalls.push((a.length + 1) * (b.length + 1))
+      return actual.editDistance(a, b)
+    },
+  }
+})
 
 type Json = Record<string, unknown>
 type Truncated = false | { shown: Record<string, number>; total: Record<string, number | string>; dropped: Record<string, number>; level: string; cursor: string | null; narrow: string[] }
@@ -416,18 +430,25 @@ describe('a ranged read is a merge base (#864, #961)', () => {
 })
 
 describe('suggestions stay bounded', () => {
-  it('20 missing long heading targets on a note of 2,000 headings answer quickly, with suggestions where the work allows', async () => {
+  beforeEach(() => {
+    distanceCalls.length = 0
+  })
+
+  it('20 missing long heading targets on a note of 2,000 headings spend a bounded edit-distance work, with suggestions where the work allows', async () => {
     const path = 'docs/many-headings'
     const body = Array.from({ length: 2_000 }, (_, i) => `## Heading number ${i} about ${'topic '.repeat(6)}\ntext ${i}\n`).join('')
     await createNote(vaultId, { path, body })
     const targets = Array.from({ length: 20 }, (_, i) => ({ heading: `Missing heading ${i} ${'x'.repeat(100)}` }))
-    const started = performance.now()
+    distanceCalls.length = 0
     const r = await call('read_note', { vaultId, path, targets, budget_tokens: 25_000 })
-    const ms = performance.now() - started
     expect(r.isError, r.text.slice(0, 200)).toBe(false)
     expect(parts(r.json).every((p) => p.error?.code === 'NOT_FOUND')).toBe(true)
-    // Unbounded, this read ran an edit distance per target against every heading: seconds of a blocked event loop.
-    expect(ms).toBeLessThan(2_000)
+    // Unbounded, this read ran an edit distance per target against every heading (20 x 2,000 calls of ~12,000 cells, 480 M):
+    // seconds of a blocked event loop. The work, not the clock, is bounded: all targets together stay within SUGGESTION_CELLS
+    // and the per-target candidate cap (200 paths), whatever the machine's load.
+    const cells = distanceCalls.reduce((sum, n) => sum + n, 0)
+    expect(cells).toBeLessThanOrEqual(SUGGESTION_CELLS)
+    expect(distanceCalls.length).toBeLessThanOrEqual(20 * 200)
     // A short miss still gets its nearest headings.
     const near = await call('read_note', { vaultId, path, targets: [{ heading: 'Heading numbr 7 about topic topic topic topic topic topic' }] })
     expect(parts(near.json)[0]!.error!.suggestions?.length).toBeGreaterThan(0)
