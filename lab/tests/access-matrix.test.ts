@@ -8,6 +8,11 @@
 // nothing identifying in the answer. The usage report is the #1034 class: a
 // report must not list a read by its note's path once the share that
 // allowed the read is gone.
+import { execFile } from 'node:child_process'
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
 import { mcpOutcome, restOutcome, runAccessMatrix, type AccessMatrix, type Actor, type ReadOutcome } from '../lib/access-matrix.ts'
 import type { Check, LabTest } from '../lib/context.ts'
 import { connectLocalRepo, copyIntoLocalRepo, settleRepo, writeTree } from '../lib/fixlab.ts'
@@ -94,12 +99,40 @@ const test: LabTest = {
       })
       return report(actor)
     }
+    // The vault as a git remote (#677): a clone, with the actor's token, as the cloned notes or git's refusal.
+    const cloneVault = async (actor: Actor): Promise<ReadOutcome> => {
+      const dir = mkdtempSync(join(tmpdir(), 'lab-matrix-clone-'))
+      const url = `${ctx.baseUrl.replace('://', `://elara:${mcp[actor].token}@`)}/git/vaults/${vaultId}`
+      try {
+        await promisify(execFile)('git', ['-c', 'credential.helper=', 'clone', '--quiet', url, dir], { env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' } })
+        const files = readdirSync(dir, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.md')).sort()
+        return { ok: true, denied: false, text: files.map((f) => `${f}\n${readFileSync(join(dir, f), 'utf8')}`).join('\n') }
+      } catch (err) {
+        const text = (err as { stderr?: string }).stderr ?? String(err)
+        return { ok: false, denied: /error: (403|404)|not found/.test(text), text }
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }
     const matrices: AccessMatrix[] = [
+      { name: 'git clone of a vault', identifiers: [source, `${mark}source orbital checklist`], share, read: cloneVault },
       { name: 'MCP read_note', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source }) },
       { name: 'REST GET /api/vaults/:id/notes/*', identifiers: [sourceNote.id, source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/notes/${source}`) },
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
+      { name: 'MCP read_note grep', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source, targets: [{ grep: 'orbital' }] }) },
+      { name: 'MCP read_file grep', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file, targets: [{ grep: 'launch' }] }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
       { name: 'MCP find_symbols refs: explain', identifiers: [run, `${mark}Run`, `docs/${mark}-cite`], share, read: viaMcp('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' }) },
+      {
+        name: 'MCP find_symbols overlay',
+        identifiers: [file, `${mark}Plan`],
+        share,
+        read: viaMcp('find_symbols', {
+          repositoryId,
+          query: `${mark}Plan`,
+          overlay: `--- a/${file}\n+++ b/${file}\n@@ -1,3 +1,3 @@\n export function ${mark}Plan(): string {\n-  return 'launch window'\n+  return 'launch window, edited'\n }\n`,
+        }),
+      },
       { name: 'MCP browse_repository changed_since', identifiers: [added], share, read: viaMcp('browse_repository', { repositoryId, changed_since: '2000-01-01' }) },
       ...(['references', 'callers', 'impact'] as const).map((refs) => ({
         name: `MCP find_symbols refs: ${refs}`,

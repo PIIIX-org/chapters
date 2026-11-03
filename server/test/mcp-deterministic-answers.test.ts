@@ -328,6 +328,17 @@ const QUESTIONS: Question[] = [
   { name: 'find_symbols refs explain a symbol with callers and a citing note', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'upload', refs: 'explain' }) },
   { name: 'find_symbols refs explain at a line', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'src/upload.ts:5', refs: 'explain' }) },
   { name: 'find_symbols refs explain candidates of a name defined three times', tool: 'find_symbols', args: (w) => ({ repositoryId: w.repoId, query: 'parse', refs: 'explain' }) },
+  // The overlay (#676): a changed file's symbols as the diff leaves them, an added file's, the base's elsewhere.
+  {
+    name: 'find_symbols overlay',
+    tool: 'find_symbols',
+    args: (w) => ({
+      repositoryId: w.repoId,
+      query: 'checksum',
+      overlay:
+        '--- a/src/checksum.ts\n+++ b/src/checksum.ts\n@@ -1,4 +1,7 @@\n /** A chunk checksum. */\n+export function checksumAll(chunks: string[]): string[] {\n+  return chunks.map((c) => String(c.length))\n+}\n export function checksum(chunk: string): string {\n   return String(chunk.length)\n }\n',
+    }),
+  },
   { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }) },
   { name: 'graph repository communities', tool: 'graph', args: (w) => ({ repositoryId: w.repoId }) },
   {
@@ -352,6 +363,9 @@ const QUESTIONS: Question[] = [
   { name: 'browse_repository changed_since folder', tool: 'browse_repository', args: (w) => ({ repositoryId: w.repoId, changed_since: '2000-01-01', path: 'src' }), history: true },
   ...NOTES.map((n): Question => ({ name: `read_note ${n.path}`, tool: 'read_note', args: (w) => ({ vaultId: w.vaultId, path: n.path }) })),
   ...FILES.map((f): Question => ({ name: `read_file ${f.path}`, tool: 'read_file', args: (w) => ({ repositoryId: w.repoId, path: f.path }) })),
+  // The grep target (#423) searches the text it reads: the same lines in the same order, whatever the ids.
+  { name: 'read_file grep', tool: 'read_file', args: (w) => ({ repositoryId: w.repoId, path: 'src/upload.ts', targets: [{ grep: 'export function' }] }) },
+  { name: 'read_note grep', tool: 'read_note', args: (w) => ({ vaultId: w.vaultId, path: 'index', targets: [{ grep: 'upload' }] }) },
   { name: 'repository_status', tool: 'repository_status', args: (w) => ({ repositoryId: w.repoId }) },
 ]
 

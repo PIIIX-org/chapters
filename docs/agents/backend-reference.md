@@ -2338,8 +2338,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   answer their outline with `outline: true` (opt-in: by default it cost
   the premise benchmark more on every suite, #1002) and read parts with `targets` (#416,
   #417: `mcp/read-targets.ts`, `text/targets.ts`; a target is
-  `{lines: "a-b"}`, `{block}`, `{heading: "A > B"}` or, on read_file,
-  `{symbol}`, each answered as a `part` text section of `response.ts`,
+  `{lines: "a-b"}`, `{block}`, `{heading: "A > B"}`, `{grep}` or, on read_file,
+  `{symbol}`, each answered as a `part` text section of `response.ts`
+  (`grep`: see Result handles below),
   a miss as a per-target error item; the outline is section 0 and the
   withheld body section 1, so a cursor at 0 pages the outline and one
   past it the body; note lines count over the projected file, D3, with
@@ -2367,7 +2368,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `Default N` and `Next page`, check the budget's 256-25,000 range in a
   refinement instead of listing `minimum`/`maximum`, pinned ids say
   `omit when pinned`, and the read targets are explained once here
-  rather than per tool. `test/mcp-instructions.test.ts` checks the rules per profile,
+  rather than per tool (#423's `grep` costs the reader profile 11 characters net, 7,995 against 7,984 before, 1,999 tokens against 1,996: the `targets` description is `Parts` and a note `path` is `Note path`, with two shorter instruction and description phrases; writer tools/list + instructions 15,483 against 15,512, admin tools/list 41,241 against 41,371). `test/mcp-instructions.test.ts` checks the rules per profile,
   that every manual named is in the token's `resources/list`, and the
   same bytes across two initializes and two vault pins per profile.
 - **Unchanged reads** (#682, ADR-004 §2.9): `read_note` and `read_file`
@@ -2687,6 +2688,22 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     lines turned into lines of the note's file as backlinks do (#472);
     `fresh` is note `updated_at` >= file `updated_at`. The MCP-only `explain`
     value is not in `REFS`, so the REST `code-refs` route does not take it.
+  - `find_symbols` with `overlay` (#676, `mcp/overlay.ts` over
+    `repositories/overlay.ts`) answers on base + overlay without writing:
+    `parseOverlay` reads a `git diff --no-renames` (200 KB, 50 files;
+    renames and binaries refused), `overlaySymbols` applies the hunks to the
+    stored content of the changed files with every context line checked
+    (`OverlayError` -> `INVALID_ARGUMENT` on `overlay`) and runs the
+    existing `extractStructure` on the result in memory, and `overlayHits`
+    drops the base hits of the changed files and merges the lexical matches
+    (exact name first, then the rest, then the base hits: an overlay hit is
+    never pushed out by a full page of base hits); `OVERLAY_MAX_PARSED` (2 MiB)
+    bounds the source parsed per call and `extractStructure` runs with
+    `edges: false`; files not in the index are `skipped`, a diff whose `index`
+    blob differs from the stored content's git blob id is `stale`. The base search is asked for
+    `OVERLAY_SPARE` more hits for what is dropped. No blocks, edges or
+    versions are written; `server/src/search/**` is untouched. The head's
+    `commit`/`tree` is the base and `overlay: true` says it was used.
     With `changed_since` (#471, `mcp/changes.ts` over `repositories/changes.ts`)
     it lists the files changed after a commit or a date instead, from the
     index's own history: `syncRepositoryFiles` records a `repository_versions`
@@ -2799,6 +2816,30 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `test/mcp-response-envelope.test.ts` drives each
     tool family through the MCP HTTP path, `test/mcp-budget-ladder.test.ts`
     each ladder level.
+  - **Result handles** (#423, ADR-004 A2; deviates from D5's stored
+    handle: nothing stored, no expiry, no cross-account state): a very large document or
+    result is not inlined and not stored. The handle is stateless:
+    the document's version (`rev` or `hash`), `total_lines`, the cursor
+    and the `grep` target. The cursor binds the arguments and the
+    resolved scope (`argsFingerprint`) and guards the text it resumes
+    (a changed document is `CURSOR_STALE`), and the handler checks the
+    caller's access on every page, so a cursor is a position, never a
+    capability, and nothing expires or accumulates on the server (ADR-004
+    D5 proposed a 15-minute Postgres store; recomputing from the content
+    hash needs none). `{grep: "text"}` (`read-targets.ts`
+    `targetSections`) is one text section named `matches`: the lines
+    holding the literal text (smart case: case-insensitive unless it has
+    an uppercase letter), one line of context either side, in `grep -n`
+    form (`n:` match, `n-` context, `--` between ranges that do not
+    touch), so it is cut at line boundaries within `budget_tokens` and
+    counted and continued like any text. One grep target per read;
+    an empty or over-200-character text, a second grep or one mixed with
+    another kind is an `INVALID_ARGUMENT` item in `targets`. A read cut
+    by its budget of a document over 20,000 tokens (`largeNarrow`) adds
+    `targets: [{"grep":"<text>"}]` and `outline: true` to
+    `truncated.narrow` (on an outline answer, the `grep` hint only); smaller documents answer as before, so the
+    premise benchmark's reads do not change unless one of its files is
+    that large. `test/mcp-read-targets.test.ts` covers it.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
@@ -2972,6 +3013,40 @@ up calling `syncRepositoryFiles()` (`store.ts`), which diffs against
 what's already indexed: unchanged content hashes are no-ops, changed/
 new files upsert, anything no longer present is **hard-deleted** (git
 is the history record, not Chapters).
+
+**Vault git remote** (#677, read-only slice; `server/src/git-remote/`):
+`GET /git/vaults/:vaultId/info/refs?service=git-upload-pack` and
+`POST /git/vaults/:vaultId/git-upload-pack` (smart HTTP, unprefixed like
+`/mcp`) serve `git clone`/`fetch`/`pull` of a vault; `receive-pack` is 403.
+`routes.ts` authenticates an MCP token (Basic password or Bearer,
+`resolveMcpToken`: live revoke/expiry) and authorises on EVERY request:
+account scope, or a vault pin equal to the path's vault, `read_note` in
+the allow-list if one is set, and `resolveAccess(user, vault)`; anything
+else is the 404 a missing vault gets (a repository pin included). The
+bare repository is content only, shared by the callers of a vault, at
+`DATA_DIR/git-remotes/<vaultId>.git` (`vault-remote.ts`): built lazily on
+a request from the live notes as `<path>.md` in the projector's file form,
+as a SNAPSHOT and never a history (a purged or replaced note's text must not
+stay readable through an old commit, and no purge hook reaches this
+repository): two commits, an EMPTY root (fixed author, date and message, so
+its id is stable across rebuilds and vaults) and the snapshot, its only
+child, rewritten with `git fast-import --force` on each change while
+`reflog expire` and `gc --prune=now` drop the previous snapshot and its
+objects (the snapshot's message holds the sha256 fingerprint of all paths
+and file hashes, so an unchanged vault costs one query and one `git log`,
+and the same content is the same commit: fixed author, newest `updated_at`
+as date). After a change a client's `git pull` is a forced non-fast-forward
+of that one commit and refuses; `git pull --rebase` (no local commits),
+`git fetch && git reset --hard origin/main` or a new clone update it. The manual's clone example sends the token as a header (`git -c http.extraHeader="Authorization: Bearer …" clone`), never as URL userinfo (a token in the URL lands in `.git/config` and shell history, and the secret scan reads the manuals). A body that is not a pkt-line upload request is a 400. A
+gzip request is inflated under a 1 MiB cap (413 above it, a bomb included). Served by spawning
+`git upload-pack --stateless-rpc` (git is in the image, no new dependency).
+A derived cache: leave it out of backups; `sweepVaultRemotes` removes the
+repositories of deleted vaults at boot. A rebuild holds the vault's notes in
+memory once. Not covered: push (see #677's plan: structural diff against
+the served base, compare-and-set per note, conflicts as proposals) and
+attachments. `test/vault-git-remote.test.ts` covers scopes, revoke,
+allow-list, push refusal, fetch and delete; the `git clone of a vault`
+matrix is in both access matrices.
 
 1. **git** (`git-sync.ts`, `git-mirror.ts`, #684) — fetches into a
    persistent bare, shallow mirror per repository
@@ -3554,6 +3629,27 @@ row whose target a created file or a manifest change replaced keeps the
 stale target until its file is extracted again. Wikilink rows without lines or a context are rewritten
 from their note's body by the `note_links` catch-up jobs (#472, see **Link
 catch-up** below), queued before `listen`.
+
+**Shared work by content** (#684 part B, `repositories/blob-cache.ts`,
+migration 0064): blocks, edges and imports stay one set of rows per
+repository file (ids, access and cascade deletes are per repository).
+What is a function of the content alone is reused. `processFile` takes a
+block's vector, when the file's own blocks lack it, from a code block with
+the same `embed_key` (model + embedded text) in another repository **of the
+same account** (`repositories.owner_id`; `vectorsInAccount`, served by the
+partial index `blocks_code_embed_key_idx`): what comes back is the vector
+the caller's own text embeds to, so no content is read, but the lookup never
+crosses accounts (a 64-bit key is not where one account's rows stand in for
+another's), and another account's identical file is embedded again. A block's embedded text includes the file's path, so the same content at another path embeds again (sharing serves clones and forks, not moved files). The index is on `embed_key` alone: the account filter is a join, not an index column, so `(embed_key, container_id)` would not narrow it, and a text held by many repositories costs one row scan per holder, bounded by the repositories' count. A reused
+vector counts as new to the file for the semantic edge refresh (#1007), like
+an embedded one. `parsed()` keeps the symbols, imports and sites of a content
+in this process (2,000 entries, least recently used out), keyed by
+`EXTRACTOR_VERSION`, the language label, the grammar the extension selects
+and the content hash, so a second repository or branch with the same blob is
+not parsed again; `parseCacheStats` counts parses and reuses. A sync with no
+change parses and embeds nothing and a one-file change re-processes one
+file (#684 part A, `test/repository-git-mirror.test.ts`);
+`test/blob-sharing.test.ts` and `test/blob-parse-cache.test.ts` cover this part.
 
 **Code edges** (`code-edge-rules.ts`, `code-edges.ts`, table `code_edges`,
 migration 0061, #469, ADR-004 §2.8): the symbol-level edges #470
