@@ -92,6 +92,7 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord, restoreVaultRecord, trashVaultRecord } from '../vaults/routes.js'
 import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
+import { leanHit, leanHitKey } from './search-hit.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
 import { BACKLINK_CAP, backlinksOf, neighborhood, type Backlink } from '../graph/neighbors.js'
@@ -2971,8 +2972,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         sections: [
           ranked({
             name: 'results',
-            items: results,
-            id: (r) => `${r.resourceType}:${r.id}`,
+            // What the call or the path already says stays out of every hit (#414): see `leanHit`.
+            items: results.map((r) => leanHit(r, resources.vaultIds.length + resources.repositoryIds.length === 1)),
+            id: leanHitKey,
             limit,
             // Down the ladder: without snippet, frontmatter, updated, heading and tokens, then the location (`path#La-Lb` for a located hit, else the path); counted per path.
             ladder: {
