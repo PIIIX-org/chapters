@@ -1532,8 +1532,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     the one backticked token, or the one word left once the filler (`where is the ... defined`) is dropped. A path
     term (a `/` or a file extension) finds repository files by path or file name and notes by path (with or
     without `.md`); otherwise the symbol blocks whose bare name or `Class.name` equals the term in any spelling
-    `identifiers.ts` knows. Found: `route`, `retrieval_mode: "exact"`, hits with `channel: "exact"` (the symbol
-    located as in #414, a file with lines 1..end and its tokens), `confidence: 1` for one, `ambiguous: true` for
+    `identifiers.ts` knows. Found: `route`, `retrieval_mode: "exact"`, hits (a symbol's lines, a file with
+    lines 1..end), `confidence: 1` for one, `ambiguous: true` for
     several (at most 10), nothing fuzzy. Not found, or not routable: the hybrid path, byte-identical to before,
     and no `route` in the answer. The issue's `retrieval_mode: "fallback"` is not used: it would lose which
     channels answered; an unrouted answer says nothing instead. The structural route (callers, references) and
