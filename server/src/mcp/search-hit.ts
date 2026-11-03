@@ -1,11 +1,12 @@
 import type { SearchResult } from '../search/search.js'
 
-/** A hit as the MCP `search` answer carries it: `containerId` is left out when the call named its container. */
-export type LeanHit = Omit<SearchResult, 'containerId'> & { containerId?: string }
+/** A hit as the MCP `search` answer carries it: `containerId` is left out when the call named its container, and a note's `frontmatter` always (#419). */
+export type LeanHit = Omit<SearchResult, 'containerId' | 'frontmatter'> & { containerId?: string; frontmatter?: undefined }
 
 /**
  * A search hit as the MCP `search` answer carries it (#414). The answer has a token budget, so every field a hit
  * repeats is a hit that falls off the end of the list:
+ * - `frontmatter` of a note hit (#419: `read_note` has it, REST keeps it for the client's tags);
  * - `containerId` when the call named its one vault or repository (or the token is pinned to it); not with `everywhere`, whatever it reached;
  * - `type` when it is the `language` of a code hit or the `symbolKind` of a symbol hit;
  * - `heading` of a symbol hit: its `symbolName` (and `symbolParent`) is the name path;
@@ -17,6 +18,7 @@ export function leanHit(hit: SearchResult, singleContainer: boolean): LeanHit {
   const typeRepeats = (hit.resourceType === 'code' && type === hit.language) || (hit.resourceType === 'symbol' && type === hit.symbolKind)
   return {
     ...rest,
+    frontmatter: undefined,
     ...(singleContainer ? {} : { containerId }),
     ...(typeRepeats ? {} : { type }),
     ...(heading === undefined || hit.resourceType === 'symbol' ? {} : { heading }),

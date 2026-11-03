@@ -3,7 +3,7 @@
 // instructions, counted as characters / 4 like the benchmark counts tokens.
 // A reader token (no prompts, #428) stays within 2,500 tokens (2,000 until #468: the owner raised it, the tools/list cost is
 // paid once per session and cached, #681, while the tools cut per-answer tokens). A writer
-// token's tools/list + instructions stay within 4,000; its prompts are
+// token's tools/list + instructions stay within 4,500 (4,000 until #1090: the owner raised it; the list cost is paid once per session and cached, #681); its prompts are
 // reported, as is the admin size (its tools/list ceiling is in
 // mcp-tool-schema.test.ts). Every tool description is at most two
 // sentences: the long manuals are MCP resources (mcp-manuals.test.ts). The
@@ -21,7 +21,7 @@ type Args = Record<string, unknown>
 type Profile = 'reader' | 'writer' | 'admin'
 
 /** Tokens (characters / 4) a profile may cost: reader everything, writer tools/list + instructions. */
-const BUDGET_TOKENS: Partial<Record<Profile, number>> = { reader: 2_500, writer: 4_000 }
+const BUDGET_TOKENS: Partial<Record<Profile, number>> = { reader: 2_500, writer: 4_500 }
 
 let app: FastifyInstance
 let baseUrl: string

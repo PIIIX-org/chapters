@@ -64,6 +64,8 @@ const test: LabTest = {
       )
       return rows[0]?.n === 1 ? true : undefined
     }, 240_000, 2_000)
+    // A note that cites the plan file: `find_symbols` with `refs: "explain"` (#675) names it to readers of its vault only.
+    await mcp.owner.must('create_note', { vaultId, type: 'docs', name: `${mark}-cite`, body: `Why the plan: [[repo:${repoName}/${file}]].` })
     await copyIntoLocalRepo(ctx, writeTree({ [added]: `export const ${mark}Added = 1\n` }), repoName)
     await rest.owner.must('POST', `/api/repositories/${repositoryId}/sync`, {})
     await settleRepo(ctx, repositoryId, 'lab-matrix-repo-added', { stallMs: 60_000, timeoutMs: 240_000, minFiles: 4 })
@@ -120,6 +122,7 @@ const test: LabTest = {
       { name: 'MCP read_note grep', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source, targets: [{ grep: 'orbital' }] }) },
       { name: 'MCP read_file grep', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file, targets: [{ grep: 'launch' }] }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
+      { name: 'MCP find_symbols refs: explain', identifiers: [run, `${mark}Run`, `docs/${mark}-cite`], share, read: viaMcp('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' }) },
       {
         name: 'MCP find_symbols overlay',
         identifiers: [file, `${mark}Plan`],
@@ -160,6 +163,18 @@ const test: LabTest = {
       { name: 'MCP usage_report', identifiers: [sourceNote.id, source], kind: 'listing', share, read: readThenReport(viaMcp('usage_report', {})) },
     ]
     for (const m of matrices) checks.push(...(await runAccessMatrix(m)))
+    // The repository shared, the vault not (#675): `find_symbols` with `refs: "explain"` names the code, but no note of the unshared vault.
+    const onlyRepo = await rest.owner.must<{ id: string }>('POST', `/api/repositories/${repositoryId}/shares`, { granteeType: 'user', granteeId: ids.shared })
+    const explained = await mcp.shared.call('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' })
+    await rest.owner.must('DELETE', `/api/repositories/${repositoryId}/shares/${onlyRepo.id}`)
+    const leaked = [`docs/${mark}-cite`, vaultId].filter((x) => explained.text.includes(x))
+    checks.push({
+      name: 'MCP find_symbols refs: explain: repository shared, vault not',
+      expected: 'the code is answered and no note of the unshared vault is named',
+      actual: explained.ok ? (leaked.length === 0 ? 'answered, nothing leaked' : `leaked ${leaked.join(', ')}`) : `not answered: ${explained.text.slice(0, 120)}`,
+      ok: explained.ok && leaked.length === 0,
+      severity: explained.ok && leaked.length === 0 ? 'info' : 'high',
+    })
 
     if (!reportWasOn) await rest.owner.must('PUT', '/api/usage/settings', { enabled: false })
 
