@@ -5,29 +5,29 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 <!-- state:generated:start -->
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #920 Promote: phase 2 step B (prod ← d3b210e: ADR-003 S2a-2/S2b/S3/S6, compaction, whole-body… (merged 2026-10-23, `d3b210e`).
-- **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/7, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 59/98, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/36, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 3/46, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/47.
-- **Open issues**: [198](https://github.com/PIIIX-org/chapters/issues): P0 27, P1 92, P2 60, no priority 19; `bug` 58, `security` 12, `decision` 3, `deferred` 2.
+- **Checks on `dev`**: CI (latest push run) **failure**; nightly lab (full tier) **failure**; bench-gate (all suites) success. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/7, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 68/97, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/36, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 3/51, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/47.
+- **Open issues**: [192](https://github.com/PIIIX-org/chapters/issues): P0 22, P1 90, P2 60, no priority 20; `bug` 58, `security` 12, `decision` 3, `deferred` 2.
 - **Owner actions** (label `owner`):
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
   - #930 [phase 3] Design review and owner sign-off: ADR-004 response contract (before wave 2) (P0)
   - #1062 Owner: activate the agent trial (API key and model) so real-agent exact-answer numbers… (P0)
   - #664 Production deploys on the push to prod, before CI publishes the gated image (#590 is… (P1)
   - #636 Production uptime
-- **In progress: [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4)** (38 open, owner actions excluded):
+- **In progress: [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4)** (28 open, owner actions excluded):
   - #414 [fix 11] Search hits return {path#Lx-Ly, block id, heading path, approx tokens, snippet… (P0)
   - #415 [fix 12] Group hits by note, at most 3 passages per note (P0)
-  - #417 [fix 14] read_file and read_note without a range return an outline with line spans, not… (P0)
-  - #420 [fix 17] Every read, search, browse, graph and history tool takes budget_tokens (P0)
-  - #421 [fix 18] Over budget: drop whole low-ranked items, then step down a ladder (P0)
-  - #422 [fix 19] Every response ends with a truncated block: shown, total (fetch limit+1 to… (P0)
   - #423 [fix 20] Very large results become a pageable, greppable handle instead of inline text (P0)
   - #426 [fix 23] graph: limit, neighborsOf, depth, edgeTypes actually implemented (P0)
   - #428 [fix 26] Tool profiles: reader (~6 tools: orient, search, grep, read, outline, code… (P0)
   - #468 [fix 66] grep over notes and code: regex, path glob, repo, ref, context lines, same line… (P0)
   - #471 [fix 69] Git awareness: indexed commit SHA everywhere, changed_since(commit or date,… (P0)
   - #534 [fix 136] orient(query?, focus?, budget): ranked repo map (P0)
-  - … and 26 more: https://github.com/PIIIX-org/chapters/milestone/4
+  - #1060 [phase 3] Query router: identifiers, paths and structural questions answered by exact… (P0)
+  - #1061 [phase 3] Search commits to one span with a confidence, or abstains: a verifier stage… (P0)
+  - #419 [fix 16] Search results stop carrying frontmatter by default (53% of a note hit today) (P1)
+  - #431 [fix 29] Tool search for the long tail instead of listing every tool (Cognee pattern) (P1)
+  - … and 16 more: https://github.com/PIIIX-org/chapters/milestone/4
 - **Open bugs** (label `bug`):
   - #713 [ui] Landing page says "No notes" to a user with notes (P1)
   - #714 [ui] Floating top bar collides with page controls; status pill duplicated (DEF-02, DEF-08… (P1)
