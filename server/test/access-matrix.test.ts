@@ -201,6 +201,15 @@ describe('read surfaces (#552, #1034)', () => {
     read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(FILE)}`)),
   })
 
+  // orient (#534) names definitions with their paths and lines, and notes by path.
+  accessMatrix('MCP orient: repository map', {
+    setup: () => shareBoth([FILE, `${MARK}Plan`]),
+    read: (actor) => call(actor, 'orient', { repositoryId, query: `${MARK}Plan`, focus: [FILE] }),
+  })
+  accessMatrix('MCP orient: vault outline', {
+    setup: () => shareBoth([SOURCE]),
+    read: (actor) => call(actor, 'orient', { vaultId, path: 'docs', query: `${MARK}source` }),
+  })
   accessMatrix('MCP find_symbols refs: explain', {
     setup: () => shareBoth([RUN, `${MARK}Run`, `docs/${MARK}-cite`]),
     read: (actor) => call(actor, 'find_symbols', { repositoryId, query: `${MARK}Plan`, refs: 'explain' }),

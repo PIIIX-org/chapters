@@ -143,6 +143,7 @@ const CASES: Record<string, ScopeCase> = {
   search: { kind: 'vault-or-repo', args: () => ({ query: 'scope probe marker' }), finds: { vault: [MARK.P] } },
   grep: { kind: 'vault-or-repo', args: () => ({ pattern: 'scope probe marker' }), finds: { vault: [MARK.P] } },
   graph: { kind: 'vault-or-repo' },
+  orient: { kind: 'vault-or-repo', finds: { vault: ['docs/'], repo: ['src/'] } },
   find_graph_path: { kind: 'vault-or-repo', args: (fx) => ({ source: fx.O.onlyPath, target: fx.RO.onlyPath }) },
 
   // by perspective id
