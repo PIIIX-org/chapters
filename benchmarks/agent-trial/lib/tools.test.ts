@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
-import { ELARA_TOOLS, LOCAL_TOOL_SPECS, TOOL_CALL_MAX_MS, elaraToolset, globToRegExp, localToolset, toParameters, type McpToolInfo } from './tools.ts'
+import { ELARA_TOOLS, elaraAllow, LOCAL_TOOL_SPECS, TOOL_CALL_MAX_MS, elaraToolset, globToRegExp, localToolset, toParameters, type McpToolInfo } from './tools.ts'
 
 const root = mkdtempSync(join(tmpdir(), 'agent-trial-tools-'))
 after(() => rmSync(root, { recursive: true, force: true }))
@@ -177,4 +177,10 @@ test('elara tools: a server without one of the tools is a setup error', () => {
 test('toParameters always yields an object schema', () => {
   assert.deepEqual(toParameters(undefined), { type: 'object', properties: {} })
   assert.deepEqual(toParameters({ type: 'object' }), { type: 'object', properties: {} })
+})
+
+test('the Elara arm has grep, and orient only when the server lists it', () => {
+  assert.ok(ELARA_TOOLS.includes('grep'))
+  assert.deepEqual(elaraAllow(listed), ELARA_TOOLS)
+  assert.deepEqual(elaraAllow([...listed, { name: 'orient' }]), [...ELARA_TOOLS, 'orient'])
 })

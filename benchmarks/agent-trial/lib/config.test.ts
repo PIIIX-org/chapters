@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { ARMS, dryRunAnswer, dryRunPlan, parseArms, systemPrompt } from './arms.ts'
+import { ARMS, HARNESS_VERSION, dryRunAnswer, dryRunPlan, parseArms, systemPrompt } from './arms.ts'
 import { SKIP_NOTICE, gateMode, resolveMode } from './config.ts'
 import { judgeAnswer, judgePrompt, parseVerdict } from './judge.ts'
 import type { Model } from './model.ts'
@@ -126,4 +126,14 @@ test('judge: runs one tool-less turn and counts the facts judged stated', async 
     [0, 'none', true],
     [0, 'none', true],
   ])
+})
+
+test('the Elara prompt names grep and orient only when the arm has them; the harness version is a number', () => {
+  const plain = systemPrompt('elara', { maxToolCalls: 30, repositoryId: 'r-1' })
+  assert.doesNotMatch(plain, /`grep`|`orient`/)
+  const both = systemPrompt('elara', { maxToolCalls: 30, repositoryId: 'r-1', tools: ['search', 'grep', 'orient'] })
+  assert.match(both, /`grep` searches the code by regular expression/)
+  assert.match(both, /`orient` gives a map/)
+  assert.doesNotMatch(systemPrompt('local', { maxToolCalls: 30, tools: ['grep', 'orient'] }), /`orient`/)
+  assert.ok(Number.isInteger(HARNESS_VERSION) && HARNESS_VERSION >= 2)
 })

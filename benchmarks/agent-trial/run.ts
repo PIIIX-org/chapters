@@ -23,14 +23,14 @@ import { LabContext, loadEnv } from '../../lab/lib/context.ts'
 import { exec } from '../../lab/lib/docker.ts'
 import { connectLocalRepo, copyIntoLocalRepo, repoProgress, settleRepo } from '../../lab/lib/fixlab.ts'
 import { assertLabBaseUrl } from '../lib/guard.ts'
-import { dryRunAnswer, dryRunPlan, parseArms, systemPrompt, type Arm } from './lib/arms.ts'
+import { HARNESS_VERSION, dryRunAnswer, dryRunPlan, parseArms, systemPrompt, type Arm } from './lib/arms.ts'
 import { resolveMode } from './lib/config.ts'
 import { gradeAnswer, type Grade } from './lib/grade.ts'
 import { judgeAnswer, type JudgeResult } from './lib/judge.ts'
 import { DEFAULT_CAPS, runEpisode, type Caps, type EpisodeResult } from './lib/loop.ts'
 import { httpModel, scriptedModel, type Model } from './lib/model.ts'
 import { checkEvidence, selectTasks, validateTasks, type TaskFile } from './lib/tasks.ts'
-import { ELARA_TOOLS, elaraToolset, localToolset, type Toolset } from './lib/tools.ts'
+import { ELARA_TOOLS, ELARA_OPTIONAL_TOOLS, elaraAllow, elaraToolset, localToolset, type Toolset } from './lib/tools.ts'
 
 const DIR = 'benchmarks/agent-trial'
 const outDir = 'agent-trial-results'
@@ -107,13 +107,16 @@ if (index.outcome !== 'complete') throw new Error(`indexing did not complete (${
 // The Elara arm's token: pinned to the trial repository, read access, only its tools. The
 // `admin` profile (#428), because `repository_status`, its first call, is in no smaller profile;
 // the allow-list is what limits it to ELARA_TOOLS.
-const minted = await ctx.mintToken('admin', ctx.uniq('agent-trial'), 'repository', { repositoryId: repo.id, access: 'read', profile: 'admin', allowedTools: ELARA_TOOLS })
+const minted = await ctx.mintToken('admin', ctx.uniq('agent-trial'), 'repository', { repositoryId: repo.id, access: 'read', profile: 'admin', allowedTools: [...ELARA_TOOLS, ...ELARA_OPTIONAL_TOOLS] })
 const mcp = ctx.mcp(minted.token, 'agent-trial')
+// The allow-list filters `tools/list`, so an optional tool the server lacks is simply not there.
+const listedTools = await mcp.listTools()
+const elaraTools = elaraAllow(listedTools)
 const toolsets: Record<Arm, Toolset> = {
-  elara: elaraToolset(await mcp.listTools(), async (tool, args, timeoutMs) => {
+  elara: elaraToolset(listedTools, async (tool, args, timeoutMs) => {
     const r = await mcp.call(tool, args, timeoutMs)
     return { text: r.text, ok: r.ok }
-  }),
+  }, elaraTools),
   local: localToolset(root),
 }
 
@@ -184,11 +187,12 @@ function flush(complete: boolean): string {
     updatedAt: at,
     ms: Date.now() - t0,
     harness: HARNESS,
+    harnessVersion: HARNESS_VERSION,
     repo: file.repo,
     caps,
     runBudgetMs: RUN_BUDGET_MS,
     index,
-    elaraTools: ELARA_TOOLS,
+    elaraTools,
     totals: totalsByArm,
     notRun,
     tasks: rows.map((r) => ({
@@ -212,7 +216,7 @@ function flush(complete: boolean): string {
     '',
     ...(dryRun ? ['**DRY RUN**: scripted model (a fixed tool-call script, no language model). These numbers test the plumbing; they are not agent numbers.', ''] : []),
     ...(complete ? [] : [`**INCOMPLETE**: ${rows.length} of ${tasks.length * arms.length} episodes run${notRun.length > 0 ? `, ${notRun.length} not run (run budget)` : ' so far'}.`, '']),
-    `Model ${modelInfo.provider}/${modelInfo.name}; Elara at ${process.env.GITHUB_SHA ?? '(local)'}; run ${runUrl ?? '-'}; tasks on ${file.repo.url} @ ${file.repo.commit.slice(0, 7)}; harness ${HARNESS}; ${at}`,
+    `Model ${modelInfo.provider}/${modelInfo.name}; Elara at ${process.env.GITHUB_SHA ?? '(local)'}; run ${runUrl ?? '-'}; tasks on ${file.repo.url} @ ${file.repo.commit.slice(0, 7)}; harness v${HARNESS_VERSION} ${HARNESS}; ${at}`,
     '',
     `Index: ${index.outcome}, ${index.files} files, ${index.symbols} symbols, ${Math.round(index.ms / 1000)} s. Caps per task: ${caps.maxToolCalls} tool calls, ${caps.maxTokens} tokens (judge included), ${Math.round(caps.maxWallMs / 60_000)} min.`,
     '',
@@ -254,7 +258,7 @@ for (const task of tasks) {
       continue
     }
     const model: Model = live ?? scriptedModel(dryRunPlan(task, arm), dryRunAnswer)
-    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id }), prompt: task.prompt, caps })
+    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id, tools: elaraTools }), prompt: task.prompt, caps })
     const grade = gradeAnswer(task, episode.answer)
     const row: Row = { task: task.id, arm, episode, grade }
     if (live && judging && episode.answer) {
