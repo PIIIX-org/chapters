@@ -15,7 +15,7 @@
 //   file answers carry `hash`, both carry `total_lines`.
 // - Every read_note answer, ranged or outline, records its rev as the base
 //   a later whole-body edit merges from (#864, #961).
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { and, eq } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -28,7 +28,21 @@ import { createNote, updateNote } from '../src/notes/store.js'
 import { noteBlocks } from '../src/notes/note-blocks.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { SUGGESTION_CELLS } from '../src/mcp/read-targets.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+
+// Edit-distance work, counted per call (cells filled): what the suggestions of missing targets cost.
+const distanceCalls = vi.hoisted(() => [] as number[])
+vi.mock('../src/mcp/strict-input.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/mcp/strict-input.js')>()
+  return {
+    ...actual,
+    editDistance: (a: string, b: string) => {
+      distanceCalls.push((a.length + 1) * (b.length + 1))
+      return actual.editDistance(a, b)
+    },
+  }
+})
 
 type Json = Record<string, unknown>
 type Truncated = false | { shown: Record<string, number>; total: Record<string, number | string>; dropped: Record<string, number>; level: string; cursor: string | null; narrow: string[] }
@@ -416,20 +430,84 @@ describe('a ranged read is a merge base (#864, #961)', () => {
 })
 
 describe('suggestions stay bounded', () => {
-  it('20 missing long heading targets on a note of 2,000 headings answer quickly, with suggestions where the work allows', async () => {
+  beforeEach(() => {
+    distanceCalls.length = 0
+  })
+
+  it('20 missing long heading targets on a note of 2,000 headings spend a bounded edit-distance work, with suggestions where the work allows', async () => {
     const path = 'docs/many-headings'
     const body = Array.from({ length: 2_000 }, (_, i) => `## Heading number ${i} about ${'topic '.repeat(6)}\ntext ${i}\n`).join('')
     await createNote(vaultId, { path, body })
     const targets = Array.from({ length: 20 }, (_, i) => ({ heading: `Missing heading ${i} ${'x'.repeat(100)}` }))
-    const started = performance.now()
+    distanceCalls.length = 0
     const r = await call('read_note', { vaultId, path, targets, budget_tokens: 25_000 })
-    const ms = performance.now() - started
     expect(r.isError, r.text.slice(0, 200)).toBe(false)
     expect(parts(r.json).every((p) => p.error?.code === 'NOT_FOUND')).toBe(true)
-    // Unbounded, this read ran an edit distance per target against every heading: seconds of a blocked event loop.
-    expect(ms).toBeLessThan(2_000)
+    // Unbounded, this read ran an edit distance per target against every heading (20 x 2,000 calls of ~12,000 cells, 480 M):
+    // seconds of a blocked event loop. The work, not the clock, is bounded: all targets together stay within SUGGESTION_CELLS
+    // and the per-target candidate cap (200 paths), whatever the machine's load.
+    const cells = distanceCalls.reduce((sum, n) => sum + n, 0)
+    expect(cells).toBeLessThanOrEqual(SUGGESTION_CELLS)
+    expect(distanceCalls.length).toBeLessThanOrEqual(20 * 200)
     // A short miss still gets its nearest headings.
     const near = await call('read_note', { vaultId, path, targets: [{ heading: 'Heading numbr 7 about topic topic topic topic topic topic' }] })
     expect(parts(near.json)[0]!.error!.suggestions?.length).toBeGreaterThan(0)
+  })
+})
+
+describe('grep target: a large document is searched, not paged (#423)', () => {
+  /** `grep -n`: `n:` a matching line, `n-` its context, `--` between ranges that do not touch. */
+  const GREP_STORE = ['2-  save(x: string) {', '3:    return x', '4-  }', '5-  load() {', '6:    return 1', '7-  }', '--', '9-export function helper() {', '10:  return 2', '11-}', ''].join('\n')
+
+  it('read_file answers only the matching lines with a line of context, in file numbering', async () => {
+    const a = await read('read_file', { path: 'src/store.ts', targets: [{ grep: 'return' }] })
+    expect(a).toMatchObject({ path: 'src/store.ts', total_lines: 11, matches: GREP_STORE })
+    expect(a).not.toHaveProperty('targets')
+    expect(a.truncated).toBe(false)
+  })
+
+  it('matches case-insensitively unless the pattern has an uppercase letter; no match answers an empty text', async () => {
+    expect((await read('read_file', { path: 'src/store.ts', targets: [{ grep: 'class store' }] })).matches).toBe('1:export class Store {\n2-  save(x: string) {\n')
+    expect((await read('read_file', { path: 'src/store.ts', targets: [{ grep: 'export CLASS' }] })).matches).toBe('')
+    expect((await read('read_file', { path: 'src/store.ts', targets: [{ grep: 'nothing here' }] })).matches).toBe('')
+  })
+
+  it('read_note greps the projected file (D3 numbering); an empty pattern, a second grep and a grep with another kind are INVALID_ARGUMENT items', async () => {
+    const { bodyStart } = await noteFile('docs/guide')
+    const at = (n: number) => bodyStart - 1 + n
+    const a = await read('read_note', { path: 'docs/guide', targets: [{ grep: 'brew' }, { grep: '' }, { grep: 'brew', lines: '1' }, { grep: 'run' }, { lines: '1' }] })
+    expect(a.matches).toBe(`${at(7)}-## macOS\n${at(8)}:brew install x\n${at(9)}-# Usage\n`)
+    expect(parts(a)).toMatchObject([{ grep: '', error: { code: 'INVALID_ARGUMENT' } }, { error: { code: 'INVALID_ARGUMENT' } }, { grep: 'run', error: { code: 'INVALID_ARGUMENT' } }, { lines: [1, 1], text: '---\n' }])
+  })
+
+  it('pages the matches with a cursor: every line once, each page within its budget, a fraction of the file', async () => {
+    const whole = await read('read_file', { path: 'src/big.ts', targets: [{ grep: 'line 1 of' }], budget_tokens: 25_000 })
+    expect(whole.truncated).toBe(false)
+    expect((whole.matches as string).split('\n').filter((l) => /^\d+:/.test(l))).toHaveLength(60)
+    // 60 matches of a ~31,000-token file cost under a tenth of it.
+    expect(Math.ceil(JSON.stringify(whole).length / 4)).toBeLessThan(BIG_TS.length / 40)
+    let text = ''
+    let cursor: string | null = null
+    for (let page = 0; page < 60; page++) {
+      const a: Answer = await read('read_file', { path: 'src/big.ts', targets: [{ grep: 'line 1 of' }], budget_tokens: 256, ...(cursor ? { cursor } : {}) })
+      text += a.matches as string
+      cursor = cursorOf(a)
+      if (!cursor) break
+    }
+    expect(cursor).toBeNull()
+    expect(text).toBe(whole.matches)
+  })
+
+  it('a read of a document over 20,000 tokens that cuts its body names grep and outline in narrow', async () => {
+    const a = await read('read_file', { path: 'src/big.ts' })
+    expect(a.truncated).not.toBe(false)
+    expect((a.truncated as { narrow: string[] }).narrow).toEqual(expect.arrayContaining(['targets: [{"grep":"<text>"}]', 'outline: true']))
+    const small = await read('read_file', { path: 'src/store.ts' })
+    expect(small.truncated).toBe(false)
+    // The outline answer carries the grep hint too, and no second `outline: true`.
+    const outlined = await read('read_file', { path: 'src/big.ts', outline: true })
+    const narrow = (outlined.truncated as { narrow: string[] }).narrow
+    expect(narrow).toContain('targets: [{"grep":"<text>"}]')
+    expect(narrow).not.toContain('outline: true')
   })
 })

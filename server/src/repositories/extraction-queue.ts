@@ -8,6 +8,7 @@ import { CHUNK_VERSION, embedKey } from '../search/embed-key.js'
 import { EMBEDDER_ID, embedder } from '../search/embeddings.js'
 import { fieldKeywords, fileKeywords, symbolKeywords } from '../search/identifiers.js'
 import { queueSemanticEdgeRefresh, runSemanticEdgeRefresh } from '../search/semantic-edges.js'
+import { parsed, vectorsInAccount } from './blob-cache.js'
 import { codeBlocks } from './code-blocks.js'
 import {
   blockDefinitions,
@@ -20,7 +21,7 @@ import {
   reresolveFiles,
   storedDefinitions,
 } from './code-edges.js'
-import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
+import { EXTRACTOR_VERSION, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { hasOutline, outlineSections } from './outline.js'
 import {
   RESOLUTION_MANIFEST_PATTERN,
@@ -542,7 +543,8 @@ export const extractionWork = { processFile }
  * content. Blocks are upserted by `block_id`, so a block that survives keeps
  * its row; one whose `embedKey` (model + embedded text) a block of the file
  * already has keeps that vector instead of being embedded again, so an edit
- * elsewhere or a version bump re-embeds only changed texts.
+ * elsewhere or a version bump re-embeds only changed texts; one that a block of another repository of the same
+ * account has (blob-cache.ts) takes that vector too, and a content parsed before in this process is not parsed again.
  */
 async function processFile(fileId: string): Promise<void> {
   const row = (await db.select().from(repositoryFiles).where(eq(repositoryFiles.id, fileId)))[0]
@@ -562,7 +564,7 @@ async function processFile(fileId: string): Promise<void> {
   const structured = !looksMinified(row.content)
   // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
   const { imports, symbols, sites }: ExtractionResult =
-    structured && isSupportedLanguage(language) ? await extractStructure(language, row.content, row.path) : { imports: [], symbols: [], sites: [] }
+    structured && isSupportedLanguage(language) ? await parsed(language, row.content, row.path, row.contentHash) : { imports: [], symbols: [], sites: [] }
   // The minified rule is about code: a Markdown file with one long line (a table, a paragraph) keeps its outline.
   const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, row.content) : []
   // The keyword channel's identifier lexemes (#455): a minified file's mangled names are left out, its path kept.
@@ -621,11 +623,20 @@ async function processFile(fileId: string): Promise<void> {
   const kept = await vectorsByEmbedKey('code', fileId)
   const keys = new Map(embedOrder.map((i) => [i, embedKey(fileBlocks[i]!.embedText)]))
   const vectors = new Map<number, number[]>()
-  const toEmbed: number[] = []
+  let toEmbed: number[] = []
   for (const i of embedOrder) {
     const reused = kept.get(keys.get(i)!)
     if (reused) vectors.set(i, reused)
     else toEmbed.push(i)
+  }
+  // What the file's own blocks lack, the account's other repositories may hold for the same text (#684 part B).
+  if (toEmbed.length > 0) {
+    const shared = await vectorsInAccount(row.repositoryId, [...new Set(toEmbed.map((i) => keys.get(i)!))])
+    toEmbed = toEmbed.filter((i) => {
+      const reused = shared.get(keys.get(i)!)
+      if (reused) vectors.set(i, reused)
+      return !reused
+    })
   }
   if (toEmbed.length > 0) {
     const embedStarted = performance.now()
@@ -658,8 +669,9 @@ async function processFile(fileId: string): Promise<void> {
   // nodes it can move (#1007: the vectors new to it), queued with the block set so a refresh that fails after the
   // commit runs again.
   const currentKeys = new Set(keys.values())
-  const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !currentKeys.has(k))
-  const newKeys = toEmbed.map((i) => keys.get(i)!)
+  // A vector taken from another repository of the account is as new to this file as one just embedded.
+  const newKeys = [...vectors.keys()].map((i) => keys.get(i)!).filter((k) => !kept.has(k))
+  const changed = newKeys.length > 0 || [...kept.keys()].some((k) => !currentKeys.has(k))
   const writeStarted = performance.now()
   const refreshJob = await db.transaction(async (tx) => {
     // Before the row lock, as every code edge writer takes them (code-edges.ts).

@@ -1002,16 +1002,24 @@ reviewed:`, `Verdict:`, then the findings), committed to the PR branch with
 a `review: <title> (#<pr> at <sha>)` commit before the `VERDICT: MERGE` is
 posted, and linked from that verdict by commit sha
 (`https://github.com/PIIIX-org/chapters/blob/<sha>/docs/reviews/<file>`,
-or the `tree/<sha>/docs/reviews` directory). **Since 2026-11-02 the record
-is committed once, on the MERGE round** (master decision): a commit moves
-the head, and on a PR that runs the all-suite bench (#1053) that cancels a
-run of up to three hours. A `VERDICT: CHANGES` round therefore posts only
-the inline review and the verdict comment (its findings, with the head it
-reviewed); the MERGE record then holds **every round**, each under its own
-`## Round <n> (<head sha>)` heading with the verdict it gave. #1071
-tracks reusing the bench for heads that differ only under `docs/reviews/`,
-after which records go back to one commit per round. Records committed
-before this rule (one per head reviewed) stay as they are. The top-level
+or the `tree/<sha>/docs/reviews` directory). A record
+commit moves the head, which would cancel and restart the all-suite bench
+(#1053, up to three hours), so the `plan` job of `elara-lab.yml` reuses the
+parent's results for it (#1071): when the PR head's only changes from its
+single parent are under `docs/reviews/` (renames included) and the parent's
+`lab`, `bench (n)` and `bench-gate` checks (latest run of each name, from
+`github-actions`) concluded success or skipped with a successful
+`bench-gate`, it plans tier `none` and bench `none`, and the `bench-gate`
+job only reports, with a link to the parent's `bench-gate` run, that the
+parent's results stand (`lab-plan.mjs` `reuseFrom`, tested in
+`lab-plan.test.mjs`). `merge_group` runs never reuse and stay full. Any
+doubt plans as before: another path in the diff, a merge commit as head, a
+parent whose checks are missing, red, cancelled or unfinished (the record
+was pushed while the parent's bench still ran), or an API error. So a
+record may go back to **one commit per round**, but push it only after the
+head it reviews is green: a record pushed on a running head re-runs
+everything. Records committed under the earlier rule (once, on the MERGE
+round, every round in one file) stay as they are. The top-level
 directory holds the records of **open and recently merged PRs only**: once
 a PR has been merged (or closed without
 merging) for more than **7 days**, its records move to

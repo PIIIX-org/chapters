@@ -387,9 +387,10 @@ async function loadLanguage(grammar: Grammar): Promise<Language> {
 /**
  * Tree-sitter, file-level extraction (spec 9): import edges + cheap
  * "contains" symbols, those at module level and the methods of module-level
- * classes (#450), by line. `path` picks the grammar where a language has several.
+ * classes (#450), by line. `path` picks the grammar where a language has several. `edges: false` skips the code
+ * edge sites (`sites` is empty): the overlay of `find_symbols` (#676) wants symbols only.
  */
-export async function extractStructure(language: string, content: string, path: string): Promise<ExtractionResult> {
+export async function extractStructure(language: string, content: string, path: string, options: { edges?: boolean } = {}): Promise<ExtractionResult> {
   if (!isSupportedLanguage(language)) {
     throw new Error(`unsupported language for extraction: ${language}`)
   }
@@ -433,7 +434,7 @@ export async function extractStructure(language: string, content: string, path: 
     symbols.sort((a, b) => a.startLine - b.startLine)
     // After the symbols: a site names its enclosing symbol and its local definition by index.
     const rules = EDGE_RULES[grammar]
-    const sites = rules ? extractSites(tree.rootNode, content, rules, symbols, edgeMatches) : []
+    const sites = rules && options.edges !== false ? extractSites(tree.rootNode, content, rules, symbols, edgeMatches) : []
 
     return { imports, symbols, sites }
   } finally {

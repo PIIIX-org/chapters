@@ -1,0 +1,125 @@
+# Review of #1089 — feat: find_symbols takes an overlay, the agent's diff agains
+Head reviewed: feefaa60125d93bbd210890780891f1fd94dad99
+Verdict: MERGE
+
+## Round 1 (a2255a630754ad5dccc30dc938a14018e660fb5f) — CHANGES
+
+Review: https://github.com/PIIIX-org/chapters/pull/1089#pullrequestreview-5741536384
+
+### Blockers
+Verified: the overlay is never persisted or logged; `requireRepositoryAccess` runs before any content read; `everywhere`/no-repository/`refs` combinations refused up front; both access matrices have an overlay entry; manuals identical and `overlay` described; deterministic order (patches by path, ids `overlay:<path>:<line>:<inner>`, cursor bound to the arguments); the hunk applier refuses a diff that doesn't match the stored lines; fails-before on an assertion. Two blockers:
+1. **Unbounded parse work on the request path** — `server/src/repositories/overlay.ts:119`: the 200 KB cap bounds the diff, not the work; each changed file's whole stored content (≤ 1 MiB) is re-parsed with tree-sitter, synchronously, so 50 one-line hunks can mean ~50 MiB of WASM parsing on the event loop with no timeout. This is the first request-path use of `extractStructure`, and it also computes `imports`/`sites` that are discarded. Cap the total bytes parsed (e.g. 2–4 MiB → `INVALID_ARGUMENT`) and skip edge extraction here.
+2. **Symbols your edit adds can be pushed out by base hits** — `server/src/mcp/overlay.ts:65`: `[...exact, ...base, ...rest].slice(0, limit + 1)` puts non-exact overlay symbols after every base hit, so with ≥ `limit + 1` base hits (default 20) a symbol only the edit declares (`checksumAll` for `checksum`) is not returned, against the manual's promise; the head then looks complete. Reserve slots for (or rank first) overlay hits, and add a test with many base matches.
+Minor: stale base only detected when a hunk fails to apply — compare a caller-supplied base commit with the indexed one, or flag it; one unindexed modified file refuses the whole overlay while deleted files aren't checked; a punctuation-only query matches every overlay symbol; the manuals should say `git add -N` for untracked files; no tests for `kind`, spare truncation, or an unsupported language.
+Budget: reader +10, writer +10 (writer 3,997/4,000 on this PR alone) — the tool stack will need trims when stacked.
+
+
+### Full record
+# Review of PIIIX-org/chapters#1089 — find_symbols takes an overlay, the agent's diff against the indexed commit (#676)
+Head reviewed: a2255a630754ad5dccc30dc938a14018e660fb5f
+
+I read the diff and the surrounding code (`find_symbols` handler, `extractStructure`, `ranked` and its cursor guard, `repository_files` schema). I ran nothing: no tests or builds, only the static budget arithmetic below. All CI checks were still pending when I looked. No pre-review comment was posted on the PR.
+
+## Scope checked
+- Overlay format and limits: 200 KB, 50 files, renames, copies and binaries refused, a file listed twice refused.
+- Parsing cost on the request path.
+- Persistence and cross-account leakage.
+- Stale-base handling.
+- Merge and ordering of overlay and base hits.
+- Budgets.
+- Both access matrices, determinism, fails-before and CI.
+- Both manuals, and that every parameter is described.
+
+## Verified
+- **Not persisted.** `overlaySymbols` only SELECTs the stored contents, applies hunks in memory and parses. Nothing is written or cached across calls. The overlay is not logged on the request path (grep found no argument logging in `mcp/`).
+- **Access order.** `requireRepositoryAccess` runs before `overlaySymbols` reads any content. So the "does not apply to <path>" and "not in the indexed repository" errors, which name paths, can only reach callers who already have access. The parse-time errors only echo the caller's own input.
+- **Refused combinations.** `everywhere` and no-`repositoryId` are refused, and so is `overlay` with `refs`. Both are checked before any DB read.
+- **Both matrix entries present.** `server/test/access-matrix.test.ts` and `lab/tests/access-matrix.test.ts` have an `MCP find_symbols overlay` entry using `accessMatrix` and `shareBoth`, with identifiers `[file, Plan]`. I did not run the lab one. The overlay response carries only file content and symbols that `read_file` already exposes. I found no per-path restriction on repository files.
+- **Manuals identical.** `skills/chapters` and `skills/elara` `mcp-tools.md` carry the same blob (`1759b6da`). Both `SKILL.md` files got the same line. The new `overlay` argument has a `.describe()`.
+- **Determinism.** Overlay patches are sorted by path. Extraction is stable by `startLine`. The merge order is exact matches, then base hits, then the rest, and `rest` is already in path/line order. The ids `overlay:<path>:<line>:<inner>` are deterministic. The cursor fingerprint is built from the arguments, so a different overlay on page 2 is refused. The new question in `mcp-deterministic-answers.test.ts` covers this.
+- **Fails-before.** On dev, `overlay` is an unknown strict argument, so `find()` in `mcp-overlay.test.ts` fails on `expect(r.isError).toBe(false)`.
+- **Hunk applier.** It checks every context and removed line against the base. A diff against another commit whose lines moved is refused, naming the file.
+- **No `server/src/search/**` change.** The all-suite bench path list is not touched.
+- **Migrations.** None added.
+
+## Findings (blocking)
+None that I would block on. Two issues are worth fixing before or soon after merge.
+
+1. **No bound on parse cost on the request path** (`server/src/repositories/overlay.ts:119-140`).
+   - The 200 KB cap bounds the diff, not the work. Each changed file's whole stored content, up to `MAX_FILE_BYTES` (1 MiB), is reparsed with tree-sitter.
+   - A one-line hunk on each of 50 files means up to about 50 MiB of synchronous WASM parsing per call. `extractStructure` has no timeout or progress callback. The parse runs serially on the request thread and blocks the event loop for every user.
+   - `extractStructure` also computes `imports` and `sites` (code edges), which this path discards.
+   - The only other caller of `extractStructure` is the background extraction queue, so this is the first request-path use.
+   - Suggested fix: cap the total bytes parsed (for example 2–4 MiB across the changed files) and refuse with `INVALID_ARGUMENT` above it. Optionally add a parse timeout.
+2. **Overlay-only symbols can be pushed out by base hits** (`server/src/mcp/overlay.ts:65`).
+   - The result is `[...exact, ...base, ...rest].slice(0, limit + 1)`. Overlay symbols not named exactly `query` come after all base hits.
+   - Once the base has `limit + 1` hits (default 20), a symbol the edit adds is not returned, for example `checksumAll` for the query `checksum`. This contradicts the manual's promise that "a symbol only your edit declares is found".
+   - The 50 spare slots do not cover it. `rest` is sliced off the end, not merged by rank.
+   - The same truncation applies when more than `OVERLAY_SPARE` (50) base hits fall in changed files. The head then looks complete although `limit` base hits were lost.
+   - The tests use queries with few base matches, so they do not catch this.
+   - Suggested fix: interleave overlay hits by a rule (for example before the base hits, or reserve slots for them), or document that overlay hits fill only leftover slots and say so in the manual.
+
+## Minor
+- **Stale base is only partly detected.** The server never receives or compares a base commit. The refusal fires only when a hunk's lines do not match the stored content. An overlay made against a newer local HEAD whose hunks still apply is accepted. In that case file regions outside the hunks come from the stale index with no signal. The response head carries `commit` and the manual tells agents to diff against it, but nothing flags a mismatch.
+- **One unindexed file refuses the whole overlay.** A modified file that is not in `repository_files` (over 1 MiB, skipped, binary-ish, or a lockfile) fails the call with "is not in the indexed repository". Skipping such files, or listing them, would be friendlier. Deleted files are not checked at all, so the two cases are inconsistent.
+- **Punctuation-only query.** A query such as `()` gives `words.length === 0`, so `overlayHits` matches every symbol of every changed file. The base search, via `findSymbols`, returns nothing for a blank query.
+- **Untracked files.** `git diff` omits untracked new files, and neither manual says to `git add -N` them.
+- **Missing tests.** No test covers the `kind` filter, the spare/truncation case, or a diff whose changed file the extractor does not support.
+
+## Budget delta
+Budget delta: reader +10 tokens, writer +10 tokens (PR body measured reader 2,189→2,199 and writer 3,988→3,997 with `mcp-tool-budget` on dev 7c1b02c; my static JSON-length arithmetic gives +39 characters ≈ +9.75 tokens, which agrees). The new `overlay` argument adds about 111 characters. The description trims in `search`, `find_symbols` and `graph` remove about 72. The writer would be at 3,997 of 4,000 on this PR alone, so the sum with #1077, #1078, #1080, #1082, #1086 and #1088 will exceed 4,000 unless trimmed. The author acknowledges this.
+
+Verdict: CHANGES (non-blocking on correctness; fix finding 1 for the unbounded request-path parse and decide finding 2 before merge)
+
+I created and removed a scratch worktree and local branch from the existing `/tmp/w1085` clone. Nothing else is left running or on disk from this review.
+
+## Round 2 (feefaa60125d93bbd210890780891f1fd94dad99) — MERGE
+
+# Re-review of PIIIX-org/chapters#1089 (find_symbols overlay, #676)
+
+Head reviewed: e9bb410565d87791ca8e835c4e92ce5117e6056f. That is c55f864c plus one commit, "overlay decodes git's quoted paths". The assigned c55f864 is no longer the head.
+
+## Previous blockers
+
+1. **Parse work on the request path: resolved.**
+   - `overlaySymbols` in `server/src/repositories/overlay.ts` adds the length of each patched file's content to a running total after applying hunks. It throws `OverlayError` ("over 2 MiB of source…") once the total passes `OVERLAY_MAX_PARSED` (2 MiB), so the request is refused as `INVALID_ARGUMENT`.
+   - `extractStructure(..., { edges: false })` skips the edge-site pass, and the default behaviour is unchanged.
+   - `applyHunks` no longer uses `push(...slice)`.
+   - The refusal is tested: "reads at most 2 MiB of changed source in one call" feeds three 700 KB files and expects `isError` with `/over 2 MiB/`.
+   - I ran `test/overlay.test.ts` and `test/mcp-overlay.test.ts` on a private Postgres: 17 of 17 pass.
+
+2. **Overlay symbols pushed out by base hits: resolved.**
+   - `overlayHits` now returns `[...exact, ...rest, ...base]` sliced to the limit, so overlay symbols come first.
+   - The test "puts what the edit declares before the base hits" uses `limit: 2` with 4 base `checksum*` files. It confirms the base query alone does not contain `checksumAdded`, then confirms `checksumAdded` is `results[0]` with the page still full and `truncated` set. It passes.
+
+## Findings (blocking, path:line)
+
+None.
+
+## Minor
+
+- **Items from the first review's minor list:**
+  - Stale base: now flagged in `head.stale` by comparing git's `index` line to the stored blob's sha1.
+  - Unindexed files: skipped and listed in `head.skipped` instead of refusing the whole overlay.
+  - Deleted files: also checked against the index now.
+  - Punctuation-only queries: no longer match every overlay symbol.
+  - Tests: added for `kind`, non-source files, `skipped`, `stale` and non-ASCII paths.
+- **Quoted-path decoding:** the new `unquote` has unit tests and an end-to-end test on `src/café.ts`. I found nothing wrong in it.
+- **Cap counting:** the 2 MiB cap counts characters of patched source files in supported languages. That is fine for the stated goal.
+
+## Budget delta
+
+- **Reader:** `tools/list` plus instructions go from 8,755 to 8,794 characters, about 2,189 to 2,199 tokens of the 2,500 ceiling (+10 tokens).
+- **Writer:** `tools/list` plus instructions go from 15,950 to 15,989 characters, about 3,988 to 3,998 tokens of 4,000. That leaves 2 tokens of headroom, so the tool stack needs a trim when #1091 stacks.
+- **Admin:** `tools/list` goes from 41,353 to 41,392 characters, about 10,338 to 10,348 tokens.
+- `mcp-tool-budget`, `mcp-tool-schema`, `mcp-manuals` and `mcp-definitions-version` all pass at the head.
+
+## CI on the head
+
+- **Passing:** `attribution`, `fails-before` and `pr-evidence`.
+- **`evaluate`:** shows "fail" but was cancelled with "Canceling since a higher priority waiting request for Review verdict-1089 exists". It is a superseded concurrency run, not a real failure.
+- **Still pending when I looked:** `checks`, `issue-close` and `CLAssistant`. The `checks` run has not finished, so the full CI result is not in yet.
+
+Cleanup: I stopped my private Postgres and deleted the temporary clone and data directories.
+
+Verdict: MERGE (once `checks` goes green)

@@ -9,6 +9,7 @@ import { pruneFinishedJobs, startJobPolling } from './jobs/durable.js'
 import { startMetricsSampler } from './monitoring/sampler.js'
 import { scrubStoredGitCredentials } from './repositories/git-remote.js'
 import { sweepGitMirrors } from './repositories/git-mirror.js'
+import { sweepVaultRemotes } from './git-remote/vault-remote.js'
 import { startBackupScheduler } from './export/backup-service.js'
 import { config, MIN_MONITORING_TOKEN_LENGTH } from './config.js'
 import { sql } from './db/client.js'
@@ -96,6 +97,8 @@ try {
   const reconciled = await reconcileOrphanedSyncs()
   if (reconciled > 0) console.log(`reconciled ${reconciled} orphaned repository sync(s) to idle`)
   const sweptMirrors = await sweepGitMirrors()
+  const sweptRemotes = await sweepVaultRemotes()
+  if (sweptRemotes > 0) console.log(`removed ${sweptRemotes} vault git remote(s) of deleted vaults`)
   if (sweptMirrors > 0) console.log(`removed ${sweptMirrors} git mirror(s) of deleted repositories`)
   const backfilled = await backfillUnresolvedImports()
   if (backfilled > 0) console.log(`resolved ${backfilled} previously unresolved code import(s)`)
