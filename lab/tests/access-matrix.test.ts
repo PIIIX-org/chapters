@@ -117,6 +117,8 @@ const test: LabTest = {
       { name: 'MCP read_note', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source }) },
       { name: 'REST GET /api/vaults/:id/notes/*', identifiers: [sourceNote.id, source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/notes/${source}`) },
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
+      { name: 'MCP read_note grep', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source, targets: [{ grep: 'orbital' }] }) },
+      { name: 'MCP read_file grep', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file, targets: [{ grep: 'launch' }] }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
       { name: 'MCP browse_repository changed_since', identifiers: [added], share, read: viaMcp('browse_repository', { repositoryId, changed_since: '2000-01-01' }) },
       ...(['references', 'callers', 'impact'] as const).map((refs) => ({
