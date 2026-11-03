@@ -62,7 +62,7 @@ export const SYMBOL_NAME = sql.raw(`(CASE WHEN b.symbol_parent IS NULL THEN b.in
  * `test_*.py`, `*_test.py`, and anything under `src/test/` (Maven, Gradle)
  * or `__tests__/`.
  */
-const TEST_PATH = /(?:^|\/)(?:src\/test|__tests__)\/|\.(?:test|spec)\.[^./]+$|_test\.(?:go|py)$|(?:^|\/)test_[^/]*\.py$/
+export const TEST_PATH = /(?:^|\/)(?:src\/test|__tests__)\/|\.(?:test|spec)\.[^./]+$|_test\.(?:go|py)$|(?:^|\/)test_[^/]*\.py$/
 
 export function isTestPath(path: string): boolean {
   return TEST_PATH.test(path)
