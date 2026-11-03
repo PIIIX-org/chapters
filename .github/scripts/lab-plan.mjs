@@ -22,9 +22,19 @@
 //          suite to reach at least the reference's goldReached
 //          (bench-gate.mjs --require-golds).
 //
+//   reuse  a review-record head (#1071): a PR head whose only change from its
+//          single parent is under docs/reviews/** and whose parent's lab,
+//          bench and bench-gate checks all concluded success (or skipped)
+//          with a successful bench-gate: nothing runs again; the plan is
+//          tier none, bench none, and `reuse` is the parent's bench-gate
+//          run, which the gate job reports instead. Never on a merge_group
+//          run, and any doubt (another path, a merge commit, a missing or
+//          red parent check, an API error) plans as today.
+//
 // Plain Node, no dependencies. Prints `key=value` lines for $GITHUB_OUTPUT:
 //
 //   node .github/scripts/lab-plan.mjs --files changed.txt   (one path per line)
+//     [--head-commit head.json --parent-checks checks.json]   (GitHub API: the head commit, and the check runs of its parent)
 
 import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
@@ -77,9 +87,31 @@ export function plan(files) {
   }
 }
 
-/** The `key=value` lines for $GITHUB_OUTPUT. */
+/**
+ * The parent's bench-gate run to reuse for a review-record head, or null (#1071). `head` is the API's commit object of the
+ * PR head, `checks` the parent's `check-runs` answer. Reuse needs: one parent; the head's only changes (renames included)
+ * under docs/reviews/; the parent's latest bench-gate check successful; every other lab or bench check of the parent
+ * (latest per name) successful or skipped.
+ */
+export function reuseFrom(head, checks) {
+  const files = head?.files
+  if (!Array.isArray(files) || files.length === 0 || files.length >= 300 || head.parents?.length !== 1) return null
+  const reviews = (f) => typeof f === 'string' && f.startsWith('docs/reviews/') && !f.includes('..')
+  if (!files.every((f) => reviews(f.filename) && (f.previous_filename === undefined || reviews(f.previous_filename)))) return null
+  const latest = new Map()
+  for (const run of checks?.check_runs ?? []) {
+    if (!/^(lab|bench-gate|bench \(\d+\))$/.test(run.name) || run.app?.slug !== 'github-actions') continue
+    if (!latest.has(run.name) || run.id > latest.get(run.name).id) latest.set(run.name, run)
+  }
+  const gate = latest.get('bench-gate')
+  if (gate?.conclusion !== 'success' || typeof gate.html_url !== 'string') return null
+  for (const run of latest.values()) if (run.conclusion !== 'success' && run.conclusion !== 'skipped') return null
+  return gate.html_url
+}
+
+/** The `key=value` lines for $GITHUB_OUTPUT (`reuse` only when set). */
 export function outputs(p) {
-  return [`tier=${p.tier}`, `also=${p.also}`, `bench=${p.bench}`, `golds=${p.golds}`].join('\n')
+  return [`tier=${p.tier}`, `also=${p.also}`, `bench=${p.bench}`, `golds=${p.golds}`, ...(p.reuse ? [`reuse=${p.reuse}`] : [])].join('\n')
 }
 
 function main() {
@@ -89,7 +121,18 @@ function main() {
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean)
-  console.log(outputs(plan(files)))
+  let p = plan(files)
+  const arg = (name) => (process.argv.indexOf(name) >= 0 ? process.argv[process.argv.indexOf(name) + 1] : undefined)
+  // Fail closed: an unreadable or malformed API answer plans as today.
+  try {
+    if (arg('--head-commit') && arg('--parent-checks')) {
+      const reuse = reuseFrom(JSON.parse(readFileSync(arg('--head-commit'), 'utf8')), JSON.parse(readFileSync(arg('--parent-checks'), 'utf8')))
+      if (reuse) p = { tier: 'none', also: '', bench: 'none', golds: false, reuse }
+    }
+  } catch {
+    // plan as today
+  }
+  console.log(outputs(p))
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main()

@@ -10,6 +10,7 @@ import { serializeNote, type Frontmatter } from '../src/notes/okf.js'
 import { getLiveNote, noteFile } from '../src/notes/store.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import * as Y from 'yjs'
 
 let counter = 0
@@ -139,8 +140,11 @@ export async function wipeInstance(): Promise<void> {
   // The projector and the embedding queue may hold a transaction on notes and
   // other tables in the background: the truncate locks every table, one by one,
   // so it deadlocks with them (#862: the semantic-edge kNN of an embedding job,
-  // the projector's reads). Let both finish first. No caller syncs repository
-  // files, so the extraction queue has nothing running here.
+  // the projector's reads), and so does extraction of synced repository files
+  // (#1094: its transaction holds the file, block and edge rows while the truncate
+  // waits for one of them and extraction for another). Let all three finish first;
+  // extraction goes first because it queues the embeddings.
+  await flushExtraction()
   await Promise.all([flushProjections(), flushEmbeddings()])
   const tables = await sql<Array<{ tablename: string }>>`select tablename from pg_tables where schemaname = 'public'`
   await sql.unsafe(`truncate ${tables.map((t) => `"${t.tablename}"`).join(', ')} cascade`)
