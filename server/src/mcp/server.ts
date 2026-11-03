@@ -80,6 +80,7 @@ import { serializeNote } from '../notes/okf.js'
 import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
+import { explainAnswer } from './explain.js'
 import { OVERLAY_SPARE, overlayHits, readOverlay } from './overlay.js'
 import { changedFilesAnswer } from './changes.js'
 import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
@@ -3023,7 +3024,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
         limit: intRange('limit', 1, 50).optional().describe('Max results'),
-        refs: z.enum(REFS).optional().describe('Sites of a symbol; at: `path:line`'),
+        refs: z.enum([...REFS, 'explain']).optional().describe('Sites of a symbol; at: `path:line`; explain: sites, notes'),
         path: z.string().optional().describe('File of the definition'),
         depth: intRange('depth', 1, 3).optional().describe('impact levels; default 2'),
         overlay: z.string().optional().describe('`git diff --no-renames` vs the indexed commit: searches your edits'),
@@ -3031,17 +3032,26 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       budget: 'list',
     },
     async (
-      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs; path?: string; depth?: number; overlay?: string },
+      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs | 'explain'; path?: string; depth?: number; overlay?: string },
       { repositoryId },
       page,
     ) => {
       const { overlay, ...refsArgs } = args
-      refsArguments(refsArgs)
       if (overlay !== undefined && (args.refs !== undefined || !repositoryId)) {
         throw new McpToolError('INVALID_ARGUMENT', '`overlay` searches the symbols of one repository: pass `repositoryId`, and no `refs`', { field: 'overlay' })
       }
       const patches = overlay === undefined ? null : readOverlay(overlay)
       // null: an account-scoped connection with no repositoryId, or `everywhere`.
+      if (args.refs === 'explain') {
+        if (!repositoryId) throw new McpToolError('INVALID_ARGUMENT', '`refs` reads one repository: pass `repositoryId`', { field: 'repositoryId' })
+        if (args.depth !== undefined) throw new McpToolError('INVALID_ARGUMENT', '`depth` goes with `refs: "impact"`', { field: 'depth' })
+        if (args.limit !== undefined) throw new McpToolError('INVALID_ARGUMENT', '`refs: "explain"` has fixed list sizes: leave out `limit`', { field: 'limit' })
+        await requireRepositoryAccess(repositoryId)
+        // The vaults whose notes may cite the code: every readable one for an account token, none for a pinned one.
+        const vaultIds = auth.connection.scope === 'account' ? (await listAccessibleVaults(auth.user.id)).map((v) => v.id) : []
+        return explainAnswer(repositoryId, refsArgs, vaultIds, await repositoryIndexedVersion(repositoryId))
+      }
+      refsArguments({ ...refsArgs, refs: args.refs })
       if (repositoryId) await requireRepositoryAccess(repositoryId)
       if (args.refs !== undefined) {
         if (!repositoryId) throw new McpToolError('INVALID_ARGUMENT', '`refs` reads one repository: pass `repositoryId`', { field: 'repositoryId' })
