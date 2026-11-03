@@ -93,7 +93,7 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord, restoreVaultRecord, trashVaultRecord } from '../vaults/routes.js'
 import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
-import { leanHit, leanHitKey } from './search-hit.js'
+import { leanHit } from './search-hit.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
 import { BACKLINK_CAP, backlinksOf, neighborhood, type Backlink } from '../graph/neighbors.js'
@@ -2977,7 +2977,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
             name: 'results',
             // What the call or the path already says stays out of every hit (#414): see `leanHit`. A call that named no container (`everywhere`) keeps it on the hit, however many it reached today: the answer's shape must not change when a vault is shared.
             items: results.map((r) => leanHit(r, args.everywhere !== true && resources.vaultIds.length + resources.repositoryIds.length === 1)),
-            id: leanHitKey,
+            id: (r) => `${r.resourceType}:${r.id}`,
             limit,
             // Down the ladder: without snippet, frontmatter, updated, heading and tokens, then the location (`path#La-Lb` for a located hit, else the path); counted per path.
             ladder: {

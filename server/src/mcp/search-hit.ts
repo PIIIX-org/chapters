@@ -1,26 +1,25 @@
 import type { SearchResult } from '../search/search.js'
 
-/** A hit as the MCP `search` answer carries it: `containerId` and a note's or file's `id` are left out when they say nothing the call or the path does not. */
-export type LeanHit = Omit<SearchResult, 'containerId' | 'id'> & { containerId?: string; id?: string }
+/** A hit as the MCP `search` answer carries it: `containerId` is left out when the call named its container. */
+export type LeanHit = Omit<SearchResult, 'containerId'> & { containerId?: string }
 
 /**
  * A search hit as the MCP `search` answer carries it (#414). The answer has a token budget, so every field a hit
  * repeats is a hit that falls off the end of the list:
  * - `containerId` when the call named its one vault or repository (or the token is pinned to it); not with `everywhere`, whatever it reached;
- * - `id` of a note or a file: no tool takes it (reads and the graph take the path), a symbol's stays for `find_symbols`;
- * - `type` on a code hit, which is its `language` again;
+ * - `type` when it is the `language` of a code hit or the `symbolKind` of a symbol hit;
+ * - `heading` of a symbol hit: its `symbolName` (and `symbolParent`) is the name path;
  * - the digits of `score` after the fifth decimal (the list is already in score order; REST keeps the full value).
+ * A hit keeps its `id`: the usage report (#678) reads hits by it.
  */
 export function leanHit(hit: SearchResult, singleContainer: boolean): LeanHit {
-  const { containerId, id, type, ...rest } = hit
+  const { containerId, type, heading, ...rest } = hit
+  const typeRepeats = (hit.resourceType === 'code' && type === hit.language) || (hit.resourceType === 'symbol' && type === hit.symbolKind)
   return {
     ...rest,
-    ...(hit.resourceType === 'symbol' ? { id } : {}),
     ...(singleContainer ? {} : { containerId }),
-    ...(hit.resourceType === 'code' && type === hit.language ? {} : { type }),
+    ...(typeRepeats ? {} : { type }),
+    ...(heading === undefined || hit.resourceType === 'symbol' ? {} : { heading }),
     score: Math.round(hit.score * 1e5) / 1e5,
   }
 }
-
-/** What identifies a lean hit in a list (a cursor's guard): a symbol's id, else its container and path. */
-export const leanHitKey = (hit: LeanHit): string => (hit.resourceType === 'symbol' ? `symbol:${hit.id}` : `${hit.resourceType}:${hit.containerId ?? ''}:${hit.path}`)

@@ -78,7 +78,7 @@ describe('search answers down the budget ladder (#414)', () => {
     const named = await agent.callTool({ name: 'search', arguments: { vaultId, query: 'pomelo harvest', limit: 3 } })
     const namedHit = (JSON.parse((named.content as Array<{ text: string }>)[0]!.text).results as Array<Record<string, unknown>>)[0]!
     expect(namedHit).not.toHaveProperty('containerId')
-    expect(namedHit).not.toHaveProperty('id')
+    expect(namedHit.id).toEqual(expect.any(String))
     expect(namedHit.path).toMatch(/^docs\/ladder-/)
     resetRateLimits()
     const everywhere = await agent.callTool({ name: 'search', arguments: { everywhere: true, query: 'pomelo harvest', limit: 3 } })
