@@ -6,7 +6,7 @@ export type LeanHit = Omit<SearchResult, 'containerId' | 'id'> & { containerId?:
 /**
  * A search hit as the MCP `search` answer carries it (#414). The answer has a token budget, so every field a hit
  * repeats is a hit that falls off the end of the list:
- * - `containerId` when the search spans one vault or repository (the call named it);
+ * - `containerId` when the call named its one vault or repository (or the token is pinned to it); not with `everywhere`, whatever it reached;
  * - `id` of a note or a file: no tool takes it (reads and the graph take the path), a symbol's stays for `find_symbols`;
  * - `type` on a code hit, which is its `language` again;
  * - the digits of `score` after the fifth decimal (the list is already in score order; REST keeps the full value).

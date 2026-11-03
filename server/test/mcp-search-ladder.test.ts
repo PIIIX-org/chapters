@@ -72,4 +72,17 @@ describe('search answers down the budget ladder (#414)', () => {
     for (const row of rows.slice(0, LOCATE_HITS)) expect(row).toMatch(/^docs\/ladder-\d\d#L\d+-L\d+$/)
     for (const row of rows.slice(LOCATE_HITS)) expect(row).toMatch(/^docs\/ladder-\d\d$/)
   })
+
+  it('a call that names its container leaves the container id out of the hits; `everywhere` keeps it even when only one container is reachable (the shape must not change when another is shared)', async () => {
+    resetRateLimits()
+    const named = await agent.callTool({ name: 'search', arguments: { vaultId, query: 'pomelo harvest', limit: 3 } })
+    const namedHit = (JSON.parse((named.content as Array<{ text: string }>)[0]!.text).results as Array<Record<string, unknown>>)[0]!
+    expect(namedHit).not.toHaveProperty('containerId')
+    expect(namedHit).not.toHaveProperty('id')
+    expect(namedHit.path).toMatch(/^docs\/ladder-/)
+    resetRateLimits()
+    const everywhere = await agent.callTool({ name: 'search', arguments: { everywhere: true, query: 'pomelo harvest', limit: 3 } })
+    const anyHit = (JSON.parse((everywhere.content as Array<{ text: string }>)[0]!.text).results as Array<Record<string, unknown>>)[0]!
+    expect(anyHit.containerId).toBe(vaultId)
+  })
 })

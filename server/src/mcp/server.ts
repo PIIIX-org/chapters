@@ -2958,7 +2958,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       },
       budget: 'list',
     },
-    async (args: { query: string; symbols?: boolean; limit?: number }, { resources }) => {
+    async (args: { query: string; symbols?: boolean; limit?: number; everywhere?: boolean }, { resources }) => {
       const limit = args.limit ?? 20
       // The first `limit` hits of the ranking, plus one to know whether more match.
       const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id })
@@ -2972,8 +2972,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         sections: [
           ranked({
             name: 'results',
-            // What the call or the path already says stays out of every hit (#414): see `leanHit`.
-            items: results.map((r) => leanHit(r, resources.vaultIds.length + resources.repositoryIds.length === 1)),
+            // What the call or the path already says stays out of every hit (#414): see `leanHit`. A call that named no container (`everywhere`) keeps it on the hit, however many it reached today: the answer's shape must not change when a vault is shared.
+            items: results.map((r) => leanHit(r, args.everywhere !== true && resources.vaultIds.length + resources.repositoryIds.length === 1)),
             id: leanHitKey,
             limit,
             // Down the ladder: without snippet, frontmatter, updated, heading and tokens, then the location (`path#La-Lb` for a located hit, else the path); counted per path.
