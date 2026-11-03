@@ -81,6 +81,7 @@ import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projecto
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
 import { orientAnswer } from './orient.js'
+import { explainAnswer } from './explain.js'
 import { OVERLAY_SPARE, overlayHits, readOverlay } from './overlay.js'
 import { changedFilesAnswer } from './changes.js'
 import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
@@ -1436,6 +1437,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   }
   const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: the result, nothing written') }
   /** The second sentence of every note write's description (#429): the answer, and where the rest is. */
+  const WRITE_DOC = ' Answers `rev`, `status` (`retry`: not written, resend) and `indexed`.'
 
   tool(
     'read_note',
@@ -1531,12 +1533,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'writer',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Create an OKF note at `path`, or at `type`/`name`.',
+      description: 'Create an OKF note at `path`, or at `type`/`name`; needs edit access.' + WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
-        path: z.string().optional().describe('Full note path; or give type and name'),
-        type: z.string().optional().describe('First path segment (with name)'),
-        name: z.string().optional().describe('Name slug (with type)'),
+        path: z.string().optional().describe('Full path, or type + name'),
+        type: z.string().optional().describe('First path segment, with name'),
+        name: z.string().optional().describe('Name slug, with type'),
         frontmatter: z.record(z.string(), z.unknown()).optional().describe('Frontmatter'),
         body: z.string().optional().describe('Body'),
         ...IDEMPOTENCY_ARG,
@@ -1593,7 +1595,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Change a note: `ops` (preferred) edit the live text, `body` replaces it merged from `base_rev` or your last read_note, `frontmatter` merges per key.',
+        'Change a note: `ops` (preferred) edit the live text, `body` replaces it (merged from `base_rev` or your last read_note), `frontmatter` merges per key; needs edit access.' +
+        WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -1607,7 +1610,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           .union([z.string(), z.number().refine(Number.isInteger, { error: 'base_rev is an integer or a string' })])
           .optional()
           .describe('`rev` you edited: later changes merge; an overlap is `conflicted`, nothing written'),
-        allowGrowth: z.boolean().optional().describe('true: write a body that doubles the note (else quarantined)'),
+        allowGrowth: z.boolean().optional().describe('true: allow doubling the note (else quarantined)'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -1802,14 +1805,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Append `text` as whole lines to the live note, so concurrent appends all land; `createIfMissing: true` creates it.',
+        'Append `text` as whole lines so concurrent appends land (use for logs); `createIfMissing: true` creates the note; needs edit access.' +
+        WRITE_DOC,
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
-        text: z.string().describe('Lines'),
+        text: z.string().describe('Lines to append'),
         createIfMissing: z.boolean().optional().describe('true: create if missing'),
-        frontmatter: z.looseObject({}).optional().describe('Merged per key'),
-        allowGrowth: z.boolean().optional().describe('true: allow doubling the note'),
+        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Merged per top-level key'),
+        allowGrowth: z.boolean().optional().describe('true: allow doubling the note (else quarantined)'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -1852,8 +1856,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         vaultId: VAULT_ID,
         path: NOTE_PATH,
         body: z.string().describe('Whole body'),
-        frontmatter: z.looseObject({}).optional().describe('Merged per key'),
-        allowGrowth: z.boolean().optional().describe('true: write a body that doubles the note (else quarantined)'),
+        frontmatter: z.record(z.string(), z.unknown()).optional().describe('Merged per top-level key'),
+        allowGrowth: z.boolean().optional().describe('true: allow doubling the note (else quarantined)'),
         ...IDEMPOTENCY_ARG,
         ...DRY_RUN_ARG,
       },
@@ -3020,7 +3024,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         repositoryId: UUID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
         limit: intRange('limit', 1, 50).optional().describe('Max results'),
-        refs: z.enum(REFS).optional().describe('Sites of a symbol; at: `path:line`'),
+        refs: z.enum([...REFS, 'explain']).optional().describe('Sites of a symbol; at: `path:line`; explain: sites, notes'),
         path: z.string().optional().describe('File of the definition'),
         depth: intRange('depth', 1, 3).optional().describe('impact levels; default 2'),
         overlay: z.string().optional().describe('`git diff --no-renames` vs the indexed commit: searches your edits'),
@@ -3028,17 +3032,26 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       budget: 'list',
     },
     async (
-      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs; path?: string; depth?: number; overlay?: string },
+      args: { query: string; kind?: SymbolKind; limit?: number; refs?: Refs | 'explain'; path?: string; depth?: number; overlay?: string },
       { repositoryId },
       page,
     ) => {
       const { overlay, ...refsArgs } = args
-      refsArguments(refsArgs)
       if (overlay !== undefined && (args.refs !== undefined || !repositoryId)) {
         throw new McpToolError('INVALID_ARGUMENT', '`overlay` searches the symbols of one repository: pass `repositoryId`, and no `refs`', { field: 'overlay' })
       }
       const patches = overlay === undefined ? null : readOverlay(overlay)
       // null: an account-scoped connection with no repositoryId, or `everywhere`.
+      if (args.refs === 'explain') {
+        if (!repositoryId) throw new McpToolError('INVALID_ARGUMENT', '`refs` reads one repository: pass `repositoryId`', { field: 'repositoryId' })
+        if (args.depth !== undefined) throw new McpToolError('INVALID_ARGUMENT', '`depth` goes with `refs: "impact"`', { field: 'depth' })
+        if (args.limit !== undefined) throw new McpToolError('INVALID_ARGUMENT', '`refs: "explain"` has fixed list sizes: leave out `limit`', { field: 'limit' })
+        await requireRepositoryAccess(repositoryId)
+        // The vaults whose notes may cite the code: every readable one for an account token, none for a pinned one.
+        const vaultIds = auth.connection.scope === 'account' ? (await listAccessibleVaults(auth.user.id)).map((v) => v.id) : []
+        return explainAnswer(repositoryId, refsArgs, vaultIds, await repositoryIndexedVersion(repositoryId))
+      }
+      refsArguments({ ...refsArgs, refs: args.refs })
       if (repositoryId) await requireRepositoryAccess(repositoryId)
       if (args.refs !== undefined) {
         if (!repositoryId) throw new McpToolError('INVALID_ARGUMENT', '`refs` reads one repository: pass `repositoryId`', { field: 'repositoryId' })

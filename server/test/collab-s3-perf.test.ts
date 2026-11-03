@@ -5,6 +5,8 @@ import * as Y from 'yjs'
 import { sql } from 'drizzle-orm'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import { flushProjections } from '../src/notes/projector.js'
 import { createNote } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
@@ -81,6 +83,7 @@ describe('S3 performance acceptance (§11)', () => {
     const note = await createNote(vaultId, { path: `docs/big-typed-${attempt}`, body: bigBody() })
     const sent = new Map<string, { at: number; typist: number; acked?: number; seen: Map<number, number> }>()
     const providers: HocuspocusProvider[] = []
+    let verdict: unknown
     try {
       const typists = [0, 1, 2].map((typist) => {
         const provider = new HocuspocusProvider({ url: `ws://127.0.0.1:${port}/collab`, name: `${vaultId}/~${note.id}`, token, document: new Y.Doc() })
@@ -127,12 +130,25 @@ describe('S3 performance acceptance (§11)', () => {
       process.stdout.write(
         `[S3 perf] ${latencies.length} keystrokes, ${folds} folds of the 1 MiB note: p50 ${p(0.5).toFixed(1)} ms, p95 ${p(0.95).toFixed(1)} ms, max ${p(1).toFixed(1)} ms\n`,
       )
-      // The relay folded the big note while the typists typed.
-      expect(folds).toBeGreaterThan(0)
-      expect(p(0.95)).toBeLessThan(BUDGET_MS)
+      // The verdict is decided here, before the teardown below can wait: a failed bound is reported as itself.
+      try {
+        // The relay folded the big note while the typists typed.
+        expect(folds).toBeGreaterThan(0)
+        expect(p(0.95)).toBeLessThan(BUDGET_MS)
+      } catch (err) {
+        verdict = err
+      }
     } finally {
       providers.forEach((p) => p.destroy())
+      // Isolate the next attempt (#905): the last tab leaving unloads the document with a fold of the 1 MiB note; wait
+      // for the relay to drop it and finish the fold, so a `--retry` does not measure under this load. The fold and the
+      // creation also queue an embedding and a projection of the 1 MiB note, in this process: they are the load that made
+      // attempt 2 measure p95 287-413 ms (against 28-41 ms) even from an idle relay.
+      await collab.idle()
+      await flushEmbeddings()
+      await flushProjections()
     }
+    if (verdict) throw verdict
   }, 120_000)
 })
 

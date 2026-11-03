@@ -21,9 +21,7 @@ const READ_RULES =
   'Manuals: elara://manual/conventions and one per family.'
 
 const WRITE_RULES =
-  ' A whole edit_note `body` merges from `base_rev`, else from your last read_note. ' +
-  '`ops` edit the live text. Retry a note write with the same `idempotency_key`. ' +
-  'Note writes need edit access and answer with `rev`, `status` (`retry`: nothing written, send it again) and `indexed` (manual: elara://manual/notes).'
+  ' A whole edit_note `body` merges from `base_rev`, else from your last read_note. Retry a note write with the same `idempotency_key`.'
 
 export function instructionsFor(profile: ToolProfile): string {
   return profile === 'reader' ? READ_RULES : READ_RULES + WRITE_RULES
