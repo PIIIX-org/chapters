@@ -342,6 +342,8 @@ export interface CollabRelay {
   hocuspocus: Hocuspocus
   /** Detach, flush debounced note writes, drop remaining sockets. */
   destroy(): Promise<void>
+  /** Resolves once no document is loaded and no unload fold is running (tests isolate attempts with it). */
+  idle(): Promise<void>
 }
 
 /**
@@ -784,6 +786,15 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
 
   return {
     hocuspocus,
+    idle: async () => {
+      // Unloading is asynchronous: a document leaves the map, then its fold registers; settle on both being empty.
+      for (;;) {
+        while (hocuspocus.getDocumentsCount() > 0) await new Promise((r) => setTimeout(r, 10))
+        await Promise.all([...unloadFolds])
+        await new Promise((r) => setTimeout(r, 10))
+        if (hocuspocus.getDocumentsCount() === 0 && unloadFolds.size === 0) return
+      }
+    },
     destroy: async () => {
       httpServer.off('upgrade', onUpgrade)
       unbindKick()
