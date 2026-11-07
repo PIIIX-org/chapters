@@ -463,7 +463,7 @@ the same caps, and run through the same loop:
 | | Elara arm | local arm |
 |---|---|---|
 | source | the lab instance's MCP server, the pinned tree indexed as a `local_path` repository | a checkout of the same tree on the runner (no `.git`) |
-| tools | `search`, `find_symbols`, `read_file`, `browse_repository`, `repository_status`, `graph`, `find_graph_path`, with the server's own schemas; each call is one MCP `tools/call` | `list_files` (glob), `grep` (JavaScript regex, `path:line:text`; `path` `.` or empty = the whole checkout), `read_file` (offset/limit, numbered lines; refuses a path that resolves outside the checkout, symlinks included) |
+| tools | `search`, `find_symbols`, `read_file`, `browse_repository`, `repository_status`, `graph`, `find_graph_path`, `grep`, `orient`, with the server's own schemas (a server that does not list one fails the run); the prompt steers the Elara arm to `orient` first, and the local arm has no equivalent (it has `list_files`); each call is one MCP `tools/call` | `list_files` (glob), `grep` (JavaScript regex, `path:line:text`; `path` `.` or empty = the whole checkout), `read_file` (offset/limit, numbered lines; refuses a path that resolves outside the checkout, symlinks included) |
 | access | a token pinned to the repository, read access, allow-listed to those tools | the checkout only |
 
 Caps per task: 30 tool calls (the round-2 cap), 600,000 tokens in + out
@@ -575,7 +575,7 @@ Docker, bun): bring the lab up as in `docs/agents/lab.md`, then
 **How to read a run.** `agent-trial-results/summary.md` (also the job
 summary) has one row per task and arm: facts found / total, the false
 claims flagged, tokens in and out, tool calls, wall time, stop reason; then
-totals per arm, and any episode not run. `results.json` adds the model, caps, harness hash, index
+totals per arm, and any episode not run. `results.json` adds the model, caps, harness hash and `harnessVersion` (`HARNESS_VERSION` in `lib/arms.ts`, bumped when an arm's tools or prompt change: never compare results of different versions; v2 gave the Elara arm `grep` and `orient`, as the reader profile has), index
 outcome, which facts were found and missed, the sentence of each flagged
 false claim, the full answer and the trace. Compare arms on the same run
 only: models, prices and Elara change between runs. Read the answers before

@@ -29,7 +29,7 @@ export interface Toolset {
  * token is pinned to the trial repository with read access and this
  * allow-list, so the server refuses anything else as well.
  */
-export const ELARA_TOOLS = ['search', 'find_symbols', 'read_file', 'browse_repository', 'repository_status', 'graph', 'find_graph_path']
+export const ELARA_TOOLS = ['search', 'find_symbols', 'read_file', 'browse_repository', 'repository_status', 'graph', 'find_graph_path', 'grep', 'orient']
 
 /** The subset of an MCP tools/list entry the mapping reads. */
 export interface McpToolInfo {
