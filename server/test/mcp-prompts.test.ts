@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { chainEdgeLine } from '../src/mcp/prompts.js'
 import { buildApp } from '../src/app.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -66,11 +67,8 @@ beforeAll(async () => {
   for (const [type, name, body] of [
     ['chain', 'first', 'Starts here, then [[chain/second]].'],
     ['chain', 'second', 'Ends here.'],
-    // Two notes that share a tag and no link: an undirected edge with no line of evidence.
-    ['chain', 'tagged-a', 'Alpha.'],
-    ['chain', 'tagged-b', 'Beta.'],
-  ]) {
-    await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/notes`, headers: { cookie: ownerCookie }, body: { type, name, body, ...(name.startsWith('tagged') ? { frontmatter: { tags: ['chain-shared'] } } : {}) } })
+  ] as const) {
+    await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/notes`, headers: { cookie: ownerCookie }, body: { type, name, body } })
   }
 
   const account = (
@@ -87,6 +85,17 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const client of clients) await client.close().catch(() => {})
   await app.close()
+})
+
+describe('the chain prompt\'s edge line (#558)', () => {
+  const row = { from: { path: 'a/x' }, to: { path: 'b/y' }, directed: true, kind: 'extracted', relation: 'link', confidence: 'resolved', evidence: 'a/x#L4' } as const
+  it('names both ends, the direction, why, how sure and where it is written', () => {
+    expect(chainEdgeLine(row)).toBe('  - a/x -> b/y (link, extracted, resolved, a/x#L4)')
+    expect(chainEdgeLine({ ...row, directed: false, kind: 'structural', relation: 'same_type', evidence: 'type:a' })).toBe('  - a/x -- b/y (same_type, structural, resolved, type:a)')
+  })
+  it('has no trailing location when the edge is written nowhere (a similarity)', () => {
+    expect(chainEdgeLine({ ...row, directed: false, kind: 'semantic', relation: 'similar', confidence: 0.5, evidence: null })).toBe('  - a/x -- b/y (similar, semantic, 0.5)')
+  })
 })
 
 describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
@@ -217,10 +226,6 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
     const text = (prompt.messages[0]?.content as { type: string; text: string }).text
     expect(text).toContain('DISCOVERED GRAPH PATH (1 hops)')
     expect(text).toMatch(/- chain\/first -> chain\/second \(link, extracted, resolved, chain\/first#L\d+\)/)
-    const tagged = await client.getPrompt({ name: 'summarize_concept_chain', arguments: { sourceNode: 'chain/tagged-a', targetNode: 'chain/tagged-b', vaultId } })
-    const tagText = (tagged.messages[0]?.content as { type: string; text: string }).text
-    // An undirected edge (`--`) with no evidence (the pair is joined by structure or similarity, not a written line): no trailing location.
-    expect(tagText).toMatch(/- chain\/tagged-a -- chain\/tagged-b \(\w+, \w+, (resolved|[\d.]+)\)\n/)
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)
   })
 
