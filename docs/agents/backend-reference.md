@@ -1548,6 +1548,18 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **No frontmatter in MCP hits** (#419): the MCP `search` handler drops `frontmatter` from every hit (it was
     42 % of a typical note hit's characters, measured in `mcp-search-hits.test.ts`: 665 to 387); `searchNotes` and
     the REST routes still return it, the client's search overlay shows its tags.
+  - **Query router** (#1060, `router.ts`): before the legs run, `searchNotes` asks `routeQuery` whether the query is
+    one identifier or one path (only without filters, with symbols for an identifier, at most 6 words). The term is
+    the one backticked token, or the one word left once the filler (`where is the ... defined`) is dropped. A path
+    term (a `/` or a file extension) finds repository files by path or file name and notes by path (with or
+    without `.md`); otherwise the symbol blocks whose bare name or `Class.name` equals the term in any spelling
+    `identifiers.ts` knows. Found: `route`, `retrieval_mode: "exact"`, hits (a symbol's lines, a file with
+    lines 1..end), `confidence: 1` for one, `ambiguous: true` for
+    several (at most 10), nothing fuzzy. Not found, or not routable: the hybrid path, byte-identical to before,
+    and no `route` in the answer. The issue's `retrieval_mode: "fallback"` is not used: it would lose which
+    channels answered; an unrouted answer says nothing instead. The structural route (callers, references) and
+    the MCP `route` override argument are not built: the first needs #1055, the second has no room in the reader
+    budget. `SearchNotesOptions.route: false` takes the hybrid path in tests.
   - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
     merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a
     fixed window of `CANDIDATES = 30` rows per leg (the population the
