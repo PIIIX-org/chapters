@@ -2200,7 +2200,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   outside its vault, the same answer as for a missing id);
   `repository-or-account` (`find_symbols`: a vault token is refused, a
   repository token searches only its pin); `vault-or-repo` (`search`,
-  `graph`, `find_graph_path`, via `resolveResourceSet`). `everywhere:
+  `graph`, `find_graph_path`, `orient`, via `resolveResourceSet`). `everywhere:
   true` needs an account token. Ids that come from stored data rather
   than arguments stay inside the pin too: `audit_okf_conformance` on a
   vault token reports every `[[repo:...]]` link as broken without
@@ -2237,7 +2237,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   profile; this connection has the reader profile (mint a token with
   that profile)`). `reader`: `list_vaults`, `list_repositories`,
   `browse_vault`, `browse_repository`, `search`, `read_note`,
-  `read_file`, `find_symbols`, `graph`, `find_graph_path`; `writer`
+  `read_file`, `find_symbols`, `orient`, `graph`, `find_graph_path`; `writer`
   adds `create_note`, `edit_note`, `append_note`. A new tool is
   `admin` unless it declares a smaller profile. The profile only
   intersects with the allow-list, access level, scope and pin; it never
@@ -2692,6 +2692,21 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     cursor's fingerprint, so a cursor from another folder is refused. The
     REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
     file, unordered, no paging.
+  - `orient` (#534, `mcp/orient.ts` over `repositories/orient.ts`) answers
+    where to start, at most 10 entries per list (`ORIENT_ENTRIES`), one
+    level (`path`) at a time. Repository: `repositoryMap` ranks the symbol
+    blocks under the folder by `refs`, the `resolved` `call`/`reference`/
+    `import` rows of `code_edges` (#469) from other, non-test files
+    (`TEST_PATH`, code-edges.ts, is used in SQL; `test` rows and test-file
+    sources never count, test-file definitions are not listed), plus the
+    `query`/`focus` bonuses (20 for a definition under `focus`, 5 per use
+    from a focus file, 10 for a query word in the name, 5 in the path),
+    ties by path (`COLLATE "C"`), line, `block_id`; the `folders` list is
+    the same rows grouped one level below the folder. Vault: `vaultOutline`
+    ranks the live notes one level below the folder by the `note_links`
+    rows from other notes of the vault. Both lists are `ranked` sections
+    (11 fetched for the `">10"` total) and fit the budget by the ladder; no
+    ranking or response code is shared with `search`.
   - `find_symbols` with `refs: "explain"` (#675, `mcp/explain.ts`, data in
     `repositories/explain.ts`) composes the code questions with the notes that
     cite the definition's file in one answer: the definition (`symbol`, `at:

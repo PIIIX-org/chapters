@@ -80,6 +80,7 @@ import { serializeNote } from '../notes/okf.js'
 import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
+import { orientAnswer } from './orient.js'
 import { explainAnswer } from './explain.js'
 import { OVERLAY_SPARE, overlayHits, readOverlay } from './overlay.js'
 import { changedFilesAnswer } from './changes.js'
@@ -181,12 +182,12 @@ const EDIT_OPS = z.array(
     editOp('replace_text', {
       find: z.string(),
       replace: z.string(),
-      expectedCount: z.number().int().min(1).optional().describe('How many times `find` must occur (default 1); all are replaced'),
+      expectedCount: intRange('expectedCount', 1, 1_000_000).optional().describe('Times `find` must occur (default 1)'),
     }),
     editOp('insert_before', { anchor: z.string(), text: z.string() }),
     editOp('insert_after', { anchor: z.string(), text: z.string() }),
     editOp('replace_section', {
-      heading: z.string().describe('"## Plan" (the whole heading line) or "Plan" (its text)'),
+      heading: z.string().describe('"## Plan" or "Plan"'),
       content: z.string(),
     }),
     editOp('append', { text: z.string() }),
@@ -1432,7 +1433,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       .min(1)
       .max(200)
       .optional()
-      .describe('Retry-safe: the same key + arguments within 24 h replays the first result (`replayed: true`)'),
+      .describe('Same key + arguments from this connection within 24 h replay the first result (`replayed: true`)'),
   }
   const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: the result, nothing written') }
   /** The second sentence of every note write's description (#429): the answer, and where the rest is. */
@@ -1606,7 +1607,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         removeKeys: z.array(z.string()).optional().describe('Frontmatter keys to delete'),
         // The note's `rev` (its seq, #477), or a revision id (the `rev` before #477, note_history ids, #822).
         base_rev: z
-          .union([z.string(), z.number().int()])
+          .union([z.string(), z.number().refine(Number.isInteger, { error: 'base_rev is an integer or a string' })])
           .optional()
           .describe('`rev` you edited: later changes merge; an overlap is `conflicted`, nothing written'),
         allowGrowth: z.boolean().optional().describe('true: allow doubling the note (else quarantined)'),
@@ -1850,8 +1851,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Create the note at `path`, or replace its whole body (merged from your last read) and merge `frontmatter` when it exists, in one step that concurrent callers cannot race; requires edit access.' +
-        WRITE_DOC,
+        'Create the note at `path`, or replace its whole body (merged from your last read) and merge `frontmatter` when it exists, in one step that concurrent callers cannot race.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -1892,7 +1892,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Rename a note (a slug) or move it (a full path); links using its old full path are rewritten; requires edit access.' + WRITE_DOC,
+      description: 'Rename a note (a slug) or move it (a full path); links using its old full path are rewritten.',
       inputSchema: {
         vaultId: VAULT_ID,
         from: z.string().describe('Current note path'),
@@ -1922,7 +1922,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       destructive: true,
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Move a note to the trash (`id` for restore_note); requires edit access.' + WRITE_DOC,
+      description: 'Move a note to the trash (`id` for restore_note).',
       inputSchema: { vaultId: VAULT_ID, path: NOTE_PATH, ...IDEMPOTENCY_ARG },
     },
     async ({ idempotency_key: key, ...args }: { path: string; idempotency_key?: string }, { vaultId: target }) => {
@@ -1946,7 +1946,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'read',
       pinPermission: 'edit',
-      description: 'List the trashed notes of a vault as `{notes}`, most recently deleted first; requires edit access.',
+      description: 'List the trashed notes of a vault as `{notes}`, most recently deleted first.',
       inputSchema: {
         vaultId: VAULT_ID,
         limit: z.number().int().min(1).max(100).optional().describe('Page size (default 50)'),
@@ -1976,7 +1976,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Restore a trashed note by `noteId`; requires edit access.' + WRITE_DOC,
+      description: 'Restore a trashed note by `noteId`.',
       inputSchema: {
         vaultId: VAULT_ID,
         noteId: UUID_ARG.describe('Note id from list_trash'),
@@ -2094,7 +2094,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Restore a note to a recorded revision (from note_history), as a new revision; requires edit access.' + WRITE_DOC,
+      description: 'Restore a note to a recorded revision (from note_history), as a new revision.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -3088,6 +3088,25 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         narrow: args.kind ? [] : ['kind: "function"'],
       }
     },
+  )
+
+  tool(
+    'orient',
+    {
+      scope: 'vault-or-repo',
+      capability: 'read',
+      profile: 'reader',
+      description: 'Where to start: a repository\'s most-used definitions, a vault\'s most-linked notes; 10 per level, `path` descends.',
+      inputSchema: {
+        repositoryId: REPOSITORY_ID,
+        vaultId: VAULT_ID,
+        query: z.string().optional().describe('Favour these words'),
+        focus: z.array(z.string()).optional().describe('Files or folders in play'),
+        path: z.string().optional().describe('Folder level'),
+      },
+      budget: 'list',
+    },
+    async (args: { query?: string; focus?: string[]; path?: string }, { resources }) => orientAnswer(resources, args),
   )
 
   /** A community edge's identity in a page guard and in the order edges are listed. */

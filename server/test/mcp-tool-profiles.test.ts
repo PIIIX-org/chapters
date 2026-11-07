@@ -17,7 +17,7 @@ import { createActiveUser, loginCookie } from './helpers.js'
 
 type Args = Record<string, unknown>
 
-/** The reader profile over today's tools; `orient`, `grep`, `outline` and the code-question tools join as they land. */
+/** The reader profile over today's tools; `grep`, `outline` and the code-question tools join as they land. */
 const READER = [
   'browse_repository',
   'browse_vault',
@@ -27,6 +27,7 @@ const READER = [
   'grep',
   'list_repositories',
   'list_vaults',
+  'orient',
   'read_file',
   'read_note',
   'search',
@@ -142,9 +143,9 @@ describe('tools/list per profile (#428)', () => {
 
   it('pinned reader tokens list the reader tools their scope reaches', async () => {
     const vault = await mint({ name: 'profiles-vault-reader', scope: 'vault', vaultId, profile: 'reader' })
-    expect(await listed(vault.client)).toEqual(['browse_vault', 'find_graph_path', 'graph', 'grep', 'read_note', 'search'])
+    expect(await listed(vault.client)).toEqual(['browse_vault', 'find_graph_path', 'graph', 'grep', 'orient', 'read_note', 'search'])
     const repo = await mint({ name: 'profiles-repo-reader', scope: 'repository', repositoryId, profile: 'reader' })
-    expect(await listed(repo.client)).toEqual(['browse_repository', 'find_graph_path', 'find_symbols', 'graph', 'grep', 'read_file', 'search'])
+    expect(await listed(repo.client)).toEqual(['browse_repository', 'find_graph_path', 'find_symbols', 'graph', 'grep', 'orient', 'read_file', 'search'])
   })
 
   it('a reader token lists no prompts; writer and admin tokens keep them (owner decision on #930)', async () => {
