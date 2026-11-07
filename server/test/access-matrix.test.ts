@@ -262,6 +262,30 @@ describe('read surfaces (#552, #1034)', () => {
     for (const n of names) expect(revoked, `revoked ${n}`).not.toContain(n)
   })
 
+  // A pinned token sending an id of the other kind is refused with the scope error and names nothing of the account (#1101).
+  it('MCP pinned token with an id of the other kind: the answer names no id or name of the account', async () => {
+    const pin = async (body: Record<string, unknown>) => {
+      const minted = await rest('owner', 'POST', '/api/mcp-connections', { name: `matrix-pin-${Math.random()}`, ...body })
+      expect(minted.statusCode).toBeLessThan(300)
+      const mcp = new Client({ name: 'access-matrix-pin', version: '0.0.0' })
+      await mcp.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), { requestInit: { headers: { authorization: `Bearer ${(minted.json() as { token: string }).token}` } } }))
+      clients.push(mcp)
+      return mcp
+    }
+    const repoPinned = await pin({ scope: 'repository', repositoryId })
+    const vaultPinned = await pin({ scope: 'vault', vaultId })
+    resetRateLimits()
+    const fromRepoPin = mcpOutcome(await repoPinned.callTool({ name: 'browse_vault', arguments: { vaultId } }))
+    resetRateLimits()
+    const fromVaultPin = mcpOutcome(await vaultPinned.callTool({ name: 'browse_repository', arguments: { repositoryId } }))
+    for (const [label, outcome] of [['repository-pinned sending a vaultId', fromRepoPin], ['vault-pinned sending a repositoryId', fromVaultPin]] as const) {
+      expect(outcome.denied || !outcome.ok, label).toBe(true)
+      expect(outcome.text, label).toContain('TOOL_NOT_ALLOWED')
+      expect(outcome.text, label).not.toContain('suggestions')
+      for (const hidden of [vaultId, repositoryId, `matrix ${MARK}`, `matrix-${MARK}`]) expect(outcome.text, `${label}: ${hidden}`).not.toContain(hidden)
+    }
+  })
+
   // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.
   for (const refs of ['references', 'callers', 'impact'] as const) {
     accessMatrix(`MCP find_symbols refs: ${refs}`, {

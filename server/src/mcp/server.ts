@@ -940,7 +940,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           for (const [kind, given] of [['repository', raw0.repositoryId], ['vault', raw0.vaultId]] as const) {
             if (typeof given !== 'string') continue
             const names = await accessibleIds(kind)
-            if (names.some((n) => n.startsWith(`${given} (`))) continue
+            if (names.some((n) => n.startsWith(`${given.toLowerCase()} (`))) continue
             const result = errorResult(toErrorEnvelope(new McpToolError('NOT_FOUND', 'not found', { suggestions: names.slice(0, ID_SUGGESTIONS) })))
             toolErrors.add(result)
             return result

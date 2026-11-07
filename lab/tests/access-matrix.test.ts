@@ -165,6 +165,20 @@ const test: LabTest = {
       { name: 'MCP usage_report', identifiers: [sourceNote.id, source], kind: 'listing', share, read: readThenReport(viaMcp('usage_report', {})) },
     ]
     for (const m of matrices) checks.push(...(await runAccessMatrix(m)))
+    // A pinned token sending an id of the other kind is refused with the scope error and names nothing of the account (#1101).
+    const pinnedMcp = async (body: Record<string, unknown>) => {
+      const minted = await rest.owner.must<{ token: string }>('POST', '/api/mcp-connections', { name: `lab matrix pin ${Date.now()}`, ...body })
+      return ctx.mcp(minted.token, 'matrix-pinned')
+    }
+    const crossKind: Array<[string, string]> = [
+      ['repository-pinned sending a vaultId', (await (await pinnedMcp({ scope: 'repository', repositoryId })).call('browse_vault', { vaultId })).text],
+      ['vault-pinned sending a repositoryId', (await (await pinnedMcp({ scope: 'vault', vaultId })).call('browse_repository', { repositoryId })).text],
+    ]
+    for (const [who, text] of crossKind) {
+      const leaked = [vaultId, repositoryId, repoName].filter((x) => text.includes(x))
+      const ok = text.includes('TOOL_NOT_ALLOWED') && !text.includes('suggestions') && leaked.length === 0
+      checks.push({ name: `MCP pinned token with an id of the other kind (${who})`, expected: 'scope refusal, nothing of the account named', actual: ok ? 'scope refusal, nothing named' : `leaked ${leaked.join(', ')}: ${text.slice(0, 100)}`, ok, severity: ok ? 'info' : 'high' })
+    }
     // A refused id names the account's own ids and names (#1101): the repository is in the owner's and the shared account's suggestions only.
     const suggested = async (actor: Actor) => (await mcp[actor].call('browse_repository', { repositoryId: 'not-a-uuid' })).text
     const revokeShare = await share()

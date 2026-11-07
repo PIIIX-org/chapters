@@ -32,7 +32,23 @@ interface ErrorBody {
 }
 
 const SLUG_RULE = '^[a-z0-9][a-z0-9-]*$'
-const NOT_FOUND = '{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}'
+
+/**
+ * A not-found of an id the caller cannot use (#439, #1101): code and message are the plain ones; a vault or repository
+ * id also carries the caller's own ids as suggestions (`<id> (<name>)`), every one in `own`, and nothing in `foreign`.
+ */
+function expectPlainNotFound(text: string, own: readonly string[], foreign: readonly string[], label: string): void {
+  const error = (JSON.parse(text) as { error: { code: string; message: string; retryable: boolean; suggestions?: string[] } }).error
+  expect(error, label).toMatchObject({ code: 'NOT_FOUND', message: 'not found', retryable: false })
+  expect(Object.keys(error).sort(), label).toEqual(error.suggestions ? ['code', 'message', 'retryable', 'suggestions'] : ['code', 'message', 'retryable'])
+  // Every suggestion is `<id> (<name>)` of something the caller reads: none of the foreign ids or names, and the ids in
+  // `own` (the caller's vaults, when the test knows them all) are the only vault ids.
+  for (const suggestion of error.suggestions ?? []) expect(suggestion, label).toMatch(/^[0-9a-f-]{36} \(.+\)$/)
+  if (/vault/i.test(label)) {
+    for (const suggestion of error.suggestions ?? []) expect(own.some((id) => suggestion.startsWith(`${id} (`)), `${label}: ${suggestion} is the caller's`).toBe(true)
+  }
+  for (const hidden of foreign) expect(text, label).not.toContain(hidden)
+}
 
 let app: FastifyInstance
 let baseUrl: string
@@ -149,8 +165,10 @@ describe('structured MCP errors (#439)', () => {
   it("another account's vault answers the exact bytes of a missing vault: no suggestions from outside the caller's reach", async () => {
     const theirs = await failure(acctB, 'read_note', { vaultId: VA, path: 'concepts/alpha-nte' })
     const missing = await failure(acctB, 'read_note', { vaultId: randomUUID(), path: 'concepts/alpha-nte' })
-    expect(theirs.text).toBe(NOT_FOUND)
-    expect(missing.text).toBe(NOT_FOUND)
+    // Exactly the bytes of a missing id, and nothing of A's anywhere in them.
+    expect(theirs.text).toBe(missing.text)
+    // B can read A's shared vault VA2 (its own to name), not VA.
+    expectPlainNotFound(theirs.text, [VB, VA2], [VA, 'errors-a ('], "A's vault")
     // In B's own vault, A's note is never suggested.
     expect((await failure(acctB, 'read_note', { vaultId: VB, path: 'concepts/alpha-nte' })).error).toEqual({
       code: 'NOT_FOUND',
@@ -172,8 +190,10 @@ describe('structured MCP errors (#439)', () => {
 
     const badUuid = await failure(acctA, 'read_note', { vaultId: 'not-a-uuid', path: 'concepts/x' })
     expect(badUuid.error).toMatchObject({ code: 'INVALID_ARGUMENT', field: 'vaultId' })
-    expect(badUuid.error.message).toContain('Invalid UUID')
-    expect(badUuid.error.suggestions).toBeUndefined()
+    // Refused by the handler's id check (#1101): not a UUID, with the caller's own vaults as suggestions.
+    expect(badUuid.error.message).toBe('vaultId is not a UUID: use one of the suggestions')
+    expect(badUuid.error.suggestions).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(`^${VA} \\(errors-a`))]))
+    expect(badUuid.text).not.toContain(VB)
 
     // An enum lists its values.
     expect((await failure(acctA, 'graph', { vaultId: VA, aggregate: 'all' })).error).toMatchObject({
@@ -241,8 +261,10 @@ describe('structured MCP errors (#439)', () => {
     const pinned = await mint(cookieA, { name: 'errors-pinned', scope: 'vault', vaultId: VA, access: 'write' })
     expect((await failure(pinned, 'read_note', { vaultId: VA2, path: 'concepts/alpha-note' })).error).toEqual({
       code: 'TOOL_NOT_ALLOWED',
-      message: 'this connection is pinned to a different vault',
+      message: `this connection is pinned to a different vault: use vaultId ${VA} (errors-a), or omit it`,
       retryable: false,
+      field: 'vaultId',
+      suggestions: [`${VA} (errors-a)`],
     })
     expect((await failure(acctA, 'browse_vault', { vaultId: VA, cursor: 'bogus' })).error).toMatchObject({ code: 'CURSOR_INVALID', retryable: false })
   })
@@ -278,8 +300,10 @@ describe('structured MCP errors (#439)', () => {
     ] as const) {
       const foreign = await failure(acctA, tool, { [key]: theirs })
       const missing = await failure(acctA, tool, { [key]: randomUUID() })
-      expect(foreign.text, `${tool} on B's id`).toBe(NOT_FOUND)
-      expect(missing.text, `${tool} on a missing id`).toBe(NOT_FOUND)
+      // Same bytes for B's id and a missing one (up to the id sent), none of B's ids or names in either.
+      expect(foreign.text, `${tool} on B's id`).toBe(missing.text)
+      expectPlainNotFound(foreign.text, [VA, VA2], [VB, repoB.id, teamB.id, 'errors-b '], `${tool} on B's id`)
+      expectPlainNotFound(missing.text, [VA, VA2], [VB, repoB.id, teamB.id, 'errors-b '], `${tool} on a missing id`)
     }
     // B is a member of A's team but not its owner: the team is visible, the action needs more.
     resetRateLimits()
