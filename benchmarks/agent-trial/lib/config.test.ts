@@ -127,3 +127,12 @@ test('judge: runs one tool-less turn and counts the facts judged stated', async 
     [0, 'none', true],
   ])
 })
+
+test('the Elara prompt names grep and orient only when the arm has them', () => {
+  const plain = systemPrompt('elara', { maxToolCalls: 30, repositoryId: 'r-1' })
+  assert.doesNotMatch(plain, /`grep`|`orient`/)
+  const both = systemPrompt('elara', { maxToolCalls: 30, repositoryId: 'r-1', tools: ['search', 'grep', 'orient'] })
+  assert.match(both, /`grep` searches the code by regular expression/)
+  assert.match(both, /`orient` gives a map/)
+  assert.doesNotMatch(systemPrompt('local', { maxToolCalls: 30, tools: ['grep', 'orient'] }), /`orient`/)
+})

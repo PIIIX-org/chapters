@@ -23,7 +23,7 @@ import { LabContext, loadEnv } from '../../lab/lib/context.ts'
 import { exec } from '../../lab/lib/docker.ts'
 import { connectLocalRepo, copyIntoLocalRepo, repoProgress, settleRepo } from '../../lab/lib/fixlab.ts'
 import { assertLabBaseUrl } from '../lib/guard.ts'
-import { dryRunAnswer, dryRunPlan, parseArms, systemPrompt, type Arm } from './lib/arms.ts'
+import { HARNESS_VERSION, dryRunAnswer, dryRunPlan, parseArms, systemPrompt, type Arm } from './lib/arms.ts'
 import { resolveMode } from './lib/config.ts'
 import { gradeAnswer, type Grade } from './lib/grade.ts'
 import { judgeAnswer, type JudgeResult } from './lib/judge.ts'
@@ -184,6 +184,7 @@ function flush(complete: boolean): string {
     updatedAt: at,
     ms: Date.now() - t0,
     harness: HARNESS,
+    harnessVersion: HARNESS_VERSION,
     repo: file.repo,
     caps,
     runBudgetMs: RUN_BUDGET_MS,
@@ -212,7 +213,7 @@ function flush(complete: boolean): string {
     '',
     ...(dryRun ? ['**DRY RUN**: scripted model (a fixed tool-call script, no language model). These numbers test the plumbing; they are not agent numbers.', ''] : []),
     ...(complete ? [] : [`**INCOMPLETE**: ${rows.length} of ${tasks.length * arms.length} episodes run${notRun.length > 0 ? `, ${notRun.length} not run (run budget)` : ' so far'}.`, '']),
-    `Model ${modelInfo.provider}/${modelInfo.name}; Elara at ${process.env.GITHUB_SHA ?? '(local)'}; run ${runUrl ?? '-'}; tasks on ${file.repo.url} @ ${file.repo.commit.slice(0, 7)}; harness ${HARNESS}; ${at}`,
+    `Model ${modelInfo.provider}/${modelInfo.name}; Elara at ${process.env.GITHUB_SHA ?? '(local)'}; run ${runUrl ?? '-'}; tasks on ${file.repo.url} @ ${file.repo.commit.slice(0, 7)}; harness v${HARNESS_VERSION} ${HARNESS}; ${at}`,
     '',
     `Index: ${index.outcome}, ${index.files} files, ${index.symbols} symbols, ${Math.round(index.ms / 1000)} s. Caps per task: ${caps.maxToolCalls} tool calls, ${caps.maxTokens} tokens (judge included), ${Math.round(caps.maxWallMs / 60_000)} min.`,
     '',
@@ -254,7 +255,7 @@ for (const task of tasks) {
       continue
     }
     const model: Model = live ?? scriptedModel(dryRunPlan(task, arm), dryRunAnswer)
-    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id }), prompt: task.prompt, caps })
+    const episode = await runEpisode({ model, tools: toolsets[arm], system: systemPrompt(arm, { maxToolCalls: caps.maxToolCalls, repositoryId: repo.id, tools: toolsets.elara.specs.map((s) => s.name) }), prompt: task.prompt, caps })
     const grade = gradeAnswer(task, episode.answer)
     const row: Row = { task: task.id, arm, episode, grade }
     if (live && judging && episode.answer) {
