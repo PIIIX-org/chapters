@@ -66,8 +66,11 @@ beforeAll(async () => {
   for (const [type, name, body] of [
     ['chain', 'first', 'Starts here, then [[chain/second]].'],
     ['chain', 'second', 'Ends here.'],
+    // Two notes that share a tag and no link: an undirected edge with no line of evidence.
+    ['chain', 'tagged-a', 'Alpha.'],
+    ['chain', 'tagged-b', 'Beta.'],
   ]) {
-    await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/notes`, headers: { cookie: ownerCookie }, body: { type, name, body } })
+    await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/notes`, headers: { cookie: ownerCookie }, body: { type, name, body, ...(name.startsWith('tagged') ? { frontmatter: { tags: ['chain-shared'] } } : {}) } })
   }
 
   const account = (
@@ -214,6 +217,10 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
     const text = (prompt.messages[0]?.content as { type: string; text: string }).text
     expect(text).toContain('DISCOVERED GRAPH PATH (1 hops)')
     expect(text).toMatch(/- chain\/first -> chain\/second \(link, extracted, resolved, chain\/first#L\d+\)/)
+    const tagged = await client.getPrompt({ name: 'summarize_concept_chain', arguments: { sourceNode: 'chain/tagged-a', targetNode: 'chain/tagged-b', vaultId } })
+    const tagText = (tagged.messages[0]?.content as { type: string; text: string }).text
+    // An undirected edge (`--`) with no evidence (the pair is joined by structure or similarity, not a written line): no trailing location.
+    expect(tagText).toMatch(/- chain\/tagged-a -- chain\/tagged-b \(\w+, \w+, (resolved|[\d.]+)\)\n/)
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)
   })
 
