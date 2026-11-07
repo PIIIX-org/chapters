@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { GetPromptResult } from '@modelcontextprotocol/sdk/types.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import { buildGraph, findShortestPath } from '../graph/assemble.js'
+import { edgeRows } from '../graph/edges.js'
 import { resolveNode } from '../graph/resolve-node.js'
 import { searchNotes } from '../search/search.js'
 import { readNote } from '../notes/store.js'
@@ -560,9 +561,12 @@ STRUCTURE OF THE BRIEFING:
           if (path.found && path.nodes.length > 0) {
             pathInfo =
               `\nDISCOVERED GRAPH PATH (${path.distance} hops):\n` +
-              path.nodes.map((n, i) => `  ${i + 1}. [${n.resourceType}] ${n.path} (${n.id})`).join('\n') +
+              path.nodes.map((n, i) => `  ${i + 1}. [${n.resourceType}] ${n.path}`).join('\n') +
               `\nEDGES:\n` +
-              path.edges.map((e) => `  - ${e.source} -> ${e.target} (${e.kind})`).join('\n')
+              // As find_graph_path rows: names, direction, why the edge exists and where it is written (#558).
+              (await edgeRows(path.edges, path.nodes, resources))
+                .map((r) => `  - ${r.from.path} ${r.directed ? '->' : '--'} ${r.to.path} (${r.relation}, ${r.kind}, ${r.confidence}${r.evidence ? `, ${r.evidence}` : ''})`)
+                .join('\n')
           }
         }
       } catch {
