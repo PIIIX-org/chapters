@@ -84,7 +84,7 @@ import { orientAnswer } from './orient.js'
 import { explainAnswer } from './explain.js'
 import { OVERLAY_SPARE, overlayHits, readOverlay } from './overlay.js'
 import { changedFilesAnswer } from './changes.js'
-import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
+import { deleteRepositoryRecord, folderProbe, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { skippedField } from '../repositories/fs-scan.js'
 import { SYMBOL_KINDS, type SymbolKind } from '../repositories/extraction.js'
@@ -2245,10 +2245,20 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async (args: { path?: string; changed_since?: string }, { repositoryId: target }, page) => {
       await requireRepositoryAccess(target)
-      const folder = args.path?.replace(/^\/+|\/+$/g, '') || null
+      // `.`, `./docs`, `/docs/` and `docs//lib` name folders as a shell would (#1102): empty and `.` segments are dropped.
+      const folder = args.path?.split('/').filter((part) => part !== '' && part !== '.').join('/') || null
       if (args.changed_since !== undefined) return changedFilesAnswer(target, args.changed_since, folder, await repositoryIndexedVersion(target), page)
       // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
-      const rows = await listRepositoryFilesPage(target, { folder, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 })
+      const after = page.after(0, z.string())
+      const rows = await listRepositoryFilesPage(target, { folder, after, limit: BROWSE_PAGE + 1 })
+      // An empty list always means an empty folder: one that holds nothing is not a folder.
+      if (rows.length === 0 && folder !== null && after === null) {
+        const probe = await folderProbe(target, folder)
+        throw new McpToolError('NOT_FOUND', probe.isFile ? `${folder} is a file: use read_file` : `no folder ${folder} in this repository`, {
+          field: 'path',
+          suggestions: probe.isFile ? [] : closest(folder, probe.directories),
+        })
+      }
       const files = rows.slice(0, BROWSE_PAGE)
       // Narrowing: the largest folders one level below `folder` on this page.
       const base = folder === null ? '' : `${folder}/`
@@ -2299,8 +2309,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     ) => {
       await requireRepositoryAccess(target)
       checkReadArgs(args)
-      const read = await readRepositoryFile(target, args.path)
-      if (!read) throw new McpToolError('NOT_FOUND', 'file not found')
+      // A path as an agent types it in a shell: `./src/a.ts`, `/src/a.ts` (#1102).
+      const filePath = args.path.split('/').filter((part) => part !== '' && part !== '.').join('/')
+      const read = await readRepositoryFile(target, filePath)
+      if (!read) {
+        const inside = filePath === '' ? [] : await listRepositoryFilesPage(target, { folder: filePath, after: null, limit: 1 })
+        throw new McpToolError('NOT_FOUND', inside.length > 0 ? `${filePath} is a folder: use browse_repository` : 'file not found', { field: 'path' })
+      }
       const { file } = read
       // The content version (ADR-004 §2.9: 16 hex of its sha256), on every answer: what `if_rev` takes (#682). Not the
       // repository's commit or tree: a sync stores files one by one and records those at its end, so a file can change

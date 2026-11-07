@@ -2685,7 +2685,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `listRepositoryFilesPage` (`repositories/store.ts`) reads `BROWSE_PAGE`
     (500) + 1 files after the cursor's path, `ORDER BY path COLLATE "C"`,
     and its `path` folder is the `COLLATE "C"` range `folder/` ≤ path <
-    `folder0` (leading/trailing `/` ignored; a file's path lists nothing).
+    `folder0` (`.`, empty and repeated `/` segments dropped, #1102; a folder that holds no file is `NOT_FOUND` with near folders from `folderProbe`, a file's path says so; `read_file` and `grep` read `./` and `/` paths the same way, and `read_file` of a folder says to browse it).
     The index `repository_files_repo_path_c` (`repository_id`, `path
     COLLATE "C"`, migration 0029) serves both: the unique
     `repository_files_repo_path` is in the database collation. Past 500

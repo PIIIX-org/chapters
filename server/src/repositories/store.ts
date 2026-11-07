@@ -344,6 +344,15 @@ export async function listRepositoryFilesPage(
     .limit(opts.limit)
 }
 
+/** Whether `path` is an indexed file, and the directories of the repository (at most 2,000, by path): what a folder that holds nothing is told (#1102). */
+export async function folderProbe(repositoryId: string, path: string): Promise<{ isFile: boolean; directories: string[] }> {
+  const [file] = await db.select({ id: repositoryFiles.id }).from(repositoryFiles).where(and(eq(repositoryFiles.repositoryId, repositoryId), eq(repositoryFiles.path, path)))
+  const rows = (await db.execute(sql`
+    SELECT dir FROM (SELECT DISTINCT regexp_replace(path, '/[^/]*$', '') AS dir FROM repository_files
+    WHERE repository_id = ${repositoryId} AND position('/' IN path) > 0 ) d ORDER BY dir COLLATE "C" LIMIT 2000`)) as unknown as Array<{ dir: string }>
+  return { isFile: file !== undefined, directories: rows.map((r) => r.dir) }
+}
+
 /**
  * A file's declared symbols — its "outline" (spec 9): its `symbol` blocks
  * (#413); `parent` only on a method or namespace member (#450).
