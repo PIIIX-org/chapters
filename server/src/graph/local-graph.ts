@@ -1,4 +1,4 @@
-import { inArray } from 'drizzle-orm'
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { notes } from '../db/schema.js'
 import { getLiveNote } from '../notes/store.js'
@@ -81,8 +81,24 @@ export async function getLocalGraph(vaultId: string, path: string, depth: number
   }
 }
 
-/** The links to a note, one per line they are written on (`location` is `path#La`, lines of the linking note's file). */
-export async function getBacklinkLines(vaultId: string, path: string): Promise<Backlink[] | null> {
+/**
+ * The notes that link to a note, one item per linking note with `links`, its links one per
+ * line (`location` is `path#La`, lines of the linking note's file, and the paragraph or line). The same rows MCP `graph` lists
+ * (`backlinksOf`), so a note listed always has its lines. null when the vault has no such live note.
+ */
+export async function getBacklinks(vaultId: string, path: string) {
   const note = await getLiveNote(vaultId, path)
-  return note ? backlinksOf(noteNode(note), {}) : null
+  if (!note) return null
+  const lines = await backlinksOf(noteNode(note), {})
+  const byPath = new Map<string, Array<Pick<Backlink, 'location' | 'context'>>>()
+  for (const { path: from, location, context } of lines) byPath.set(from, [...(byPath.get(from) ?? []), { location, context }])
+  const linking = await db
+    .select({ id: notes.id, path: notes.path, type: notes.type, name: notes.name, frontmatter: notes.frontmatter, updatedAt: notes.updatedAt })
+    .from(notes)
+    .where(and(eq(notes.vaultId, vaultId), isNull(notes.deletedAt), inArray(notes.path, [...byPath.keys()])))
+    .orderBy(sql`${notes.path} COLLATE "C"`)
+  return linking.map(({ frontmatter, ...row }) => {
+    const title = (frontmatter as { title?: unknown } | null)?.title
+    return { ...row, title: typeof title === 'string' ? title : null, links: byPath.get(row.path)! }
+  })
 }

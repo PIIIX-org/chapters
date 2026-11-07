@@ -1357,9 +1357,10 @@ its body-relative lines into `path#La` of its file; a row with line 0 gives
 the bare path. The section is listed after `nodes` and `edges` when the
 centre is a note and `edgeTypes` includes `extracted`, with the ladder
 `{path, location}` → `location` → counts per linking note. The REST route
-`/vaults/:id/backlinks/*` (`getIncomingLinks`) lists one item per linking note
-and, since the REST follow-up of #472, `links: [{location, context}]` from the
-same `backlinksOf` rows. The REST `/vaults/:id/local-graph/*` is
+`/vaults/:id/backlinks/*` (`getBacklinks`, `graph/local-graph.ts`) lists one item
+per linking note with `links: [{location, context}]`, all from the same
+`backlinksOf` rows (the older `getIncomingLinks` is gone: one resolver, so a
+listed note always has its lines). The REST `/vaults/:id/local-graph/*` is
 `graph/local-graph.ts`: `neighborhood()` (SQL, nearest first then path, at most
 50 nodes, `extracted` and `semantic` edges, one edge per pair and kind) in the
 shape the client already read; the in-memory `getLocalGraph` of `notes/store.ts`

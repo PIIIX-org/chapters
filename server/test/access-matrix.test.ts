@@ -172,10 +172,21 @@ afterAll(async () => {
 })
 
 describe('read surfaces (#552, #1034)', () => {
-  // `drift` names a file of a repository: a vault reader sees it only with access to that repository too.
-  accessMatrix('MCP read_note drift', {
-    setup: () => shareBoth([GONE]),
-    read: (actor) => call(actor, 'read_note', { vaultId, path: DRIFT }),
+  // `drift` names a file of a repository (#472): the owner of both is told, a reader of the vault alone is not. The note's own
+  // body already holds the path, so the text only drift writes is what is looked for.
+  it('MCP read_note drift: the vault shared, the repository not: no drift', async () => {
+    // The answer is JSON: the quotes are escaped in it.
+    const drift = JSON.stringify(`Referenced code file "${GONE}" was removed`).slice(1, -1)
+    expect((await call('owner', 'read_note', { vaultId, path: DRIFT })).text).toContain(drift)
+    const share = await must('owner', 'POST', `/api/vaults/${vaultId}/shares`, { granteeType: 'user', granteeId: actors.shared.id, permission: 'read' })
+    try {
+      const read = await call('shared', 'read_note', { vaultId, path: DRIFT })
+      expect(read.ok, read.text).toBe(true)
+      expect(read.text).toContain(DRIFT)
+      expect(read.text).not.toContain(drift)
+    } finally {
+      await must('owner', 'DELETE', `/api/vaults/${vaultId}/shares/${share.id as string}`)
+    }
   })
   accessMatrix('MCP read_note', {
     setup: () => shareBoth([SOURCE, `${MARK}source`]),

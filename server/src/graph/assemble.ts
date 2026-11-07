@@ -147,12 +147,14 @@ export interface GraphResourceSet {
   repositoryIds: string[]
 }
 
-/** A graph node before Louvain gives it a community. */
 /** The name of a note path (`NoteRow.name`): the path without its first segment; the whole path of a one-segment one. */
 export const noteNameOf = (path: string): string => path.slice(path.indexOf('/') + 1)
 
 /** The ways a link may name the note at `path`, as written in `note_links.target_path`: its path, its path with `.md`, its name, its name with `.md`. */
-export const linkTargetsOf = (path: string): string[] => [...new Set([path, `${path}.md`, noteNameOf(path), `${noteNameOf(path)}.md`])]
+export const linkTargetsOf = (path: string): string[] =>
+  [...new Set([path, `${path}.md`, noteNameOf(path), `${noteNameOf(path)}.md`].flatMap((t) => [t, `/${t}`]))]
+
+/** A graph node before Louvain gives it a community. */
 
 export interface InternalNode {
   id: string

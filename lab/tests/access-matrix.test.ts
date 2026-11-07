@@ -122,7 +122,6 @@ const test: LabTest = {
       { name: 'git clone of a vault', identifiers: [source, `${mark}source orbital checklist`], share, read: cloneVault },
       { name: 'MCP read_note', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source }) },
       { name: 'REST GET /api/vaults/:id/notes/*', identifiers: [sourceNote.id, source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/notes/${source}`) },
-      { name: 'MCP read_note drift', identifiers: [gone], share, read: viaMcp('read_note', { vaultId, path: drift }) },
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
       { name: 'MCP read_note grep', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source, targets: [{ grep: 'orbital' }] }) },
       { name: 'MCP read_file grep', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file, targets: [{ grep: 'launch' }] }) },
@@ -181,6 +180,21 @@ const test: LabTest = {
       actual: explained.ok ? (leaked.length === 0 ? 'answered, nothing leaked' : `leaked ${leaked.join(', ')}`) : `not answered: ${explained.text.slice(0, 120)}`,
       ok: explained.ok && leaked.length === 0,
       severity: explained.ok && leaked.length === 0 ? 'info' : 'high',
+    })
+
+    // The vault shared, the repository not (#472): `read_note` tells the owner the cited file is gone (`drift`), not a reader of the vault alone.
+    const driftText = JSON.stringify(`Referenced code file "${gone}" was removed`).slice(1, -1)
+    const ownerRead = await mcp.owner.call('read_note', { vaultId, path: drift })
+    const onlyVault = await rest.owner.must<{ id: string }>('POST', `/api/vaults/${vaultId}/shares`, { granteeType: 'user', granteeId: ids.shared, permission: 'read' })
+    const sharedRead = await mcp.shared.call('read_note', { vaultId, path: drift })
+    await rest.owner.must('DELETE', `/api/vaults/${vaultId}/shares/${onlyVault.id}`)
+    const driftOk = ownerRead.text.includes(driftText) && sharedRead.ok && sharedRead.text.includes(drift) && !sharedRead.text.includes(driftText)
+    checks.push({
+      name: 'MCP read_note drift: vault shared, repository not',
+      expected: 'the owner is told the file is gone, the vault reader is not',
+      actual: driftOk ? 'owner told, reader not' : `LEAKS or missing: owner ${ownerRead.text.includes(driftText)}, reader ok ${sharedRead.ok}, reader told ${sharedRead.text.includes(driftText)}`,
+      ok: driftOk,
+      severity: driftOk ? 'info' : 'high',
     })
 
     if (!reportWasOn) await rest.owner.must('PUT', '/api/usage/settings', { enabled: false })

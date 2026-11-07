@@ -50,6 +50,7 @@ beforeAll(async () => {
   // Linked by a short name and with `.md` (as written, not as the note's path), a second hop, a prose `code:` that is no link,
   // a changed hash recorded in `sources`, and a hub of 55 notes for the node cap.
   await createNote(vaultId, { path: 'docs/short', body: 'Short: [[centre]].\n' })
+  await createNote(vaultId, { path: 'docs/slash', body: 'Slash: [[/docs/centre]].\n' })
   await createNote(vaultId, { path: 'docs/withmd', body: 'With md: [[docs/centre.md]].\n' })
   await createNote(vaultId, { path: 'docs/outer', body: 'Out by name: [[zeta]].\n' })
   await createNote(vaultId, { path: 'docs/deep', body: 'Two hops: [[docs/zeta]].\n' })
@@ -85,11 +86,14 @@ afterAll(async () => {
 describe('REST backlinks with lines (#472)', () => {
   it('each linking note lists its links, one per line, with the paragraph', async () => {
     const backlinks = (await get(`/api/vaults/${vaultId}/backlinks/docs/centre`)) as Array<{ path: string; links: Array<{ location: string; context: string | null }> }>
-    expect(backlinks.map((b) => b.path)).toEqual(['docs/alpha', 'docs/mid', 'docs/short', 'docs/withmd'])
+    expect(backlinks.map((b) => b.path)).toEqual(['docs/alpha', 'docs/mid', 'docs/short', 'docs/slash', 'docs/withmd'])
     expect(backlinks[0]!.links).toEqual([{ location: expect.stringMatching(/^docs\/alpha#L\d+$/), context: 'Alpha links to [[docs/centre]] once.' }])
     // Linked as `[[centre]]` and `[[docs/centre.md]]`: listed with their lines too.
     expect(backlinks[2]!.links.map((l) => l.context)).toEqual(['Short: [[centre]].'])
-    expect(backlinks[3]!.links.map((l) => l.context)).toEqual(['With md: [[docs/centre.md]].'])
+    expect(backlinks[3]!.links.map((l) => l.context)).toEqual(['Slash: [[/docs/centre]].'])
+    expect(backlinks[4]!.links.map((l) => l.context)).toEqual(['With md: [[docs/centre.md]].'])
+    // Every note listed has its lines: one resolver for the list and the lines.
+    expect(backlinks.every((b) => b.links.length > 0)).toBe(true)
     expect(backlinks[1]!.links.map((l) => l.context)).toEqual(['First [[docs/centre]].', 'Second [[docs/centre]] here.'])
     expect(backlinks[1]!.links[0]!.location).not.toBe(backlinks[1]!.links[1]!.location)
   })
@@ -104,6 +108,7 @@ describe('REST local graph from the SQL walk (#472)', () => {
       ['docs/alpha', 1],
       ['docs/mid', 1],
       ['docs/short', 1],
+      ['docs/slash', 1],
       ['docs/withmd', 1],
       ['docs/zeta', 1],
     ])
@@ -112,7 +117,16 @@ describe('REST local graph from the SQL walk (#472)', () => {
     expect((mcp.nodes as Array<{ path: string }>).map((n) => n.path)).toEqual(rest.nodes.map((n) => n.path))
     const extracted = (rest.edges as Array<{ source: string; target: string; kind: string }>).filter((e) => e.kind === 'extracted')
     const byId = new Map((rest.nodes as Array<{ id: string; path: string }>).map((n) => [n.id, n.path]))
-    expect(extracted.map((e) => `${byId.get(e.source)}>${byId.get(e.target)}`).sort()).toEqual(['docs/alpha>docs/centre', 'docs/centre>docs/zeta', 'docs/mid>docs/centre', 'docs/short>docs/centre', 'docs/withmd>docs/centre'])
+    expect(extracted.map((e) => `${byId.get(e.source)}>${byId.get(e.target)}`).sort()).toEqual(['docs/alpha>docs/centre', 'docs/centre>docs/zeta', 'docs/mid>docs/centre', 'docs/short>docs/centre', 'docs/slash>docs/centre', 'docs/withmd>docs/centre'])
+  })
+})
+
+describe('the whole graph resolves links by path, `.md` or name too (#472)', () => {
+  it('graph aggregate none has the edges of the short-name, slash and .md links', async () => {
+    const all = await call('graph', { vaultId, aggregate: 'none', edgeTypes: ['extracted'], budget_tokens: 25_000 })
+    const edges = (all.edges as Array<{ from: { path: string }; to: { path: string } }>).map((e) => `${e.from.path}>${e.to.path}`)
+    for (const from of ['short', 'slash', 'withmd']) expect(edges, from).toContain(`docs/${from}>docs/centre`)
+    expect(edges).toContain('docs/outer>docs/zeta')
   })
 })
 
