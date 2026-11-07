@@ -18,7 +18,7 @@ export function parseArms(raw: string): Arm[] {
 }
 
 /** Bumped when the tools an arm gets or what it is told changes: results of different versions are not compared (`harness` is the hash of the files, this is the name a reader can say). */
-export const HARNESS_VERSION = 2
+export const HARNESS_VERSION = 3
 
 export function systemPrompt(arm: Arm, opts: { maxToolCalls: number; repositoryId?: string; tools?: readonly string[] }): string {
   const access =

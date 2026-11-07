@@ -490,6 +490,16 @@ cost), 8,192 output tokens per turn, 100,000 characters per tool result,
   100,000-character tool results (1 and 10 calls per turn) and one that
   reports no usage; the old checks let them reach 901,625, 1,501,568 and
   975,342 tokens (#651 reviews).
+- **The final turn (#1116).** At any cap the model gets one last request with
+  `tool_choice: none` and the instruction to answer from what it has, the
+  same for both arms; its tokens and time count in the totals and the stop
+  reason (`cap:tool-calls`, `cap:tokens`, `cap:wall-time`) stays recorded. A
+  final turn that comes back with no text (a model that calls a tool anyway
+  or sends nothing: T5's Elara answer in run 42395876734 was empty after 30
+  calls) is asked again, up to 3 times, in plain words; each ask counts as a
+  turn, the ignored tool calls leave the history, and after the third the
+  episode ends with an empty answer and an `error` saying why. **`HARNESS_VERSION`
+  is 3** for this change: results of v2 and v3 are never compared.
 - **Time.** Tools stop at 15 minutes minus a reserve for the final answer
   (a fifth of the cap, at most 3 minutes); every model request carries an
   abort signal for the time left, retries included; a tool turn cut off at
@@ -575,7 +585,7 @@ Docker, bun): bring the lab up as in `docs/agents/lab.md`, then
 **How to read a run.** `agent-trial-results/summary.md` (also the job
 summary) has one row per task and arm: facts found / total, the false
 claims flagged, tokens in and out, tool calls, wall time, stop reason; then
-totals per arm, and any episode not run. `results.json` adds the model, caps, harness hash and `harnessVersion` (`HARNESS_VERSION` in `lib/arms.ts`, bumped when an arm's tools or prompt change: never compare results of different versions; v2 gave the Elara arm `grep` and `orient`, as the reader profile has), index
+totals per arm, and any episode not run. `results.json` adds the model, caps, harness hash and `harnessVersion` (`HARNESS_VERSION` in `lib/arms.ts`, bumped when an arm's tools or prompt change: never compare results of different versions; v2 gave the Elara arm `grep` and `orient`, as the reader profile has; v3 asks again for text when a capped final turn has none), index
 outcome, which facts were found and missed, the sentence of each flagged
 false claim, the full answer and the trace. Compare arms on the same run
 only: models, prices and Elara change between runs. Read the answers before

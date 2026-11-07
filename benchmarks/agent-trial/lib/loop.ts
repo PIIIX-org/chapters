@@ -101,6 +101,9 @@ export function finalReserveMs(caps: Caps): number {
   return Math.min(3 * 60_000, Math.floor(caps.maxWallMs / 5))
 }
 
+/** Times a capped episode asks again for text when its final turn has none. */
+const FINAL_ASKS = 3
+
 export async function runEpisode(e: Episode): Promise<EpisodeResult> {
   const now = e.now ?? (() => performance.now())
   const t0 = now()
@@ -116,6 +119,7 @@ export async function runEpisode(e: Episode): Promise<EpisodeResult> {
   let aborted = 0
   let dropped = 0
   let lastText = ''
+  let asks = 0
   let cap: StopReason | null = null
   const result = (answer: string, stop: StopReason, error?: string): EpisodeResult => ({
     answer,
@@ -211,6 +215,15 @@ export async function runEpisode(e: Episode): Promise<EpisodeResult> {
     used.output += usage.output
     estimated ||= turn.estimated === true
     lastText = turn.text
+    if (cap !== null && turn.text.trim() === '') {
+      // A final turn with no text (the model ignored `toolChoice: 'none'` and called a tool, or sent nothing): ask again in plain
+      // words, up to FINAL_ASKS times, every turn counted. The ignored calls leave the history, which has no results for them.
+      // shortcut: three asks, then the episode ends without an answer and says so; upgrade if a model needs more.
+      if (++asks > FINAL_ASKS) return result('', cap, `no final answer: the model sent no text after ${FINAL_ASKS} asks`)
+      // The blank turn itself is not kept (a provider refuses an empty assistant message); the ask follows the previous user message.
+      messages.push({ role: 'user', text: 'Your last reply had no text. Do not call tools: write your final answer now, in plain text, from what you have found.' })
+      continue
+    }
     messages.push({ role: 'assistant', text: turn.text, toolCalls: turn.toolCalls })
     if (turn.toolCalls.length === 0 || cap !== null) return result(turn.text, cap ?? 'answered')
 
