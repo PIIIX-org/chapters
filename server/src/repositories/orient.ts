@@ -31,7 +31,7 @@ import { db } from '../db/client.js'
 import { textArray } from '../search/block-rows.js'
 import { TEST_PATH } from './code-edges.js'
 
-/** Entries per list and page (the issue's cap); the cursor goes on to the next ten. */
+/** Entries per list and page (the issue's cap); the cursor goes on to the next ten definitions. */
 export const ORIENT_ENTRIES = 10
 
 export interface OrientSymbol {
@@ -69,11 +69,9 @@ export interface OrientOptions {
   folder: string | null
 }
 
-/** Entries skipped in each list: a page of `ORIENT_ENTRIES` further down the ranking (#534). */
+/** Definitions skipped: a page of `ORIENT_ENTRIES` further down the ranking (#534). */
 export interface OrientOffsets {
   symbols?: number
-  folders?: number
-  outline?: number
 }
 
 /** The query's words as lower-case LIKE patterns (an `_` or `%` is not a wildcard), at most 8. */
@@ -137,7 +135,7 @@ export async function repositoryMap(
       FROM defs) d
     GROUP BY child
     ORDER BY sum(score) DESC, child COLLATE "C"
-    LIMIT ${ORIENT_ENTRIES + 1} OFFSET ${offsets.folders ?? 0}`)) as unknown as OrientFolder[]
+    LIMIT ${ORIENT_ENTRIES + 1}`)) as unknown as OrientFolder[]
   return {
     symbols: symbols.map((r) => ({
       at: `${r.path}:${r.line}`,
@@ -152,7 +150,7 @@ export async function repositoryMap(
 }
 
 /** The notes and folders of a vault at one level. */
-export async function vaultOutline(vaultId: string, opts: OrientOptions, offset = 0): Promise<OrientNote[]> {
+export async function vaultOutline(vaultId: string, opts: OrientOptions): Promise<OrientNote[]> {
   const focus = opts.focus ?? []
   const words = wordPatterns(opts.query)
   const prefix = opts.folder === null ? '' : `${opts.folder}/`
@@ -176,6 +174,6 @@ export async function vaultOutline(vaultId: string, opts: OrientOptions, offset 
       FROM scored n) d
     GROUP BY child, is_dir
     ORDER BY sum(score) DESC, child COLLATE "C"
-    LIMIT ${ORIENT_ENTRIES + 1} OFFSET ${offset}`)) as unknown as Array<{ path: string; notes: number | null; type: string | null; links: number }>
+    LIMIT ${ORIENT_ENTRIES + 1}`)) as unknown as Array<{ path: string; notes: number | null; type: string | null; links: number }>
   return rows.map((r) => (r.notes === null ? { path: r.path, type: r.type!, links: r.links } : { path: r.path, notes: r.notes, links: r.links }))
 }

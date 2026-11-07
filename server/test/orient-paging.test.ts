@@ -14,6 +14,8 @@ let app: FastifyInstance
 let agent: Client
 let pagedRepo: string
 let pythonRepo: string
+let foldersRepo: string
+let mixedRepo: string
 
 type Answer = { symbols?: Array<{ at: string; symbol: string; refs: number; guessed?: number }>; folders?: Array<{ path: string }>; truncated: false | { cursor: string | null; total: Record<string, number | string> } }
 
@@ -33,6 +35,19 @@ beforeAll(async () => {
   const repo = async (name: string) => (await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name, ingestionMethod: 'agent_push' } })).json<{ id: string }>().id
   pagedRepo = await repo('orient-paged')
   pythonRepo = await repo('orient-python')
+  foldersRepo = await repo('orient-folders')
+  mixedRepo = await repo('orient-mixed')
+  // Twelve top-level folders and fifteen definitions: the folders are more than a page, the definitions too.
+  const wide = Object.fromEntries(Array.from({ length: 15 }, (_, i) => [`d${String(i).padStart(2, '0')}/f.ts`, `export function w${String(i).padStart(2, '0')}(): number {\n  return ${i}\n}\n`]))
+  await syncRepositoryFiles(foldersRepo, Object.entries(wide).map(([path, content]) => ({ path, content })), Object.keys(wide))
+  // `r` is used from another file by a resolved import and call; `g` only by name from a Python file whose path sorts first.
+  const mixed: Record<string, string> = {
+    'a/guessed.py': 'def g():\n    return 1\n',
+    'a/caller.py': 'from a.guessed import g\n\ndef c():\n    return g()\n',
+    'b/res.ts': 'export function r(): number {\n  return 1\n}\n',
+    'c/use.ts': "import { r } from '../b/res'\n\nexport function u(): number {\n  return r()\n}\n",
+  }
+  await syncRepositoryFiles(mixedRepo, Object.entries(mixed).map(([path, content]) => ({ path, content })), Object.keys(mixed))
   const many = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`src/m${String(i).padStart(2, '0')}.ts`, `export function m${String(i).padStart(2, '0')}(): number {\n  return ${i}\n}\n`]))
   await syncRepositoryFiles(pagedRepo, Object.entries(many).map(([path, content]) => ({ path, content })), Object.keys(many))
   const python: Record<string, string> = {
@@ -68,6 +83,22 @@ describe('orient pages past ten entries (#534)', () => {
     expect(seen).toEqual(Array.from({ length: 25 }, (_, i) => `m${String(i).padStart(2, '0')}`))
   })
 
+  it('the first page of a repository with more than ten folders still has its definitions', async () => {
+    const answer = await orient({ repositoryId: foldersRepo })
+    expect(answer.folders).toHaveLength(10)
+    expect(answer.symbols).toHaveLength(10)
+    expect(answer.truncated).toMatchObject({ total: { folders: '>10', symbols: '>10' } })
+  })
+
+  it('a cursor belongs to the repository it came from: replayed with another it is refused as invalid', async () => {
+    const first = await orient({ repositoryId: pagedRepo })
+    const cursor = (first.truncated as { cursor: string }).cursor
+    resetRateLimits()
+    const replay = await agent.callTool({ name: 'orient', arguments: { repositoryId: foldersRepo, cursor } })
+    expect(replay.isError).toBe(true)
+    expect(JSON.parse((replay.content as Array<{ text: string }>)[0]!.text).error.code).toBe('CURSOR_INVALID')
+  })
+
   it('the first page says that more exist', async () => {
     const answer = await orient({ repositoryId: pagedRepo })
     expect(answer.truncated).toMatchObject({ total: { symbols: '>10' }, cursor: expect.any(String) })
@@ -75,6 +106,14 @@ describe('orient pages past ten entries (#534)', () => {
 })
 
 describe('orient ranks guessed uses (#534)', () => {
+  it('below resolved ones: a definition used by a resolved import and call outranks one used by name from a path that sorts first', async () => {
+    const answer = await orient({ repositoryId: mixedRepo })
+    const order = answer.symbols!.map((s) => s.symbol)
+    expect(order.indexOf('r')).toBeLessThan(order.indexOf('g'))
+    expect(answer.symbols!.find((s) => s.symbol === 'r')).toMatchObject({ refs: 2 })
+    expect(answer.symbols!.find((s) => s.symbol === 'g')).toMatchObject({ refs: 0, guessed: 2 })
+  })
+
   it('a definition only called by name from other files outranks an unused one, and shows how many (an import and a call per file)', async () => {
     const answer = await orient({ repositoryId: pythonRepo })
     const helper = answer.symbols!.find((s) => s.symbol === 'helper')!
