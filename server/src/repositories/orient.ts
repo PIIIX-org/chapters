@@ -12,6 +12,9 @@
  *   score = refs + 20 if the definition's file is under a `focus` entry
  *         + 5 per use from a `focus` file
  *         + 10 if a `query` word is part of its name + 5 if part of its path.
+ * Uses guessed by name alone (`textual`, no unknown-receiver members) count half
+ * (`guessed` in the entry): Python and Go cross-file calls are only ever guessed,
+ * so without them every definition of those repositories ranks flat.
  * Ties go by path (code units), line, block id, so the same index answers the same
  * bytes. The signature is the first line of the stored snippet.
  *
@@ -28,7 +31,7 @@ import { db } from '../db/client.js'
 import { textArray } from '../search/block-rows.js'
 import { TEST_PATH } from './code-edges.js'
 
-/** Entries per list (the issue's cap). */
+/** Entries per list and page (the issue's cap); the cursor goes on to the next ten. */
 export const ORIENT_ENTRIES = 10
 
 export interface OrientSymbol {
@@ -37,7 +40,10 @@ export interface OrientSymbol {
   kind: string
   symbol: string
   sig: string
+  /** Resolved uses from other non-test files. */
   refs: number
+  /** Uses guessed by name alone (`textual`, not a member of an unknown receiver); absent when none. They rank below resolved ones. */
+  guessed?: number
 }
 
 export interface OrientFolder {
@@ -63,6 +69,13 @@ export interface OrientOptions {
   folder: string | null
 }
 
+/** Entries skipped in each list: a page of `ORIENT_ENTRIES` further down the ranking (#534). */
+export interface OrientOffsets {
+  symbols?: number
+  folders?: number
+  outline?: number
+}
+
 /** The query's words as lower-case LIKE patterns (an `_` or `%` is not a wildcard), at most 8. */
 function wordPatterns(query: string | undefined): string[] {
   const words = (query ?? '').toLowerCase().match(/[a-z0-9_]{2,}/g) ?? []
@@ -83,6 +96,7 @@ const underFolder = (column: SQL, folder: string | null): SQL =>
 export async function repositoryMap(
   repositoryId: string,
   opts: OrientOptions,
+  offsets: OrientOffsets = {},
 ): Promise<{ symbols: OrientSymbol[]; folders: OrientFolder[] }> {
   const focus = opts.focus ?? []
   const words = wordPatterns(opts.query)
@@ -94,16 +108,18 @@ export async function repositoryMap(
   // One row per definition under the folder with its score; the list and the folders read the same rows.
   const scored = sql`
     WITH uses AS (
-      SELECT e.target_file_id AS file_id, e.target_block_id AS block_id, count(*)::int AS n,
-        (count(*) FILTER (WHERE ${inFocus(sql`sf.path`, focus)}))::int AS from_focus
+      SELECT e.target_file_id AS file_id, e.target_block_id AS block_id,
+        (count(*) FILTER (WHERE e.confidence = 'resolved'))::int AS n,
+        (count(*) FILTER (WHERE e.confidence = 'textual' AND NOT e.member))::int AS guessed,
+        (count(*) FILTER (WHERE e.confidence = 'resolved' AND ${inFocus(sql`sf.path`, focus)}))::int AS from_focus
       FROM code_edges e JOIN repository_files sf ON sf.id = e.source_file_id
-      WHERE e.repository_id = ${repositoryId} AND e.confidence = 'resolved' AND e.kind IN ('call', 'reference', 'import')
+      WHERE e.repository_id = ${repositoryId} AND (e.confidence = 'resolved' OR NOT e.member) AND e.kind IN ('call', 'reference', 'import')
         AND e.target_file_id IS NOT NULL AND e.source_file_id <> e.target_file_id AND NOT (sf.path ~ ${TEST_PATH.source})
       GROUP BY e.target_file_id, e.target_block_id
     ), defs AS (
       SELECT b.id, b.block_id, f.path, b.start_line AS line, b.inner_path AS symbol, b.symbol_kind AS kind, b.snippet,
-        coalesce(u.n, 0) AS refs,
-        coalesce(u.n, 0) + 5 * coalesce(u.from_focus, 0) + (CASE WHEN ${inFocus(sql`f.path`, focus)} THEN 20 ELSE 0 END)
+        coalesce(u.n, 0) AS refs, coalesce(u.guessed, 0) AS guessed,
+        coalesce(u.n, 0) + 0.5 * coalesce(u.guessed, 0) + 5 * coalesce(u.from_focus, 0) + (CASE WHEN ${inFocus(sql`f.path`, focus)} THEN 20 ELSE 0 END)
           + (CASE WHEN ${named} THEN 10 ELSE 0 END) + (CASE WHEN ${pathed} THEN 5 ELSE 0 END) AS score
       FROM blocks b JOIN repository_files f ON f.id = b.owner_id
         LEFT JOIN uses u ON u.file_id = b.owner_id AND u.block_id = b.block_id
@@ -111,9 +127,9 @@ export async function repositoryMap(
         AND NOT (f.path ~ ${TEST_PATH.source}) AND ${underFolder(sql`f.path`, opts.folder)}
     )`
   const symbols = (await db.execute(sql`${scored}
-    SELECT path, line, symbol, kind, snippet, refs FROM defs
+    SELECT path, line, symbol, kind, snippet, refs, guessed FROM defs
     ORDER BY score DESC, path COLLATE "C", line, block_id
-    LIMIT ${ORIENT_ENTRIES + 1}`)) as unknown as Array<{ path: string; line: number; symbol: string; kind: string; snippet: string | null; refs: number }>
+    LIMIT ${ORIENT_ENTRIES + 1} OFFSET ${offsets.symbols ?? 0}`)) as unknown as Array<{ path: string; line: number; symbol: string; kind: string; snippet: string | null; refs: number; guessed: number }>
   const folders = (await db.execute(sql`${scored}
     SELECT child AS path, count(DISTINCT def_file)::int AS files, sum(refs)::int AS refs FROM (
       SELECT ${prefix}::text || split_part(substr(path, ${skip}), '/', 1) || (CASE WHEN position('/' IN substr(path, ${skip})) > 0 THEN '/' ELSE '' END) AS child,
@@ -121,7 +137,7 @@ export async function repositoryMap(
       FROM defs) d
     GROUP BY child
     ORDER BY sum(score) DESC, child COLLATE "C"
-    LIMIT ${ORIENT_ENTRIES + 1}`)) as unknown as OrientFolder[]
+    LIMIT ${ORIENT_ENTRIES + 1} OFFSET ${offsets.folders ?? 0}`)) as unknown as OrientFolder[]
   return {
     symbols: symbols.map((r) => ({
       at: `${r.path}:${r.line}`,
@@ -129,13 +145,14 @@ export async function repositoryMap(
       symbol: r.symbol,
       sig: (r.snippet ?? '').split('\n').find((l) => l.trim() !== '')?.trim() ?? r.symbol,
       refs: r.refs,
+      ...(r.guessed > 0 ? { guessed: r.guessed } : {}),
     })),
     folders,
   }
 }
 
 /** The notes and folders of a vault at one level. */
-export async function vaultOutline(vaultId: string, opts: OrientOptions): Promise<OrientNote[]> {
+export async function vaultOutline(vaultId: string, opts: OrientOptions, offset = 0): Promise<OrientNote[]> {
   const focus = opts.focus ?? []
   const words = wordPatterns(opts.query)
   const prefix = opts.folder === null ? '' : `${opts.folder}/`
@@ -159,6 +176,6 @@ export async function vaultOutline(vaultId: string, opts: OrientOptions): Promis
       FROM scored n) d
     GROUP BY child, is_dir
     ORDER BY sum(score) DESC, child COLLATE "C"
-    LIMIT ${ORIENT_ENTRIES + 1}`)) as unknown as Array<{ path: string; notes: number | null; type: string | null; links: number }>
+    LIMIT ${ORIENT_ENTRIES + 1} OFFSET ${offset}`)) as unknown as Array<{ path: string; notes: number | null; type: string | null; links: number }>
   return rows.map((r) => (r.notes === null ? { path: r.path, type: r.type!, links: r.links } : { path: r.path, notes: r.notes, links: r.links }))
 }
