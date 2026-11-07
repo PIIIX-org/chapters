@@ -921,12 +921,15 @@ queue commit.
 
 **Merge queue settings** (ruleset 26310472, enabled 2026-11-01). The merge
 method is **merge commit**: the verdict check needs the PR head as the
-queue commit's second parent and fails closed otherwise. The maximum group
-size is **1** (`max_entries_to_build` and `max_entries_to_merge` 1,
-grouping `ALLGREEN`): `lab-plan` and `review-verdict` resolve only the PR
-named in the queue branch, so a grouped commit would carry other PRs'
-changes unplanned and unreviewed. The status-check timeout is **300
-minutes**, above the `bench` job's 240-minute all-suite budget.
+queue commit's second parent and fails closed otherwise. Each merge carries
+one PR (`max_entries_to_merge` 1, grouping `ALLGREEN`): `lab-plan` and
+`review-verdict` resolve only the PR named in the queue branch, so a merged
+group would carry other PRs' changes unplanned and unreviewed. Up to **5**
+entries build at once (`max_entries_to_build` 5, owner decision 2026-11-07;
+it was 2 while runners were saturated): entry *n* builds on `dev` plus the
+entries ahead of it, and a failure ahead rebuilds the ones behind. The
+status-check timeout is **300 minutes**, above the `bench` job's 240-minute
+all-suite budget.
 
 **Landing a PR on `dev`.** Once the PR's own checks are green and its
 `VERDICT: MERGE` is posted, add it to the queue; there is no "Update
