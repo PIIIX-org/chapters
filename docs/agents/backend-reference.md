@@ -1303,7 +1303,10 @@ import, `type:`/`tag:`/`language:`/`folder:` for structural, null for
 semantic and for import rows extracted before migration 0031 (`line` null
 until the first boot with #453 re-extracts them: their file has `extractor_version` 0). On the budget
 ladder a row's `locations` form is one line, `from -> to relation
-evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
+evidence`. `summarize_concept_chain` (`mcp/prompts.ts`) prints the path's
+steps by path and its edges as these `edgeRows` rows by path (#558):
+`from -> to (relation, kind, confidence[, evidence])`, `--` for an
+undirected edge, no ids.
 
 `resolve-node.ts` (#447) turns a node reference into a node for MCP
 `graph`'s `neighborsOf`, `find_graph_path`'s ends, the REST
@@ -1357,8 +1360,23 @@ its body-relative lines into `path#La` of its file; a row with line 0 gives
 the bare path. The section is listed after `nodes` and `edges` when the
 centre is a note and `edgeTypes` includes `extracted`, with the ladder
 `{path, location}` → `location` → counts per linking note. The REST route
-`/vaults/:id/backlinks/*` (`getIncomingLinks`) is unchanged: one item per
-linking note, no lines.
+`/vaults/:id/backlinks/*` (`getBacklinks`, `graph/local-graph.ts`) lists one item
+per linking note with `links: [{location, context}]`, all from the same
+`backlinksOf` rows (the older `getIncomingLinks` is gone: one resolver, so a
+listed note always has its lines). The REST `/vaults/:id/local-graph/*` is
+`graph/local-graph.ts`: `neighborhood()` (SQL, nearest first then path, at most
+50 nodes, `extracted` and `semantic` edges, one edge per pair and kind) in the
+shape the client already read; the in-memory `getLocalGraph` of `notes/store.ts`
+is gone. **Per-note drift**: `read_note` puts `drift: [{resource, kind,
+detail}]` in the head of a first body page when a `[[repo:..]]`/`[[code:..]]`
+link or frontmatter `sources` entry of the note no longer holds (`noteDrift`, `checkCodeStaleness(repo, {noteId})`:
+the file is gone, its hash changed, or the symbol is missing; no
+notification; only repositories the note names and the connection may read are
+checked: every readable one for an account token, none for a vault pin; no
+query for a note naming none); absent otherwise, so no tool text changed.
+Links to a note count by its path, path with `.md` or name (`noteLinkTargets`,
+shared by the walk, `backlinksOf` and `buildGraph`: a name stands for one note,
+the last path in code-unit order), as the old REST graph resolved them.
 
 **Saved perspectives** (`graph_perspectives`; REST `GET/POST
 /graph/perspectives`, `DELETE /graph/perspectives/:id`, and the three MCP
@@ -1542,6 +1560,18 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **No frontmatter in MCP hits** (#419): the MCP `search` handler drops `frontmatter` from every hit (it was
     42 % of a typical note hit's characters, measured in `mcp-search-hits.test.ts`: 665 to 387); `searchNotes` and
     the REST routes still return it, the client's search overlay shows its tags.
+  - **Query router** (#1060, `router.ts`): before the legs run, `searchNotes` asks `routeQuery` whether the query is
+    one identifier or one path (only without filters, with symbols for an identifier, at most 6 words). The term is
+    the one backticked token, or the one word left once the filler (`where is the ... defined`) is dropped. A path
+    term (a `/` or a file extension) finds repository files by path or file name and notes by path (with or
+    without `.md`); otherwise the symbol blocks whose bare name or `Class.name` equals the term in any spelling
+    `identifiers.ts` knows. Found: `route`, `retrieval_mode: "exact"`, hits (a symbol's lines, a file with
+    lines 1..end), `confidence: 1` for one, `ambiguous: true` for
+    several (at most 10), nothing fuzzy. Not found, or not routable: the hybrid path, byte-identical to before,
+    and no `route` in the answer. The issue's `retrieval_mode: "fallback"` is not used: it would lose which
+    channels answered; an unrouted answer says nothing instead. The structural route (callers, references) and
+    the MCP `route` override argument are not built: the first needs #1055, the second has no room in the reader
+    budget. `SearchNotesOptions.route: false` takes the hybrid path in tests.
   - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
     merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a
     fixed window of `CANDIDATES = 30` rows per leg (the population the
@@ -2200,7 +2230,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   outside its vault, the same answer as for a missing id);
   `repository-or-account` (`find_symbols`: a vault token is refused, a
   repository token searches only its pin); `vault-or-repo` (`search`,
-  `graph`, `find_graph_path`, via `resolveResourceSet`). `everywhere:
+  `graph`, `find_graph_path`, `orient`, via `resolveResourceSet`). `everywhere:
   true` needs an account token. Ids that come from stored data rather
   than arguments stay inside the pin too: `audit_okf_conformance` on a
   vault token reports every `[[repo:...]]` link as broken without
@@ -2237,7 +2267,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   profile; this connection has the reader profile (mint a token with
   that profile)`). `reader`: `list_vaults`, `list_repositories`,
   `browse_vault`, `browse_repository`, `search`, `read_note`,
-  `read_file`, `find_symbols`, `graph`, `find_graph_path`; `writer`
+  `read_file`, `find_symbols`, `orient`, `graph`, `find_graph_path`; `writer`
   adds `create_note`, `edit_note`, `append_note`. A new tool is
   `admin` unless it declares a smaller profile. The profile only
   intersects with the allow-list, access level, scope and pin; it never
@@ -2683,7 +2713,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `listRepositoryFilesPage` (`repositories/store.ts`) reads `BROWSE_PAGE`
     (500) + 1 files after the cursor's path, `ORDER BY path COLLATE "C"`,
     and its `path` folder is the `COLLATE "C"` range `folder/` ≤ path <
-    `folder0` (leading/trailing `/` ignored; a file's path lists nothing).
+    `folder0` (`.`, empty and repeated `/` segments dropped, #1102; a folder that holds no file is `NOT_FOUND` with near folders from `folderProbe`, a file's path says so; `read_file` and `grep` read `./` and `/` paths the same way, and `read_file` of a folder says to browse it).
     The index `repository_files_repo_path_c` (`repository_id`, `path
     COLLATE "C"`, migration 0029) serves both: the unique
     `repository_files_repo_path` is in the database collation. Past 500
@@ -2692,6 +2722,28 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     cursor's fingerprint, so a cursor from another folder is refused. The
     REST `GET /repositories/:id/files` keeps `listRepositoryFiles`: every
     file, unordered, no paging.
+  - `orient` (#534, `mcp/orient.ts` over `repositories/orient.ts`) answers
+    where to start, at most 10 entries per list (`ORIENT_ENTRIES`), one
+    level (`path`) at a time. Repository: `repositoryMap` ranks the symbol
+    blocks under the folder by `refs`, the `resolved` `call`/`reference`/
+    `import` rows of `code_edges` (#469) from other, non-test files
+    (`TEST_PATH`, code-edges.ts, is used in SQL; `test` rows and test-file
+    sources never count, test-file definitions are not listed), plus the
+    `query`/`focus` bonuses (20 for a definition under `focus`, 5 per use
+    from a focus file, 10 for a query word in the name, 5 in the path),
+    ties by path (`COLLATE "C"`), line, `block_id`; the `folders` list is
+    the same rows grouped one level below the folder. Vault: `vaultOutline`
+    ranks the live notes one level below the folder by the `note_links`
+    rows from other notes of the vault. Uses guessed by name alone (`textual`,
+    not a member of an unknown receiver) count half in the score and show as
+    `guessed` (Python and Go cross-file calls are only ever guessed). The
+    `symbols` list is a `keyset` section (11 fetched for the `">10"` total, the
+    cursor holds the offset the next ten start at; it is last, bound to the
+    call's scope like every cursor); `folders` and `outline` are `ranked`
+    lists of ten with a `">10"` total and no cursor (a deeper level is a
+    `path`): a list that pages ends its page (response.ts `fill`), so were they
+    paged they would hide the definitions. The sections fit the budget by the
+    ladder; no ranking or response code is shared with `search`.
   - `find_symbols` with `refs: "explain"` (#675, `mcp/explain.ts`, data in
     `repositories/explain.ts`) composes the code questions with the notes that
     cite the definition's file in one answer: the definition (`symbol`, `at:
@@ -2734,6 +2786,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     git history and dates are sync times. The versions after the one the commit
     or date names are folded per path in SQL and paged by path like the plain
     listing; a commit no version recorded is `INVALID_ARGUMENT`.
+  - Vault and repository id arguments (#1101) are listed as UUIDs but
+    checked by `idRefusal` in `tool()` (`mcp/server.ts`), not by the schema:
+    a pinned connection's wrong id is refused naming the pin
+    (`suggestions: ["<id> (<name>)"]`), an account connection's malformed id
+    is `INVALID_ARGUMENT` and an id it cannot see `NOT_FOUND` (both with up to
+    5 of its own accessible ids, by name then id). A pinned connection's refusal
+    names only its pin (`TOOL_NOT_ALLOWED`, malformed or not), and an id of the
+    other kind is the scope refusal with no suggestions. The accessible ids are
+    read only on a refusal.
   - `browse_vault` (#425) pages in SQL the same way, one code path for
     the root (the empty folder) and a folder (`notes/store.ts`), reading
     only the page: `browseNotesPage` reads 500 + 1 live notes after the
@@ -3854,7 +3915,7 @@ repository, file or symbol. The usage report (#678) records `refs` and `depth`
 as filters of a `find_symbols` call.
 
 **Grep** (#468; `repositories/grep.ts` the scan, `mcp/grep.ts` the budgeted
-answer; no REST route): MCP `grep` matches a regular expression line by line
+answer; REST routes below): MCP `grep` matches a regular expression line by line
 over the live notes of vaults (their bodies) and the indexed files of
 repositories (`repository_files.content`: the indexed version only, named once
 in the head as `commit` or `tree`, #471). It is a reader tool, so it costs
@@ -3890,7 +3951,7 @@ is 50 hits, as many as fit `budget_tokens` (ladder: without `snippet`, then
 `path#La-Lb`, then counted per file). Access: the usual `vault-or-repo` scope
 resolution, so another account's vault or repository is a `NOT_FOUND` and
 `everywhere` lists only what the account reaches; both access matrices cover
-it (vault, repository, everywhere). Not covered: a REST route, `ref` other than
+it (vault, repository, everywhere). **REST** (`repositories/grep-routes.ts`, `GET /vaults/:id/grep`, `/repositories/:id/grep`, `/grep`): `pattern`, `path`, `context`, `after`; answers `{scanned, commit | tree?, hits, next, capped}` (`next` is the cursor of the following page, `capped` the path a stopped scan had read to); a refused pattern is 400, a scan past its time limit 503, an unreachable vault or repository 404; both access matrices cover the three routes. Not covered: `ref` other than
 the indexed version, matching a note's frontmatter lines, overlapping contexts
 are not merged, and a line is cut at 500 characters.
 

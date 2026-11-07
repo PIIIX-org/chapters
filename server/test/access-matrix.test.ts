@@ -32,6 +32,9 @@ const MARK = 'quokkamatrix'
 const TARGET = `docs/${MARK}-target`
 const SOURCE = `docs/${MARK}-source`
 const SOURCE_BODY = `${MARK}source orbital checklist, see [[${TARGET}]].`
+// A note whose code reference no longer holds: read_note names it as `drift` (#472).
+const DRIFT = `docs/${MARK}-drift`
+const GONE = `src/${MARK}-gone.ts`
 const FILE = `src/${MARK}-plan.ts`
 const FILE_BODY = `export function ${MARK}Plan(): string {\n  return 'launch window'\n}\n`
 // A caller and a test of the plan: the sites the code queries (#470) list.
@@ -139,6 +142,7 @@ beforeAll(async () => {
   // A note that cites the plan file: `find_symbols` with `refs: "explain"` (#675) names it to readers of its vault only.
   await must('owner', 'POST', `/api/vaults/${vaultId}/notes`, { type: 'docs', name: `${MARK}-cite`, body: `Why the plan: [[repo:matrix-${MARK}/${FILE}]].` })
   repositoryId = (await must('owner', 'POST', '/api/repositories', { name: `matrix-${MARK}`, ingestionMethod: 'agent_push' })).id as string
+  await must('owner', 'POST', `/api/vaults/${vaultId}/notes`, { type: 'docs', name: `${MARK}-drift`, body: `Plan: [[repo:matrix-${MARK}/${GONE}]].` })
   const files = [
     { path: FILE, content: FILE_BODY },
     { path: RUN, content: RUN_BODY },
@@ -168,6 +172,22 @@ afterAll(async () => {
 })
 
 describe('read surfaces (#552, #1034)', () => {
+  // `drift` names a file of a repository (#472): the owner of both is told, a reader of the vault alone is not. The note's own
+  // body already holds the path, so the text only drift writes is what is looked for.
+  it('MCP read_note drift: the vault shared, the repository not: no drift', async () => {
+    // The answer is JSON: the quotes are escaped in it.
+    const drift = JSON.stringify(`Referenced code file "${GONE}" was removed`).slice(1, -1)
+    expect((await call('owner', 'read_note', { vaultId, path: DRIFT })).text).toContain(drift)
+    const share = await must('owner', 'POST', `/api/vaults/${vaultId}/shares`, { granteeType: 'user', granteeId: actors.shared.id, permission: 'read' })
+    try {
+      const read = await call('shared', 'read_note', { vaultId, path: DRIFT })
+      expect(read.ok, read.text).toBe(true)
+      expect(read.text).toContain(DRIFT)
+      expect(read.text).not.toContain(drift)
+    } finally {
+      await must('owner', 'DELETE', `/api/vaults/${vaultId}/shares/${share.id as string}`)
+    }
+  })
   accessMatrix('MCP read_note', {
     setup: () => shareBoth([SOURCE, `${MARK}source`]),
     read: (actor) => call(actor, 'read_note', { vaultId, path: SOURCE }),
@@ -201,6 +221,15 @@ describe('read surfaces (#552, #1034)', () => {
     read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(FILE)}`)),
   })
 
+  // orient (#534) names definitions with their paths and lines, and notes by path.
+  accessMatrix('MCP orient: repository map', {
+    setup: () => shareBoth([FILE, `${MARK}Plan`]),
+    read: (actor) => call(actor, 'orient', { repositoryId, query: `${MARK}Plan`, focus: [FILE] }),
+  })
+  accessMatrix('MCP orient: vault outline', {
+    setup: () => shareBoth([SOURCE]),
+    read: (actor) => call(actor, 'orient', { vaultId, path: 'docs', query: `${MARK}source` }),
+  })
   accessMatrix('MCP find_symbols refs: explain', {
     setup: () => shareBoth([RUN, `${MARK}Run`, `docs/${MARK}-cite`]),
     read: (actor) => call(actor, 'find_symbols', { repositoryId, query: `${MARK}Plan`, refs: 'explain' }),
@@ -231,6 +260,50 @@ describe('read surfaces (#552, #1034)', () => {
   accessMatrix('MCP browse_repository changed_since', {
     setup: () => shareBoth([ADDED]),
     read: (actor) => call(actor, 'browse_repository', { repositoryId, changed_since: '2000-01-01' }),
+  })
+
+  // A refused id names the account's own accessible ids and names (#1101): the object is in the owner's and the shared
+  // account's suggestions only. The refusal is an error answer, so this is the matrix's four cases by hand.
+  it('MCP malformed id: suggestions name the repository and vault to the owner and the shared account only', async () => {
+    const asks = (actor: Actor) => [
+      call(actor, 'browse_repository', { repositoryId: 'not-a-uuid' }),
+      call(actor, 'browse_vault', { vaultId: 'not-a-uuid' }),
+    ]
+    const names = [`matrix-${MARK}`, repositoryId, `matrix ${MARK}`, vaultId]
+    const text = async (actor: Actor) => (await Promise.all(asks(actor))).map((o) => o.text).join('\n')
+    const owner = await text('owner')
+    for (const n of names) expect(owner, `owner ${n}`).toContain(n)
+    expect(await text('unrelated')).not.toMatch(new RegExp(names.map((n) => n.replace(/[()]/g, '\\$&')).join('|')))
+    const fixture = await shareBoth(names)
+    const shared = await text('shared')
+    for (const n of names) expect(shared, `shared ${n}`).toContain(n)
+    await fixture.revoke()
+    const revoked = await text('shared')
+    for (const n of names) expect(revoked, `revoked ${n}`).not.toContain(n)
+  })
+
+  // A pinned token sending an id of the other kind is refused with the scope error and names nothing of the account (#1101).
+  it('MCP pinned token with an id of the other kind: the answer names no id or name of the account', async () => {
+    const pin = async (body: Record<string, unknown>) => {
+      const minted = await rest('owner', 'POST', '/api/mcp-connections', { name: `matrix-pin-${Math.random()}`, ...body })
+      expect(minted.statusCode).toBeLessThan(300)
+      const mcp = new Client({ name: 'access-matrix-pin', version: '0.0.0' })
+      await mcp.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), { requestInit: { headers: { authorization: `Bearer ${(minted.json() as { token: string }).token}` } } }))
+      clients.push(mcp)
+      return mcp
+    }
+    const repoPinned = await pin({ scope: 'repository', repositoryId })
+    const vaultPinned = await pin({ scope: 'vault', vaultId })
+    resetRateLimits()
+    const fromRepoPin = mcpOutcome(await repoPinned.callTool({ name: 'browse_vault', arguments: { vaultId } }))
+    resetRateLimits()
+    const fromVaultPin = mcpOutcome(await vaultPinned.callTool({ name: 'browse_repository', arguments: { repositoryId } }))
+    for (const [label, outcome] of [['repository-pinned sending a vaultId', fromRepoPin], ['vault-pinned sending a repositoryId', fromVaultPin]] as const) {
+      expect(outcome.denied || !outcome.ok, label).toBe(true)
+      expect(outcome.text, label).toContain('TOOL_NOT_ALLOWED')
+      expect(outcome.text, label).not.toContain('suggestions')
+      for (const hidden of [vaultId, repositoryId, `matrix ${MARK}`, `matrix-${MARK}`]) expect(outcome.text, `${label}: ${hidden}`).not.toContain(hidden)
+    }
   })
 
   // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.
@@ -279,6 +352,18 @@ describe('read surfaces (#552, #1034)', () => {
   accessMatrix('MCP grep everywhere', {
     setup: () => shareBoth([SOURCE, `${MARK}source`], 'listing'),
     read: (actor) => call(actor, 'grep', { everywhere: true, pattern: `${MARK}source` }),
+  })
+  accessMatrix('REST GET /api/vaults/:id/grep', {
+    setup: () => shareBoth([SOURCE, `${MARK}source`]),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/vaults/${vaultId}/grep?pattern=${MARK}source`)),
+  })
+  accessMatrix('REST GET /api/repositories/:id/grep', {
+    setup: () => shareBoth([FILE, `${MARK}Plan`]),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/grep?pattern=${MARK}Plan`)),
+  })
+  accessMatrix('REST GET /api/grep (everywhere)', {
+    setup: () => shareBoth([SOURCE, `${MARK}source`], 'listing'),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/grep?pattern=${MARK}source`)),
   })
   accessMatrix('REST GET /api/search (everywhere)', {
     setup: () => shareBoth([sourceId, SOURCE], 'listing'),

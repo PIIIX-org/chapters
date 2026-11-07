@@ -147,7 +147,15 @@ export interface GraphResourceSet {
   repositoryIds: string[]
 }
 
+/** The name of a note path (`NoteRow.name`): the path without its first segment; the whole path of a one-segment one. */
+export const noteNameOf = (path: string): string => path.slice(path.indexOf('/') + 1)
+
+/** The ways a link may name the note at `path`, as written in `note_links.target_path`: its path, its path with `.md`, its name, its name with `.md`. */
+export const linkTargetsOf = (path: string): string[] =>
+  [...new Set([path, `${path}.md`, noteNameOf(path), `${noteNameOf(path)}.md`].flatMap((t) => [t, `/${t}`]))]
+
 /** A graph node before Louvain gives it a community. */
+
 export interface InternalNode {
   id: string
   resourceType: ResourceType
@@ -557,6 +565,14 @@ export async function buildGraph(
   const noteByVaultPath = new Map(
     internalNodes.filter((n) => n.resourceType === 'note').map((n) => [`${n.resourceId}:${n.path}`, n.id]),
   )
+  const noteByVaultName = new Map(
+    internalNodes.filter((n) => n.resourceType === 'note').sort((a, b) => (a.path < b.path ? -1 : 1)).map((n) => [`${n.resourceId}:${noteNameOf(n.path)}`, n.id]),
+  )
+  /** A written link target as a note of the source's vault: its path, the path without `.md`, or its name (#472). */
+  const noteLinkTarget = (vaultId: string, target: string): string | undefined => {
+    const clean = target.replace(/^\//, '').replace(/\.md$/, '')
+    return noteByVaultPath.get(`${vaultId}:${clean}`) ?? noteByVaultName.get(`${vaultId}:${clean}`)
+  }
   const codeByRepoPath = new Map(
     internalNodes.filter((n) => n.resourceType === 'code').map((n) => [`${n.resourceId}:${n.path}`, n.id]),
   )
@@ -581,7 +597,7 @@ export async function buildGraph(
       const file = repoLinkTarget(link.targetPath, repoNameToId, repositoryIds)
       const targetId =
         file === undefined
-          ? noteByVaultPath.get(`${source.resourceId}:${link.targetPath}`)
+          ? noteLinkTarget(source.resourceId, link.targetPath)
           : file && codeByRepoPath.get(`${file.repositoryId}:${file.path}`)
       if (targetId) list.add(linkEdge(link.sourceNoteId, targetId, link.startLine, link.endLine))
     }

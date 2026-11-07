@@ -629,9 +629,11 @@ path rules are `.github/scripts/lab-plan.mjs` (unit tests
 commit `plan` resolves the PR from the queue branch
 (`gh-readonly-queue/<base>/pr-<N>-<sha>`) and plans it the same way, so
 `plan`, `lab` and `bench-gate` report on the queue commit; its `HEAD^1`
-is the queue's base, so the base copies of the gates run there as on a
-PR. Every job has a `timeout-minutes` (`lab` 60 for the fast tier, 180
-for the full one). Tiers, the baseline, how to add a test:
+is the queue's base (`dev` for the first entry, the queue commit of the
+entry ahead otherwise, so `HEAD^1..HEAD` is still exactly the PR's change),
+and the base copies of the gates run there as on a PR. Every job has a
+`timeout-minutes` (`lab` 60 for the fast tier, 180 for the full one).
+Tiers, the baseline, how to add a test:
 `docs/agents/lab.md`.
 
 **Premise benchmark** (same workflow, jobs `bench` ×3 and `bench-gate`,
@@ -834,8 +836,8 @@ Rules apply to `dev` and `prod` in layers, and all must pass:
 - **Classic branch protection** on each branch: `enforce_admins: true`
   (admins cannot bypass it), the required status checks in the table below
   (#574), and `strict` — `true` on `prod` (the PR must be up to date with
-  its base), `false` on `dev`, where the merge queue tests every PR on the
-  current tip instead (2026-11-01).
+  its base), `false` on `dev`, where the merge queue tests every PR on
+  `dev` plus the queued entries ahead of it instead (2026-11-01).
 - **Repository ruleset 24421063, "Require CI green before merge"**
   (`gh api repos/PIIIX-org/chapters/rulesets/24421063`). It targets `dev`,
   `prod` and `main` and has no bypass actors
@@ -910,7 +912,8 @@ lists what counted, each verdict author's permission and how to pass).
 
 On the merge queue's `merge_group` event the job resolves the PR from the
 queue branch (`gh-readonly-queue/<base>/pr-<N>-<sha>`; the sha in the name
-is the queue's base, not the PR head), applies the same rules to the PR's
+is the queue's base, `dev` or the queue commit of the entry ahead, never
+the PR head), applies the same rules to the PR's
 current head, which the queue's temporary merge commit must contain as its
 second parent (a queue commit built from another head gets a failure
 status naming both, and a single-parent queue commit, from a squash or
@@ -921,12 +924,15 @@ queue commit.
 
 **Merge queue settings** (ruleset 26310472, enabled 2026-11-01). The merge
 method is **merge commit**: the verdict check needs the PR head as the
-queue commit's second parent and fails closed otherwise. The maximum group
-size is **1** (`max_entries_to_build` and `max_entries_to_merge` 1,
-grouping `ALLGREEN`): `lab-plan` and `review-verdict` resolve only the PR
-named in the queue branch, so a grouped commit would carry other PRs'
-changes unplanned and unreviewed. The status-check timeout is **300
-minutes**, above the `bench` job's 240-minute all-suite budget.
+queue commit's second parent and fails closed otherwise. Each merge carries
+one PR (`max_entries_to_merge` 1, grouping `ALLGREEN`): `lab-plan` and
+`review-verdict` resolve only the PR named in the queue branch, so a merged
+group would carry other PRs' changes unplanned and unreviewed. Up to **5**
+entries build at once (`max_entries_to_build` 5, owner decision 2026-11-07;
+it was 2 while runners were saturated): entry *n* builds on `dev` plus the
+entries ahead of it, and a failure ahead rebuilds the ones behind. The
+status-check timeout is **300 minutes**, above the `bench` job's 240-minute
+all-suite budget.
 
 **Landing a PR on `dev`.** Once the PR's own checks are green and its
 `VERDICT: MERGE` is posted, add it to the queue; there is no "Update

@@ -80,10 +80,11 @@ import { serializeNote } from '../notes/okf.js'
 import { bodyStartLine, renderDirIndex, renderNoteFile } from '../notes/projector.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { auditVaultConformance } from '../notes/audit.js'
+import { orientAnswer } from './orient.js'
 import { explainAnswer } from './explain.js'
 import { OVERLAY_SPARE, overlayHits, readOverlay } from './overlay.js'
 import { changedFilesAnswer } from './changes.js'
-import { deleteRepositoryRecord, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
+import { deleteRepositoryRecord, folderProbe, indexedVersion, listFileBlocks, listFileSymbols, listRepositoryFilesPage, readRepositoryFile, repositoryIndexedVersion } from '../repositories/store.js'
 import { countPendingExtractions, extractionFailures } from '../repositories/extraction-queue.js'
 import { skippedField } from '../repositories/fs-scan.js'
 import { SYMBOL_KINDS, type SymbolKind } from '../repositories/extraction.js'
@@ -136,6 +137,7 @@ import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
+import { noteDrift } from '../notes/staleness.js'
 import { GREP_INPUT, grepAnswer } from './grep.js'
 import { LONG_TEXT_LINES, routingHint, withHint } from './routing-hints.js'
 import {
@@ -170,9 +172,14 @@ const UUID_ARG = z
   .string()
   .refine((value) => UUID_PATTERN.test(value), { error: 'Invalid UUID' })
   .meta({ format: 'uuid' })
+/**
+ * A vault or repository id argument. Listed as a UUID but not checked by the schema: a mis-copied id is refused by
+ * `idRefusal` with the ids that would have worked (#1101), which the schema's "Invalid UUID" could not name.
+ */
+const ID_ARG = z.string().meta({ format: 'uuid' })
 /** The target vault (repository): a pinned connection may omit it, an account connection names it. */
-const VAULT_ID = UUID_ARG.optional().describe('Vault id; omit when pinned')
-const REPOSITORY_ID = UUID_ARG.optional().describe('Repository id; omit when pinned')
+const VAULT_ID = ID_ARG.optional().describe('Vault id; omit when pinned')
+const REPOSITORY_ID = ID_ARG.optional().describe('Repository id; omit when pinned')
 const NOTE_PATH = z.string().describe('Note path')
 
 /** One `edit_note` op (#408); each op object takes only its own keys. */
@@ -182,12 +189,12 @@ const EDIT_OPS = z.array(
     editOp('replace_text', {
       find: z.string(),
       replace: z.string(),
-      expectedCount: z.number().int().min(1).optional().describe('How many times `find` must occur (default 1); all are replaced'),
+      expectedCount: intRange('expectedCount', 1, 1_000_000).optional().describe('Times `find` must occur (default 1)'),
     }),
     editOp('insert_before', { anchor: z.string(), text: z.string() }),
     editOp('insert_after', { anchor: z.string(), text: z.string() }),
     editOp('replace_section', {
-      heading: z.string().describe('"## Plan" (the whole heading line) or "Plan" (its text)'),
+      heading: z.string().describe('"## Plan" or "Plan"'),
       content: z.string(),
     }),
     editOp('append', { text: z.string() }),
@@ -657,6 +664,37 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     return requested
   }
 
+  /** At most this many accessible ids a refused id names. */
+  const ID_SUGGESTIONS = 5
+
+  /**
+   * The refusal of a vault or repository id argument that cannot be used (#1101), naming the ids that can: a pinned
+   * connection's pin, else up to five of the account's own accessible ones as `<id> (<name>)`. Only the caller's ids
+   * are named, so an id it cannot see answers as a missing one. null when the id is fine as far as shape and pin go.
+   */
+  async function idRefusal(kind: 'vault' | 'repository', requested: string): Promise<McpToolError | null> {
+    const field = kind === 'vault' ? 'vaultId' : 'repositoryId'
+    const scope = auth.connection.scope
+    // A connection pinned to the other kind may name no id of this one, whatever it is: the scope's own refusal, and no
+    // id or name of the account (#1101 review).
+    if (scope !== 'account' && scope !== kind) return new McpToolError('TOOL_NOT_ALLOWED', `this connection is scoped to a ${scope}, not a ${kind}`, { field })
+    const pin = scope === kind ? (kind === 'vault' ? auth.connection.vaultId : auth.connection.repositoryId) : null
+    // The accessible ones are read only to refuse.
+    if (pin ? requested === pin : UUID_PATTERN.test(requested)) return null
+    const names = await accessibleIds(kind)
+    if (pin) {
+      const named = names.find((n) => n.startsWith(pin)) ?? pin
+      return new McpToolError('TOOL_NOT_ALLOWED', `this connection is pinned to a different ${kind}: use ${field} ${named}, or omit it`, { field, suggestions: [named] })
+    }
+    return new McpToolError('INVALID_ARGUMENT', `${field} is not a UUID: use one of the suggestions`, { field, suggestions: names.slice(0, ID_SUGGESTIONS) })
+  }
+
+  /** The account's accessible vaults or repositories as `<id> (<name>)`, by name then id: the same suggestions every time. */
+  async function accessibleIds(kind: 'vault' | 'repository'): Promise<string[]> {
+    const own = kind === 'vault' ? await listAccessibleVaults(auth.user.id) : await listAccessibleRepositories(auth.user.id)
+    return [...own].sort((x, y) => compareCodeUnits(x.name, y.name) || compareCodeUnits(x.id, y.id)).map((r) => `${r.id} (${r.name})`)
+  }
+
   function requireAccountScope(surface: string): void {
     // Audit rule: account-wide surfaces are hard-rejected for vault- or
     // repository-scoped tokens, never silently narrowed.
@@ -870,6 +908,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         requireCapability(name, def.capability, profile)
         // The SDK has already parsed the arguments with `inputSchema`, the shape A describes.
         const args = (raw ?? {}) as A
+        for (const [kind, id] of [['vault', args.vaultId], ['repository', args.repositoryId]] as const) {
+          if (typeof id !== 'string') continue
+          const refusal = await idRefusal(kind, id)
+          if (refusal) throw refusal
+        }
         const ids: ScopeIds = def.ids
           ? await def.ids(args)
           : {
@@ -892,6 +935,19 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         await answer.rendered?.(truncated, seen)
         return answered(text, blocks)
       } catch (err) {
+        // An id the caller cannot see is a missing one (#439); it names the caller's own ids (#1101).
+        const raw0 = (raw ?? {}) as { vaultId?: unknown; repositoryId?: unknown }
+        if (err instanceof McpToolError && err.code === 'NOT_FOUND' && auth.connection.scope === 'account') {
+          // With both ids given, the one the account cannot see is the one named.
+          for (const [kind, given] of [['repository', raw0.repositoryId], ['vault', raw0.vaultId]] as const) {
+            if (typeof given !== 'string') continue
+            const names = await accessibleIds(kind)
+            if (names.some((n) => n.startsWith(`${given.toLowerCase()} (`))) continue
+            const result = errorResult(toErrorEnvelope(new McpToolError('NOT_FOUND', 'not found', { suggestions: names.slice(0, ID_SUGGESTIONS) })))
+            toolErrors.add(result)
+            return result
+          }
+        }
         const result = errorResult(toErrorEnvelope(err))
         toolErrors.add(result)
         return result
@@ -1433,7 +1489,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       .min(1)
       .max(200)
       .optional()
-      .describe('Retry-safe: the same key + arguments within 24 h replays the first result (`replayed: true`)'),
+      .describe('Same key + arguments from this connection within 24 h replay the first result (`replayed: true`)'),
   }
   const DRY_RUN_ARG = { dry_run: z.boolean().optional().describe('true: the result, nothing written') }
   /** The second sentence of every note write's description (#429): the answer, and where the rest is. */
@@ -1497,6 +1553,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         const answer = { head: { path: note.row.path, rev: note.row.seq, ...lines, ...foldError }, sections: targetSections(parted, args.targets), rendered }
         return inSession(session, doc, answer, page.at)
       }
+      // References to code that changed since the note was written (#472): on a first page, only when there are any.
+      // Only repositories this connection may read: every readable one for an account token, none for a vault pin.
+      const drift = page.at === null ? await noteDrift(auth.connection.scope === 'account' ? await listAccessibleRepositories(auth.user.id) : [], { id: note.row.id, body: note.body, frontmatter: note.frontmatter }) : []
       const head = {
         path: note.row.path,
         rev: note.row.seq,
@@ -1504,6 +1563,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         indexed: await noteIndexed(note.row.id, note.row.seq),
         ...lines,
         ...foldError,
+        ...(drift.length > 0 ? { drift } : {}),
       }
       const answer = (outline: OutlineEntry[] | null): Budgeted => ({
         head,
@@ -1607,7 +1667,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         removeKeys: z.array(z.string()).optional().describe('Frontmatter keys to delete'),
         // The note's `rev` (its seq, #477), or a revision id (the `rev` before #477, note_history ids, #822).
         base_rev: z
-          .union([z.string(), z.number().int()])
+          .union([z.string(), z.number().refine(Number.isInteger, { error: 'base_rev is an integer or a string' })])
           .optional()
           .describe('`rev` you edited: later changes merge; an overlap is `conflicted`, nothing written'),
         allowGrowth: z.boolean().optional().describe('true: allow doubling the note (else quarantined)'),
@@ -1851,8 +1911,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
       description:
-        'Create the note at `path`, or replace its whole body (merged from your last read) and merge `frontmatter` when it exists, in one step that concurrent callers cannot race; requires edit access.' +
-        WRITE_DOC,
+        'Create the note at `path`, or replace its whole body (merged from your last read) and merge `frontmatter` when it exists, in one step that concurrent callers cannot race.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -1893,7 +1952,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Rename a note (a slug) or move it (a full path); links using its old full path are rewritten; requires edit access.' + WRITE_DOC,
+      description: 'Rename a note (a slug) or move it (a full path); links using its old full path are rewritten.',
       inputSchema: {
         vaultId: VAULT_ID,
         from: z.string().describe('Current note path'),
@@ -1923,7 +1982,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       destructive: true,
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Move a note to the trash (`id` for restore_note); requires edit access.' + WRITE_DOC,
+      description: 'Move a note to the trash (`id` for restore_note).',
       inputSchema: { vaultId: VAULT_ID, path: NOTE_PATH, ...IDEMPOTENCY_ARG },
     },
     async ({ idempotency_key: key, ...args }: { path: string; idempotency_key?: string }, { vaultId: target }) => {
@@ -1947,7 +2006,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       scope: 'vault',
       capability: 'read',
       pinPermission: 'edit',
-      description: 'List the trashed notes of a vault as `{notes}`, most recently deleted first; requires edit access.',
+      description: 'List the trashed notes of a vault as `{notes}`, most recently deleted first.',
       inputSchema: {
         vaultId: VAULT_ID,
         limit: z.number().int().min(1).max(100).optional().describe('Page size (default 50)'),
@@ -1977,7 +2036,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Restore a trashed note by `noteId`; requires edit access.' + WRITE_DOC,
+      description: 'Restore a trashed note by `noteId`.',
       inputSchema: {
         vaultId: VAULT_ID,
         noteId: UUID_ARG.describe('Note id from list_trash'),
@@ -2095,7 +2154,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'write',
       pinPermission: 'edit',
       outputSchema: WRITE_RESULT_SCHEMA,
-      description: 'Restore a note to a recorded revision (from note_history), as a new revision; requires edit access.' + WRITE_DOC,
+      description: 'Restore a note to a recorded revision (from note_history), as a new revision.',
       inputSchema: {
         vaultId: VAULT_ID,
         path: NOTE_PATH,
@@ -2241,10 +2300,20 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
     async (args: { path?: string; changed_since?: string }, { repositoryId: target }, page) => {
       await requireRepositoryAccess(target)
-      const folder = args.path?.replace(/^\/+|\/+$/g, '') || null
+      // `.`, `./docs`, `/docs/` and `docs//lib` name folders as a shell would (#1102): empty and `.` segments are dropped.
+      const folder = args.path?.split('/').filter((part) => part !== '' && part !== '.').join('/') || null
       if (args.changed_since !== undefined) return changedFilesAnswer(target, args.changed_since, folder, await repositoryIndexedVersion(target), page)
       // A keyset in SQL from the cursor's path: the fetch of one page + 1 tells there are more.
-      const rows = await listRepositoryFilesPage(target, { folder, after: page.after(0, z.string()), limit: BROWSE_PAGE + 1 })
+      const after = page.after(0, z.string())
+      const rows = await listRepositoryFilesPage(target, { folder, after, limit: BROWSE_PAGE + 1 })
+      // An empty list always means an empty folder: one that holds nothing is not a folder.
+      if (rows.length === 0 && folder !== null && after === null) {
+        const probe = await folderProbe(target, folder)
+        throw new McpToolError('NOT_FOUND', probe.isFile ? `${folder} is a file: use read_file` : `no folder ${folder} in this repository`, {
+          field: 'path',
+          suggestions: probe.isFile ? [] : closest(folder, probe.directories),
+        })
+      }
       const files = rows.slice(0, BROWSE_PAGE)
       // Narrowing: the largest folders one level below `folder` on this page.
       const base = folder === null ? '' : `${folder}/`
@@ -2295,8 +2364,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     ) => {
       await requireRepositoryAccess(target)
       checkReadArgs(args)
-      const read = await readRepositoryFile(target, args.path)
-      if (!read) throw new McpToolError('NOT_FOUND', 'file not found')
+      // A path as an agent types it in a shell: `./src/a.ts`, `/src/a.ts` (#1102).
+      const filePath = args.path.split('/').filter((part) => part !== '' && part !== '.').join('/')
+      const read = await readRepositoryFile(target, filePath)
+      if (!read) {
+        const inside = filePath === '' ? [] : await listRepositoryFilesPage(target, { folder: filePath, after: null, limit: 1 })
+        throw new McpToolError('NOT_FOUND', inside.length > 0 ? `${filePath} is a folder: use browse_repository` : 'file not found', { field: 'path' })
+      }
       const { file } = read
       // The content version (ADR-004 §2.9: 16 hex of its sha256), on every answer: what `if_rev` takes (#682). Not the
       // repository's commit or tree: a sync stores files one by one and records those at its end, so a file can change
@@ -2954,8 +3028,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         'Keyword and semantic search over notes and code.',
       inputSchema: {
         query: z.string().describe('Search text'),
-        vaultId: UUID_ARG.optional().describe('Vault to search'),
-        repositoryId: UUID_ARG.optional().describe('Repository to search'),
+        vaultId: ID_ARG.optional().describe('Vault to search'),
+        repositoryId: ID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Everything accessible (account tokens)'),
         symbols: z.boolean().optional().describe('Include code symbols'),
         limit: intRange('limit', 1, 100).optional().describe('Max results'),
@@ -3003,8 +3077,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description: 'Regex over note and code lines: located hits in path order.',
       inputSchema: {
         ...GREP_INPUT,
-        vaultId: UUID_ARG.optional().describe('Vault to search'),
-        repositoryId: UUID_ARG.optional().describe('Repository to search'),
+        vaultId: ID_ARG.optional().describe('Vault to search'),
+        repositoryId: ID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('All accessible (account tokens)'),
       },
       budget: 'list',
@@ -3024,7 +3098,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: {
         query: z.string().describe('Name, signature or meaning'),
         kind: z.enum(SYMBOL_KINDS).optional().describe('Symbol kind'),
-        repositoryId: UUID_ARG.optional().describe('Repository to search'),
+        repositoryId: ID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
         limit: intRange('limit', 1, 50).optional().describe('Max results'),
         refs: z.enum([...REFS, 'explain']).optional().describe('Sites of a symbol; at: `path:line`; explain: sites, notes'),
@@ -3092,6 +3166,25 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
   )
 
+  tool(
+    'orient',
+    {
+      scope: 'vault-or-repo',
+      capability: 'read',
+      profile: 'reader',
+      description: 'Where to start: a repository\'s most-used definitions, a vault\'s most-linked notes; 10 per level, `path` descends.',
+      inputSchema: {
+        repositoryId: REPOSITORY_ID,
+        vaultId: VAULT_ID,
+        query: z.string().optional().describe('Favour these words'),
+        focus: z.array(z.string()).optional().describe('Files or folders in play'),
+        path: z.string().optional().describe('Folder level'),
+      },
+      budget: 'list',
+    },
+    async (args: { query?: string; focus?: string[]; path?: string }, { resources }, page) => orientAnswer(resources, args, page),
+  )
+
   /** A community edge's identity in a page guard and in the order edges are listed. */
   const edgeKey = (e: { source: string; target: string; kind?: string }) => `${e.source}>${e.target}:${e.kind ?? ''}`
   const byEdgeKey = (a: { source: string; target: string; kind?: string }, b: { source: string; target: string; kind?: string }) =>
@@ -3121,8 +3214,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description:
         'Query the knowledge graph of notes and code: one node per community by default, or nodes with `community`, `aggregate: "none"` or `neighborsOf`. Edges carry direction, relation, confidence and evidence (`path#La-Lb`).',
       inputSchema: {
-        vaultId: UUID_ARG.optional().describe('Vault graph'),
-        repositoryId: UUID_ARG.optional().describe('Repository graph'),
+        vaultId: ID_ARG.optional().describe('Vault graph'),
+        repositoryId: ID_ARG.optional().describe('Repository graph'),
         types: z.array(z.string()).optional().describe('Note types or code languages'),
         tags: z.array(z.string()).optional().describe('Only these tags'),
         aggregate: z.enum(['community', 'none']).optional().describe('Default "community"'),
@@ -3243,8 +3336,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: {
         source: z.string().describe('Node id, path or name'),
         target: z.string().describe('Node id, path or name'),
-        vaultId: UUID_ARG.optional().describe('Vault graph'),
-        repositoryId: UUID_ARG.optional().describe('Repository graph'),
+        vaultId: ID_ARG.optional().describe('Vault graph'),
+        repositoryId: ID_ARG.optional().describe('Repository graph'),
       },
       budget: 'list',
     },
@@ -3275,7 +3368,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description:
         'List saved graph perspectives and filter presets for a vault (yours plus shared ones) or merged graph (your own global perspectives). A vault-scoped connection sees only the perspectives of its vault.',
       inputSchema: {
-        vaultId: UUID_ARG.optional()
+        vaultId: ID_ARG.optional()
           .describe('Optional vault ID constraint. If omitted, lists merged/global perspectives (account-scoped connections) or those of the pinned vault.'),
       },
     },
@@ -3315,7 +3408,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         'Save a scoped graph perspective with filter presets (types, tags, date range, color mode) for a vault (needs edit access) or merged graph (instance admins only; a global perspective is visible only to you).',
       inputSchema: {
         name: z.string().min(1).describe('Perspective name'),
-        vaultId: UUID_ARG.optional().describe('Optional vault ID constraint'),
+        vaultId: ID_ARG.optional().describe('Optional vault ID constraint'),
         filters: strictArgs('save_graph_perspective filters', {
           types: z.array(z.string()).optional(),
           tags: z.array(z.string()).optional(),

@@ -64,6 +64,15 @@ export interface GrepPosition {
   line: number
 }
 
+/** A position as a cursor holds it: `<target>:<line>:<path>`. */
+export const encodePosition = (p: GrepPosition): string => `${p.c}:${p.line}:${p.path}`
+
+/** The position a cursor string holds, or null when it is not one. */
+export function parsePosition(text: string): GrepPosition | null {
+  const parsed = /^(\d+):(\d+):([^]*)$/.exec(text)
+  return parsed && { c: Number(parsed[1]), line: Number(parsed[2]), path: parsed[3]! }
+}
+
 export interface GrepHit {
   vaultId?: string
   repositoryId?: string

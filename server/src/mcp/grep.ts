@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { GrepError, MAX_CONTEXT, PAGE_HITS, grep, grepTargets, type GrepHit, type GrepPosition } from '../repositories/grep.js'
+import { GrepError, MAX_CONTEXT, PAGE_HITS, encodePosition, grep, parsePosition, grepTargets, type GrepHit, type GrepPosition } from '../repositories/grep.js'
 import { repositoryIndexedVersion } from '../repositories/store.js'
 import { McpToolError } from './errors.js'
 import { intRange, keyset, location, type Budgeted, type Page } from './response.js'
@@ -23,9 +23,6 @@ interface Capped {
   capped: { files: number; after: string }
 }
 
-/** A position as the cursor holds it: `<target>:<line>:<path>`. */
-const encode = (p: GrepPosition): string => `${p.c}:${p.line}:${p.path}`
-
 const Position = z.string().regex(/^\d+:\d+:/)
 
 export async function grepAnswer(
@@ -35,12 +32,11 @@ export async function grepAnswer(
 ): Promise<Budgeted> {
   const targets = await grepTargets(resources.vaultIds, resources.repositoryIds)
   const at = page.after(0, Position)
-  const parsed = at === null ? null : /^(\d+):(\d+):([^]*)$/.exec(at)
-  const after: GrepPosition | null = parsed && { c: Number(parsed[1]), line: Number(parsed[2]), path: parsed[3]! }
+  const after: GrepPosition | null = at === null ? null : parsePosition(at)
   const limit = PAGE_HITS
   let answer
   try {
-    answer = await grep(targets, { pattern: args.pattern, glob: args.path, context: args.context ?? 0, limit, after })
+    answer = await grep(targets, { pattern: args.pattern, glob: args.path?.replace(/^(?:\.?\/)+/, ''), context: args.context ?? 0, limit, after })
   } catch (err) {
     throw err instanceof GrepError ? new McpToolError(err.code, err.message, err.field ? { field: err.field } : {}) : err
   }
@@ -55,7 +51,7 @@ export async function grepAnswer(
         items,
         limit,
         more: answer.more || answer.capped !== null,
-        resume: (_item, i) => encode(i < answer.hits.length ? answer.positions[i]! : answer.capped!),
+        resume: (_item, i) => encodePosition(i < answer.hits.length ? answer.positions[i]! : answer.capped!),
         // Down the ladder: without the snippet, then `path#La-Lb`; counted per file.
         ladder: {
           no_context: (h) => ('capped' in h ? h : { ...h, snippet: undefined }),

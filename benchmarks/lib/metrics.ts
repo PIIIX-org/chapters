@@ -160,6 +160,8 @@ export interface QuestionOutcome {
   gold: readonly LineRange[]
   /** The search answered `no_match` or `ambiguous` instead of a first hit (#1058). */
   abstained: boolean
+  /** The route the search took (#1060): `identifier` or `path` by lookup, else `conceptual`. */
+  route: 'identifier' | 'path' | 'conceptual'
   /** Tokens / calls spent when the first gold range was fully seen; null = never. */
   tokensToGold: number | null
   callsToGold: number | null
@@ -187,6 +189,9 @@ export interface Aggregate {
   goldReached: number
   /** `goldReached / questions`: the phase-3 exit criterion is 0.99 (#1058). */
   goldReachedRate: number
+  /** The fraction of questions the router answered by lookup (#1060), and `exact1` over those alone (0 when none). */
+  routed: number
+  exact1Routed: number
   /** Questions the search answered `no_match` or `ambiguous` instead of a first hit, as a fraction: not a pass, not a wrong answer either. */
   abstained: number
   /** Mean tokens to the first gold range; a miss counts as `missTokens`. */
@@ -240,6 +245,8 @@ export function aggregate(outcomes: readonly QuestionOutcome[], missTokens: numb
     goldReached: outcomes.filter((o) => o.tokensToGold !== null).length,
     goldReachedRate: round4(outcomes.length === 0 ? 0 : outcomes.filter((o) => o.tokensToGold !== null).length / outcomes.length),
     abstained: round4(mean(outcomes.map((o) => (o.abstained ? 1 : 0)))),
+    routed: round4(mean(outcomes.map((o) => (o.route === 'conceptual' ? 0 : 1)))),
+    exact1Routed: round4(mean(outcomes.filter((o) => o.route !== 'conceptual').map((o) => (o.abstained ? 0 : exactAtK(o.hits, o.gold, 1))))),
     tokensToGold: Math.round(mean(toGold)),
     tokensToGoldMedian: Math.round(median(toGold)),
     tokensToGoldReached: Math.round(mean(outcomes.flatMap((o) => (o.tokensToGold === null ? [] : [o.tokensToGold])))),

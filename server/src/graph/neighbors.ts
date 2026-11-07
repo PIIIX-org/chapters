@@ -1,5 +1,4 @@
 import { and, eq, inArray, isNotNull, isNull, like, ne, or, sql, type AnyColumn, type SQL } from 'drizzle-orm'
-import { alias } from 'drizzle-orm/pg-core'
 import { db } from '../db/client.js'
 import { noteLinks, notes, repositoryFileImports, repositoryFiles, semanticEdges } from '../db/schema.js'
 import { location } from '../mcp/response.js'
@@ -15,7 +14,9 @@ import {
   groupKeys,
   importEdge,
   linkEdge,
+  linkTargetsOf,
   nodeOrder,
+  noteNameOf,
   noteNode,
   passesFilters,
   repoLinkTarget,
@@ -143,20 +144,38 @@ async function ring(walk: Walk, frontier: InternalNode[], within: ReadonlySet<st
       .select({ source: noteLinks.sourceNoteId, target: noteLinks.targetPath, startLine: noteLinks.startLine, endLine: noteLinks.endLine })
       .from(noteLinks)
       .where(anyId(noteLinks.sourceNoteId, noteIds))
+    // A link names a note by path, path with `.md` or name (#472): the notes the written targets stand for, by vault.
+    const standsFor = await noteLinkTargets(
+      vaultIds,
+      links.filter((l) => repoLinkTarget(l.target, walk.repoNameToId, repositoryIds) === undefined).map((l) => l.target),
+    )
     for (const link of links) {
       const file = repoLinkTarget(link.target, walk.repoNameToId, repositoryIds)
-      if (file === undefined) byPath.push([link.source, 'note', reach.byId.get(link.source)!.resourceId, link.target, link.startLine, link.endLine])
+      if (file === undefined) {
+        const vault = reach.byId.get(link.source)!.resourceId
+        byPath.push([link.source, 'note', vault, standsFor.get(`${vault}:${cleanLinkTarget(link.target)}`) ?? link.target, link.startLine, link.endLine])
+      }
       else if (file) byPath.push([link.source, 'code', file.repositoryId, file.path, link.startLine, link.endLine])
     }
-    // Links to a frontier note from a live note of its vault.
-    const target = alias(notes, 'target')
+    // Links to a frontier note from a live note of its vault, by any name a link gives it (#472).
+    const asked = new Map<string, Array<{ id: string; vaultId: string }>>()
+    for (const id of noteIds) {
+      const n = reach.byId.get(id)!
+      for (const written of linkTargetsOf(n.path)) asked.set(written, [...(asked.get(written) ?? []), { id, vaultId: n.resourceId }])
+    }
     const backlinks = await db
-      .select({ ...NOTE_NODE_COLUMNS, to: target.id, startLine: noteLinks.startLine, endLine: noteLinks.endLine })
+      .select({ ...NOTE_NODE_COLUMNS, target: noteLinks.targetPath, startLine: noteLinks.startLine, endLine: noteLinks.endLine })
       .from(noteLinks)
-      .innerJoin(target, eq(target.path, noteLinks.targetPath))
       .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
-      .where(and(anyId(target.id, noteIds), eq(notes.vaultId, target.vaultId), isNull(notes.deletedAt)))
-    for (const { to, startLine, endLine, ...source } of backlinks) rows.push([to, noteNode(source), linkEdge(source.id, to, startLine, endLine)])
+      .where(and(inArray(noteLinks.targetPath, [...asked.keys()]), isNull(notes.deletedAt)))
+    const standsForBack = await noteLinkTargets(vaultIds, backlinks.map((b) => b.target))
+    for (const { target: written, startLine, endLine, ...source } of backlinks) {
+      // A name stands for one note (a path before a name; among names the last path), as for a link out of a note.
+      const stands = standsForBack.get(`${source.vaultId}:${cleanLinkTarget(written)}`)
+      for (const t of asked.get(written) ?? []) {
+        if (t.vaultId === source.vaultId && t.id !== source.id && reach.byId.get(t.id)!.path === stands) rows.push([t.id, noteNode(source), linkEdge(source.id, t.id, startLine, endLine)])
+      }
+    }
   }
 
   if (kinds.has('extracted') && codeIds.length > 0) {
@@ -339,6 +358,28 @@ async function groupMembers(walk: Walk, frontier: InternalNode[]): Promise<Map<s
   return byKey
 }
 
+/** A written link target without a leading `/` and a trailing `.md`. */
+const cleanLinkTarget = (target: string): string => target.replace(/^\//, '').replace(/\.md$/, '')
+
+/**
+ * The notes written link targets stand for (#472): `<vault>:<target as cleaned>` to a note path, over the live notes of
+ * `vaultIds`. A target names a note by its path, or else by its name; a name shared by several notes stands for the last
+ * of them in code-unit order (as `buildGraph`).
+ */
+async function noteLinkTargets(vaultIds: readonly string[], targets: readonly string[]): Promise<Map<string, string>> {
+  const written = [...new Set(targets.filter((t) => !t.startsWith('repo:') && !t.startsWith('code:')).map(cleanLinkTarget))]
+  const stands = new Map<string, string>()
+  if (written.length === 0 || vaultIds.length === 0) return stands
+  const name = sql`CASE WHEN position('/' in ${notes.path}) > 0 THEN substr(${notes.path}, position('/' in ${notes.path}) + 1) ELSE ${notes.path} END`
+  const named = await db
+    .select({ vaultId: notes.vaultId, path: notes.path })
+    .from(notes)
+    .where(and(inArray(notes.vaultId, [...vaultIds]), isNull(notes.deletedAt), or(inArray(notes.path, written), inArray(name, written))))
+  for (const n of named.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) stands.set(`${n.vaultId}:${noteNameOf(n.path)}`, n.path)
+  for (const n of named) stands.set(`${n.vaultId}:${n.path}`, n.path)
+  return stands
+}
+
 /** The local graph around `center` (see the module comment). */
 export async function neighborhood(resources: GraphResourceSet, center: InternalNode, options: NeighborhoodOptions): Promise<LocalGraph> {
   const walk: Walk = {
@@ -403,7 +444,7 @@ export const BACKLINK_CAP = 1_000
 
 /**
  * Every stored link to note `center` from another live note of its vault,
- * resolved as graph link edges are (the exact path), one per row (a target
+ * resolved as graph link edges are (its path, path with `.md`, or name), one per row (a target
  * linked on several lines has several), by path in code-unit order, then
  * line; at most `BACKLINK_CAP` + 1. Stored lines are body-relative
  * (ADR-004 §2.2): each linking note's frontmatter turns them into lines of
@@ -414,6 +455,7 @@ export async function backlinksOf(center: InternalNode, filters: Walk['filters']
   const rows = await db
     .select({
       path: notes.path,
+      target: noteLinks.targetPath,
       frontmatter: notes.frontmatter,
       frontmatterSrc: sql<unknown>`frontmatter_src`,
       startLine: noteLinks.startLine,
@@ -422,11 +464,13 @@ export async function backlinksOf(center: InternalNode, filters: Walk['filters']
     })
     .from(noteLinks)
     .innerJoin(notes, eq(notes.id, noteLinks.sourceNoteId))
-    .where(and(eq(noteLinks.targetPath, center.path), eq(notes.vaultId, center.resourceId), isNull(notes.deletedAt), ne(notes.id, center.id), ...noteFilterSql(filters)))
+    .where(and(inArray(noteLinks.targetPath, linkTargetsOf(center.path)), eq(notes.vaultId, center.resourceId), isNull(notes.deletedAt), ne(notes.id, center.id), ...noteFilterSql(filters)))
     .orderBy(sql`${notes.path} COLLATE "C"`, noteLinks.startLine)
     .limit(BACKLINK_CAP + 1)
+  // A name stands for one note (`noteLinkTargets`): a link `[[centre]]` is not a link to every note named `centre`.
+  const stands = await noteLinkTargets([center.resourceId], rows.map((r) => r.target))
   const bodyStart = new Map<string, number>()
-  return rows.map((r) => {
+  return rows.filter((r) => stands.get(`${center.resourceId}:${cleanLinkTarget(r.target)}`) === center.path).map((r) => {
     if (r.startLine === 0) return { path: r.path, location: r.path, context: r.context }
     let start = bodyStart.get(r.path)
     if (start === undefined) bodyStart.set(r.path, (start = bodyStartLine(r)))

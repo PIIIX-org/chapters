@@ -57,6 +57,10 @@ const test: LabTest = {
       [runTest]: `import { ${mark}Plan } from './${mark}-plan'\n\ntest('plan', () => {\n  ${mark}Plan()\n})\n`,
     }), repoName)
     const repositoryId = (await connectLocalRepo(ctx, repoName)).id
+    // A note whose code reference no longer holds: `read_note` names it as `drift` (#472), for a reader of the repository too.
+    const drift = `docs/${mark}-drift`
+    const gone = `src/${mark}-gone.ts`
+    await mcp.owner.must('create_note', { vaultId, type: 'docs', name: `${mark}-drift`, body: `Plan: [[repo:${repoName}/${gone}]].` })
     const repoSettle = await settleRepo(ctx, repositoryId, 'lab-matrix-repo', { stallMs: 60_000, timeoutMs: 240_000 })
     const embedded = await poll(async () => {
       const rows = await ctx.docker.psqlRows<{ n: number }>(
@@ -122,6 +126,8 @@ const test: LabTest = {
       { name: 'MCP read_note grep', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source, targets: [{ grep: 'orbital' }] }) },
       { name: 'MCP read_file grep', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file, targets: [{ grep: 'launch' }] }) },
       { name: 'REST GET /api/repositories/:id/files/content', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/files/content?path=${encodeURIComponent(file)}`) },
+      { name: 'MCP orient: repository map', identifiers: [file, `${mark}Plan`], share, read: viaMcp('orient', { repositoryId, query: `${mark}Plan`, focus: [file] }) },
+      { name: 'MCP orient: vault outline', identifiers: [source], share, read: viaMcp('orient', { vaultId, path: 'docs', query: `${mark}source` }) },
       { name: 'MCP find_symbols refs: explain', identifiers: [run, `${mark}Run`, `docs/${mark}-cite`], share, read: viaMcp('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' }) },
       {
         name: 'MCP find_symbols overlay',
@@ -154,6 +160,9 @@ const test: LabTest = {
       { name: 'MCP grep in a vault', identifiers: [source, `${mark}source`], share, read: viaMcp('grep', { vaultId, pattern: `${mark}source` }) },
       { name: 'MCP grep in a repository', identifiers: [file, `${mark}Plan`], share, read: viaMcp('grep', { repositoryId, pattern: `${mark}Plan` }) },
       { name: 'MCP grep everywhere', identifiers: [source, `${mark}source`], kind: 'listing', share, read: viaMcp('grep', { everywhere: true, pattern: `${mark}source` }) },
+      { name: 'REST GET /api/vaults/:id/grep', identifiers: [source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/grep?pattern=${mark}source`) },
+      { name: 'REST GET /api/repositories/:id/grep', identifiers: [file, `${mark}Plan`], share, read: viaRest(`/api/repositories/${repositoryId}/grep?pattern=${mark}Plan`) },
+      { name: 'REST GET /api/grep (everywhere)', identifiers: [source, `${mark}source`], kind: 'listing', share, read: viaRest(`/api/grep?pattern=${mark}source`) },
       { name: 'REST GET /api/search (everywhere)', identifiers: [sourceNote.id, source], kind: 'listing', share, read: viaRest(`/api/search?q=${mark}source`) },
       { name: 'REST GET /api/vaults/:id/backlinks/*', identifiers: [sourceNote.id, source], share, read: viaRest(`/api/vaults/${vaultId}/backlinks/${target}`) },
       { name: 'MCP graph neighborsOf the target', identifiers: [source], share, read: viaMcp('graph', { vaultId, neighborsOf: target, edgeTypes: ['extracted'] }) },
@@ -163,6 +172,40 @@ const test: LabTest = {
       { name: 'MCP usage_report', identifiers: [sourceNote.id, source], kind: 'listing', share, read: readThenReport(viaMcp('usage_report', {})) },
     ]
     for (const m of matrices) checks.push(...(await runAccessMatrix(m)))
+    // A pinned token sending an id of the other kind is refused with the scope error and names nothing of the account (#1101).
+    const pinnedMcp = async (body: Record<string, unknown>) => {
+      const minted = await rest.owner.must<{ token: string }>('POST', '/api/mcp-connections', { name: `lab matrix pin ${Date.now()}`, ...body })
+      return ctx.mcp(minted.token, 'matrix-pinned')
+    }
+    const crossKind: Array<[string, string]> = [
+      ['repository-pinned sending a vaultId', (await (await pinnedMcp({ scope: 'repository', repositoryId })).call('browse_vault', { vaultId })).text],
+      ['vault-pinned sending a repositoryId', (await (await pinnedMcp({ scope: 'vault', vaultId })).call('browse_repository', { repositoryId })).text],
+    ]
+    for (const [who, text] of crossKind) {
+      const leaked = [vaultId, repositoryId, repoName].filter((x) => text.includes(x))
+      const ok = text.includes('TOOL_NOT_ALLOWED') && !text.includes('suggestions') && leaked.length === 0
+      checks.push({ name: `MCP pinned token with an id of the other kind (${who})`, expected: 'scope refusal, nothing of the account named', actual: ok ? 'scope refusal, nothing named' : `leaked ${leaked.join(', ')}: ${text.slice(0, 100)}`, ok, severity: ok ? 'info' : 'high' })
+    }
+    // A refused id names the account's own ids and names (#1101): the repository is in the owner's and the shared account's suggestions only.
+    const suggested = async (actor: Actor) => (await mcp[actor].call('browse_repository', { repositoryId: 'not-a-uuid' })).text
+    const revokeShare = await share()
+    const phases: Array<[string, string, boolean]> = [
+      ['owner', await suggested('owner'), true],
+      ['shared', await suggested('shared'), true],
+      ['unrelated', await suggested('unrelated'), false],
+    ]
+    await revokeShare()
+    phases.push(['revoked', await suggested('shared'), false])
+    for (const [who, text, expected] of phases) {
+      const named = text.includes(repoName) && text.includes(repositoryId)
+      checks.push({
+        name: `MCP malformed repositoryId: suggestions (${who})`,
+        expected: expected ? 'names the repository' : 'names nothing of it',
+        actual: named ? 'names the repository' : 'names nothing of it',
+        ok: named === expected,
+        severity: named === expected ? 'info' : 'high',
+      })
+    }
     // The repository shared, the vault not (#675): `find_symbols` with `refs: "explain"` names the code, but no note of the unshared vault.
     const onlyRepo = await rest.owner.must<{ id: string }>('POST', `/api/repositories/${repositoryId}/shares`, { granteeType: 'user', granteeId: ids.shared })
     const explained = await mcp.shared.call('find_symbols', { repositoryId, query: `${mark}Plan`, refs: 'explain' })
@@ -174,6 +217,21 @@ const test: LabTest = {
       actual: explained.ok ? (leaked.length === 0 ? 'answered, nothing leaked' : `leaked ${leaked.join(', ')}`) : `not answered: ${explained.text.slice(0, 120)}`,
       ok: explained.ok && leaked.length === 0,
       severity: explained.ok && leaked.length === 0 ? 'info' : 'high',
+    })
+
+    // The vault shared, the repository not (#472): `read_note` tells the owner the cited file is gone (`drift`), not a reader of the vault alone.
+    const driftText = JSON.stringify(`Referenced code file "${gone}" was removed`).slice(1, -1)
+    const ownerRead = await mcp.owner.call('read_note', { vaultId, path: drift })
+    const onlyVault = await rest.owner.must<{ id: string }>('POST', `/api/vaults/${vaultId}/shares`, { granteeType: 'user', granteeId: ids.shared, permission: 'read' })
+    const sharedRead = await mcp.shared.call('read_note', { vaultId, path: drift })
+    await rest.owner.must('DELETE', `/api/vaults/${vaultId}/shares/${onlyVault.id}`)
+    const driftOk = ownerRead.text.includes(driftText) && sharedRead.ok && sharedRead.text.includes(drift) && !sharedRead.text.includes(driftText)
+    checks.push({
+      name: 'MCP read_note drift: vault shared, repository not',
+      expected: 'the owner is told the file is gone, the vault reader is not',
+      actual: driftOk ? 'owner told, reader not' : `LEAKS or missing: owner ${ownerRead.text.includes(driftText)}, reader ok ${sharedRead.ok}, reader told ${sharedRead.text.includes(driftText)}`,
+      ok: driftOk,
+      severity: driftOk ? 'info' : 'high',
     })
 
     if (!reportWasOn) await rest.owner.must('PUT', '/api/usage/settings', { enabled: false })

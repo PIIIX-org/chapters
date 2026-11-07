@@ -43,7 +43,6 @@ const OBJECT_KEYS = ['noteId', 'revisionId', 'shareId', 'notificationId', 'teamI
 /** A call the SDK refused for its arguments (#439: the error envelope wraps it), before any id was looked up. */
 const ARGS_REJECTED = /^\{"error":\{"code":"INVALID_ARGUMENT","message":"Invalid arguments for tool /
 /** The not-found answer, byte for byte, for an id B cannot reach and for one that does not exist (#439, ADR-004 §2.7). */
-const NOT_FOUND = '{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}'
 
 let seq = 0
 const next = () => `${Date.now().toString(36)}${(seq++).toString(36)}`
@@ -436,10 +435,16 @@ describe("account separation: B sees nothing of A's (#552)", () => {
     const typo = 'docs/secret-pln'
     for (const vaultId of [fx.VA, randomUUID()]) {
       for (const tool of ['read_note', 'export_note', 'note_history', 'delete_note']) {
-        expect(await call(acctB, tool, { vaultId, path: typo }), `${tool} ${vaultId === fx.VA ? "A's vault" : 'a missing vault'}`).toEqual({
-          isError: true,
-          text: NOT_FOUND,
-        })
+        const answer = await call(acctB, tool, { vaultId, path: typo })
+        const label = `${tool} ${vaultId === fx.VA ? "A's vault" : 'a missing vault'}`
+        // The plain not-found, with B's own vaults as the only suggestions (#1101): nothing of A's.
+        expect(answer.isError, label).toBe(true)
+        const error = (JSON.parse(answer.text) as { error: { code: string; message: string; retryable: boolean; suggestions?: string[] } }).error
+        expect({ code: error.code, message: error.message, retryable: error.retryable }, label).toEqual({ code: 'NOT_FOUND', message: 'not found', retryable: false })
+        for (const suggestion of error.suggestions ?? []) expect(suggestion.startsWith(`${fx.VA} (`), label).toBe(false)
+        expect(answer.text, label).not.toContain(fx.VA)
+        expect(answer.text, label).not.toContain('secret')
+        expect(answer, label).toEqual(await call(acctB, tool, { vaultId: randomUUID(), path: typo }))
       }
     }
     // A reads the vault, so A gets its own path suggested.

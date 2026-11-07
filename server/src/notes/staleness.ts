@@ -24,6 +24,8 @@ export interface StalenessDrift {
  */
 export async function checkCodeStaleness(
   repositoryId: string,
+  /** One note (#472): only its references are checked, and nobody is notified (the caller is reading it). */
+  only?: { noteId: string },
 ): Promise<StalenessDrift[]> {
   const [repo] = await db
     .select({ id: repositories.id, name: repositories.name, ownerId: repositories.ownerId })
@@ -32,6 +34,10 @@ export async function checkCodeStaleness(
     .limit(1)
 
   if (!repo) return []
+
+  // Candidates first (cheap): a note that names nothing of this repository loads none of its files.
+  const candidates = await candidateNotes(repo, only)
+  if (candidates.size === 0) return []
 
   const repoFiles = await db
     .select({ path: repositoryFiles.path, contentHash: repositoryFiles.contentHash })
@@ -60,33 +66,7 @@ export async function checkCodeStaleness(
     set.add(s.innerPath)
   }
 
-  // ponytail: query note_links and frontmatter sources matching repo to avoid loading entire database into RAM (GRAPH-08).
-  const matchingLinks = await db
-    .select({ sourceNoteId: noteLinks.sourceNoteId })
-    .from(noteLinks)
-    .where(
-      sql`${noteLinks.targetPath} ILIKE ${'repo:' + repositoryId + '%'}
-       OR ${noteLinks.targetPath} ILIKE ${'repo:' + repo.name + '%'}
-       OR ${noteLinks.targetPath} ILIKE ${'code:' + repositoryId + '%'}
-       OR ${noteLinks.targetPath} ILIKE ${'code:' + repo.name + '%'}`,
-    )
-
-  const matchingFm = await db.execute(sql`
-    SELECT id FROM notes
-    WHERE deleted_at IS NULL
-      AND (
-        frontmatter::text ILIKE ${'%"repo:' + repositoryId + '/%'}
-        OR frontmatter::text ILIKE ${'%"repo:' + repo.name + '/%'}
-      )
-  `)
-
-  const candidateIds = new Set<string>()
-  for (const r of matchingLinks) candidateIds.add(r.sourceNoteId)
-  for (const r of matchingFm as unknown as Array<{ id: string }>) candidateIds.add(r.id)
-
-  if (candidateIds.size === 0) return []
-
-  const candidateIdArray = [...candidateIds]
+  const candidateIdArray = [...candidates]
   const liveNotes = await db
     .select({
       id: notes.id,
@@ -237,7 +217,7 @@ export async function checkCodeStaleness(
     }
   }
 
-  if (uniqueDrifts.length > 0 && repo.ownerId) {
+  if (uniqueDrifts.length > 0 && repo.ownerId && !only) {
     const driftSummary = uniqueDrifts
       .slice(0, 5)
       .map((d) => `${d.notePath} -> ${d.resource} (${d.kind})`)
@@ -256,4 +236,59 @@ export async function checkCodeStaleness(
   }
 
   return uniqueDrifts
+}
+
+/** The ids of the live notes that name repository `repo` in a source or a `repo:`/`code:` link (`only`: that note, if it does). */
+async function candidateNotes(repo: { id: string; name: string }, only?: { noteId: string }): Promise<Set<string>> {
+  // ponytail: query note_links and frontmatter sources matching repo to avoid loading entire database into RAM (GRAPH-08).
+  const mine = only ? sql`${noteLinks.sourceNoteId} = ${only.noteId}` : sql`true`
+  const matchingLinks = await db
+    .select({ sourceNoteId: noteLinks.sourceNoteId })
+    .from(noteLinks)
+    .where(
+      sql`${mine} AND (${noteLinks.targetPath} ILIKE ${'repo:' + repo.id + '%'}
+       OR ${noteLinks.targetPath} ILIKE ${'repo:' + repo.name + '%'}
+       OR ${noteLinks.targetPath} ILIKE ${'code:' + repo.id + '%'}
+       OR ${noteLinks.targetPath} ILIKE ${'code:' + repo.name + '%'})`,
+    )
+  const matchingFm = await db.execute(sql`
+    SELECT id FROM notes
+    WHERE deleted_at IS NULL
+      ${only ? sql`AND id = ${only.noteId}` : sql``}
+      AND (
+        frontmatter::text ILIKE ${'%"repo:' + repo.id + '/%'}
+        OR frontmatter::text ILIKE ${'%"repo:' + repo.name + '/%'}
+      )
+  `)
+  return new Set([...matchingLinks.map((r) => r.sourceNoteId), ...(matchingFm as unknown as Array<{ id: string }>).map((r) => r.id)])
+}
+
+/**
+ * The drift of one note (#472), as `read_note` shows it: its references to files
+ * and symbols that changed, vanished or lost the symbol since the note recorded
+ * them. Only the repositories in `readable` (the ones the connection may read:
+ * every readable one for an account token, none for a pinned one) and named by
+ * a `[[repo:..]]`/`[[code:..]]` link or a frontmatter `sources` entry are
+ * checked; a note that names none runs no query.
+ */
+export async function noteDrift(
+  readable: ReadonlyArray<{ id: string; name: string }>,
+  note: { id: string; body: string; frontmatter: unknown },
+): Promise<Array<Pick<StalenessDrift, 'resource' | 'kind' | 'detail'>>> {
+  const named = new Set<string>()
+  for (const m of note.body.matchAll(/\[\[(?:repo|code):([^\]|#:/]+)[:/]/g)) named.add(m[1]!.trim().toLowerCase())
+  const sources = (note.frontmatter as { sources?: unknown } | null)?.sources
+  if (Array.isArray(sources)) {
+    for (const source of sources) {
+      const resource = (source as { resource?: unknown } | null)?.resource
+      const m = typeof resource === 'string' ? /^repo:([^/#:]+)\//.exec(resource) : null
+      if (m) named.add(m[1]!.toLowerCase())
+    }
+  }
+  if (named.size === 0) return []
+  const found: StalenessDrift[] = []
+  for (const repo of readable) {
+    if (named.has(repo.id.toLowerCase()) || named.has(repo.name.toLowerCase())) found.push(...(await checkCodeStaleness(repo.id, { noteId: note.id })))
+  }
+  return found.map(({ resource, kind, detail }) => ({ resource, kind, detail })).sort((a, b) => (a.resource < b.resource ? -1 : a.resource > b.resource ? 1 : a.kind < b.kind ? -1 : 1))
 }
