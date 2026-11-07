@@ -105,6 +105,7 @@ counted whole.
 | `ndcg10` | DCG@10 of the distinct ranked files over the ideal DCG@10 of the judged relevances (gain / log2(rank + 1)); a file counts once; always in [0, 1] |
 | `goldReached`, `goldReachedRate` | questions where the first gold range was fully seen, and that over the suite's questions |
 | `routed`, `exact1Routed` | the fraction of questions the router answered by lookup (the search answer names a `route`, #1060), and `exact1` over those questions alone (reported, not gated; a routed path answer is a whole file, so read it with its tokens) |
+| `answered`, `exact1Answered` | the fraction of questions where the search committed to one span (its answer has an `answer`, the verifier's confidence at least `ANSWER_MIN_CONFIDENCE`, #1061), and `exact1` over those alone (reported, not gated: the calibration of the confidence; the per-question `confidence` is in `results.json`) |
 | `abstained` | the fraction of questions where `search` answered `no_match` or `ambiguous` instead of a first hit: not a pass, not a wrong answer either (reported, not gated) |
 | `tokensToGold`, `tokensToGoldMedian` | tokens received until the first gold range was fully seen; a miss counts as 65,000 (the most an episode can spend: budget + one capped response) |
 | `tokensToGoldReached` | the same, mean over the questions this agent reached (misses left out) |

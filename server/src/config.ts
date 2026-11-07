@@ -221,6 +221,10 @@ export const config = {
   get searchMaxDistance(): number {
     return readSearchMaxDistance(env.SEARCH_MAX_DISTANCE, this.embeddings) ?? defaultSearchMaxDistance(this.embeddings)
   },
+  /** The search verifier (#1061): 'local' = ONNX cross-encoder on CPU; 'fake' = deterministic test verifier; 'off' = fused order only. */
+  verifier: env.ELARA_VERIFIER ?? (EMBEDDINGS === 'local' ? 'local' : 'off'),
+  /** A verifier call slower than this is dropped: the answer keeps the fused order and says `degraded`. */
+  verifyTimeoutMs: Number(env.ELARA_VERIFY_TIMEOUT_MS ?? 4000),
   semanticThreshold: Number(env.SEMANTIC_THRESHOLD ?? 0.75),
   semanticK: Number(env.SEMANTIC_K ?? 8),
   smtp: (env.ELARA_SMTP_HOST ?? env.CHAPTERS_SMTP_HOST ?? env.SMTP_HOST)

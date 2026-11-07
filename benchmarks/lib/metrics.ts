@@ -162,6 +162,8 @@ export interface QuestionOutcome {
   abstained: boolean
   /** The route the search took (#1060): `identifier` or `path` by lookup, else `conceptual`. */
   route: 'identifier' | 'path' | 'conceptual'
+  /** The search committed to one span (`answer`, #1061). */
+  answered: boolean
   /** Tokens / calls spent when the first gold range was fully seen; null = never. */
   tokensToGold: number | null
   callsToGold: number | null
@@ -192,6 +194,9 @@ export interface Aggregate {
   /** The fraction of questions the router answered by lookup (#1060), and `exact1` over those alone (0 when none). */
   routed: number
   exact1Routed: number
+  /** The fraction of questions the verifier committed to one span for (the answer names an `answer`, #1061), and `exact1` over those alone (0 when none): the calibration of its confidence. */
+  answered: number
+  exact1Answered: number
   /** Questions the search answered `no_match` or `ambiguous` instead of a first hit, as a fraction: not a pass, not a wrong answer either. */
   abstained: number
   /** Mean tokens to the first gold range; a miss counts as `missTokens`. */
@@ -247,6 +252,8 @@ export function aggregate(outcomes: readonly QuestionOutcome[], missTokens: numb
     abstained: round4(mean(outcomes.map((o) => (o.abstained ? 1 : 0)))),
     routed: round4(mean(outcomes.map((o) => (o.route === 'conceptual' ? 0 : 1)))),
     exact1Routed: round4(mean(outcomes.filter((o) => o.route !== 'conceptual').map((o) => (o.abstained ? 0 : exactAtK(o.hits, o.gold, 1))))),
+    answered: round4(mean(outcomes.map((o) => (o.answered ? 1 : 0)))),
+    exact1Answered: round4(mean(outcomes.filter((o) => o.answered).map((o) => (o.abstained ? 0 : exactAtK(o.hits, o.gold, 1))))),
     tokensToGold: Math.round(mean(toGold)),
     tokensToGoldMedian: Math.round(median(toGold)),
     tokensToGoldReached: Math.round(mean(outcomes.flatMap((o) => (o.tokensToGold === null ? [] : [o.tokensToGold])))),

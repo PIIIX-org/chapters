@@ -24,6 +24,7 @@ import { COMPACT_REVISIONS_JOB } from './notes/store-tx.js'
 import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 import { pruneUsage } from './usage/recorder.js'
+import { warmVerifier } from './search/verifier.js'
 
 // ADR-003 §5.1/§9: the shared instance lock on a reserved connection, held
 // from before migrations until exit. Refused (exit 2) while
@@ -108,6 +109,8 @@ try {
     console.log(`\n=== Elara one-time setup token: ${setupToken} ===\n`)
   }
   await app.listen({ port: config.port, host: '0.0.0.0' })
+  // The verifier's model downloads and loads in the background, so the first search does not wait for it (#1061).
+  warmVerifier()
   // One process, one port: the relay rides Fastify's own HTTP server.
   const collab = startCollabServer(app.server)
   // Boot step 9, in the background (bootStore already drained the

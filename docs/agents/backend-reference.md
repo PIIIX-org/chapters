@@ -1548,6 +1548,20 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **No frontmatter in MCP hits** (#419): the MCP `search` handler drops `frontmatter` from every hit (it was
     42 % of a typical note hit's characters, measured in `mcp-search-hits.test.ts`: 665 to 387); `searchNotes` and
     the REST routes still return it, the client's search overlay shows its tags.
+  - **Verifier** (#1061, `verifier.ts`, `verifier-worker.ts`): after fusion and only for a conceptual query (the router
+    declined), the top `VERIFY_TOP_N` (30) hits are scored against the query by a local cross-encoder
+    (`jinaai/jina-reranker-v1-tiny-en`, int8 ONNX, Apache-2.0, ~33 MB, English only) in one worker thread, and the list is
+    reordered by score (equal scores keep their fused order). A passage is `hitText`: the symbol's name, the path and the
+    snippet. `confidence` = top probability minus runner-up's; `>= ANSWER_MIN_CONFIDENCE` (0.5) sets `answer`;
+    otherwise a runner-up `>= AMBIGUOUS_RUNNER_UP` (0.5) sets `ambiguous`. `VERIFIER_ID` (model, dtype, passage text
+    version) is the version like `EMBEDDER_ID` (#453); nothing derived is stored, so a change needs no migration, only a
+    new benchmark baseline. The model downloads into the Transformers.js cache on first use (started at boot,
+    `warmVerifier`), exactly like the embedder's: it is not in the image. `ELARA_VERIFIER` is `local` (default with
+    local embeddings), `fake` (deterministic word overlap, tests) or `off` (default with fake embeddings, so the other
+    tests' orders are untouched); `ELARA_VERIFY_TIMEOUT_MS` (4000) drops a slow call. Failure, timeout or a missing
+    model: the fused order, `degraded: { reason: 'verifier_failed' }`. A query with a letter outside Latin script is not
+    scored (`verifier: 'skipped_language'`; a multilingual reranker is phase 5). shortcut: the passage is the hit's
+    snippet (about 30 words), not the located block, until #1066 lands; then `hitText` reads the located passage.
   - **Query router** (#1060, `router.ts`): before the legs run, `searchNotes` asks `routeQuery` whether the query is
     one identifier or one path (only without filters, with symbols for an identifier, at most 6 words). The term is
     the one backticked token, or the one word left once the filler (`where is the ... defined`) is dropped. A path
