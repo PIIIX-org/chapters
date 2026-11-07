@@ -95,6 +95,57 @@ test('the tool-call cap refuses extra calls in a turn, then forces an answer wit
   assert.match(JSON.stringify(final.messages.at(-1)), /give your final answer now/)
 })
 
+/** A model that never stops calling tools: it ignores `toolChoice: 'none'` (an empty answer with a tool call) until a user message asks again for text; then it answers. */
+function stubborn(finalText: string, stubbornTurns: number): Model & { requests: CompletionRequest[] } {
+  const requests: CompletionRequest[] = []
+  let forced = 0
+  return {
+    provider: 'openai',
+    name: 'stubborn',
+    requests,
+    async complete(req) {
+      requests.push(structuredClone({ ...req, signal: undefined }))
+      const base = { usage: { input: 100, output: 10 } }
+      if (req.toolChoice === 'auto' || forced++ < stubbornTurns) return { ...base, text: '', toolCalls: [call(`c${requests.length}`)], stop: 'tool_calls' }
+      return { ...base, text: finalText, toolCalls: [], stop: 'stop' }
+    },
+  }
+}
+
+for (const arm of ['elara', 'local']) {
+  test(`${arm}: a model that keeps calling tools at the cap still ends with a final answer, the stop stays cap:tool-calls and every turn counts`, async () => {
+    const model = stubborn('the final answer', 2)
+    const r = await runEpisode({ model, tools: fakeTools(), system: `arm ${arm}`, prompt: 'p', caps: caps({ maxToolCalls: 2 }) })
+    assert.equal(r.stop, 'cap:tool-calls')
+    assert.equal(r.answer, 'the final answer')
+    assert.equal(r.toolCalls, 2)
+    // Two tool turns, then the forced turn, and two more asks that got tool calls back or text.
+    const forcedRequests = model.requests.filter((q) => q.toolChoice === 'none')
+    assert.equal(forcedRequests.length, 3)
+    assert.equal(r.turns, 2 + 3)
+    assert.deepEqual([r.tokensIn, r.tokensOut], [500, 50])
+    // The ask names plain text, and the ignored tool calls are not left dangling in the history.
+    const last = forcedRequests.at(-1)!
+    assert.match(JSON.stringify(last.messages.at(-1)), /no text|plain text/)
+    for (const m of last.messages.slice(0, -1)) if (m.role === 'assistant' && m.text === '') assert.ok(m.toolCalls.length === 0 || last.messages[last.messages.indexOf(m) + 1]?.role === 'tool')
+  })
+}
+
+test('a model that never answers in text gets a bounded number of asks, then the episode ends with no answer and says why', async () => {
+  const model = stubborn('unused', 99)
+  const r = await runEpisode({ model, tools: fakeTools(), system: 's', prompt: 'p', caps: caps({ maxToolCalls: 1 }) })
+  assert.equal(r.stop, 'cap:tool-calls')
+  assert.equal(r.answer, '')
+  assert.match(r.error ?? '', /no final answer/)
+  assert.ok(model.requests.length <= 1 + 1 + 3)
+})
+
+test('a model that answers before the cap is unchanged: no extra ask', async () => {
+  const model = replay([turn([call('a')]), turn([], 'done')])
+  const r = await runEpisode({ model, tools: fakeTools(), system: 's', prompt: 'p', caps: caps({ maxToolCalls: 5 }) })
+  assert.deepEqual([r.stop, r.answer, r.turns], ['answered', 'done', 2])
+})
+
 /**
  * A model that reports `ratio` x characters/4 of each request as its input,
  * spends its whole output allowance, and calls `parallel` tools per turn
