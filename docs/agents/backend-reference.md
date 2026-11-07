@@ -3857,7 +3857,7 @@ repository, file or symbol. The usage report (#678) records `refs` and `depth`
 as filters of a `find_symbols` call.
 
 **Grep** (#468; `repositories/grep.ts` the scan, `mcp/grep.ts` the budgeted
-answer; no REST route): MCP `grep` matches a regular expression line by line
+answer; REST routes below): MCP `grep` matches a regular expression line by line
 over the live notes of vaults (their bodies) and the indexed files of
 repositories (`repository_files.content`: the indexed version only, named once
 in the head as `commit` or `tree`, #471). It is a reader tool, so it costs
@@ -3893,7 +3893,7 @@ is 50 hits, as many as fit `budget_tokens` (ladder: without `snippet`, then
 `path#La-Lb`, then counted per file). Access: the usual `vault-or-repo` scope
 resolution, so another account's vault or repository is a `NOT_FOUND` and
 `everywhere` lists only what the account reaches; both access matrices cover
-it (vault, repository, everywhere). Not covered: a REST route, `ref` other than
+it (vault, repository, everywhere). **REST** (`repositories/grep-routes.ts`, `GET /vaults/:id/grep`, `/repositories/:id/grep`, `/grep`): `pattern`, `path`, `context`, `after`; answers `{scanned, commit | tree?, hits, next, capped}` (`next` is the cursor of the following page, `capped` the path a stopped scan had read to); a refused pattern is 400, a scan past its time limit 503, an unreachable vault or repository 404; both access matrices cover the three routes. Not covered: `ref` other than
 the indexed version, matching a note's frontmatter lines, overlapping contexts
 are not merged, and a line is cut at 500 characters.
 

@@ -29,6 +29,7 @@ import { teamRoutes } from './vaults/team-routes.js'
 import { mcpConnectionRoutes } from './vaults/mcp-connection-routes.js'
 import { notificationRoutes } from './notifications/routes.js'
 import { repositoryRoutes } from './repositories/routes.js'
+import { grepRoutes } from './repositories/grep-routes.js'
 import { repositoryPushRoutes } from './repositories/push-routes.js'
 import { repositoryWebhookRoutes } from './repositories/git-webhook-routes.js'
 import { repositoryFileContentRoutes } from './repositories/file-content-routes.js'
@@ -199,6 +200,7 @@ export async function buildApp(
       await api.register(async (a) => exportRoutes(a))
       await api.register(async (a) => teamRoutes(a))
       await api.register(async (a) => repositoryRoutes(a))
+      await api.register(async (a) => grepRoutes(a))
       await api.register(async (a) => repositoryFileContentRoutes(a))
       await api.register(async (a) => mcpConnectionRoutes(a))
       await api.register(async (a) => adminRoutes(a), { prefix: '/admin' })

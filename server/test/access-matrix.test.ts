@@ -289,6 +289,18 @@ describe('read surfaces (#552, #1034)', () => {
     setup: () => shareBoth([SOURCE, `${MARK}source`], 'listing'),
     read: (actor) => call(actor, 'grep', { everywhere: true, pattern: `${MARK}source` }),
   })
+  accessMatrix('REST GET /api/vaults/:id/grep', {
+    setup: () => shareBoth([SOURCE, `${MARK}source`]),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/vaults/${vaultId}/grep?pattern=${MARK}source`)),
+  })
+  accessMatrix('REST GET /api/repositories/:id/grep', {
+    setup: () => shareBoth([FILE, `${MARK}Plan`]),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/grep?pattern=${MARK}Plan`)),
+  })
+  accessMatrix('REST GET /api/grep (everywhere)', {
+    setup: () => shareBoth([SOURCE, `${MARK}source`], 'listing'),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/grep?pattern=${MARK}source`)),
+  })
   accessMatrix('REST GET /api/search (everywhere)', {
     setup: () => shareBoth([sourceId, SOURCE], 'listing'),
     read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/search?q=${MARK}source`)),
