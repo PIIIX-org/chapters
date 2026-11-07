@@ -136,6 +136,7 @@ import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
+import { noteDrift } from '../notes/staleness.js'
 import { GREP_INPUT, grepAnswer } from './grep.js'
 import { LONG_TEXT_LINES, routingHint, withHint } from './routing-hints.js'
 import {
@@ -1551,6 +1552,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         const answer = { head: { path: note.row.path, rev: note.row.seq, ...lines, ...foldError }, sections: targetSections(parted, args.targets), rendered }
         return inSession(session, doc, answer, page.at)
       }
+      // References to code that changed since the note was written (#472): on a first page, only when there are any.
+      // Only repositories this connection may read: every readable one for an account token, none for a vault pin.
+      const drift = page.at === null ? await noteDrift(auth.connection.scope === 'account' ? await listAccessibleRepositories(auth.user.id) : [], { id: note.row.id, body: note.body, frontmatter: note.frontmatter }) : []
       const head = {
         path: note.row.path,
         rev: note.row.seq,
@@ -1558,6 +1562,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         indexed: await noteIndexed(note.row.id, note.row.seq),
         ...lines,
         ...foldError,
+        ...(drift.length > 0 ? { drift } : {}),
       }
       const answer = (outline: OutlineEntry[] | null): Budgeted => ({
         head,

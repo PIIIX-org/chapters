@@ -32,6 +32,9 @@ const MARK = 'quokkamatrix'
 const TARGET = `docs/${MARK}-target`
 const SOURCE = `docs/${MARK}-source`
 const SOURCE_BODY = `${MARK}source orbital checklist, see [[${TARGET}]].`
+// A note whose code reference no longer holds: read_note names it as `drift` (#472).
+const DRIFT = `docs/${MARK}-drift`
+const GONE = `src/${MARK}-gone.ts`
 const FILE = `src/${MARK}-plan.ts`
 const FILE_BODY = `export function ${MARK}Plan(): string {\n  return 'launch window'\n}\n`
 // A caller and a test of the plan: the sites the code queries (#470) list.
@@ -139,6 +142,7 @@ beforeAll(async () => {
   // A note that cites the plan file: `find_symbols` with `refs: "explain"` (#675) names it to readers of its vault only.
   await must('owner', 'POST', `/api/vaults/${vaultId}/notes`, { type: 'docs', name: `${MARK}-cite`, body: `Why the plan: [[repo:matrix-${MARK}/${FILE}]].` })
   repositoryId = (await must('owner', 'POST', '/api/repositories', { name: `matrix-${MARK}`, ingestionMethod: 'agent_push' })).id as string
+  await must('owner', 'POST', `/api/vaults/${vaultId}/notes`, { type: 'docs', name: `${MARK}-drift`, body: `Plan: [[repo:matrix-${MARK}/${GONE}]].` })
   const files = [
     { path: FILE, content: FILE_BODY },
     { path: RUN, content: RUN_BODY },
@@ -168,6 +172,22 @@ afterAll(async () => {
 })
 
 describe('read surfaces (#552, #1034)', () => {
+  // `drift` names a file of a repository (#472): the owner of both is told, a reader of the vault alone is not. The note's own
+  // body already holds the path, so the text only drift writes is what is looked for.
+  it('MCP read_note drift: the vault shared, the repository not: no drift', async () => {
+    // The answer is JSON: the quotes are escaped in it.
+    const drift = JSON.stringify(`Referenced code file "${GONE}" was removed`).slice(1, -1)
+    expect((await call('owner', 'read_note', { vaultId, path: DRIFT })).text).toContain(drift)
+    const share = await must('owner', 'POST', `/api/vaults/${vaultId}/shares`, { granteeType: 'user', granteeId: actors.shared.id, permission: 'read' })
+    try {
+      const read = await call('shared', 'read_note', { vaultId, path: DRIFT })
+      expect(read.ok, read.text).toBe(true)
+      expect(read.text).toContain(DRIFT)
+      expect(read.text).not.toContain(drift)
+    } finally {
+      await must('owner', 'DELETE', `/api/vaults/${vaultId}/shares/${share.id as string}`)
+    }
+  })
   accessMatrix('MCP read_note', {
     setup: () => shareBoth([SOURCE, `${MARK}source`]),
     read: (actor) => call(actor, 'read_note', { vaultId, path: SOURCE }),

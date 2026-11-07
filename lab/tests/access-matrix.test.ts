@@ -57,6 +57,10 @@ const test: LabTest = {
       [runTest]: `import { ${mark}Plan } from './${mark}-plan'\n\ntest('plan', () => {\n  ${mark}Plan()\n})\n`,
     }), repoName)
     const repositoryId = (await connectLocalRepo(ctx, repoName)).id
+    // A note whose code reference no longer holds: `read_note` names it as `drift` (#472), for a reader of the repository too.
+    const drift = `docs/${mark}-drift`
+    const gone = `src/${mark}-gone.ts`
+    await mcp.owner.must('create_note', { vaultId, type: 'docs', name: `${mark}-drift`, body: `Plan: [[repo:${repoName}/${gone}]].` })
     const repoSettle = await settleRepo(ctx, repositoryId, 'lab-matrix-repo', { stallMs: 60_000, timeoutMs: 240_000 })
     const embedded = await poll(async () => {
       const rows = await ctx.docker.psqlRows<{ n: number }>(
@@ -213,6 +217,21 @@ const test: LabTest = {
       actual: explained.ok ? (leaked.length === 0 ? 'answered, nothing leaked' : `leaked ${leaked.join(', ')}`) : `not answered: ${explained.text.slice(0, 120)}`,
       ok: explained.ok && leaked.length === 0,
       severity: explained.ok && leaked.length === 0 ? 'info' : 'high',
+    })
+
+    // The vault shared, the repository not (#472): `read_note` tells the owner the cited file is gone (`drift`), not a reader of the vault alone.
+    const driftText = JSON.stringify(`Referenced code file "${gone}" was removed`).slice(1, -1)
+    const ownerRead = await mcp.owner.call('read_note', { vaultId, path: drift })
+    const onlyVault = await rest.owner.must<{ id: string }>('POST', `/api/vaults/${vaultId}/shares`, { granteeType: 'user', granteeId: ids.shared, permission: 'read' })
+    const sharedRead = await mcp.shared.call('read_note', { vaultId, path: drift })
+    await rest.owner.must('DELETE', `/api/vaults/${vaultId}/shares/${onlyVault.id}`)
+    const driftOk = ownerRead.text.includes(driftText) && sharedRead.ok && sharedRead.text.includes(drift) && !sharedRead.text.includes(driftText)
+    checks.push({
+      name: 'MCP read_note drift: vault shared, repository not',
+      expected: 'the owner is told the file is gone, the vault reader is not',
+      actual: driftOk ? 'owner told, reader not' : `LEAKS or missing: owner ${ownerRead.text.includes(driftText)}, reader ok ${sharedRead.ok}, reader told ${sharedRead.text.includes(driftText)}`,
+      ok: driftOk,
+      severity: driftOk ? 'info' : 'high',
     })
 
     if (!reportWasOn) await rest.owner.must('PUT', '/api/usage/settings', { enabled: false })
