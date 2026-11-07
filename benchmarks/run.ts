@@ -128,6 +128,8 @@ interface PolicyRow {
   exact5: boolean
   abstained: boolean
   route: 'identifier' | 'path' | 'conceptual'
+  /** The verifier's confidence in the first hit, null when it did not run (#1061). */
+  confidence: number | null
   tokensToGold: number | null
   callsToGold: number | null
   tokensToAllGold: number | null
@@ -152,6 +154,7 @@ function outcome(q: Question, run: PolicyRun): { outcome: QuestionOutcome; row: 
     gold,
     abstained: run.abstained,
     route: run.route,
+    answered: run.answered,
     tokensToGold: ep.tokensToGold,
     callsToGold: ep.callsToGold,
     tokensToAllGold: ep.tokensToAllGold,
@@ -170,6 +173,7 @@ function outcome(q: Question, run: PolicyRun): { outcome: QuestionOutcome; row: 
     exact5: !run.abstained && exactAtK(run.hits, gold, 5) === 1,
     abstained: run.abstained,
     route: run.route,
+    confidence: run.confidence,
     tokensToGold: o.tokensToGold,
     callsToGold: o.callsToGold,
     tokensToAllGold: o.tokensToAllGold,

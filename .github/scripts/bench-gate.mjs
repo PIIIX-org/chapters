@@ -100,6 +100,8 @@ export const METRICS = [
   'abstained',
   'routed',
   'exact1Routed',
+  'answered',
+  'exact1Answered',
   'tokensToGold',
   'tokensToGoldMedian',
   'tokensToGoldReached',

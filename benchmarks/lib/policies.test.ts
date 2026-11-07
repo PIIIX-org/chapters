@@ -366,3 +366,16 @@ test('elara: a routed answer that lists several exact answers abstains from nami
   assert.equal(run.abstained, true)
   assert.equal(run.route, 'identifier')
 })
+
+test('elara: an answer with a location and a confidence is read as answered (#1061)', async () => {
+  const tools: ElaraTools = {
+    search: async () => ({ text: JSON.stringify({ status: 'ok', confidence: 0.91, answer: 'src/a.ts#L1-L3', results: [{ resourceType: 'symbol', path: 'src/a.ts', startLine: 1, endLine: 3 }] }), ms: 1, ok: true }),
+    readFile: async () => ({ text: '{}', ms: 1, ok: true }),
+    readSpan: async () => ({ text: '{}', ms: 1, ok: true }),
+  }
+  const run = await runElara('q', [{ path: 'src/a.ts', start: 2, end: 2 }], tools)
+  assert.equal(run.answered, true)
+  assert.equal(run.confidence, 0.91)
+  const plain: ElaraTools = { ...tools, search: async () => ({ text: JSON.stringify({ status: 'ok', results: [] }), ms: 1, ok: true }) }
+  assert.deepEqual([(await runElara('q', [], plain)).answered, (await runElara('q', [], plain)).confidence], [false, null])
+})

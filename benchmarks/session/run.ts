@@ -143,6 +143,7 @@ function outcome(gold: LineRange[], j: Judgments, run: RereadRun): { outcome: Qu
       gold,
       abstained: false,
       route: 'conceptual',
+      answered: false,
       tokensToGold: ep.tokensToGold,
       callsToGold: ep.callsToGold,
       tokensToAllGold: ep.tokensToAllGold,

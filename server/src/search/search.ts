@@ -1,4 +1,5 @@
 import { routeQuery } from './router.js'
+import { verifier, verifyHits, type Verifier } from './verifier.js'
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { config } from '../config.js'
@@ -370,6 +371,8 @@ export interface SearchNotesOptions {
   accountId?: string
   /** False: take the hybrid path whatever the query is (#1060). The tests of the legs use it; MCP and REST do not offer it yet. */
   route?: boolean
+  /** The verifier stage (#1061); `null` = off. Default: the configured one (`ELARA_VERIFIER`). Tests pass a fake. */
+  verifier?: Verifier | null
 }
 
 /**
@@ -397,7 +400,7 @@ export interface SearchNotesOptions {
 export type SearchStatus = 'ok' | 'no_match' | 'index_building' | 'unavailable'
 /** `exact`: a routed query answered by lookup, no channel ran (#1060). */
 export type RetrievalMode = 'hybrid' | 'keyword_only' | 'vector_only' | 'none' | 'exact'
-export type Degraded = false | { reason: 'embedder_failed' | 'vector_leg_failed' | 'keyword_leg_failed' }
+export type Degraded = false | { reason: 'embedder_failed' | 'vector_leg_failed' | 'keyword_leg_failed' | 'verifier_failed' }
 export interface IndexState {
   pending_notes: number
   pending_files: number
@@ -412,9 +415,13 @@ export interface SearchResponse<H> {
   /** Present only when the query was routed (#1060): `identifier` or `path`; a conceptual query names none. */
   route?: 'identifier' | 'path'
   /** 1: the routed lookup found one exact answer. */
-  confidence?: 1
+  confidence?: number
   /** The routed lookup found several exact answers, all listed. */
   ambiguous?: true
+  /** Where the verifier says the answer is, when it is sure (#1061). */
+  answer?: string
+  /** The verifier's part in the order (#1061): `skipped_language` for a query the English model cannot read. */
+  verifier?: 'applied' | 'skipped_language'
   results: H[]
 }
 
@@ -1253,7 +1260,9 @@ export async function searchNotes(
   if (keyword) contributeSymbols(keyword[2], true)
 
   // Every filter already applied inside the legs (#454).
-  const results = [...merged.values()].sort(byScore).slice(0, limit)
+  const fused = [...merged.values()].sort(byScore)
   observeSearchLeg('fusion', performance.now() - fusionStarted)
-  return respond(results, vec !== null, keyword, vector, await state)
+  const verified = await verifyHits(query, fused, options.verifier === undefined ? verifier : options.verifier)
+  const answer = respond(verified.hits.slice(0, limit), vec !== null, keyword, vector, await state)
+  return { ...answer, ...verified.fields, degraded: answer.degraded || verified.fields.degraded || false }
 }

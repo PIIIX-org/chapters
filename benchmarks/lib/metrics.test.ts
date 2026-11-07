@@ -179,7 +179,7 @@ test('median', () => {
 
 test('aggregate: means over questions, misses cost the miss price', () => {
   const gold = [{ path: 'a', start: 10, end: 12 }]
-  const base = { judgments: rel(['a', 1]), gold, hits: [] as Array<{ path: string; start: number; end: number } | null>, abstained: false, route: 'conceptual' as 'identifier' | 'path' | 'conceptual', callsToGold: 2, tokensToAllGold: null, precision: 0.5, recall: 1, tokens: 300, calls: 2, ms: 10 }
+  const base = { judgments: rel(['a', 1]), gold, hits: [] as Array<{ path: string; start: number; end: number } | null>, abstained: false, answered: false, route: 'conceptual' as 'identifier' | 'path' | 'conceptual', callsToGold: 2, tokensToAllGold: null, precision: 0.5, recall: 1, tokens: 300, calls: 2, ms: 10 }
   const outcomes: QuestionOutcome[] = [
     { ...base, ranking: ['a'], hits: [{ path: 'a', start: 9, end: 20 }], tokensToGold: 100 },
     { ...base, ranking: ['x', 'y', 'z', 'w', 'v', 'a'], hits: [null, { path: 'a', start: 11, end: 11 }], tokensToGold: 300 },
@@ -229,7 +229,7 @@ test('exactAtK: the first k returned locations overlap a gold range of the same 
 
 test('routed questions are counted, and exact1 over them alone (#1060)', () => {
   const gold = [{ path: 'a', start: 1, end: 2 }]
-  const base = { judgments: rel(['a', 1]), gold, callsToGold: 1, tokensToAllGold: 1, precision: 1, recall: 1, tokens: 1, calls: 1, ms: 1, ranking: ['a'], tokensToGold: 1, abstained: false }
+  const base = { judgments: rel(['a', 1]), gold, callsToGold: 1, tokensToAllGold: 1, precision: 1, recall: 1, tokens: 1, calls: 1, ms: 1, ranking: ['a'], tokensToGold: 1, abstained: false, answered: false }
   const a = aggregate(
     [
       { ...base, route: 'identifier', hits: [{ path: 'a', start: 2, end: 9 }] },
@@ -244,4 +244,22 @@ test('routed questions are counted, and exact1 over them alone (#1060)', () => {
   assert.equal(a.exact1Routed, 0.5)
   assert.equal(a.exact1, 0.5)
   assert.equal(aggregate([{ ...base, route: 'conceptual', hits: [] }], 1000, 15).exact1Routed, 0)
+})
+
+test('answered questions are counted, and exact1 over them alone (#1061)', () => {
+  const gold = [{ path: 'a', start: 1, end: 2 }]
+  const base = { judgments: rel(['a', 1]), gold, callsToGold: 1, tokensToAllGold: 1, precision: 1, recall: 1, tokens: 1, calls: 1, ms: 1, ranking: ['a'], tokensToGold: 1, abstained: false, route: 'conceptual' as const }
+  const a = aggregate(
+    [
+      { ...base, answered: true, hits: [{ path: 'a', start: 2, end: 9 }] },
+      { ...base, answered: true, hits: [{ path: 'b', start: 1, end: 9 }] },
+      { ...base, answered: false, hits: [{ path: 'a', start: 1, end: 1 }] },
+      { ...base, answered: false, hits: [] },
+    ],
+    1000,
+    15,
+  )
+  assert.equal(a.answered, 0.5)
+  assert.equal(a.exact1Answered, 0.5)
+  assert.equal(aggregate([{ ...base, answered: false, hits: [] }], 1000, 15).exact1Answered, 0)
 })

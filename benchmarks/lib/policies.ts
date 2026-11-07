@@ -113,6 +113,9 @@ export interface PolicyRun {
   abstained: boolean
   /** The route the search took: `identifier` or `path` (answered by lookup, #1060), else `conceptual`. */
   route: 'identifier' | 'path' | 'conceptual'
+  /** The search named one `answer` span, and how sure it was (#1061; null when the verifier did not run). */
+  answered: boolean
+  confidence: number | null
   episode: Episode
 }
 
@@ -247,7 +250,9 @@ export async function runElara(question: string, gold: readonly LineRange[], too
   const located = hits.map(hitLocation)
   const status = searchStatus(parsed)
   const named = parsed && typeof parsed === 'object' ? Reflect.get(parsed, 'route') : undefined
-  const run = { ranking, hits: located, abstained: status === 'no_match' || status === 'ambiguous' || Reflect.get(parsed ?? {}, 'ambiguous') === true, route: named === 'identifier' || named === 'path' ? named : ('conceptual' as const), episode: ep }
+  const confidence = parsed && typeof parsed === 'object' && typeof Reflect.get(parsed, 'confidence') === 'number' ? (Reflect.get(parsed, 'confidence') as number) : null
+  const answered = parsed && typeof parsed === 'object' && typeof Reflect.get(parsed, 'answer') === 'string'
+  const run = { ranking, hits: located, answered, confidence, abstained: status === 'no_match' || status === 'ambiguous' || Reflect.get(parsed ?? {}, 'ambiguous') === true, route: named === 'identifier' || named === 'path' ? named : ('conceptual' as const), episode: ep }
 
   // Each hit, best first, up to the file cap: the first hit, when it is located, is read as its span first; a file whose span shows no gold, and every other hit, is read page by page.
   const paged = new Set<string>()
@@ -314,7 +319,7 @@ export async function runGrep(keywords: readonly string[], gold: readonly LineRa
   const list = ep.clip(shown.map((f) => `${f.path}:${f.count}`).join('\n'))
   ep.record('rg --count', flags, list.visible, list.truncated, counted.ms, true, [])
   const ranking = shown.map((f) => f.path)
-  if (ranking.length === 0 || ep.done) return { ranking, hits: [], abstained: false, route: 'conceptual' as const, episode: ep }
+  if (ranking.length === 0 || ep.done) return { ranking, hits: [], abstained: false, route: 'conceptual' as const, answered: false, confidence: null, episode: ep }
 
   // 2. rg -n -i -m 5 <patterns> -- <top files>: where in each file, shown in ranking order.
   const top = ranking.slice(0, Math.min(GREP.previewFiles, caps.maxFiles))
@@ -340,5 +345,5 @@ export async function runGrep(keywords: readonly string[], gold: readonly LineRa
     }
     if (ep.done) break
   }
-  return { ranking, hits: [], abstained: false, route: 'conceptual' as const, episode: ep }
+  return { ranking, hits: [], abstained: false, route: 'conceptual' as const, answered: false, confidence: null, episode: ep }
 }
