@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DEFAULT_CAPS, runEpisode, type Caps } from './loop.ts'
-import { estimateRequestTokens, scriptedModel, type CompletionRequest, type Model, type ModelTurn } from './model.ts'
+import { anthropicRequest, estimateRequestTokens, scriptedModel, type CompletionRequest, type Model, type ModelTurn } from './model.ts'
 import type { Toolset } from './tools.ts'
 
 function fakeTools(results: Record<string, string> = {}): Toolset & { calls: Array<[string, Record<string, unknown>]> } {
@@ -112,24 +112,34 @@ function stubborn(finalText: string, stubbornTurns: number): Model & { requests:
   }
 }
 
-for (const arm of ['elara', 'local']) {
-  test(`${arm}: a model that keeps calling tools at the cap still ends with a final answer, the stop stays cap:tool-calls and every turn counts`, async () => {
-    const model = stubborn('the final answer', 2)
-    const r = await runEpisode({ model, tools: fakeTools(), system: `arm ${arm}`, prompt: 'p', caps: caps({ maxToolCalls: 2 }) })
-    assert.equal(r.stop, 'cap:tool-calls')
-    assert.equal(r.answer, 'the final answer')
-    assert.equal(r.toolCalls, 2)
-    // Two tool turns, then the forced turn, and two more asks that got tool calls back or text.
-    const forcedRequests = model.requests.filter((q) => q.toolChoice === 'none')
-    assert.equal(forcedRequests.length, 3)
-    assert.equal(r.turns, 2 + 3)
-    assert.deepEqual([r.tokensIn, r.tokensOut], [500, 50])
-    // The ask names plain text, and the ignored tool calls are not left dangling in the history.
-    const last = forcedRequests.at(-1)!
-    assert.match(JSON.stringify(last.messages.at(-1)), /no text|plain text/)
-    for (const m of last.messages.slice(0, -1)) if (m.role === 'assistant' && m.text === '') assert.ok(m.toolCalls.length === 0 || last.messages[last.messages.indexOf(m) + 1]?.role === 'tool')
+test('a model that keeps calling tools at the cap still ends with a final answer, the stop stays cap:tool-calls and every turn counts', async () => {
+  const model = stubborn('the final answer', 2)
+  const r = await runEpisode({ model, tools: fakeTools(), system: 's', prompt: 'p', caps: caps({ maxToolCalls: 2 }) })
+  assert.equal(r.stop, 'cap:tool-calls')
+  assert.equal(r.answer, 'the final answer')
+  assert.equal(r.toolCalls, 2)
+  // Two tool turns, the forced turn and two asks (the third request gets text).
+  assert.equal(model.requests.length, 5)
+  const forced = model.requests.filter((q) => q.toolChoice === 'none')
+  assert.equal(forced.length, 3)
+  assert.equal(r.turns, 5)
+  assert.deepEqual([r.tokensIn, r.tokensOut], [500, 50])
+  const last = forced.at(-1)!
+  assert.match(JSON.stringify(last.messages.at(-1)), /no text/)
+  // Neither the blank turns nor their ignored calls are in the history: no assistant message is blank, none has calls without a tool message after it.
+  last.messages.forEach((m, i) => {
+    if (m.role !== 'assistant') return
+    assert.ok(m.text !== '' || m.toolCalls.length > 0, 'blank assistant message')
+    if (m.toolCalls.length > 0) assert.equal(last.messages[i + 1]?.role, 'tool')
   })
-}
+  // Anthropic refuses empty content: the history as the wire builds it has none.
+  const wire = anthropicRequest('m', last).messages as Array<{ role: string; content: Array<{ type: string; text?: string }> }>
+  for (const m of wire) {
+    assert.ok(m.content.length > 0, 'empty content')
+    for (const b of m.content) if (b.type === 'text') assert.ok(b.text!.trim() !== '', 'blank text block')
+  }
+  assert.deepEqual(wire.map((m) => m.role).filter((r, i, all) => r !== all[i - 1]), wire.map((m) => m.role), 'roles alternate')
+})
 
 test('a model that never answers in text gets a bounded number of asks, then the episode ends with no answer and says why', async () => {
   const model = stubborn('unused', 99)

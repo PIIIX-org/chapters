@@ -220,7 +220,7 @@ export async function runEpisode(e: Episode): Promise<EpisodeResult> {
       // words, up to FINAL_ASKS times, every turn counted. The ignored calls leave the history, which has no results for them.
       // shortcut: three asks, then the episode ends without an answer and says so; upgrade if a model needs more.
       if (++asks > FINAL_ASKS) return result('', cap, `no final answer: the model sent no text after ${FINAL_ASKS} asks`)
-      messages.push({ role: 'assistant', text: turn.text, toolCalls: [] })
+      // The blank turn itself is not kept (a provider refuses an empty assistant message); the ask follows the previous user message.
       messages.push({ role: 'user', text: 'Your last reply had no text. Do not call tools: write your final answer now, in plain text, from what you have found.' })
       continue
     }
