@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { getBacklinkLines, getLocalGraph } from '../graph/local-graph.js'
 import { atLeast, listUsersWithAccess, resolveAccess, type Access } from '../vaults/permissions.js'
 import { OkfValidationError } from './okf.js'
 import { NoteTooLargeError, noteTransportLimit } from './size-cap.js'
@@ -13,7 +14,6 @@ import {
   getBaseRevision,
   getIncomingLinks,
   getLiveNote,
-  getLocalGraph,
   getRevision,
   listAssets,
   listRevisionMeta,
@@ -275,7 +275,9 @@ export function noteRoutes(app: FastifyInstance) {
       splitPath(req.params['*'])
       const backlinks = await getIncomingLinks(req.params.id, req.params['*'])
       if (!backlinks) return reply.code(404).send({ error: 'note not found' })
-      return backlinks
+      // Where each note links (#472): its links to this note, one per line, with the paragraph or line.
+      const lines = (await getBacklinkLines(req.params.id, req.params['*'])) ?? []
+      return backlinks.map((b) => ({ ...b, links: lines.filter((l) => l.path === b.path).map(({ location, context }) => ({ location, context })) }))
     },
   )
 

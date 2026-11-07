@@ -1357,8 +1357,18 @@ its body-relative lines into `path#La` of its file; a row with line 0 gives
 the bare path. The section is listed after `nodes` and `edges` when the
 centre is a note and `edgeTypes` includes `extracted`, with the ladder
 `{path, location}` → `location` → counts per linking note. The REST route
-`/vaults/:id/backlinks/*` (`getIncomingLinks`) is unchanged: one item per
-linking note, no lines.
+`/vaults/:id/backlinks/*` (`getIncomingLinks`) lists one item per linking note
+and, since the REST follow-up of #472, `links: [{location, context}]` from the
+same `backlinksOf` rows. The REST `/vaults/:id/local-graph/*` is
+`graph/local-graph.ts`: `neighborhood()` (SQL, nearest first then path, at most
+50 nodes, `extracted` and `semantic` edges, one edge per pair and kind) in the
+shape the client already read; the in-memory `getLocalGraph` of `notes/store.ts`
+is gone. **Per-note drift**: `read_note` puts `drift: [{resource, kind,
+detail}]` in the head of a first body page when a `repo:`/`code:` reference of
+the note no longer holds (`noteDrift`, `checkCodeStaleness(repo, {noteId})`:
+the file is gone, its hash changed, or the symbol is missing; no
+notification, no query for a note naming no repository); absent otherwise, so
+no tool text changed.
 
 **Saved perspectives** (`graph_perspectives`; REST `GET/POST
 /graph/perspectives`, `DELETE /graph/perspectives/:id`, and the three MCP
