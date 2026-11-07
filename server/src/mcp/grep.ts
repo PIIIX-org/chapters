@@ -40,7 +40,7 @@ export async function grepAnswer(
   const limit = PAGE_HITS
   let answer
   try {
-    answer = await grep(targets, { pattern: args.pattern, glob: args.path, context: args.context ?? 0, limit, after })
+    answer = await grep(targets, { pattern: args.pattern, glob: args.path?.replace(/^(?:\.?\/)+/, ''), context: args.context ?? 0, limit, after })
   } catch (err) {
     throw err instanceof GrepError ? new McpToolError(err.code, err.message, err.field ? { field: err.field } : {}) : err
   }

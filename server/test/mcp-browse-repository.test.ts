@@ -142,11 +142,33 @@ describe('browse_repository path filter', () => {
     // A trailing slash names the same folder; a nested folder lists its own subtree.
     expect((await page({ repositoryId: repoId, path: 'src/lib/', budget_tokens: 25_000 })).files.map((f) => f.path)).toEqual(expected)
     expect((await page({ repositoryId: repoId, path: 'src/lib/b' })).files.map((f) => f.path)).toEqual(['src/lib/b/c.ts'])
-    // A folder nothing is under (a file's path included) lists nothing.
-    expect(await page({ repositoryId: repoId, path: 'src/main.ts' })).toEqual({ files: [], truncated: false })
     // Without `path`, every file, in the same order.
     const all = await page({ repositoryId: repoId, budget_tokens: 25_000 })
     expect(all.files.map((f) => f.path)).toEqual([...LIB, ...OTHERS].sort(byCodeUnits))
+  })
+})
+
+describe('browse_repository path forms and unknown folders (#1102)', () => {
+  const paths = async (args: Args) => (await page({ repositoryId: repoId, budget_tokens: 25_000, ...args })).files.map((f) => f.path)
+
+  it('`.`, `./` and `/` are the root, and a leading `./` is dropped', async () => {
+    const root = await paths({})
+    expect(root.length).toBeGreaterThan(30)
+    for (const path of ['.', './', '/', '', './.', './/']) expect(await paths({ path }), JSON.stringify(path)).toEqual(root)
+    const lib = await paths({ path: 'src/lib' })
+    for (const path of ['./src/lib', './src/lib/', '/src/lib', 'src//lib', 'src/./lib']) expect(await paths({ path }), path).toEqual(lib)
+  })
+
+  it('a folder that does not exist is NOT_FOUND with the near folders, never an empty list; a file path says so', async () => {
+    const missing = await call({ repositoryId: repoId, path: 'src/libb' })
+    expect(missing.isError).toBe(true)
+    const envelope = JSON.parse(missing.text) as { error: { code: string; message: string; suggestions?: string[] } }
+    expect(envelope.error.code).toBe('NOT_FOUND')
+    expect(envelope.error.suggestions).toContain('src/lib')
+    const file = JSON.parse((await call({ repositoryId: repoId, path: 'src/main.ts' })).text) as { error: { code: string; message: string } }
+    expect(file.error.code).toBe('NOT_FOUND')
+    expect(file.error.message).toMatch(/is a file/)
+    expect(JSON.parse((await call({ repositoryId: repoId, path: 'nothing/here' })).text).error.code).toBe('NOT_FOUND')
   })
 })
 
@@ -206,5 +228,22 @@ describe('browse_repository on a large repository', () => {
     const paths = pathsOf(pages)
     expect(new Set(paths).size).toBe(LARGE)
     expect([...paths].sort(byCodeUnits)).toEqual(paths)
+  })
+})
+
+describe('read_file and grep take paths as a shell writes them (#1102)', () => {
+  it('`./src/main.ts` reads the file, a folder says to browse it, `./src/**` is the glob `src/**`', async () => {
+    const run = async (name: string, args: Args) => {
+      resetRateLimits()
+      const r = await agent.callTool({ name, arguments: { repositoryId: repoId, ...args } })
+      return (r.content as Array<{ text?: string }>)[0]?.text ?? ''
+    }
+    for (const path of ['./src/main.ts', '/src/main.ts', 'src//main.ts']) expect(await run('read_file', { path }), path).toContain('"path":"src/main.ts"')
+    const dir = JSON.parse(await run('read_file', { path: 'src' })) as { error: { code: string; message: string } }
+    expect(dir.error).toMatchObject({ code: 'NOT_FOUND', message: 'src is a folder: use browse_repository' })
+    expect(JSON.parse(await run('read_file', { path: 'src/nothing.ts' })).error.message).toBe('file not found')
+    const plain = JSON.parse(await run('grep', { pattern: 'src', path: 'src/**' })) as { scanned: number }
+    expect(plain.scanned).toBeGreaterThan(0)
+    expect(JSON.parse(await run('grep', { pattern: 'src', path: './src/**' }))).toEqual(plain)
   })
 })
