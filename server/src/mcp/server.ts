@@ -95,6 +95,7 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord, restoreVaultRecord, trashVaultRecord } from '../vaults/routes.js'
 import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
+import { leanHit } from './search-hit.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
 import { BACKLINK_CAP, backlinksOf, neighborhood, type Backlink } from '../graph/neighbors.js'
@@ -3035,7 +3036,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       },
       budget: 'list',
     },
-    async (args: { query: string; symbols?: boolean; limit?: number }, { resources }) => {
+    async (args: { query: string; symbols?: boolean; limit?: number; everywhere?: boolean }, { resources }) => {
       const limit = args.limit ?? 20
       // The first `limit` hits of the ranking, plus one to know whether more match.
       const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id })
@@ -3049,13 +3050,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         sections: [
           ranked({
             name: 'results',
-            // A note hit carries no frontmatter (#419, measured in mcp-search-hits.test.ts): `read_note` has it, REST keeps it for the client's tags.
-            items: results.map((r) => ({ ...r, frontmatter: undefined })),
+            // A note hit carries no frontmatter (#419): `read_note` has it, REST keeps it for the client's tags. What the call or the path already says stays out of every hit (#414): see `leanHit`. A call that named no container (`everywhere`) keeps it on the hit, however many it reached today: the answer's shape must not change when a vault is shared.
+            items: results.map((r) => leanHit(r, args.everywhere !== true && resources.vaultIds.length + resources.repositoryIds.length === 1)),
             id: (r) => `${r.resourceType}:${r.id}`,
             limit,
-            // Down the ladder: without snippet and updated, then the path (`path#La-Lb` for a symbol); counted per path.
+            // Down the ladder: without snippet, updated, heading and tokens, then the location (`path#La-Lb` for a located hit, else the path); counted per path.
             ladder: {
-              no_context: (r) => ({ ...r, snippet: undefined, updated: undefined }),
+              // Without the passage's description too (#414): the lines and the block id stay, they are what a read needs.
+              no_context: (r) => ({ ...r, snippet: undefined, updated: undefined, heading: undefined, tokens: undefined }),
               locations: (r) => (r.startLine !== undefined && r.endLine !== undefined ? location(r.path, r.startLine, r.endLine) : r.path),
               group: (r) => r.path,
             },

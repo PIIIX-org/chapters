@@ -121,12 +121,15 @@ describe('search by identifier (#455)', () => {
     expect(await search('frontmatter parse', 'symbol')).toContain('src/notes/frontmatter.ts#parseFrontmatter')
   })
 
-  it('finds a member-access call site by the whole identifier, with its first lines as the snippet', async () => {
+  it('finds a member-access call site by the whole identifier, with the lines around it as the snippet (#414)', async () => {
     expect(await search('parseFrontmatter', 'code')).toContain('src/load.ts')
-    // The English query matches nothing in it (`fm.parseFrontmatter` is one host lexeme), so no headline.
+    // The English query matches nothing in it (`fm.parseFrontmatter` is one host lexeme), so no headline: the snippet is cut around the identifier.
     keywordOnly()
     const { results } = await searchNotes({ vaultIds: [], repositoryIds: [repo] }, 'parseFrontmatter', 20, {}, { route: false })
-    expect(results.find((r) => r.path === 'src/load.ts')?.snippet).toBe(FILES[3]!.content.slice(0, 200))
+    const snippet = results.find((r) => r.path === 'src/load.ts')?.snippet
+    expect(snippet).toContain('<b>parseFrontmatter</b>')
+    expect(FILES[3]!.content).toContain(snippet!.replace(/<\/?b>/g, ''))
+    expect(snippet!.replace(/<\/?b>/g, '').length).toBeLessThanOrEqual(200)
   })
 
   it('finds a file by a dotted path and by its file name', async () => {

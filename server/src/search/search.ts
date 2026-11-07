@@ -1,3 +1,4 @@
+import { locateHits } from './locate.js'
 import { routeQuery } from './router.js'
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
@@ -341,8 +342,18 @@ export interface SearchResult {
   symbolName?: string // symbols only
   symbolKind?: string // symbols only
   symbolParent?: string // symbols only: a method's class (#450)
-  startLine?: number // symbols only; a routed file hit: the whole file
-  endLine?: number // symbols only; a routed file hit: the whole file
+  /** The lines `read_note` / `read_file` take (#414): a symbol's, or the block or span the hit points at in a note or a file. */
+  startLine?: number
+  endLine?: number
+  /** The block the hit points at (`b_...`, what `read_note` and `read_file` take as a `block` target); a note hit's section or preamble, a file hit's symbol. */
+  block?: string
+  /** The heading path of a note hit's section, the name path of a symbol. */
+  heading?: string
+  /** What reading `startLine`-`endLine` costs, characters / 4. */
+  tokens?: number
+  /** Which retrieval channel found it: the keyword leg, the vector leg or both (#414), or `exact`: the router's lookup (#1060). */
+  channel: 'keyword' | 'vector' | 'both' | 'exact'
+  /** Up to `SNIPPET_CHARS` characters around the match. */
   snippet: string
   score: number
   /** The UTC day (`YYYY-MM-DD`) of the last change: the note's, the code file's (its last sync that changed it), a symbol's file's (#446). */
@@ -493,6 +504,8 @@ interface Row {
   language?: string | null
   snippet: string
   updated_at: string
+  /** A note's nearest block (`block_id`), from the vector leg (#414). */
+  block?: string
   /** A relaxed or trigram row of a keyword leg (#455 part 2): its fusion rank counts from `CANDIDATES`. */
   relaxed?: true
 }
@@ -602,16 +615,17 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
             -- cut below by path. Unfiltered, the cut has no join to notes, which would add a lookup per block; a
             -- filter (#454) joins them there, so it runs inside the (iterative, #462) scan, before the cut.
             WITH nearest AS (
-              SELECT owner_id, ${distance(sql`embedding`)} AS distance
+              SELECT owner_id, blocks.block_id, ${distance(sql`embedding`)} AS distance
               FROM blocks ${filter.length > 0 ? sql`JOIN notes ON notes.id = blocks.owner_id AND notes.deleted_at IS NULL ${filterSql}` : sql``}
               WHERE owner_type = 'note' AND container_id = ANY(${uuidArray(vaultIds)}) AND embedding IS NOT NULL
               ORDER BY ${distance(sql`embedding`)}, owner_id
               LIMIT ${BLOCK_CANDIDATES}
             ), best AS (
-              SELECT owner_id, min(distance) AS distance FROM nearest GROUP BY owner_id
+              -- The nearest block of each note is the passage the hit points at (#414).
+              SELECT DISTINCT ON (owner_id) owner_id, block_id, distance FROM nearest ORDER BY owner_id, distance, block_id
             )
             SELECT notes.id, notes.vault_id AS container_id, notes.path, notes.type, notes.frontmatter, left(notes.body, 200) AS snippet,
-                   ${UPDATED_AT(sql`notes.updated_at`)}, best.distance
+                   ${UPDATED_AT(sql`notes.updated_at`)}, best.distance, best.block_id AS block
             FROM best JOIN notes ON notes.id = best.owner_id
             WHERE notes.deleted_at IS NULL
             ORDER BY best.distance, notes.path COLLATE "C", notes.id`),
@@ -1183,10 +1197,15 @@ export async function searchNotes(
   const fusionStarted = performance.now()
   const ctx = queryExactContext(query)
   const codeShaped = isCodeShaped(query)
-  const merged = new Map<string, SearchResult>()
+  const merged = new Map<string, Omit<SearchResult, 'channel'>>()
+  // The legs that found each hit, and the block the vector leg found nearest in a note (#414).
+  const legs = new Map<string, Set<'keyword' | 'vector'>>()
+  const vectorBlocks = new Map<string, string>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
       const key = `${resourceType}:${row.id}`
+      legs.set(key, (legs.get(key) ?? new Set()).add(preferSnippet ? 'keyword' : 'vector'))
+      if (!preferSnippet && row.block !== undefined) vectorBlocks.set(key, row.block)
       const contribution = 1 / (RRF_K + rank + (row.relaxed ? CANDIDATES : 0) + 1)
       const existing = merged.get(key)
       if (existing) {
@@ -1215,6 +1234,7 @@ export async function searchNotes(
   const contributeSymbols = (rows: SymbolRow[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
       const key = `symbol:${row.id}`
+      legs.set(key, (legs.get(key) ?? new Set()).add(preferSnippet ? 'keyword' : 'vector'))
       const contribution = 1 / (RRF_K + rank + (row.relaxed ? CANDIDATES : 0) + 1)
       const existing = merged.get(key)
       if (existing) {
@@ -1253,7 +1273,11 @@ export async function searchNotes(
   if (keyword) contributeSymbols(keyword[2], true)
 
   // Every filter already applied inside the legs (#454).
-  const results = [...merged.values()].sort(byScore).slice(0, limit)
+  const results = [...merged.entries()]
+    .sort(([, a], [, b]) => byScore(a, b))
+    .slice(0, limit)
+    .map(([key, hit]): SearchResult => ({ ...hit, channel: legs.get(key)!.size === 2 ? 'both' : legs.get(key)!.has('keyword') ? 'keyword' : 'vector' }))
   observeSearchLeg('fusion', performance.now() - fusionStarted)
+  await locateHits(results, query, vectorBlocks, vec ?? undefined)
   return respond(results, vec !== null, keyword, vector, await state)
 }

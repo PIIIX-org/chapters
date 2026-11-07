@@ -12,6 +12,7 @@
 // has no list to narrow).
 import { sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
+import { locateHits } from './locate.js'
 import { splitIdentifier } from './identifiers.js'
 import type { SearchResult } from './search.js'
 
@@ -61,27 +62,27 @@ export async function routeQuery(resources: { vaultIds: string[]; repositoryIds:
       resources.repositoryIds.length === 0
         ? []
         : ((await db.execute(sql`
-            SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS head,
+            SELECT f.id, f.repository_id AS container_id, f.path, f.language, left(f.content, 200) AS head, length(f.content) AS chars,
                    greatest(length(f.content) - length(replace(f.content, E'\n', '')) + (CASE WHEN right(f.content, 1) = E'\n' THEN 0 ELSE 1 END), 1) AS lines, to_char(f.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS updated
             FROM repository_files f
             WHERE f.repository_id = ANY(${uuids(resources.repositoryIds)}) AND (lower(f.path) = ${lower} OR lower(f.path) LIKE ${`%/${lower.replace(/[\\%_]/g, '\\$&')}`})
-            ORDER BY f.path COLLATE "C", f.id LIMIT ${MAX_ROUTED + 1}`)) as unknown as Array<{ id: string; container_id: string; path: string; language: string | null; head: string; lines: number; updated: string }>)
+            ORDER BY f.path COLLATE "C", f.id LIMIT ${MAX_ROUTED + 1}`)) as unknown as Array<{ id: string; container_id: string; path: string; language: string | null; head: string; chars: number; lines: number; updated: string }>)
     const notes =
       resources.vaultIds.length === 0
         ? []
         : ((await db.execute(sql`
-            SELECT n.id, n.vault_id AS container_id, n.path, n.type, left(n.body, 200) AS head, to_char(n.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS updated
+            SELECT n.id, n.vault_id AS container_id, n.path, n.type, left(n.body, 200) AS head, length(n.body) AS chars, to_char(n.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS updated
             FROM notes n
             WHERE n.vault_id = ANY(${uuids(resources.vaultIds)}) AND n.deleted_at IS NULL AND (lower(n.path) = ${lower} OR lower(n.path) || '.md' = ${lower})
-            ORDER BY n.path COLLATE "C", n.id LIMIT ${MAX_ROUTED + 1}`)) as unknown as Array<{ id: string; container_id: string; path: string; type: string; head: string; updated: string }>)
+            ORDER BY n.path COLLATE "C", n.id LIMIT ${MAX_ROUTED + 1}`)) as unknown as Array<{ id: string; container_id: string; path: string; type: string; head: string; chars: number; updated: string }>)
     const results: SearchResult[] = [
       ...files.map((f): SearchResult => ({
         resourceType: 'code', id: f.id, containerId: f.container_id, path: f.path, type: f.language, language: f.language, updated: f.updated,
-        startLine: 1, endLine: f.lines, snippet: f.head, score: 1,
+        startLine: 1, endLine: f.lines, tokens: Math.ceil(f.chars / 4), channel: 'exact', snippet: f.head, score: 1,
       })),
       ...notes.map((n): SearchResult => ({
         resourceType: 'note', id: n.id, containerId: n.container_id, path: n.path, type: n.type, updated: n.updated,
-        snippet: n.head, score: 1,
+        tokens: Math.ceil(n.chars / 4), channel: 'exact', snippet: n.head, score: 1,
       })),
     ]
     // More than `MAX_ROUTED` exact answers is not an answer: the hybrid path ranks them.
@@ -109,7 +110,8 @@ export async function routeQuery(resources: { vaultIds: string[]; repositoryIds:
   const results = symbols.map((s): SearchResult => ({
     resourceType: 'symbol', id: s.id, containerId: s.container_id, path: s.path, type: s.kind, symbolName: s.name, symbolKind: s.kind,
     ...(s.parent !== null ? { symbolParent: s.parent } : {}), startLine: s.start_line, endLine: s.end_line, updated: s.updated,
-    snippet: s.snippet, score: 1,
+    channel: 'exact', snippet: s.snippet, score: 1,
   }))
+  await locateHits(results, query, new Map())
   return { route: 'identifier', results, ...(results.length === 1 ? { confidence: 1 as const } : { ambiguous: true as const }) }
 }

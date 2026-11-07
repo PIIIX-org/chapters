@@ -62,7 +62,8 @@ describe('identifier route (#1060)', () => {
     expect(res.ambiguous).toBeUndefined()
     expect(res.results).toHaveLength(1)
     const [hit] = res.results
-    expect(hit).toMatchObject({ resourceType: 'symbol', path: 'src/notes/frontmatter.ts', symbolName: 'parseFrontmatter', startLine: 1, endLine: 3 })
+    expect(hit).toMatchObject({ resourceType: 'symbol', path: 'src/notes/frontmatter.ts', symbolName: 'parseFrontmatter', startLine: 1, endLine: 3, channel: 'exact' })
+    expect(hit!.block).toMatch(/^b_[a-z2-7]{12}$/)
   })
 
   it('is asked in a sentence, by a snake_case spelling, or as Class.method', async () => {
