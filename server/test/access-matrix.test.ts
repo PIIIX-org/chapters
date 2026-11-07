@@ -262,6 +262,50 @@ describe('read surfaces (#552, #1034)', () => {
     read: (actor) => call(actor, 'browse_repository', { repositoryId, changed_since: '2000-01-01' }),
   })
 
+  // A refused id names the account's own accessible ids and names (#1101): the object is in the owner's and the shared
+  // account's suggestions only. The refusal is an error answer, so this is the matrix's four cases by hand.
+  it('MCP malformed id: suggestions name the repository and vault to the owner and the shared account only', async () => {
+    const asks = (actor: Actor) => [
+      call(actor, 'browse_repository', { repositoryId: 'not-a-uuid' }),
+      call(actor, 'browse_vault', { vaultId: 'not-a-uuid' }),
+    ]
+    const names = [`matrix-${MARK}`, repositoryId, `matrix ${MARK}`, vaultId]
+    const text = async (actor: Actor) => (await Promise.all(asks(actor))).map((o) => o.text).join('\n')
+    const owner = await text('owner')
+    for (const n of names) expect(owner, `owner ${n}`).toContain(n)
+    expect(await text('unrelated')).not.toMatch(new RegExp(names.map((n) => n.replace(/[()]/g, '\\$&')).join('|')))
+    const fixture = await shareBoth(names)
+    const shared = await text('shared')
+    for (const n of names) expect(shared, `shared ${n}`).toContain(n)
+    await fixture.revoke()
+    const revoked = await text('shared')
+    for (const n of names) expect(revoked, `revoked ${n}`).not.toContain(n)
+  })
+
+  // A pinned token sending an id of the other kind is refused with the scope error and names nothing of the account (#1101).
+  it('MCP pinned token with an id of the other kind: the answer names no id or name of the account', async () => {
+    const pin = async (body: Record<string, unknown>) => {
+      const minted = await rest('owner', 'POST', '/api/mcp-connections', { name: `matrix-pin-${Math.random()}`, ...body })
+      expect(minted.statusCode).toBeLessThan(300)
+      const mcp = new Client({ name: 'access-matrix-pin', version: '0.0.0' })
+      await mcp.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), { requestInit: { headers: { authorization: `Bearer ${(minted.json() as { token: string }).token}` } } }))
+      clients.push(mcp)
+      return mcp
+    }
+    const repoPinned = await pin({ scope: 'repository', repositoryId })
+    const vaultPinned = await pin({ scope: 'vault', vaultId })
+    resetRateLimits()
+    const fromRepoPin = mcpOutcome(await repoPinned.callTool({ name: 'browse_vault', arguments: { vaultId } }))
+    resetRateLimits()
+    const fromVaultPin = mcpOutcome(await vaultPinned.callTool({ name: 'browse_repository', arguments: { repositoryId } }))
+    for (const [label, outcome] of [['repository-pinned sending a vaultId', fromRepoPin], ['vault-pinned sending a repositoryId', fromVaultPin]] as const) {
+      expect(outcome.denied || !outcome.ok, label).toBe(true)
+      expect(outcome.text, label).toContain('TOOL_NOT_ALLOWED')
+      expect(outcome.text, label).not.toContain('suggestions')
+      for (const hidden of [vaultId, repositoryId, `matrix ${MARK}`, `matrix-${MARK}`]) expect(outcome.text, `${label}: ${hidden}`).not.toContain(hidden)
+    }
+  })
+
   // The code queries (#470) name a file's sites, their enclosing symbols and one line of source.
   for (const refs of ['references', 'callers', 'impact'] as const) {
     accessMatrix(`MCP find_symbols refs: ${refs}`, {
@@ -308,6 +352,18 @@ describe('read surfaces (#552, #1034)', () => {
   accessMatrix('MCP grep everywhere', {
     setup: () => shareBoth([SOURCE, `${MARK}source`], 'listing'),
     read: (actor) => call(actor, 'grep', { everywhere: true, pattern: `${MARK}source` }),
+  })
+  accessMatrix('REST GET /api/vaults/:id/grep', {
+    setup: () => shareBoth([SOURCE, `${MARK}source`]),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/vaults/${vaultId}/grep?pattern=${MARK}source`)),
+  })
+  accessMatrix('REST GET /api/repositories/:id/grep', {
+    setup: () => shareBoth([FILE, `${MARK}Plan`]),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/repositories/${repositoryId}/grep?pattern=${MARK}Plan`)),
+  })
+  accessMatrix('REST GET /api/grep (everywhere)', {
+    setup: () => shareBoth([SOURCE, `${MARK}source`], 'listing'),
+    read: async (actor) => restOutcome(await rest(actor, 'GET', `/api/grep?pattern=${MARK}source`)),
   })
   accessMatrix('REST GET /api/search (everywhere)', {
     setup: () => shareBoth([sourceId, SOURCE], 'listing'),

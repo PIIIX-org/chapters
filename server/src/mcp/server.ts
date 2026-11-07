@@ -171,9 +171,14 @@ const UUID_ARG = z
   .string()
   .refine((value) => UUID_PATTERN.test(value), { error: 'Invalid UUID' })
   .meta({ format: 'uuid' })
+/**
+ * A vault or repository id argument. Listed as a UUID but not checked by the schema: a mis-copied id is refused by
+ * `idRefusal` with the ids that would have worked (#1101), which the schema's "Invalid UUID" could not name.
+ */
+const ID_ARG = z.string().meta({ format: 'uuid' })
 /** The target vault (repository): a pinned connection may omit it, an account connection names it. */
-const VAULT_ID = UUID_ARG.optional().describe('Vault id; omit when pinned')
-const REPOSITORY_ID = UUID_ARG.optional().describe('Repository id; omit when pinned')
+const VAULT_ID = ID_ARG.optional().describe('Vault id; omit when pinned')
+const REPOSITORY_ID = ID_ARG.optional().describe('Repository id; omit when pinned')
 const NOTE_PATH = z.string().describe('Note path')
 
 /** One `edit_note` op (#408); each op object takes only its own keys. */
@@ -658,6 +663,37 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     return requested
   }
 
+  /** At most this many accessible ids a refused id names. */
+  const ID_SUGGESTIONS = 5
+
+  /**
+   * The refusal of a vault or repository id argument that cannot be used (#1101), naming the ids that can: a pinned
+   * connection's pin, else up to five of the account's own accessible ones as `<id> (<name>)`. Only the caller's ids
+   * are named, so an id it cannot see answers as a missing one. null when the id is fine as far as shape and pin go.
+   */
+  async function idRefusal(kind: 'vault' | 'repository', requested: string): Promise<McpToolError | null> {
+    const field = kind === 'vault' ? 'vaultId' : 'repositoryId'
+    const scope = auth.connection.scope
+    // A connection pinned to the other kind may name no id of this one, whatever it is: the scope's own refusal, and no
+    // id or name of the account (#1101 review).
+    if (scope !== 'account' && scope !== kind) return new McpToolError('TOOL_NOT_ALLOWED', `this connection is scoped to a ${scope}, not a ${kind}`, { field })
+    const pin = scope === kind ? (kind === 'vault' ? auth.connection.vaultId : auth.connection.repositoryId) : null
+    // The accessible ones are read only to refuse.
+    if (pin ? requested === pin : UUID_PATTERN.test(requested)) return null
+    const names = await accessibleIds(kind)
+    if (pin) {
+      const named = names.find((n) => n.startsWith(pin)) ?? pin
+      return new McpToolError('TOOL_NOT_ALLOWED', `this connection is pinned to a different ${kind}: use ${field} ${named}, or omit it`, { field, suggestions: [named] })
+    }
+    return new McpToolError('INVALID_ARGUMENT', `${field} is not a UUID: use one of the suggestions`, { field, suggestions: names.slice(0, ID_SUGGESTIONS) })
+  }
+
+  /** The account's accessible vaults or repositories as `<id> (<name>)`, by name then id: the same suggestions every time. */
+  async function accessibleIds(kind: 'vault' | 'repository'): Promise<string[]> {
+    const own = kind === 'vault' ? await listAccessibleVaults(auth.user.id) : await listAccessibleRepositories(auth.user.id)
+    return [...own].sort((x, y) => compareCodeUnits(x.name, y.name) || compareCodeUnits(x.id, y.id)).map((r) => `${r.id} (${r.name})`)
+  }
+
   function requireAccountScope(surface: string): void {
     // Audit rule: account-wide surfaces are hard-rejected for vault- or
     // repository-scoped tokens, never silently narrowed.
@@ -871,6 +907,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         requireCapability(name, def.capability, profile)
         // The SDK has already parsed the arguments with `inputSchema`, the shape A describes.
         const args = (raw ?? {}) as A
+        for (const [kind, id] of [['vault', args.vaultId], ['repository', args.repositoryId]] as const) {
+          if (typeof id !== 'string') continue
+          const refusal = await idRefusal(kind, id)
+          if (refusal) throw refusal
+        }
         const ids: ScopeIds = def.ids
           ? await def.ids(args)
           : {
@@ -893,6 +934,19 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         await answer.rendered?.(truncated, seen)
         return answered(text, blocks)
       } catch (err) {
+        // An id the caller cannot see is a missing one (#439); it names the caller's own ids (#1101).
+        const raw0 = (raw ?? {}) as { vaultId?: unknown; repositoryId?: unknown }
+        if (err instanceof McpToolError && err.code === 'NOT_FOUND' && auth.connection.scope === 'account') {
+          // With both ids given, the one the account cannot see is the one named.
+          for (const [kind, given] of [['repository', raw0.repositoryId], ['vault', raw0.vaultId]] as const) {
+            if (typeof given !== 'string') continue
+            const names = await accessibleIds(kind)
+            if (names.some((n) => n.startsWith(`${given.toLowerCase()} (`))) continue
+            const result = errorResult(toErrorEnvelope(new McpToolError('NOT_FOUND', 'not found', { suggestions: names.slice(0, ID_SUGGESTIONS) })))
+            toolErrors.add(result)
+            return result
+          }
+        }
         const result = errorResult(toErrorEnvelope(err))
         toolErrors.add(result)
         return result
@@ -2973,8 +3027,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         'Keyword and semantic search over notes and code.',
       inputSchema: {
         query: z.string().describe('Search text'),
-        vaultId: UUID_ARG.optional().describe('Vault to search'),
-        repositoryId: UUID_ARG.optional().describe('Repository to search'),
+        vaultId: ID_ARG.optional().describe('Vault to search'),
+        repositoryId: ID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Everything accessible (account tokens)'),
         symbols: z.boolean().optional().describe('Include code symbols'),
         limit: intRange('limit', 1, 100).optional().describe('Max results'),
@@ -3021,8 +3075,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description: 'Regex over note and code lines: located hits in path order.',
       inputSchema: {
         ...GREP_INPUT,
-        vaultId: UUID_ARG.optional().describe('Vault to search'),
-        repositoryId: UUID_ARG.optional().describe('Repository to search'),
+        vaultId: ID_ARG.optional().describe('Vault to search'),
+        repositoryId: ID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('All accessible (account tokens)'),
       },
       budget: 'list',
@@ -3042,7 +3096,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: {
         query: z.string().describe('Name, signature or meaning'),
         kind: z.enum(SYMBOL_KINDS).optional().describe('Symbol kind'),
-        repositoryId: UUID_ARG.optional().describe('Repository to search'),
+        repositoryId: ID_ARG.optional().describe('Repository to search'),
         everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
         limit: intRange('limit', 1, 50).optional().describe('Max results'),
         refs: z.enum([...REFS, 'explain']).optional().describe('Sites of a symbol; at: `path:line`; explain: sites, notes'),
@@ -3158,8 +3212,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description:
         'Query the knowledge graph of notes and code: one node per community by default, or nodes with `community`, `aggregate: "none"` or `neighborsOf`. Edges carry direction, relation, confidence and evidence (`path#La-Lb`).',
       inputSchema: {
-        vaultId: UUID_ARG.optional().describe('Vault graph'),
-        repositoryId: UUID_ARG.optional().describe('Repository graph'),
+        vaultId: ID_ARG.optional().describe('Vault graph'),
+        repositoryId: ID_ARG.optional().describe('Repository graph'),
         types: z.array(z.string()).optional().describe('Note types or code languages'),
         tags: z.array(z.string()).optional().describe('Only these tags'),
         aggregate: z.enum(['community', 'none']).optional().describe('Default "community"'),
@@ -3280,8 +3334,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: {
         source: z.string().describe('Node id, path or name'),
         target: z.string().describe('Node id, path or name'),
-        vaultId: UUID_ARG.optional().describe('Vault graph'),
-        repositoryId: UUID_ARG.optional().describe('Repository graph'),
+        vaultId: ID_ARG.optional().describe('Vault graph'),
+        repositoryId: ID_ARG.optional().describe('Repository graph'),
       },
       budget: 'list',
     },
@@ -3312,7 +3366,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description:
         'List saved graph perspectives and filter presets for a vault (yours plus shared ones) or merged graph (your own global perspectives). A vault-scoped connection sees only the perspectives of its vault.',
       inputSchema: {
-        vaultId: UUID_ARG.optional()
+        vaultId: ID_ARG.optional()
           .describe('Optional vault ID constraint. If omitted, lists merged/global perspectives (account-scoped connections) or those of the pinned vault.'),
       },
     },
@@ -3352,7 +3406,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         'Save a scoped graph perspective with filter presets (types, tags, date range, color mode) for a vault (needs edit access) or merged graph (instance admins only; a global perspective is visible only to you).',
       inputSchema: {
         name: z.string().min(1).describe('Perspective name'),
-        vaultId: UUID_ARG.optional().describe('Optional vault ID constraint'),
+        vaultId: ID_ARG.optional().describe('Optional vault ID constraint'),
         filters: strictArgs('save_graph_perspective filters', {
           types: z.array(z.string()).optional(),
           tags: z.array(z.string()).optional(),

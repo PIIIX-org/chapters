@@ -2752,6 +2752,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     git history and dates are sync times. The versions after the one the commit
     or date names are folded per path in SQL and paged by path like the plain
     listing; a commit no version recorded is `INVALID_ARGUMENT`.
+  - Vault and repository id arguments (#1101) are listed as UUIDs but
+    checked by `idRefusal` in `tool()` (`mcp/server.ts`), not by the schema:
+    a pinned connection's wrong id is refused naming the pin
+    (`suggestions: ["<id> (<name>)"]`), an account connection's malformed id
+    is `INVALID_ARGUMENT` and an id it cannot see `NOT_FOUND` (both with up to
+    5 of its own accessible ids, by name then id). A pinned connection's refusal
+    names only its pin (`TOOL_NOT_ALLOWED`, malformed or not), and an id of the
+    other kind is the scope refusal with no suggestions. The accessible ids are
+    read only on a refusal.
   - `browse_vault` (#425) pages in SQL the same way, one code path for
     the root (the empty folder) and a folder (`notes/store.ts`), reading
     only the page: `browseNotesPage` reads 500 + 1 live notes after the
@@ -3872,7 +3881,7 @@ repository, file or symbol. The usage report (#678) records `refs` and `depth`
 as filters of a `find_symbols` call.
 
 **Grep** (#468; `repositories/grep.ts` the scan, `mcp/grep.ts` the budgeted
-answer; no REST route): MCP `grep` matches a regular expression line by line
+answer; REST routes below): MCP `grep` matches a regular expression line by line
 over the live notes of vaults (their bodies) and the indexed files of
 repositories (`repository_files.content`: the indexed version only, named once
 in the head as `commit` or `tree`, #471). It is a reader tool, so it costs
@@ -3908,7 +3917,7 @@ is 50 hits, as many as fit `budget_tokens` (ladder: without `snippet`, then
 `path#La-Lb`, then counted per file). Access: the usual `vault-or-repo` scope
 resolution, so another account's vault or repository is a `NOT_FOUND` and
 `everywhere` lists only what the account reaches; both access matrices cover
-it (vault, repository, everywhere). Not covered: a REST route, `ref` other than
+it (vault, repository, everywhere). **REST** (`repositories/grep-routes.ts`, `GET /vaults/:id/grep`, `/repositories/:id/grep`, `/grep`): `pattern`, `path`, `context`, `after`; answers `{scanned, commit | tree?, hits, next, capped}` (`next` is the cursor of the following page, `capped` the path a stopped scan had read to); a refused pattern is 400, a scan past its time limit 503, an unreachable vault or repository 404; both access matrices cover the three routes. Not covered: `ref` other than
 the indexed version, matching a note's frontmatter lines, overlapping contexts
 are not merged, and a line is cut at 500 characters.
 
