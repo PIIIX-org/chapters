@@ -1303,7 +1303,10 @@ import, `type:`/`tag:`/`language:`/`folder:` for structural, null for
 semantic and for import rows extracted before migration 0031 (`line` null
 until the first boot with #453 re-extracts them: their file has `extractor_version` 0). On the budget
 ladder a row's `locations` form is one line, `from -> to relation
-evidence`. `mcp/prompts.ts`'s path prompt still prints ids.
+evidence`. `summarize_concept_chain` (`mcp/prompts.ts`) prints the path's
+steps by path and its edges as these `edgeRows` rows by path (#558):
+`from -> to (relation, kind, confidence[, evidence])`, `--` for an
+undirected edge, no ids.
 
 `resolve-node.ts` (#447) turns a node reference into a node for MCP
 `graph`'s `neighborsOf`, `find_graph_path`'s ends, the REST

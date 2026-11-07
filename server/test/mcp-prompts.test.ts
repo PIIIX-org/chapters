@@ -62,6 +62,14 @@ beforeAll(async () => {
     },
   })
 
+  // A linked pair for the path the chain prompt prints.
+  for (const [type, name, body] of [
+    ['chain', 'first', 'Starts here, then [[chain/second]].'],
+    ['chain', 'second', 'Ends here.'],
+  ] as const) {
+    await app.inject({ method: 'POST', url: `/api/vaults/${vaultId}/notes`, headers: { cookie: ownerCookie }, body: { type, name, body } })
+  }
+
   const account = (
     await app.inject({
       method: 'POST',
@@ -198,6 +206,15 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
     expect(text).toContain('project/elara')
     expect(text).toContain('spec/scheduled-backups')
     expect(text).toContain('Explain the architectural connection')
+  })
+
+  it('summarize_concept_chain names the path steps and edges, with direction, relation and the line of the link, not ids (#558)', async () => {
+    const client = await mcpClient(accountToken)
+    const prompt = await client.getPrompt({ name: 'summarize_concept_chain', arguments: { sourceNode: 'chain/first', targetNode: 'chain/second', vaultId } })
+    const text = (prompt.messages[0]?.content as { type: string; text: string }).text
+    expect(text).toContain('DISCOVERED GRAPH PATH (1 hops)')
+    expect(text).toMatch(/- chain\/first -> chain\/second \(link, extracted, resolved, chain\/first#L\d+\)/)
+    expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/)
   })
 
   it('evaluates explain_code_architecture prompt', async () => {

@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { GetPromptResult } from '@modelcontextprotocol/sdk/types.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import { buildGraph, findShortestPath } from '../graph/assemble.js'
+import { edgeRows, type EdgeRow } from '../graph/edges.js'
 import { resolveNode } from '../graph/resolve-node.js'
 import { searchNotes } from '../search/search.js'
 import { readNote } from '../notes/store.js'
@@ -63,6 +64,10 @@ export interface PromptHelpers {
  * Registers Elara' 20 first-class MCP Prompts implementing the standard
  * `prompts/list` and `prompts/get` protocol endpoints.
  */
+/** One edge of the path the chain prompt prints: names, direction (`--`: none), relation, kind, confidence and, when written somewhere, where (#558). */
+export const chainEdgeLine = (r: EdgeRow): string =>
+  `  - ${r.from.path} ${r.directed ? '->' : '--'} ${r.to.path} (${r.relation}, ${r.kind}, ${r.confidence}${r.evidence ? `, ${r.evidence}` : ''})`
+
 export function registerMcpPrompts(
   server: McpServer,
   auth: McpAuth,
@@ -560,9 +565,12 @@ STRUCTURE OF THE BRIEFING:
           if (path.found && path.nodes.length > 0) {
             pathInfo =
               `\nDISCOVERED GRAPH PATH (${path.distance} hops):\n` +
-              path.nodes.map((n, i) => `  ${i + 1}. [${n.resourceType}] ${n.path} (${n.id})`).join('\n') +
+              path.nodes.map((n, i) => `  ${i + 1}. [${n.resourceType}] ${n.path}`).join('\n') +
               `\nEDGES:\n` +
-              path.edges.map((e) => `  - ${e.source} -> ${e.target} (${e.kind})`).join('\n')
+              // As find_graph_path rows: names, direction, why the edge exists and where it is written (#558).
+              (await edgeRows(path.edges, path.nodes, resources))
+                .map(chainEdgeLine)
+                .join('\n')
           }
         }
       } catch {
