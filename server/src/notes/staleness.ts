@@ -1,7 +1,6 @@
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { blocks, noteLinks, notes, repositories, repositoryFiles } from '../db/schema.js'
-import { listAccessibleRepositories } from '../repositories/permissions.js'
 import { notify } from '../notifications/notify.js'
 import type { OkfV2Frontmatter, SourceDescriptor } from './okf/types.js'
 
@@ -266,13 +265,30 @@ async function candidateNotes(repo: { id: string; name: string }, only?: { noteI
 
 /**
  * The drift of one note (#472), as `read_note` shows it: its references to files
- * and symbols of the repositories `accountId` can read that changed, vanished
- * or lost the symbol since the note recorded them. Empty for a note that names
- * no repository (no query runs).
+ * and symbols that changed, vanished or lost the symbol since the note recorded
+ * them. Only the repositories in `readable` (the ones the connection may read:
+ * every readable one for an account token, none for a pinned one) and named by
+ * a `[[repo:..]]`/`[[code:..]]` link or a frontmatter `sources` entry are
+ * checked; a note that names none runs no query.
  */
-export async function noteDrift(accountId: string, note: { id: string; body: string; frontmatter: unknown }): Promise<Array<Pick<StalenessDrift, 'resource' | 'kind' | 'detail'>>> {
-  if (!/repo:|code:/.test(note.body) && !JSON.stringify(note.frontmatter).includes('repo:')) return []
+export async function noteDrift(
+  readable: ReadonlyArray<{ id: string; name: string }>,
+  note: { id: string; body: string; frontmatter: unknown },
+): Promise<Array<Pick<StalenessDrift, 'resource' | 'kind' | 'detail'>>> {
+  const named = new Set<string>()
+  for (const m of note.body.matchAll(/\[\[(?:repo|code):([^\]|#:/]+)[:/]/g)) named.add(m[1]!.trim().toLowerCase())
+  const sources = (note.frontmatter as { sources?: unknown } | null)?.sources
+  if (Array.isArray(sources)) {
+    for (const source of sources) {
+      const resource = (source as { resource?: unknown } | null)?.resource
+      const m = typeof resource === 'string' ? /^repo:([^/#:]+)\//.exec(resource) : null
+      if (m) named.add(m[1]!.toLowerCase())
+    }
+  }
+  if (named.size === 0) return []
   const found: StalenessDrift[] = []
-  for (const repo of await listAccessibleRepositories(accountId)) found.push(...(await checkCodeStaleness(repo.id, { noteId: note.id })))
+  for (const repo of readable) {
+    if (named.has(repo.id.toLowerCase()) || named.has(repo.name.toLowerCase())) found.push(...(await checkCodeStaleness(repo.id, { noteId: note.id })))
+  }
   return found.map(({ resource, kind, detail }) => ({ resource, kind, detail })).sort((a, b) => (a.resource < b.resource ? -1 : a.resource > b.resource ? 1 : a.kind < b.kind ? -1 : 1))
 }

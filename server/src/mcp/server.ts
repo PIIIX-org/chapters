@@ -1499,7 +1499,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         return inSession(session, doc, answer, page.at)
       }
       // References to code that changed since the note was written (#472): on a first page, only when there are any.
-      const drift = page.at === null ? await noteDrift(auth.user.id, { id: note.row.id, body: note.body, frontmatter: note.frontmatter }) : []
+      // Only repositories this connection may read: every readable one for an account token, none for a vault pin.
+      const drift = page.at === null ? await noteDrift(auth.connection.scope === 'account' ? await listAccessibleRepositories(auth.user.id) : [], { id: note.row.id, body: note.body, frontmatter: note.frontmatter }) : []
       const head = {
         path: note.row.path,
         rev: note.row.seq,

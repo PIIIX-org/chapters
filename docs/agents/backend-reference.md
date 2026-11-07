@@ -1364,11 +1364,15 @@ same `backlinksOf` rows. The REST `/vaults/:id/local-graph/*` is
 50 nodes, `extracted` and `semantic` edges, one edge per pair and kind) in the
 shape the client already read; the in-memory `getLocalGraph` of `notes/store.ts`
 is gone. **Per-note drift**: `read_note` puts `drift: [{resource, kind,
-detail}]` in the head of a first body page when a `repo:`/`code:` reference of
-the note no longer holds (`noteDrift`, `checkCodeStaleness(repo, {noteId})`:
+detail}]` in the head of a first body page when a `[[repo:..]]`/`[[code:..]]`
+link or frontmatter `sources` entry of the note no longer holds (`noteDrift`, `checkCodeStaleness(repo, {noteId})`:
 the file is gone, its hash changed, or the symbol is missing; no
-notification, no query for a note naming no repository); absent otherwise, so
-no tool text changed.
+notification; only repositories the note names and the connection may read are
+checked: every readable one for an account token, none for a vault pin; no
+query for a note naming none); absent otherwise, so no tool text changed.
+Links to a note count by its path, path with `.md` or name (`noteLinkTargets`,
+shared by the walk, `backlinksOf` and `buildGraph`: a name stands for one note,
+the last path in code-unit order), as the old REST graph resolved them.
 
 **Saved perspectives** (`graph_perspectives`; REST `GET/POST
 /graph/perspectives`, `DELETE /graph/perspectives/:id`, and the three MCP

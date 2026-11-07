@@ -57,6 +57,10 @@ const test: LabTest = {
       [runTest]: `import { ${mark}Plan } from './${mark}-plan'\n\ntest('plan', () => {\n  ${mark}Plan()\n})\n`,
     }), repoName)
     const repositoryId = (await connectLocalRepo(ctx, repoName)).id
+    // A note whose code reference no longer holds: `read_note` names it as `drift` (#472), for a reader of the repository too.
+    const drift = `docs/${mark}-drift`
+    const gone = `src/${mark}-gone.ts`
+    await mcp.owner.must('create_note', { vaultId, type: 'docs', name: `${mark}-drift`, body: `Plan: [[repo:${repoName}/${gone}]].` })
     const repoSettle = await settleRepo(ctx, repositoryId, 'lab-matrix-repo', { stallMs: 60_000, timeoutMs: 240_000 })
     const embedded = await poll(async () => {
       const rows = await ctx.docker.psqlRows<{ n: number }>(
@@ -118,6 +122,7 @@ const test: LabTest = {
       { name: 'git clone of a vault', identifiers: [source, `${mark}source orbital checklist`], share, read: cloneVault },
       { name: 'MCP read_note', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source }) },
       { name: 'REST GET /api/vaults/:id/notes/*', identifiers: [sourceNote.id, source, `${mark}source`], share, read: viaRest(`/api/vaults/${vaultId}/notes/${source}`) },
+      { name: 'MCP read_note drift', identifiers: [gone], share, read: viaMcp('read_note', { vaultId, path: drift }) },
       { name: 'MCP read_file', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file }) },
       { name: 'MCP read_note grep', identifiers: [source, `${mark}source`], share, read: viaMcp('read_note', { vaultId, path: source, targets: [{ grep: 'orbital' }] }) },
       { name: 'MCP read_file grep', identifiers: [file, `${mark}Plan`], share, read: viaMcp('read_file', { repositoryId, path: file, targets: [{ grep: 'launch' }] }) },

@@ -277,7 +277,9 @@ export function noteRoutes(app: FastifyInstance) {
       if (!backlinks) return reply.code(404).send({ error: 'note not found' })
       // Where each note links (#472): its links to this note, one per line, with the paragraph or line.
       const lines = (await getBacklinkLines(req.params.id, req.params['*'])) ?? []
-      return backlinks.map((b) => ({ ...b, links: lines.filter((l) => l.path === b.path).map(({ location, context }) => ({ location, context })) }))
+      const byPath = new Map<string, Array<{ location: string; context: string | null }>>()
+      for (const { path, location, context } of lines) byPath.set(path, [...(byPath.get(path) ?? []), { location, context }])
+      return backlinks.map((b) => ({ ...b, links: byPath.get(b.path) ?? [] }))
     },
   )
 
