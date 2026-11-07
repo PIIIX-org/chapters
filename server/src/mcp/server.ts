@@ -3175,7 +3175,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       },
       budget: 'list',
     },
-    async (args: { query?: string; focus?: string[]; path?: string }, { resources }) => orientAnswer(resources, args),
+    async (args: { query?: string; focus?: string[]; path?: string }, { resources }, page) => orientAnswer(resources, args, page),
   )
 
   /** A community edge's identity in a page guard and in the order edges are listed. */

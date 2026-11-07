@@ -2692,9 +2692,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     ties by path (`COLLATE "C"`), line, `block_id`; the `folders` list is
     the same rows grouped one level below the folder. Vault: `vaultOutline`
     ranks the live notes one level below the folder by the `note_links`
-    rows from other notes of the vault. Both lists are `ranked` sections
-    (11 fetched for the `">10"` total) and fit the budget by the ladder; no
-    ranking or response code is shared with `search`.
+    rows from other notes of the vault. Uses guessed by name alone (`textual`,
+    not a member of an unknown receiver) count half in the score and show as
+    `guessed` (Python and Go cross-file calls are only ever guessed). The
+    `symbols` list is a `keyset` section (11 fetched for the `">10"` total, the
+    cursor holds the offset the next ten start at; it is last, bound to the
+    call's scope like every cursor); `folders` and `outline` are `ranked`
+    lists of ten with a `">10"` total and no cursor (a deeper level is a
+    `path`): a list that pages ends its page (response.ts `fill`), so were they
+    paged they would hide the definitions. The sections fit the budget by the
+    ladder; no ranking or response code is shared with `search`.
   - `find_symbols` with `refs: "explain"` (#675, `mcp/explain.ts`, data in
     `repositories/explain.ts`) composes the code questions with the notes that
     cite the definition's file in one answer: the definition (`symbol`, `at:
