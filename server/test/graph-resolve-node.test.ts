@@ -256,9 +256,15 @@ describe('candidates and suggestions stay in the caller’s reach (#447)', () =>
     expect(theirs.text.replace(strangerIds[0]!, '00000000-0000-4000-8000-000000000000')).toBe(missing.text)
     expect(JSON.parse(theirs.text)).not.toHaveProperty('error.suggestions')
     // The stranger's vault itself is the plain not-found of a missing id, byte for byte.
-    const NOT_FOUND = '{"error":{"code":"NOT_FOUND","message":"not found","retryable":false}}'
-    expect(await call('graph', { vaultId: strangerVaultId, neighborsOf: 'quarterly' })).toEqual({ isError: true, text: NOT_FOUND })
-    expect(await call('find_graph_path', { vaultId: strangerVaultId, source: 'quarterly', target: 'readme' })).toEqual({ isError: true, text: NOT_FOUND })
+    // The same bytes as a missing vault (#439), carrying only the caller's own vaults as suggestions (#1101).
+    const absent = '00000000-0000-4000-8000-000000000000'
+    for (const [tool, args] of [['graph', { neighborsOf: 'quarterly' }], ['find_graph_path', { source: 'quarterly', target: 'readme' }]] as const) {
+      const theirs = await call(tool, { vaultId: strangerVaultId, ...args })
+      expect(theirs, tool).toEqual(await call(tool, { vaultId: absent, ...args }))
+      expect(theirs.isError, tool).toBe(true)
+      expect(JSON.parse(theirs.text).error, tool).toMatchObject({ code: 'NOT_FOUND', message: 'not found', retryable: false })
+      expect(theirs.text, tool).not.toContain(strangerVaultId)
+    }
   })
 })
 

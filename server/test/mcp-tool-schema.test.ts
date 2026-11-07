@@ -121,9 +121,9 @@ describe('tools/list schemas (#430)', () => {
     })
     expect(result.isError).toBe(true)
     const content = result.content as Array<{ type: string; text?: string }>
-    // The SDK's refusal, as the error envelope (#439).
+    // Refused by the handler's id check (#1101), as the error envelope (#439), naming the ids that work.
     const envelope = JSON.parse(content[0]?.text ?? '') as { error: { code: string; message: string; field?: string } }
     expect(envelope.error).toMatchObject({ code: 'INVALID_ARGUMENT', field: 'vaultId' })
-    expect(envelope.error.message).toMatch(/Invalid UUID/i)
+    expect(envelope.error.message).toMatch(/not a UUID/i)
   })
 })
