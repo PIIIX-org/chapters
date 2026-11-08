@@ -242,8 +242,10 @@ describe('read_file and grep take paths as a shell writes them (#1102)', () => {
     const dir = JSON.parse(await run('read_file', { path: 'src' })) as { error: { code: string; message: string } }
     expect(dir.error).toMatchObject({ code: 'NOT_FOUND', message: 'src is a folder: use browse_repository' })
     expect(JSON.parse(await run('read_file', { path: 'src/nothing.ts' })).error.message).toBe('file not found')
-    const plain = JSON.parse(await run('grep', { pattern: 'src', path: 'src/**' })) as { scanned: number }
-    expect(plain.scanned).toBeGreaterThan(0)
-    expect(JSON.parse(await run('grep', { pattern: 'src', path: './src/**' }))).toEqual(plain)
+    // The page's cursor is bound to the arguments as typed (its `f` fingerprint), so the two spellings differ in it alone.
+    const withoutCursor = (text: string) => JSON.stringify(JSON.parse(text), (k, v: unknown) => (k === 'cursor' ? undefined : v))
+    const plain = await run('grep', { pattern: 'src', path: 'src/**' })
+    expect((JSON.parse(plain) as { scanned: number }).scanned).toBeGreaterThan(0)
+    expect(withoutCursor(await run('grep', { pattern: 'src', path: './src/**' }))).toEqual(withoutCursor(plain))
   })
 })
