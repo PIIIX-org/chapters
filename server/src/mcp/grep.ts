@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { GrepError, MAX_CONTEXT, PAGE_HITS, encodePosition, grep, parsePosition, grepTargets, type GrepHit, type GrepPosition } from '../repositories/grep.js'
+import { GrepError, MAX_CONTEXT, encodePosition, grep, parsePosition, grepTargets, type GrepHit, type GrepPosition } from '../repositories/grep.js'
 import { repositoryIndexedVersion } from '../repositories/store.js'
 import { McpToolError } from './errors.js'
 import { intRange, keyset, location, type Budgeted, type Page } from './response.js'
@@ -19,6 +19,14 @@ export const GREP_INPUT = {
   context: intRange('context', 0, MAX_CONTEXT).optional().describe('Context lines'),
 }
 
+/**
+ * Hits an MCP page fetches (#1122; REST keeps `PAGE_HITS`, 50). The trial's recorded grep calls replayed at this cap:
+ * 4,715 -> 3,654 characters per call (-22 %), the page holding a fact's evidence line in 217 of the 232 calls it
+ * held it at 50 (the cursor continues past it). shortcut: a count, not a character budget per hit; a per-hit width cap
+ * (`LINE_CHARS` 500) if the replay shows lines, not hits, dominating.
+ */
+export const MCP_PAGE_HITS = 20
+
 interface Capped {
   capped: { files: number; after: string }
 }
@@ -33,7 +41,7 @@ export async function grepAnswer(
   const targets = await grepTargets(resources.vaultIds, resources.repositoryIds)
   const at = page.after(0, Position)
   const after: GrepPosition | null = at === null ? null : parsePosition(at)
-  const limit = PAGE_HITS
+  const limit = MCP_PAGE_HITS
   let answer
   try {
     answer = await grep(targets, { pattern: args.pattern, glob: args.path?.replace(/^(?:\.?\/)+/, ''), context: args.context ?? 0, limit, after })

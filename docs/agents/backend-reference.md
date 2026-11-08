@@ -3947,7 +3947,7 @@ numbers it; `block` is the smallest block around the line (`markdownParts`,
 `codeParts` over `listFileBlocks` of the current content) and `tokens` what
 reading it costs (`rangeTokens`). The cursor holds `<target>:<line>:<path>`,
 the position after the last hit (a note's `line` there is body-relative); a page
-is 50 hits, as many as fit `budget_tokens` (ladder: without `snippet`, then
+is 50 hits over REST and 20 over MCP (#1122: the recorded trial calls replayed at 20 cost 22 % fewer characters; `MCP_PAGE_HITS`), as many as fit `budget_tokens` (ladder: without `snippet`, then
 `path#La-Lb`, then counted per file). Access: the usual `vault-or-repo` scope
 resolution, so another account's vault or repository is a `NOT_FOUND` and
 `everywhere` lists only what the account reaches; both access matrices cover

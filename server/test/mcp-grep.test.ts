@@ -203,17 +203,21 @@ describe('grep bounds (#468)', () => {
 
   it('pages with the cursor: the pages are the whole answer, in order', async () => {
     const seen: string[] = []
+    const sizes: number[] = []
     let cursor: string | undefined
-    // 60 matching lines in one file: more than a page of 50.
+    // 60 matching lines in one file: more than a page of 20 (MCP_PAGE_HITS).
     await db.insert(repositoryFiles).values({ repositoryId: repoId, path: 'many.txt', content: `${Array.from({ length: 60 }, (_, i) => `row ${i + 1}`).join('\n')}\n`, contentHash: 'many', size: 1 })
     for (let page = 0; page < 4; page++) {
       const r = await grep({ repositoryId: repoId, pattern: '^row', ...(cursor ? { cursor } : {}) })
       seen.push(...at(r.json.hits))
+      sizes.push(r.json.hits.length)
       cursor = r.json.truncated === false ? undefined : (r.json.truncated.cursor ?? undefined)
       if (!cursor) break
     }
     expect(seen).toEqual(Array.from({ length: 60 }, (_, i) => `many.txt:${i + 1}`))
     expect(cursor).toBeUndefined()
+    // A page is at most 20 hits over MCP (#1122), even when the budget would show more.
+    expect(sizes).toEqual([20, 20, 20])
   })
 
 })
