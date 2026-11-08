@@ -6,7 +6,7 @@ import { intRange, keyset, location, type Budgeted, type Page } from './response
 
 /**
  * `grep` (#468): a regular expression over notes and code as located hits
- * (repositories/grep.ts has the rules). A hit is `{path, line, block, tokens,
+ * (repositories/grep.ts has the rules). A hit is `{path, line, tokens,
  * snippet}` with `lines` when `context` widens the snippet; hits are in path
  * then line order and page with the cursor. A scan that stopped at its cap ends
  * the list with `{capped: {files, after}}` and `truncated` carries the cursor
@@ -40,7 +40,8 @@ export async function grepAnswer(
   } catch (err) {
     throw err instanceof GrepError ? new McpToolError(err.code, err.message, err.field ? { field: err.field } : {}) : err
   }
-  const items: Array<GrepHit | Capped> = [...answer.hits]
+  // No `block` over MCP (#1122): agents read by the hit's lines (1 read target in 368 named a block in the trial's traces); `tokens` stays.
+  const items: Array<GrepHit | Capped> = answer.hits.map((h) => ({ ...h, block: undefined }))
   if (answer.capped) items.push({ capped: { files: answer.scanned.files, after: answer.capped.path } })
   const repositoryId = resources.repositoryIds.length === 1 && resources.vaultIds.length === 0 ? resources.repositoryIds[0]! : null
   return {

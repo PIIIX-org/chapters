@@ -50,8 +50,8 @@ describe('search answers down the budget ladder (#414)', () => {
     const whole = await ask(25_000)
     const first = (whole.results as Array<Record<string, unknown>>)[0]!
     expect(whole.truncated).toBe(false)
-    expect(first).toMatchObject({ resourceType: 'note', channel: expect.any(String) })
-    expect(first.block).toMatch(/^b_/)
+    expect(first).toMatchObject({ resourceType: 'note' })
+    expect([first.block, first.channel]).toEqual([undefined, undefined])
     expect(first.heading).toBeDefined()
     expect(first.tokens).toBeGreaterThan(0)
 
@@ -61,7 +61,6 @@ describe('search answers down the budget ladder (#414)', () => {
     expect(hit.snippet).toBeUndefined()
     expect(hit.heading).toBeUndefined()
     expect(hit.tokens).toBeUndefined()
-    expect(hit.block).toBeDefined()
     expect(hit.startLine).toBeDefined()
 
     const located = await ask(256)

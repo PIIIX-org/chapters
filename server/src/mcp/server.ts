@@ -3056,7 +3056,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
             limit,
             // Down the ladder: without snippet, updated, heading and tokens, then the location (`path#La-Lb` for a located hit, else the path); counted per path.
             ladder: {
-              // Without the passage's description too (#414): the lines and the block id stay, they are what a read needs.
+              // Without the passage's description too (#414): the lines stay, they are what a read needs.
               no_context: (r) => ({ ...r, snippet: undefined, updated: undefined, heading: undefined, tokens: undefined }),
               locations: (r) => (r.startLine !== undefined && r.endLine !== undefined ? location(r.path, r.startLine, r.endLine) : r.path),
               group: (r) => r.path,

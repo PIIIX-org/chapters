@@ -1557,6 +1557,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     texts are read once per search for the returned hits only; one over `LOCATE_MAX_CHARS` (262,144) is not
     read, and its hit keeps the document-level fields. The block id hashes the owner's id, so it differs per
     database: `mcp-deterministic-answers.test.ts` masks it as the block it names.
+  - **Hit diet** (#1122): MCP `search` hits carry no `block` and no `channel`, and MCP `grep` hits no `block` (REST and
+    `searchNotes` keep every field; `read_file` and `read_note` still take a `block` target). The fair agent trial's
+    traces name a block as a read target 1 time in 368; each hit paid ~26 characters for it, ~20 for `channel`. Under the
+    fixed list budget a smaller hit means more hits at the `full` rung. `tokens` stays: it is what reading the hit's
+    smallest block costs.
   - **No frontmatter in MCP hits** (#419): the MCP `search` handler drops `frontmatter` from every hit (it was
     42 % of a typical note hit's characters, measured in `mcp-search-hits.test.ts`: 665 to 387); `searchNotes` and
     the REST routes still return it, the client's search overlay shows its tags.
