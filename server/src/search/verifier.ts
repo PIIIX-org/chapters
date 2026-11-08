@@ -125,10 +125,10 @@ export function decide(scores: number[]): Verdict {
   return { order, confidence, answer, ambiguous: !answer && p2 >= AMBIGUOUS_RUNNER_UP }
 }
 
-/** What a passage reads: its name and place, then its snippet (the `<b>` marks of a headline are dropped). shortcut: the hit's snippet (about 30 words), not the located block; read the located passage once #1066 is on dev. */
-export function hitText(h: { path: string; snippet: string; symbolName?: string; symbolKind?: string; symbolParent?: string }): string {
+/** What a passage reads: its name and place, then the located block (or, for a hit not located, its snippet; the `<b>` marks of a headline are dropped). */
+export function hitText(h: { path: string; snippet: string; symbolName?: string; symbolKind?: string; symbolParent?: string }, passage?: string): string {
   const name = h.symbolName === undefined ? '' : `${h.symbolKind ?? 'symbol'} ${h.symbolParent ? `${h.symbolParent}.` : ''}${h.symbolName}\n`
-  return `${name}${h.path}\n${h.snippet.replace(/<\/?b>/g, '')}`
+  return `${name}${h.path}\n${passage ?? h.snippet.replace(/<\/?b>/g, '')}`
 }
 
 /** The fields the verifier adds to a search answer. */
@@ -157,13 +157,13 @@ interface Hit {
  * Reorders the top `VERIFY_TOP_N` of a fused list by the verifier and decides. No verifier or fewer than two hits leave the list as it is; a failure says so (`degraded`), a
  * non-Latin query says `skipped_language`.
  */
-export async function verifyHits<H extends Hit>(query: string, hits: H[], impl: Verifier | null): Promise<{ hits: H[]; fields: VerifierFields }> {
+export async function verifyHits<H extends Hit>(query: string, hits: H[], impl: Verifier | null, passages: ReadonlyMap<H, string> = new Map()): Promise<{ hits: H[]; fields: VerifierFields }> {
   if (impl === null) return { hits, fields: {} }
   if (!isLatinQuery(query)) return { hits, fields: { verifier: 'skipped_language' } }
   if (hits.length < 2) return { hits, fields: {} }
   const top = hits.slice(0, VERIFY_TOP_N)
   try {
-    const scores = await impl.score(query, top.map(hitText))
+    const scores = await impl.score(query, top.map((h) => hitText(h, passages.get(h))))
     if (scores.length !== top.length) throw new Error(`verifier returned ${scores.length} scores for ${top.length} passages`)
     const verdict = decide(scores)
     const best = top[verdict.order[0]!]!

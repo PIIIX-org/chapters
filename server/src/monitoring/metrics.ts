@@ -324,7 +324,7 @@ export const DURATION_BUCKETS_MS = [1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 25
  * The legs of a search (search.ts): the three keyword legs, the three vector
  * legs, the query embedding they wait for, and the fusion of their rows.
  */
-export const SEARCH_LEGS = ['note_keyword', 'code_keyword', 'symbol_keyword', 'note_vector', 'code_vector', 'symbol_vector', 'query_embed', 'fusion'] as const
+export const SEARCH_LEGS = ['note_keyword', 'code_keyword', 'symbol_keyword', 'note_vector', 'code_vector', 'symbol_vector', 'query_embed', 'fusion', 'locate'] as const
 export type SearchLeg = (typeof SEARCH_LEGS)[number]
 
 /** The stages of one file's extraction (extraction-queue.ts `processFile`). */

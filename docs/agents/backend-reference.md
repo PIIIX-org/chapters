@@ -1545,6 +1545,18 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     Keyword rows
     always count. The gate cuts a suffix of a distance-ordered list, so the
     RRF ranks of the rows it keeps do not change.
+  - **Located hits** (#414, `locate.ts`): after fusion, the hits a search returns (at most its `limit`) are
+    located, in place and without changing their order or score. A note hit points at `block` (the vector leg's
+    nearest block of the note, `blockLeg` carries it as `block`), else at the innermost block around the best
+    match of the query's terms in the body (the line with the most distinct terms within 6 lines: `matchTerms`
+    are the query's identifiers, their parts and its content words); a code file hit at the innermost symbol
+    block around that match, or at the match's line alone; a symbol hit is its own span. `startLine`/`endLine`
+    are the lines `read_note` (a note's file, `bodyStartLine` added to the block's body-relative lines) and
+    `read_file` take; `heading` the block's `inner_path` (sections and symbols); `tokens` the span's characters
+    / 4; `snippet` up to `SNIPPET_CHARS` (200) around the match; `channel` `keyword`, `vector` or `both`. The
+    texts are read once per search for the returned hits only; one over `LOCATE_MAX_CHARS` (262,144) is not
+    read, and its hit keeps the document-level fields. The block id hashes the owner's id, so it differs per
+    database: `mcp-deterministic-answers.test.ts` masks it as the block it names.
   - **No frontmatter in MCP hits** (#419): the MCP `search` handler drops `frontmatter` from every hit (it was
     42 % of a typical note hit's characters, measured in `mcp-search-hits.test.ts`: 665 to 387); `searchNotes` and
     the REST routes still return it, the client's search overlay shows its tags.
@@ -1552,7 +1564,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     declined), the top `VERIFY_TOP_N` (30) hits are scored against the query by a local cross-encoder
     (`jinaai/jina-reranker-v1-tiny-en`, int8 ONNX, Apache-2.0, ~33 MB, English only) in one worker thread, and the list is
     reordered by score (equal scores keep their fused order). A passage is `hitText`: the symbol's name, the path and the
-    snippet. `confidence` = top probability minus runner-up's; `>= ANSWER_MIN_CONFIDENCE` (0.5) sets `answer`;
+    located block. `confidence` = top probability minus runner-up's; `>= ANSWER_MIN_CONFIDENCE` (0.5) sets `answer`;
     otherwise a runner-up `>= AMBIGUOUS_RUNNER_UP` (0.5) sets `ambiguous`. `VERIFIER_ID` (model, dtype, passage text
     version) is the version like `EMBEDDER_ID` (#453); nothing derived is stored, so a change needs no migration, only a
     new benchmark baseline. The model downloads into the Transformers.js cache on first use (started at boot,
@@ -1560,8 +1572,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     local embeddings), `fake` (deterministic word overlap, tests) or `off` (default with fake embeddings, so the other
     tests' orders are untouched); `ELARA_VERIFY_TIMEOUT_MS` (4000) drops a slow call. Failure, timeout or a missing
     model: the fused order, `degraded: { reason: 'verifier_failed' }`. A query with a letter outside Latin script is not
-    scored (`verifier: 'skipped_language'`; a multilingual reranker is phase 5). shortcut: the passage is the hit's
-    snippet (about 30 words), not the located block, until #1066 lands; then `hitText` reads the located passage.
+    scored (`verifier: 'skipped_language'`; a multilingual reranker is phase 5). The passage a hit is scored on is its
+    located block (#414, `locateHits` fills it for the top 30, cut at `PASSAGE_CHARS` = 1500 characters, the model cuts at 256
+    tokens), not the 30-word snippet.
   - **Query router** (#1060, `router.ts`): before the legs run, `searchNotes` asks `routeQuery` whether the query is
     one identifier or one path (only without filters, with symbols for an identifier, at most 6 words). The term is
     the one backticked token, or the one word left once the filler (`where is the ... defined`) is dropped. A path

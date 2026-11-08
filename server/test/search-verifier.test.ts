@@ -37,8 +37,20 @@ describe('the verifier stage', () => {
     const res = await ask('kiwifruit harvest', prefers({ [last]: 0.95 }))
     expect(res.results[0]!.path).toBe(last)
     expect(res.results.map((r) => r.path).sort()).toEqual(fused.results.map((r) => r.path).sort())
-    expect(res).toMatchObject({ verifier: 'applied', confidence: 0.95, answer: last, degraded: false })
+    expect(res).toMatchObject({ verifier: 'applied', confidence: 0.95, answer: expect.stringMatching(new RegExp('^' + last + '(#L\\d+-L\\d+)?$')), degraded: false })
     expect(res.ambiguous).toBeUndefined()
+  })
+
+  it('hands the verifier the located block of each hit, not its headline', async () => {
+    await createNote(vaultId, { path: 'docs/long', body: '# Intro\n\nNothing here.\n\n## Quokka care\n\nQuokkas eat grass at dusk and need shade.\n' })
+    await createNote(vaultId, { path: 'docs/zoo', body: '# Zoo\n\nQuokkas eat grass in the zoo too.\n' })
+    await flushEmbeddings()
+    const seen: string[] = []
+    await ask('quokkas eat grass', { score: async (_q: string, p: string[]) => (seen.push(...p), p.map(() => 0)) })
+    const text = seen.find((p) => p.includes('docs/long'))!
+    expect(text).toContain('## Quokka care')
+    expect(text).toContain('need shade')
+    expect(text).not.toContain('Nothing here')
   })
 
   it('says ambiguous when two are close and likely, and commits to none', async () => {

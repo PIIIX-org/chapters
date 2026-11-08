@@ -95,7 +95,7 @@ describe('GET /api/admin/metrics', () => {
     expect(hits.retrieval_mode).toBe('hybrid')
     const after = legCounts()
     // One observation per leg that ran a query (the repository has no file yet, so its legs still run) and one fusion.
-    for (const leg of ['note_keyword', 'code_keyword', 'symbol_keyword', 'note_vector', 'code_vector', 'symbol_vector', 'query_embed', 'fusion'] as const) {
+    for (const leg of ['note_keyword', 'code_keyword', 'symbol_keyword', 'note_vector', 'code_vector', 'symbol_vector', 'query_embed', 'fusion', 'locate'] as const) {
       expect(after[leg] - before[leg], leg).toBe(1)
     }
     // A symbol-only search: its two legs and the fusion, nothing of the note or code legs.
