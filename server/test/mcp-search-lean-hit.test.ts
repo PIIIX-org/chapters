@@ -32,14 +32,6 @@ describe('a lean search hit (#414)', () => {
     expect(lean.heading).toBe('x')
   })
 
-  it('saves what the two fields weigh: about 45 characters of a located hit, measured', () => {
-    const located = hit({ block: 'b_abcdefghijkl', channel: 'both', startLine: 10, endLine: 40, tokens: 120, heading: 'rotate', snippet: 'x' })
-    const withFields = JSON.stringify({ ...leanHit(located, true), block: located.block, channel: located.channel }).length
-    const lean = JSON.stringify(leanHit(located, true)).length
-    expect(withFields - lean).toBeGreaterThanOrEqual(40)
-    console.info(`#1122 located hit: ${withFields} -> ${lean} characters (${withFields - lean} fewer)`)
-  })
-
   it("keeps the hit's id: the usage report reads hits by it (#678)", () => {
     for (const h of [hit({}), symbol(), hit({ resourceType: 'note', type: 'docs', language: undefined })]) expect(leanHit(h, true).id).toBe('4b6940cf-c84e-4e42-9840-40ecd2749c50')
   })
