@@ -14,6 +14,7 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { grep as repositoryGrep, grepTargets } from '../src/repositories/grep.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 type Json = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -95,13 +96,13 @@ describe('grep over code (#468)', () => {
     expect(r.json.commit ?? r.json.tree).toBeDefined()
   })
 
-  it('a hit names the smallest block holding its line and what reading it costs; the block reads back with the line in it', async () => {
+  it('a hit names its line and what reading its block costs, not the block id (#1122); the line reads back', async () => {
     const r = await grep({ repositoryId: repoId, pattern: 'TODO: unicode', path: 'src/**' })
     const [hit] = r.json.hits
     expect([hit.path, hit.line]).toEqual(['src/store.ts', 8])
-    expect(hit.block).toEqual(expect.any(String))
+    expect('block' in hit).toBe(false)
     expect(hit.tokens).toBeGreaterThan(0)
-    const read = await call(agent, 'read_file', { repositoryId: repoId, path: 'src/store.ts', targets: [{ block: hit.block }] })
+    const read = await call(agent, 'read_file', { repositoryId: repoId, path: 'src/store.ts', targets: [{ lines: `${hit.line}-${hit.line}` }] })
     expect(read.isError, read.text).toBe(false)
     expect(read.text).toContain('TODO: unicode')
   })
@@ -153,9 +154,10 @@ describe('the block a hit names (#1083)', () => {
         // Re-key the blocks so the symbol's id sorts first or last among the file's blocks.
         const ordered = [...rows].sort((a, b) => (a.id === symbol.id ? -1 : b.id === symbol.id ? 1 : 0) * (lowFirst ? 1 : -1))
         for (const [i, b] of ordered.entries()) await db.update(blocks).set({ blockId: `b_order${lowFirst ? 'a' : 'b'}${String(i).padStart(4, '0')}` }).where(eq(blocks.id, b.id))
-        const r = await grep({ repositoryId: repoId, pattern: '^def only', path: 'tiny/only.py' })
+        // The repository function, not MCP: the answer names no block (#1122), the located block is still what `tokens` costs.
+        const found = await repositoryGrep(await grepTargets([], [repoId]), { pattern: '^def only', glob: 'tiny/only.py', context: 0, limit: 50, after: null })
         const symbolId = (await db.select({ blockId: blocks.blockId }).from(blocks).where(eq(blocks.id, symbol.id)))[0]!.blockId
-        expect(r.json.hits[0].block, label).toBe(symbolId)
+        expect(found.hits[0]!.block, label).toBe(symbolId)
       }
     } finally {
       for (const [id, blockId] of original) await db.update(blocks).set({ blockId }).where(eq(blocks.id, id))
@@ -170,9 +172,8 @@ describe('grep over notes (#468)', () => {
     const hit = r.json.hits[0]
     const read = await call(agent, 'read_note', { vaultId, path: 'guides/retry', targets: [{ lines: `${hit.line}-${hit.line}` }] })
     expect(read.text).toContain('TODO: jitter')
-    expect(hit).toMatchObject({ snippet: 'TODO: jitter', block: expect.any(String), tokens: expect.any(Number) })
-    const block = await call(agent, 'read_note', { vaultId, path: 'guides/retry', targets: [{ block: hit.block }] })
-    expect(block.text).toContain('TODO: jitter')
+    expect(hit).toMatchObject({ snippet: 'TODO: jitter', tokens: expect.any(Number) })
+    expect('block' in hit).toBe(false)
   })
 
   it('searches the vault and the repository together: `everywhere` names each hit\'s source and keeps vaults before repositories', async () => {

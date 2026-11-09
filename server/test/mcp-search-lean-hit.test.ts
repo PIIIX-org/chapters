@@ -25,6 +25,13 @@ describe('a lean search hit (#414)', () => {
     expect(leanHit(hit({}), false).containerId).toBe('89767606-c692-4ec0-a91d-140c4c45f0c6')
   })
 
+  it('leaves out the block id and the channel (#1122): reads go by lines, REST keeps both', () => {
+    const lean = JSON.parse(JSON.stringify(leanHit(hit({ block: 'b_abcdefghijkl', heading: 'x' }), true))) as Record<string, unknown>
+    expect(Object.keys(lean)).not.toContain('block')
+    expect(Object.keys(lean)).not.toContain('channel')
+    expect(lean.heading).toBe('x')
+  })
+
   it("keeps the hit's id: the usage report reads hits by it (#678)", () => {
     for (const h of [hit({}), symbol(), hit({ resourceType: 'note', type: 'docs', language: undefined })]) expect(leanHit(h, true).id).toBe('4b6940cf-c84e-4e42-9840-40ecd2749c50')
   })

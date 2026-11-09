@@ -267,7 +267,7 @@ Elara exposes 63 tools across 7 functional domains. **Capability** is the token 
 | Tool | Scope | Capability | Description |
 | :--- | :--- | :--- | :--- |
 | `search` | Any | `read` | Hybrid search (lexical + semantic) across notes and code with `symbols` support. |
-| `grep` | Any | `read` | Regex over note and indexed code lines (path glob, context lines): located hits `{path, line, block, tokens, snippet}` in path then line order, capped, paged by cursor. |
+| `grep` | Any | `read` | Regex over note and indexed code lines (path glob, context lines): located hits `{path, line, tokens, snippet}` in path then line order, capped, paged by cursor. |
 | `find_symbols` | Repository/Account | `read` | Keyword and semantic search for code symbols (functions, methods, classes, interfaces, types, enums, exported consts, namespaces) with file path and line range. Vault-scoped tokens are refused. |
 | `orient` | Vault/Repo | `read` | Where to start (#534): a repository's most-used definitions (signatures with `path:line`, ranked by resolved uses, tests left out) and a vault's most-linked notes, 10 per level; `query` and `focus` bias it, `path` goes one level down. |
 
