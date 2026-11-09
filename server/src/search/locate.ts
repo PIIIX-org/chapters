@@ -137,8 +137,8 @@ const innermost = (blocks: readonly BlockRow[], line: number): BlockRow | undefi
 
 /**
  * Fills the location of the first `LOCATE_HITS` of `results` (in place): see the header. `vectorBlocks`: for a note
- * hit, the `block_id` the vector leg found nearest (by `note:<id>`); `vec`: the query's vector, for a code file
- * hit no term occurs in.
+ * hit without its own `block`, the best vector block (by `note:<id>`); `vec`: the query's vector, for a code file
+ * hit no term occurs in. Each passage's own block takes precedence.
  */
 export async function locateHits(results: SearchResult[], query: string, vectorBlocks: ReadonlyMap<string, string>, vec?: string): Promise<void> {
   const started = performance.now()
@@ -217,7 +217,7 @@ export async function locateHits(results: SearchResult[], query: string, vectorB
       if (!row) continue
       const starts = row.body === null ? [] : lineStarts(row.body)
       const place = row.body === null ? null : bestPlace(row.body, starts, terms)
-      const wanted = vectorBlocks.get(`note:${hit.id}`)
+      const wanted = hit.block ?? vectorBlocks.get(`note:${hit.id}`)
       const block = blocks.find((b) => b.block_id === wanted) ?? (place ? innermost(blocks, place.line) : undefined) ?? [...blocks].sort((a, b) => a.start_line - b.start_line)[0]
       if (!block) continue
       const shift = bodyStartLine({ frontmatter: row.frontmatter, frontmatterSrc: null }) - 1
@@ -227,9 +227,10 @@ export async function locateHits(results: SearchResult[], query: string, vectorB
       hit.endLine = block.end_line + shift
       if (row.body === null) continue
       hit.tokens = spanTokens(row.body, starts, block.start_line, block.end_line)
-      // The match inside the block the hit points at, else the start of the block.
-      const inside = place && place.line >= block.start_line && place.line <= block.end_line ? place : null
-      hit.snippet = snippetAround(row.body, inside ? inside.at : (starts[block.start_line - 1] ?? 0), terms)
+      // Locate the match within this passage, not the document's strongest match in a different section.
+      const text = row.body.slice(starts[block.start_line - 1] ?? 0, starts[block.end_line] ?? row.body.length)
+      const inside = bestPlace(text, lineStarts(text), terms)
+      hit.snippet = snippetAround(text, inside?.at ?? 0, terms)
       continue
     }
     const content = texts.get(hit.id) ?? null

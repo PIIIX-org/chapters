@@ -202,8 +202,8 @@ describe('the block set is written for its seq only (#452, #460)', () => {
   })
 })
 
-describe('the note vector leg rolls blocks up to one hit per note (#452)', () => {
-  it('a note whose every block matches is one hit, scored once per leg', async () => {
+describe('the note vector leg keeps up to three passages per note (#415)', () => {
+  it('a note whose every block matches returns three distinct passages, each scored once per leg', async () => {
     const repeated = Array.from({ length: 6 }, (_, i) => `# Kiwi ${i}\nkiwi orchard kiwi harvest kiwi\n`).join('\n')
     const { vaultId, note } = await makeNote(repeated)
     const [other] = await db
@@ -215,9 +215,11 @@ describe('the note vector leg rolls blocks up to one hit per note (#452)', () =>
     expect((await noteBlockRows(note.id)).length).toBe(6)
 
     const hits = (await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, 'kiwi orchard harvest', 10)).results
-    expect(hits.filter((h) => h.id === note.id)).toHaveLength(1)
+    const passages = hits.filter((h) => h.id === note.id)
+    expect(passages).toHaveLength(3)
+    expect(new Set(passages.map((h) => h.block)).size).toBe(3)
     expect(hits[0]!.id).toBe(note.id)
-    // One contribution per leg at most (RRF k = 60): duplicates in the vector leg would add more.
-    expect(hits[0]!.score).toBeLessThanOrEqual(2 / 61 + 1e-9)
+    // One contribution per leg at most (RRF k = 60): other passages must not inflate a passage's score.
+    for (const hit of passages) expect(hit.score).toBeLessThanOrEqual(2 / 61 + 1e-9)
   })
 })
