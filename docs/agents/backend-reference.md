@@ -1410,9 +1410,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   0035, `blocks_note_embedding_idx` (`owner_type = 'note'`, the note leg and
   note semantic edges) and `blocks_code_embedding_idx` (`owner_type =
   'code'`, code semantic edges, which take any code block) from 0036, which
-  drops 0035's index over every block. Notes are ranked by their best block,
-  files by their `file` block, one hit per document (see **Blocks and the
-  line contract**).
+  drops 0035's index over every block. Notes return up to three passages each (#415),
+  grouped by note and ranked by their best passage's fused score, with passages best first;
+  files retain one hit each, ranked by their `file` block (see **Blocks and the line contract**).
   `findSymbols()` does the same over symbols (keyword: `ILIKE` on the
   whole query, or the symbol's identifier keywords).
   - **Keyword channel** (#455, `search/identifiers.ts`): note legs match
@@ -1545,10 +1545,18 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     Keyword rows
     always count. The gate cuts a suffix of a distance-ordered list, so the
     RRF ranks of the rows it keeps do not change.
+  - **Grouped note passages** (#415): the vector leg retains up to three nearest blocks per note.
+    Fusion keys note hits by note id and block id; the document-level keyword vote merges into the
+    nearest vector passage (or yields one keyword-only hit when no vector passage exists).
+    Documents sort by their best passage's fused score, their passages remain adjacent and best first,
+    and each note contributes at most three hits. `results` remains a flat array, bounded by `limit`.
+    The search overlay keys selections by passage block (falling back to its start line).
+    MCP continuation guards retain that passage identity internally even though the response omits `block`.
+    `prepare_task_context` deduplicates note paths before selecting its three document excerpts.
   - **Located hits** (#414, `locate.ts`; MCP hits drop `block` and `channel` since #1122: see **Hit diet** below): after fusion, the hits a search returns (at most its `limit`) are
-    located, in place and without changing their order or score. A note hit points at `block` (the vector leg's
-    nearest block of the note, `blockLeg` carries it as `block`), else at the innermost block around the best
-    match of the query's terms in the body (the line with the most distinct terms within 6 lines: `matchTerms`
+    located, in place and without changing their order or score. Each note passage points at its own `block`
+    from the vector leg, else at the innermost block around the best match of the query's terms in the body.
+    Its snippet is cut around the best match within that passage (the line with the most distinct terms within 6 lines: `matchTerms`
     are the query's identifiers, their parts and its content words); a code file hit at the innermost symbol
     block around that match, or at the match's line alone; a symbol hit is its own span. `startLine`/`endLine`
     are the lines `read_note` (a note's file, `bodyStartLine` added to the block's body-relative lines) and
@@ -3580,9 +3588,10 @@ that moved on is dropped. *Reuse*: a block whose `embed_key` a block of the
 same owner already has keeps that vector instead of being embedded again, so
 an edit to another symbol or section, a frontmatter edit, or a version bump that leaves a block's text
 alone, embeds nothing new for it. *Readers*: `search` note vector leg — the nearest 200 note blocks of the
-scoped vaults (`hnsw.ef_search` 200 and the iterative scan, #462; read exactly when the vaults hold at most 2,000 blocks, #1035; #967's distance gate on the best distance), then each live note's best block
-distance (filters applied to the note), one hit per note with the same
-`{…, snippet: left(body, 200)}` as before. A vault has about 12 times as
+scoped vaults (`hnsw.ef_search` 200 and the iterative scan, #462; read exactly when the vaults hold at most 2,000 blocks, #1035),
+then up to three nearest blocks per live note (filters applied to the note), cut to 30 candidates with
+#967's distance gate on each passage. Fusion groups and caps each note's hits at three (#415);
+localization supplies each passage's span, token cost and snippet (#414). A vault has about 12 times as
 many note blocks as notes; the partial `blocks_note_embedding_idx` keeps the
 leg on note blocks only (10k notes × 12 blocks on a quiet database: warm
 p95 28–34 ms against 22–32 ms for the old `notes.embedding` leg; the first

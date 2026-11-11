@@ -4,6 +4,9 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+import { createNote } from '../src/notes/store.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import { searchNotes } from '../src/search/search.js'
 
 let app: FastifyInstance
 let baseUrl: string
@@ -149,6 +152,32 @@ describe('MCP Prompts Suite (20 Engineering Prompts)', () => {
     expect(block.resource.uri).toBe(`elara://vault/${vaultId}/notes/project/elara`)
     expect(block.resource.text).toContain('Elara flagship knowledge base project note')
   })
+
+  it('prepares task context from three distinct notes rather than repeated passages', async () => {
+    const query = 'quokka rotation renewal gateway'
+    const paths = ['docs/context-handbook', 'docs/context-reference', 'docs/context-guide']
+    for (const path of paths) {
+      await createNote(vaultId, {
+        path,
+        body: ['Rotation', 'Renewal', 'Gateway'].map((aspect) =>
+          `## ${aspect}\n\n${Array.from({ length: 12 }, (_, i) => `Plain introduction line ${i}.`).join('\n')}\n\n${`${query} ${aspect} `.repeat(20)}\n`,
+        ).join('\n'),
+      })
+    }
+    await flushEmbeddings()
+    const { results } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, query)
+    expect(results.slice(0, 3)).toHaveLength(3)
+    expect(new Set(results.slice(0, 3).map((hit) => hit.path)).size).toBe(1)
+
+    const client = await mcpClient(accountToken)
+    const prompt = await client.getPrompt({
+      name: 'prepare_task_context',
+      arguments: { issueDescription: query, repositoryName: 'elara', vaultId },
+    })
+    const uris = prompt.messages.flatMap(({ content }) => content.type === 'resource' ? [content.resource.uri] : [])
+    expect(uris).toHaveLength(3)
+    expect(new Set(uris)).toEqual(new Set(paths.map((path) => `elara://vault/${vaultId}/notes/${path}`)))
+  }, 120_000)
 
   it('evaluates sync_local_docs_to_vault prompt with validation steps', async () => {
     const client = await mcpClient(accountToken)

@@ -13,6 +13,7 @@ export interface SearchResult {
   symbolKind?: string
   startLine?: number
   endLine?: number
+  block?: string
   snippet: string
   score: number
 }

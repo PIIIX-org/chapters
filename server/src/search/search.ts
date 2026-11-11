@@ -609,11 +609,9 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
       ? await timed('note_keyword', () => noteKeywordRows(vaultIds, query, filterSql))
       : await timed('note_vector', () => blockLeg(vaultIds, vec!, (distance) =>
           gated(sql`
-            -- A note's vector rank is its best block's distance (ADR-004 §2.5 roll-up): one row per note, as before
-            -- blocks; #967's relevance gate applies to that best distance. Equal distances at the 200-block cut go by
-            -- owner (#623; an Incremental Sort over the index scan, which the HNSW index still serves), the 30-note
-            -- cut below by path. Unfiltered, the cut has no join to notes, which would add a lookup per block; a
-            -- filter (#454) joins them there, so it runs inside the (iterative, #462) scan, before the cut.
+            -- Keep up to three passages per note (#415), with #967's relevance gate applied to each passage.
+            -- Equal distances at the 200-block cut go by owner (#623; an Incremental Sort over the HNSW scan).
+            -- A filter (#454) joins notes inside the (iterative, #462) scan, before the cut.
             WITH nearest AS (
               SELECT owner_id, blocks.block_id, ${distance(sql`embedding`)} AS distance
               FROM blocks ${filter.length > 0 ? sql`JOIN notes ON notes.id = blocks.owner_id AND notes.deleted_at IS NULL ${filterSql}` : sql``}
@@ -621,14 +619,17 @@ async function noteRows(vaultIds: string[], query: string, mode: 'keyword' | 'se
               ORDER BY ${distance(sql`embedding`)}, owner_id
               LIMIT ${BLOCK_CANDIDATES}
             ), best AS (
-              -- The nearest block of each note is the passage the hit points at (#414).
-              SELECT DISTINCT ON (owner_id) owner_id, block_id, distance FROM nearest ORDER BY owner_id, distance, block_id
+              SELECT owner_id, block_id, distance,
+                     row_number() OVER (PARTITION BY owner_id ORDER BY distance, block_id) AS passage
+              FROM nearest
             )
             SELECT notes.id, notes.vault_id AS container_id, notes.path, notes.type, notes.frontmatter, left(notes.body, 200) AS snippet,
                    ${UPDATED_AT(sql`notes.updated_at`)}, best.distance, best.block_id AS block
             FROM best JOIN notes ON notes.id = best.owner_id
-            WHERE notes.deleted_at IS NULL
-            ORDER BY best.distance, notes.path COLLATE "C", notes.id`),
+            WHERE notes.deleted_at IS NULL AND best.passage <= 3
+            ORDER BY best.distance, notes.path COLLATE "C", notes.id, best.block_id`,
+            sql`path COLLATE "C", id, block`,
+          ),
         ))
   return rows as unknown as Row[]
 }
@@ -1198,14 +1199,16 @@ export async function searchNotes(
   const ctx = queryExactContext(query)
   const codeShaped = isCodeShaped(query)
   const merged = new Map<string, Omit<SearchResult, 'channel'>>()
-  // The legs that found each hit, and the block the vector leg found nearest in a note (#414).
+  // The legs that found each passage; the nearest vector block also receives the document-level keyword vote.
   const legs = new Map<string, Set<'keyword' | 'vector'>>()
   const vectorBlocks = new Map<string, string>()
   const contribute = (resourceType: ResourceType, rows: Row[], preferSnippet: boolean): void => {
     rows.forEach((row, rank) => {
-      const key = `${resourceType}:${row.id}`
+      const document = `${resourceType}:${row.id}`
+      const block = resourceType === 'note' ? row.block ?? vectorBlocks.get(document) : undefined
+      const key = resourceType === 'note' ? `${document}:${block ?? ''}` : document
       legs.set(key, (legs.get(key) ?? new Set()).add(preferSnippet ? 'keyword' : 'vector'))
-      if (!preferSnippet && row.block !== undefined) vectorBlocks.set(key, row.block)
+      if (!preferSnippet && block !== undefined && !vectorBlocks.has(document)) vectorBlocks.set(document, block)
       const contribution = 1 / (RRF_K + rank + (row.relaxed ? CANDIDATES : 0) + 1)
       const existing = merged.get(key)
       if (existing) {
@@ -1223,6 +1226,7 @@ export async function searchNotes(
           frontmatter: resourceType === 'note' ? row.frontmatter : undefined,
           language: resourceType === 'code' ? row.language : undefined,
           updated: row.updated_at.slice(0, 10),
+          ...(block !== undefined ? { block } : {}),
           snippet: row.snippet,
           score:
             contribution + (exact ? EXACT_BOOST : 0) + (codeShaped && !isDocHit(resourceType, row.path) ? CODE_BOOST : 0),
@@ -1273,10 +1277,17 @@ export async function searchNotes(
   if (keyword) contributeSymbols(keyword[2], true)
 
   // Every filter already applied inside the legs (#454).
-  const results = [...merged.entries()]
-    .sort(([, a], [, b]) => byScore(a, b))
-    .slice(0, limit)
-    .map(([key, hit]): SearchResult => ({ ...hit, channel: legs.get(key)!.size === 2 ? 'both' : legs.get(key)!.has('keyword') ? 'keyword' : 'vector' }))
+  const groups = new Map<string, SearchResult[]>()
+  for (const [key, hit] of [...merged.entries()].sort(([, a], [, b]) => byScore(a, b))) {
+    const document = `${hit.resourceType}:${hit.id}`
+    let passages = groups.get(document)
+    if (!passages) groups.set(document, (passages = []))
+    if (hit.resourceType !== 'note' || passages.length < 3) {
+      passages.push({ ...hit, channel: legs.get(key)!.size === 2 ? 'both' : legs.get(key)!.has('keyword') ? 'keyword' : 'vector' })
+    }
+  }
+  // Insertion order is the best passage's rank; each group's passages are already best first.
+  const results = [...groups.values()].flat().slice(0, limit)
   observeSearchLeg('fusion', performance.now() - fusionStarted)
   await locateHits(results, query, vectorBlocks, vec ?? undefined)
   return respond(results, vec !== null, keyword, vector, await state)

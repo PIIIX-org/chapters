@@ -1,6 +1,6 @@
 // #414: the budget's ladder on a located search answer: without heading and tokens first, then `path#La-Lb` for a
 // hit that points at a passage.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -11,6 +11,7 @@ import { createNote } from '../src/notes/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+import * as search from '../src/search/search.js'
 
 let app: FastifyInstance
 let vaultId: string
@@ -83,5 +84,40 @@ describe('search answers down the budget ladder (#414)', () => {
     const everywhere = await agent.callTool({ name: 'search', arguments: { everywhere: true, query: 'pomelo harvest', limit: 3 } })
     const anyHit = (JSON.parse((everywhere.content as Array<{ text: string }>)[0]!.text).results as Array<Record<string, unknown>>)[0]!
     expect(anyHit.containerId).toBe(vaultId)
+  })
+  it('rejects a continuation when passages of the same note reorder, even without located lines', async () => {
+    const answer = await search.searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, 'pomelo harvest', 1)
+    const results = Array.from({ length: 12 }, (_, i) => ({
+      ...answer.results[0]!,
+      block: `b_passage_${i}`,
+      startLine: undefined,
+      endLine: undefined,
+      snippet: `Passage ${i}: ${'pomelo harvest '.repeat(70)}`,
+    }))
+    const ranking = vi.spyOn(search, 'searchNotes').mockResolvedValue({ ...answer, results })
+    const call = async (cursor?: string) => {
+      resetRateLimits()
+      const response = await agent.callTool({ name: 'search', arguments: { vaultId, query: 'pomelo harvest', limit: 12, budget_tokens: 2500, ...(cursor ? { cursor } : {}) } })
+      return {
+        isError: response.isError,
+        json: JSON.parse((response.content as Array<{ text: string }>)[0]!.text),
+      }
+    }
+    try {
+      const first = await call()
+      expect(first.isError).not.toBe(true)
+      const cursor = first.json.truncated.cursor
+      expect(cursor).toEqual(expect.any(String))
+      expect(first.json.results.length).toBeGreaterThanOrEqual(5)
+      expect(first.json.results[0]).not.toHaveProperty('block')
+      expect((await call(cursor)).isError).not.toBe(true)
+
+      ranking.mockResolvedValue({ ...answer, results: [results[1]!, results[0]!, ...results.slice(2)] })
+      const stale = await call(cursor)
+      expect(stale.isError).toBe(true)
+      expect(stale.json).toMatchObject({ error: { code: 'CURSOR_STALE' } })
+    } finally {
+      ranking.mockRestore()
+    }
   })
 })

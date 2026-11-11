@@ -4,8 +4,8 @@
 // every other block's id, and re-embeds only the blocks whose text changed
 // (a frontmatter-only edit embeds nothing). The block set is written by the
 // embed job for its `seq`, whole; a job for a seq the note has moved past
-// never overwrites newer blocks. The note vector leg ranks a note by its best
-// block: one hit per note.
+// never overwrites newer blocks. The note vector leg returns up to three
+// adjacent passages per note, ranked by the best passage (#415).
 // Uses only entry points that existed before note blocks (the fails-before
 // job runs this file against the base source).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -13,6 +13,7 @@ import { and, asc, eq, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { blocks, notes, vaults } from '../src/db/schema.js'
 import { jobTiming } from '../src/jobs/durable.js'
+import { bodyStartLine } from '../src/notes/projector.js'
 import { flushEmbeddings, scheduleEmbedding } from '../src/search/embedding-queue.js'
 import { embedder } from '../src/search/embeddings.js'
 import { searchNotes } from '../src/search/search.js'
@@ -202,8 +203,8 @@ describe('the block set is written for its seq only (#452, #460)', () => {
   })
 })
 
-describe('the note vector leg rolls blocks up to one hit per note (#452)', () => {
-  it('a note whose every block matches is one hit, scored once per leg', async () => {
+describe('the note vector leg keeps up to three passages per note (#415)', () => {
+  it('a note whose every block matches returns three distinct passages, each scored once per leg', async () => {
     const repeated = Array.from({ length: 6 }, (_, i) => `# Kiwi ${i}\nkiwi orchard kiwi harvest kiwi\n`).join('\n')
     const { vaultId, note } = await makeNote(repeated)
     const [other] = await db
@@ -212,12 +213,23 @@ describe('the note vector leg rolls blocks up to one hit per note (#452)', () =>
       .returning()
     await embedNow(note.id)
     await embedNow(other!.id)
-    expect((await noteBlockRows(note.id)).length).toBe(6)
+    const locations = await noteBlockRows(note.id)
+    expect(locations).toHaveLength(6)
 
     const hits = (await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, 'kiwi orchard harvest', 10)).results
-    expect(hits.filter((h) => h.id === note.id)).toHaveLength(1)
-    expect(hits[0]!.id).toBe(note.id)
-    // One contribution per leg at most (RRF k = 60): duplicates in the vector leg would add more.
-    expect(hits[0]!.score).toBeLessThanOrEqual(2 / 61 + 1e-9)
+    const passages = hits.filter((h) => h.id === note.id)
+    expect(passages).toHaveLength(3)
+    expect(new Set(passages.map((h) => h.block)).size).toBe(3)
+    expect(hits.slice(0, passages.length)).toEqual(passages)
+    expect(new Set(passages.map((h) => `${h.startLine}-${h.endLine}`)).size).toBe(3)
+    const shift = bodyStartLine({ frontmatter: { status: 'draft' }, frontmatterSrc: null }) - 1
+    for (const hit of passages) {
+      const block = locations.find((row) => row.blockId === hit.block)!
+      expect(block).toBeDefined()
+      expect(hit).toMatchObject({ startLine: block.startLine + shift, endLine: block.endLine + shift })
+      expect(hit.snippet).toContain('<b>kiwi</b>')
+    }
+    // One contribution per leg at most (RRF k = 60): other passages must not inflate a passage's score.
+    for (const hit of passages) expect(hit.score).toBeLessThanOrEqual(2 / 61 + 1e-9)
   })
 })
