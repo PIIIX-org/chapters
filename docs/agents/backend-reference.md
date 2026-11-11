@@ -1550,6 +1550,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     nearest vector passage (or yields one keyword-only hit when no vector passage exists).
     Documents sort by their best passage's fused score, their passages remain adjacent and best first,
     and each note contributes at most three hits. `results` remains a flat array, bounded by `limit`.
+    The search overlay keys selections by passage block (falling back to its start line).
+    MCP continuation guards retain that passage identity internally even though the response omits `block`.
+    `prepare_task_context` deduplicates note paths before selecting its three document excerpts.
   - **Located hits** (#414, `locate.ts`; MCP hits drop `block` and `channel` since #1122: see **Hit diet** below): after fusion, the hits a search returns (at most its `limit`) are
     located, in place and without changing their order or score. Each note passage points at its own `block`
     from the vector leg, else at the innermost block around the best match of the query's terms in the body.

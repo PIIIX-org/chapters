@@ -920,6 +920,29 @@ describe('SearchOverlay keyboard navigation', () => {
     expect(document.getElementById(activeId as string)).toHaveAccessibleName('Command: Open vault: Recipes')
   })
 
+  it('selects each passage of one note independently with unique option IDs', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    stubFetch(() => found([
+      { ...FIXTURE[0], block: 'first', startLine: 1, snippet: 'first passage' },
+      { ...FIXTURE[0], block: 'second', startLine: 10, snippet: 'second passage' },
+      { ...FIXTURE[0], startLine: 20, snippet: 'third passage' },
+    ]))
+    renderOverlay(true)
+    await search(user, 'passages')
+    await waitFor(() => expect(screen.getAllByText('people/jane')).toHaveLength(3))
+
+    const passages = ['first passage', 'second passage', 'third passage'].map((text) => screen.getByText(text).closest('[role="option"]')!)
+    expect(new Set(passages.map((option) => option.id)).size).toBe(3)
+    await user.keyboard('{ArrowUp}')
+    for (const passage of [...passages].reverse()) {
+      expect(screen.getAllByRole('option', { selected: true })).toEqual([passage])
+      expect(screen.getByPlaceholderText(/search/i)).toHaveAttribute('aria-activedescendant', passage.id)
+      expect(document.getElementById(passage.id)).toBe(passage)
+      await user.keyboard('{ArrowUp}')
+    }
+  })
+
   it('gives the keyboard-active option a visible bg-muted class, and clears it off the others', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })

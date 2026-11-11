@@ -230,9 +230,10 @@ PLANNING GUIDELINES:
         const vaultId = vaultFor(reqVaultId)
         await requireAccess(vaultId, 'read')
         const { results: hits } = await searchNotes({ vaultIds: [vaultId], repositoryIds: [] }, issueDescription, undefined, {}, { accountId: auth.user.id })
-        for (const hit of hits.slice(0, 3)) {
-          const note = await readNote(vaultId, hit.path).catch(() => null)
-          if (note) notes.add(vaultId, hit.path, note.body.slice(0, 600))
+        const paths = [...new Set(hits.map((hit) => hit.path))].slice(0, 3)
+        for (const path of paths) {
+          const note = await readNote(vaultId, path).catch(() => null)
+          if (note) notes.add(vaultId, path, note.body.slice(0, 600))
         }
       } catch {
         // Optional

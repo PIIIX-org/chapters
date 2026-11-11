@@ -119,7 +119,7 @@ function commandOptionId(cmd: Command): string {
 }
 
 function resultKey(r: SearchResult): string {
-  return `${r.resourceType}:${r.id}`
+  return `${r.resourceType}:${r.id}:${r.block ?? r.startLine ?? ''}`
 }
 
 function resultOptionId(r: SearchResult): string {

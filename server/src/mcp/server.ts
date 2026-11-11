@@ -95,7 +95,7 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord, restoreVaultRecord, trashVaultRecord } from '../vaults/routes.js'
 import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
-import { leanHit } from './search-hit.js'
+import { leanHit, type LeanHit } from './search-hit.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
 import { BACKLINK_CAP, backlinksOf, neighborhood, type Backlink } from '../graph/neighbors.js'
@@ -3040,6 +3040,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const limit = args.limit ?? 20
       // The first `limit` hits of the ranking, plus one to know whether more match.
       const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id })
+      // Keep passage identity outside the serialized hits: leanHit removes internal block IDs.
+      const identities = new Map<LeanHit, string>()
+      const hits = results.map((r) => {
+        const hit = leanHit(r, args.everywhere !== true && resources.vaultIds.length + resources.repositoryIds.length === 1)
+        identities.set(hit, `${r.resourceType}:${r.id}:${r.block ?? r.startLine ?? ''}`)
+        return hit
+      })
       return {
         // One repository: its indexed version, once in the head (#471).
         head: {
@@ -3051,8 +3058,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           ranked({
             name: 'results',
             // A note hit carries no frontmatter (#419): `read_note` has it, REST keeps it for the client's tags. What the call or the path already says stays out of every hit (#414): see `leanHit`. A call that named no container (`everywhere`) keeps it on the hit, however many it reached today: the answer's shape must not change when a vault is shared.
-            items: results.map((r) => leanHit(r, args.everywhere !== true && resources.vaultIds.length + resources.repositoryIds.length === 1)),
-            id: (r) => `${r.resourceType}:${r.id}`,
+            items: hits,
+            id: (r) => identities.get(r)!,
             limit,
             // Down the ladder: without snippet, updated, heading and tokens, then the location (`path#La-Lb` for a located hit, else the path); counted per path.
             ladder: {
