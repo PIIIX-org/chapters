@@ -12,6 +12,7 @@
 //   answer; every request carries an abort signal for the time left, and
 //   every tool call gets the time left until the tool deadline.
 import { estimateRequestTokens, estimateTokens, type CompletionRequest, type Message, type Model, type ToolCall, type ToolResultPart, type Usage } from './model.ts'
+import type { ModelTurn } from './model.ts'
 import type { Toolset } from './tools.ts'
 
 export interface Caps {
@@ -65,7 +66,7 @@ export interface TraceEntry {
   preview: string
 }
 
-export type StopReason = 'answered' | 'cap:tool-calls' | 'cap:tokens' | 'cap:wall-time' | 'error'
+export type StopReason = 'answered' | 'cap:tool-calls' | 'cap:tokens' | 'cap:output-tokens' | 'cap:wall-time' | 'error'
 
 export interface EpisodeResult {
   answer: string
@@ -84,6 +85,8 @@ export interface EpisodeResult {
   droppedResults: number
   wallMs: number
   trace: TraceEntry[]
+  /** Per-turn native identity and original provider counters; absent counters stay unavailable. */
+  nativeTurns?: Array<{ turn: number; requestedOutputTokens: number; provenance: NonNullable<ModelTurn['native']> }>
 }
 
 export interface Episode {
@@ -111,6 +114,7 @@ export async function runEpisode(e: Episode): Promise<EpisodeResult> {
   const messages: Message[] = [{ role: 'user', text: e.prompt }]
   const used: Usage = { input: 0, output: 0 }
   const trace: TraceEntry[] = []
+  const nativeTurns: NonNullable<EpisodeResult['nativeTurns']> = []
   let scale = INITIAL_TOKEN_SCALE
   let calibrated = false
   let estimated = false
@@ -134,6 +138,7 @@ export async function runEpisode(e: Episode): Promise<EpisodeResult> {
     droppedResults: dropped,
     wallMs: Math.round(now() - t0),
     trace,
+    ...(nativeTurns.length ? { nativeTurns } : {}),
   })
   const estimate = (req: Pick<CompletionRequest, 'system' | 'tools' | 'messages'>) => Math.ceil(estimateRequestTokens(req) * scale)
   const left = () => e.caps.maxTokens - used.input - used.output
@@ -215,6 +220,11 @@ export async function runEpisode(e: Episode): Promise<EpisodeResult> {
     used.output += usage.output
     estimated ||= turn.estimated === true
     lastText = turn.text
+    if (turn.native) nativeTurns.push({ turn: turns, requestedOutputTokens: maxOutputTokens, provenance: turn.native })
+    // Declared native-transport adaptation: retain the entire output/usage, execute no calls and never retry an overrun.
+    if (e.model.outputLimit === 'reported' && usage.output > maxOutputTokens) return result(turn.text, 'cap:output-tokens')
+    if (e.model.outputLimit === 'reported' && left() < 0) return result(turn.text, 'cap:tokens')
+    if (turn.error) return result('', 'error', turn.error)
     if (cap !== null && turn.text.trim() === '') {
       // A final turn with no text (the model ignored `toolChoice: 'none'` and called a tool, or sent nothing): ask again in plain
       // words, up to FINAL_ASKS times, every turn counted. The ignored calls leave the history, which has no results for them.

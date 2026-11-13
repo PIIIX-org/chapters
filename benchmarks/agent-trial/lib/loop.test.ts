@@ -79,6 +79,27 @@ test('provider usage is summed over turns', async () => {
   assert.equal(second.toolChoice, 'auto')
 })
 
+test('reported native output overrun retains usage and text without executing calls or retrying', async () => {
+  const model = Object.assign(replay([turn([call('overrun')], 'untruncated evidence', { input: 100, output: 8193 })]), { outputLimit: 'reported' as const })
+  const tools = fakeTools()
+  const result = await runEpisode({ model, tools, system: 's', prompt: 'p', caps: caps() })
+  assert.equal(result.stop, 'cap:output-tokens')
+  assert.equal(result.answer, 'untruncated evidence')
+  assert.deepEqual([result.tokensIn, result.tokensOut], [100, 8193])
+  assert.equal(model.requests.length, 1)
+  assert.deepEqual(tools.calls, [])
+})
+
+test('reported native total overrun is counted and stops before executing requested tools', async () => {
+  const model = Object.assign(replay([turn([call('overrun')], '', { input: 600001, output: 1 })]), { outputLimit: 'reported' as const })
+  const tools = fakeTools()
+  const result = await runEpisode({ model, tools, system: 's', prompt: 'p', caps: caps() })
+  assert.equal(result.stop, 'cap:tokens')
+  assert.equal(result.tokensIn, 600001)
+  assert.equal(model.requests.length, 1)
+  assert.deepEqual(tools.calls, [])
+})
+
 test('the tool-call cap refuses extra calls in a turn, then forces an answer without tools', async () => {
   const model = replay([turn([call('a'), call('b'), call('c')]), turn([], 'capped answer')])
   const tools = fakeTools()
@@ -264,8 +285,13 @@ test('wall time: a request still running at the tool deadline is aborted and the
     async complete(req) {
       requests.push(req)
       if (req.toolChoice === 'none') return turn([], 'answer after abort')
+      // AbortSignal.timeout is unref'ed: model the live request handle as well as its promise.
       const { promise, reject } = Promise.withResolvers<ModelTurn>()
-      req.signal!.addEventListener('abort', () => reject(req.signal!.reason))
+      const pending = setTimeout(() => reject(new Error('request outlived the episode')), 1000)
+      req.signal!.addEventListener('abort', () => {
+        clearTimeout(pending)
+        reject(req.signal!.reason)
+      }, { once: true })
       return promise
     },
   }

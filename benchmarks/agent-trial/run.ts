@@ -29,6 +29,7 @@ import { gradeAnswer, type Grade } from './lib/grade.ts'
 import { judgeAnswer, type JudgeResult } from './lib/judge.ts'
 import { DEFAULT_CAPS, runEpisode, type Caps, type EpisodeResult } from './lib/loop.ts'
 import { httpModel, scriptedModel, type Model } from './lib/model.ts'
+import { ompSubscriptionModel } from './lib/omp.ts'
 import { checkEvidence, selectTasks, validateTasks, type TaskFile } from './lib/tasks.ts'
 import { ELARA_TOOLS, elaraToolset, localToolset, type Toolset } from './lib/tools.ts'
 
@@ -119,7 +120,9 @@ const toolsets: Record<Arm, Toolset> = {
 
 const secrets = [minted.token, ...(mode.mode === 'live' ? [mode.apiKey] : [])]
 const redact = (text: string) => secrets.reduce((t, s) => t.split(s).join('***'), text)
-const live = mode.mode === 'live' ? httpModel({ provider: mode.provider, model: mode.model, apiKey: mode.apiKey, ...(mode.baseUrl ? { baseUrl: mode.baseUrl } : {}) }) : null
+const live = mode.mode === 'subscription'
+  ? ompSubscriptionModel(mode.model, join(outDir, 'native-evidence'))
+  : mode.mode === 'live' ? httpModel({ provider: mode.provider, model: mode.model, apiKey: mode.apiKey, ...(mode.baseUrl ? { baseUrl: mode.baseUrl } : {}) }) : null
 const judging = live !== null && mode.mode === 'live' && mode.judge
 
 /**
@@ -185,6 +188,7 @@ function flush(complete: boolean): string {
     ms: Date.now() - t0,
     harness: HARNESS,
     harnessVersion: HARNESS_VERSION,
+    ...(mode.mode === 'subscription' ? { transport: 'omp-rpc', auth: 'chatgpt', outputCapPolicy: 'provider-reported overrun: retain full output and usage, stop without tool execution, truncation or retry' } : {}),
     repo: file.repo,
     caps,
     runBudgetMs: RUN_BUDGET_MS,

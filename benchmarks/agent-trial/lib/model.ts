@@ -52,6 +52,11 @@ export interface CompletionRequest {
 export interface Usage {
   input: number
   output: number
+  /** Provider-reported subsets, never inferred or filled with zero when unavailable. */
+  cachedInput?: number
+  uncachedInput?: number
+  reasoningOutput?: number
+  cacheWriteInput?: number
 }
 
 export interface ModelTurn {
@@ -61,13 +66,30 @@ export interface ModelTurn {
   usage: Usage | null
   /** The provider's stop reason, verbatim. */
   stop: string
+  /** Protocol failures retain the actual native usage instead of becoming a zero-usage exception. */
+  error?: string
   /** True when usage is a characters/4 estimate (the scripted model), not provider-reported. */
   estimated?: boolean
+  /** Native transport provenance and the original provider usage for this turn. */
+  native?: {
+    transport: string
+    cliVersion: string
+    protocolVersion?: string
+    api?: string
+    endpoint?: string
+    auth: 'chatgpt'
+    model: string
+    provider: string
+    threadId: string
+    usage: Record<string, unknown>
+  }
 }
 
 export interface Model {
-  readonly provider: 'openai' | 'anthropic' | 'scripted'
+  readonly provider: 'openai' | 'openai-codex' | 'anthropic' | 'scripted'
   readonly name: string
+  /** Native transports without a hard output setting stop on reported overrun, without retry. */
+  readonly outputLimit?: 'reported'
   complete(req: CompletionRequest): Promise<ModelTurn>
 }
 

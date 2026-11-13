@@ -19,6 +19,7 @@ export type GateMode =
   | { mode: 'skip'; reason: string }
   | { mode: 'scripted' }
   | { mode: 'live'; provider: 'openai' | 'anthropic'; model: string; judge: boolean }
+  | { mode: 'subscription'; provider: 'openai-codex'; model: string; judge: false }
 
 export type TrialMode = Exclude<GateMode, { mode: 'live' }> | (Extract<GateMode, { mode: 'live' }> & { apiKey: string; baseUrl?: string })
 
@@ -26,7 +27,13 @@ export type TrialMode = Exclude<GateMode, { mode: 'live' }> | (Extract<GateMode,
 export function gateMode(env: Record<string, string | undefined>, hasKey = env.AGENT_TRIAL_HAS_KEY === 'true'): GateMode {
   const mode = (env.AGENT_TRIAL_MODE ?? '').trim() || 'auto'
   if (mode === 'scripted') return { mode: 'scripted' }
-  if (mode !== 'auto') throw new Error(`AGENT_TRIAL_MODE must be auto or scripted, got ${mode}`)
+  if (mode === 'omp') {
+    const model = (env.AGENT_TRIAL_MODEL ?? '').trim()
+    if (!model) throw new Error('AGENT_TRIAL_MODEL must pin a model for native omp')
+    if (env.AGENT_TRIAL_API_KEY || env.AGENT_TRIAL_BASE_URL || env.AGENT_TRIAL_JUDGE === '1') throw new Error('Native omp excludes API credentials, custom endpoints and judge dispatch')
+    return { mode: 'subscription', provider: 'openai-codex', model, judge: false }
+  }
+  if (mode !== 'auto') throw new Error(`AGENT_TRIAL_MODE must be auto, scripted or omp, got ${mode}`)
   const model = (env.AGENT_TRIAL_MODEL ?? '').trim()
   if (!hasKey || !model) {
     const missing = [!hasKey && 'AGENT_TRIAL_API_KEY', !model && 'AGENT_TRIAL_MODEL'].filter(Boolean).join(' and ')

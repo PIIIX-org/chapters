@@ -582,6 +582,36 @@ Docker, bun): bring the lab up as in `docs/agents/lab.md`, then
 `AGENT_TRIAL_MODE=scripted bun benchmarks/agent-trial/run.ts`. Unit tests:
 `node --test 'benchmarks/agent-trial/lib/*.test.ts'` (CI `checks` job).
 
+**Local native subscription transport (validation pending).** With omp's
+existing ChatGPT login, explicitly select `AGENT_TRIAL_MODE=omp` and pin
+`AGENT_TRIAL_MODEL`. The native runtime owns OAuth; the adapter does not
+read/export credentials and rejects API-key/base-URL/judge fallback. Its
+child environment excludes API and proxy configuration. Before each request,
+the same RPC process must report the exact model, `openai-codex-responses`,
+the first-party ChatGPT endpoint, no tools and empty native history.
+Full harness history and the arm's tools are explicit JSON on every request;
+the real harness executes returned calls and feeds back their results.
+Native tools, extensions, skills, rules and context files are disabled, as
+are retries, compaction and cache warming. Unexpected native tool or model
+changes invalidate the turn.
+
+The native subscription route has no enforced per-turn output limit. The declared adaptation,
+identical in both arms, uses reported output tokens: a turn above its requested
+limit stops as `cap:output-tokens`, preserving full output and usage and
+executing no requested tools, without truncation or retry. A reported total
+overrun likewise stops before tools. This detects rather than prevents an
+overrun; the 600,000-token cap cannot be a hard spending guarantee. These
+results require a fresh matched control and are not pooled with HTTP or
+historical Claude trials.
+
+Per-turn native events, actual model/provider identity, verified endpoint,
+runtime version and original usage are retained with results. Input totals
+include cached input; uncached, cache-read and cache-write fields remain
+separate. Unavailable reasoning fields stay unavailable, never invented as zero.
+No usage or API-equivalent estimate establishes a subscription charge. Native transport
+results are local validation evidence until the publication workflow supports
+this transport; do not present them as the workflow's published agent numbers.
+
 **How to read a run.** `agent-trial-results/summary.md` (also the job
 summary) has one row per task and arm: facts found / total, the false
 claims flagged, tokens in and out, tool calls, wall time, stop reason; then

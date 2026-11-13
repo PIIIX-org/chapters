@@ -38,7 +38,15 @@ test('live mode: provider from AGENT_TRIAL_PROVIDER, else anthropic for claude-*
   const explicit = resolveMode({ AGENT_TRIAL_API_KEY: 'k', AGENT_TRIAL_MODEL: 'claude-via-proxy', AGENT_TRIAL_PROVIDER: 'openai' })
   assert.ok(explicit.mode === 'live' && explicit.provider === 'openai')
   assert.throws(() => resolveMode({ AGENT_TRIAL_API_KEY: 'k', AGENT_TRIAL_MODEL: 'm', AGENT_TRIAL_PROVIDER: 'gemini' }), /openai or anthropic/)
-  assert.throws(() => resolveMode({ AGENT_TRIAL_MODE: 'live' }), /auto or scripted/)
+  assert.throws(() => resolveMode({ AGENT_TRIAL_MODE: 'live' }))
+})
+
+test('native subscription mode excludes API billing and judge fallback', () => {
+  const env = { AGENT_TRIAL_MODE: 'omp', AGENT_TRIAL_MODEL: 'gpt-6.1-terra' }
+  assert.deepEqual(resolveMode(env), { mode: 'subscription', provider: 'openai-codex', model: 'gpt-6.1-terra', judge: false })
+  for (const extra of [{ AGENT_TRIAL_API_KEY: 'not-a-subscription' }, { AGENT_TRIAL_BASE_URL: 'https://proxy.invalid' }, { AGENT_TRIAL_JUDGE: '1' }, { AGENT_TRIAL_MODEL: '' }]) {
+    assert.throws(() => resolveMode({ ...env, ...extra }))
+  }
 })
 
 test('the gate decides from AGENT_TRIAL_HAS_KEY and never needs the key; the runner needs the key itself', () => {
