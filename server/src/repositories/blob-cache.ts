@@ -15,6 +15,7 @@
 import { sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { textArray } from '../search/block-rows.js'
+import { recordCacheLookup } from '../monitoring/metrics.js'
 import { EXTRACTOR_VERSION, extractStructure, type ExtractionResult } from './extraction.js'
 
 /** The vectors the account's repositories already hold for `keys`, by key (one deterministic row per key). */
@@ -27,6 +28,8 @@ export async function vectorsInAccount(repositoryId: string, keys: readonly stri
     WHERE b.owner_type = 'code' AND b.embedding IS NOT NULL AND b.embed_key = ANY(${textArray(keys)})
       AND r.owner_id = (SELECT owner_id FROM repositories WHERE id = ${repositoryId})
     ORDER BY b.embed_key, b.id`)) as unknown as Array<{ embedKey: string; embedding: string }>
+  recordCacheLookup('blob_vector', true, rows.length)
+  recordCacheLookup('blob_vector', false, new Set(keys).size - rows.length)
   return new Map(rows.map((r) => [r.embedKey, JSON.parse(r.embedding) as number[]]))
 }
 
@@ -40,6 +43,7 @@ export async function parsed(language: string, content: string, path: string, co
   // The grammar is chosen from the label and the extension (extraction.ts), so both are part of the key.
   const key = `${EXTRACTOR_VERSION}:${language}:${/\.tsx$/i.test(path) ? 'tsx' : /\.h$/i.test(path) ? 'h' : ''}:${contentHash}`
   const hit = parseCache.get(key)
+  recordCacheLookup('blob_parse', hit !== undefined)
   if (hit) {
     parseCache.delete(key)
     parseCache.set(key, hit)

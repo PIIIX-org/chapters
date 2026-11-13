@@ -20,6 +20,7 @@
  */
 import { z } from 'zod'
 import { passageHash, rememberPassages, type HeldPassage, type PassageKind, type Session } from '../cache/session.js'
+import { recordCacheLookup } from '../monitoring/metrics.js'
 import { lineStarts, totalLines } from '../text/lines.js'
 import { wholeLines, type LineRange } from '../text/targets.js'
 import { location, type Budgeted, type CursorAt, type Section } from './response.js'
@@ -68,6 +69,7 @@ export function inSession(session: Session | null, doc: SessionDocument, answer:
     const ref = covering
       ? sameAs(covering, location(doc.path, lines[0], lines[1]))
       : same && sameAs(same, kind === 'text' ? location(doc.path, same.first, same.last) : doc.path)
+    recordCacheLookup('session_passage', !!ref)
     return ref && JSON.stringify({ same_as: ref }).length < length ? ref : null
   }
 
