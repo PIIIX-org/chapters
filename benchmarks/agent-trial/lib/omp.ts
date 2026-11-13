@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -65,6 +66,8 @@ export function ompSubscriptionModel(model: string, evidenceDir: string): Model 
   mkdirSync(root, { recursive: true })
   const env = Object.fromEntries(ENV_KEYS.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]!]]))
   const cliVersion = execFileSync('omp', ['--version'], { env, encoding: 'utf8', timeout: 10_000 }).trim()
+  // Keep natural prefix-cache routing stable across stateless turns, never warm it artificially.
+  const promptCacheKey = randomUUID()
   return {
     provider: PROVIDER, name: model, outputLimit: 'reported',
     async complete(req): Promise<ModelTurn> {
@@ -73,7 +76,7 @@ export function ompSubscriptionModel(model: string, evidenceDir: string): Model 
       writeFileSync(config, JSON.stringify({ ...ISOLATION, enabledModels: [`${PROVIDER}/${model}`] }))
       const instructions = 'You are the model in a controlled benchmark. This invocation is ONE model turn, not the entire task. The JSON-listed tools are real external harness capabilities, not native runtime tools or hypothetical APIs. To request evidence, emit exactly one whole JSON object {"text":string,"tool_calls":[{"name":string,"arguments":object}]} in final_answer, without a code fence, and END YOUR TURN IMMEDIATELY. Do not put actionable JSON in commentary, wait for results inside this invocation, or append a report claiming these external tools are unavailable. The external harness executes your requested calls and invokes you again with genuine results in the explicit full history. When you have enough evidence, return your actual final report as plain text/Markdown, or the JSON object with tool_calls:[]. JSON embedded in prose is never executed. Follow the supplied system rules and toolChoice; none means a final answer without calls. Never use native runtime tools, delegation, unprovided context or memory. Supplied external tool results are allowed evidence. The requested output budget is recorded and enforced after provider usage; an overrun ends the episode without retry.'
       const payload = JSON.stringify({ id: 'turn', type: 'prompt', message: JSON.stringify({ system: req.system, tools: req.tools, messages: req.messages, toolChoice: req.toolChoice, maxOutputTokens: req.maxOutputTokens }) })
-      const args = ['--mode', 'rpc', '--model', `${PROVIDER}/${model}`, '--thinking', 'medium', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-context-files', '--no-lsp', '--no-title', '--no-session', '--no-prewalk', '--config', config, '--system-prompt', instructions]
+      const args = ['--mode', 'rpc', '--model', `${PROVIDER}/${model}`, '--prompt-cache-key', promptCacheKey, '--thinking', 'medium', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-context-files', '--no-lsp', '--no-title', '--no-session', '--no-prewalk', '--config', config, '--system-prompt', instructions]
       return new Promise<ModelTurn>((resolveTurn, reject) => {
         const child = spawn('omp', args, { cwd: dir, env, signal: req.signal, stdio: ['pipe', 'pipe', 'pipe'] })
         const lines = createInterface({ input: child.stdout })
@@ -102,7 +105,7 @@ export function ompSubscriptionModel(model: string, evidenceDir: string): Model 
               sessionId = state.sessionId
               proof = true
               // Keep only non-secret state metadata, never model headers or stored credentials.
-              evidence.push({ type: 'isolation', threadId: sessionId, model: { id: selected.id, provider: selected.provider, api: selected.api, baseUrl: selected.baseUrl }, tools: [], messageCount: 0 })
+              evidence.push({ type: 'isolation', threadId: sessionId, requestedPromptCacheKey: promptCacheKey, model: { id: selected.id, provider: selected.provider, api: selected.api, baseUrl: selected.baseUrl }, tools: [], messageCount: 0 })
               child.stdin.write(payload + '\n')
             } else {
               evidence.push(frame)

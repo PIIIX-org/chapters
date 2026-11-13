@@ -605,6 +605,10 @@ Only the provider's `final_answer` phase can request tools, using a whole JSON
 envelope. A native plain-text/Markdown final report is retained verbatim as
 text, not parsed for embedded calls. Malformed JSON envelopes fail explicitly.
 Commentary remains in harness history and all output counts toward usage.
+One random prompt-cache routing key is shared by the model instance's turns
+(both arms of one run). Native histories still start empty and all actual
+history is supplied explicitly; no warming requests are made. The requested
+key is recorded, but only provider-reported counters establish cache hits.
 The runner checks `/health.version` against `AGENT_TRIAL_SERVER_COMMIT`
 (default `GITHUB_SHA`) and records server and harness source commits separately.
 
