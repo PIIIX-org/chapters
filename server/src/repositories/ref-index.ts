@@ -139,7 +139,7 @@ async function overlayView(base: RepositoryView, diff: string): Promise<Reposito
   for (const patch of parseOverlay(diff)) {
     if (patch.path.startsWith('/') || patch.path.split('/').some((p) => p === '..' || p === '.' || p === '') || patch.path.includes('\0')) throw new OverlayError('overlay paths must be repository-relative')
     const old = files.get(patch.path)
-    if (patch.status === 'added' ? old !== undefined : old === undefined) throw new OverlayError(`overlay base does not match ${patch.path}`)
+    if (patch.status === 'added' ? old !== undefined || base.entries?.has(patch.path) : old === undefined) throw new OverlayError(`overlay base does not match ${patch.path}`)
     const content = old?.content ?? ''
     if (patch.oldBlob) {
       const algorithm = base.commit?.length === 64 ? 'sha256' : 'sha1'
@@ -150,7 +150,7 @@ async function overlayView(base: RepositoryView, diff: string): Promise<Reposito
     bytes += Math.max(Buffer.byteLength(content), Buffer.byteLength(changed))
     if (bytes > OVERLAY_MAX_PARSED) throw new OverlayError('overlay files are over 2 MiB of source to read')
     if (patch.status === 'deleted') {
-      if (changed !== '' && changed !== '\n') throw new OverlayError(`deletion does not remove all of ${patch.path}`)
+      if (changed !== '') throw new OverlayError(`deletion does not remove all of ${patch.path}`)
       files.delete(patch.path)
       entries?.delete(patch.path)
     } else {

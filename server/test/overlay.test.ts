@@ -76,4 +76,12 @@ deleted file mode 100644
     const [shifted] = parseOverlay(diff.replace('+1,2', '+3,2'))
     expect(() => applyHunks('a.txt', 'one\nlast', shifted!.hunks)).toThrow(/position/)
   })
+
+  it('never silently drops unsupported metadata or replaces invalid path/text bytes', () => {
+    expect(() => parseOverlay(MODIFIED + 'diff --git a/mode.ts b/mode.ts\nold mode 100644\nnew mode 100755\n')).toThrow(/no supported text patch/)
+    expect(() => parseOverlay('diff --git a/link b/link\nnew file mode 120000\n')).toThrow(/symlink/)
+    expect(() => parseOverlay(MODIFIED + '\ud800')).toThrow(/UTF-8/)
+    expect(() => parseOverlay('--- "a/\\377.ts"\n+++ "b/\\377.ts"\n@@ -1,1 +1,1 @@\n-a\n+b\n')).toThrow(/UTF-8/)
+    expect(parseOverlay('--- "a/🙂.ts"\n+++ "b/🙂.ts"\n@@ -1,1 +1,1 @@\n-a\n+b\n')[0]!.path).toBe('🙂.ts')
+  })
 })

@@ -234,7 +234,9 @@ async function listTree(dir: string, commit: string, maxBytes = Infinity): Promi
   let out: string
   if (Number.isFinite(maxBytes)) {
     try {
-      out = (await execGit('git', ['--no-replace-objects', 'ls-tree', '-r', '-l', '-z', '--full-tree', commit], { cwd: dir, maxBuffer: maxBytes, timeout: 30_000, encoding: 'utf8' })).stdout
+      const raw = (await execGit('git', ['--no-replace-objects', 'ls-tree', '-r', '-l', '-z', '--full-tree', commit], { cwd: dir, maxBuffer: maxBytes, timeout: 30_000, encoding: null })).stdout
+      if (!isUtf8(raw)) throw new Error('Git ref contains non-UTF-8 paths')
+      out = raw.toString('utf8')
     } catch (err) {
       if (typeof err === 'object' && err !== null && ('code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || 'killed' in err && err.killed)) throw new MirrorReadLimitError('Git tree listing exceeded the ref byte/time budget')
       throw err

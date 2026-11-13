@@ -224,6 +224,10 @@ describe('ref and overlay consumers (#676/#471)', () => {
     for (const ref of ['--help', 'HEAD~1', 'main:src/api.ts', '../outside', '/tmp/source']) expect((await call('read_file', { ref, path: 'src/api.ts' })).error).toBe(true)
     expect((await call('read_file', { ref: second, overlay: OVERLAY.replace(/src\/fresh.ts/g, '../outside.ts'), path: 'src/api.ts' })).error).toBe(true)
     expect((await call('search', { ref: second, query: 'retained', everywhere: true })).error).toBe(true)
+    const binaryAddition = '--- /dev/null\n+++ b/binary.dat\n@@ -0,0 +1,1 @@\n+pretend this existing binary was absent\n'
+    expect((await call('read_file', { ref: second, overlay: binaryAddition, path: 'binary.dat' })).text).toContain('base does not match')
+    const incompleteDeletion = '--- a/deleted.txt\n+++ /dev/null\n@@ -1,1 +1,1 @@\n-delete this line\n+\n'
+    expect((await call('read_file', { ref: second, overlay: incompleteDeletion, path: 'deleted.txt' })).text).toContain('deletion does not remove all')
   })
 
   it('does not persist overlay files/symbols or expose them to another/no-overlay session', async () => {
@@ -327,6 +331,7 @@ describe('ref and overlay consumers (#676/#471)', () => {
     const edited = await repositoryViewAt(record!.ownerId, repoId, { ref: second, overlay })
     const queries = viewQueries(edited)
     expect(await queries.codeSites(repoId, target, ['import'], { limit: 10, offset: 0 })).toEqual([])
+    await expect(queries.codeSites('00000000-0000-4000-8000-000000000000', target, ['import'], { limit: 10, offset: 0 })).rejects.toThrow(/selected repository view/)
     const fresh = { ...target, fileId: edited.files.get('src/fresh.ts')!.id, name: 'src/fresh.ts', symbol: 'src/fresh.ts' }
     expect((await queries.codeSites(repoId, fresh, ['import'], { limit: 10, offset: 0 }))[0]).toMatchObject({ path: 'side.ts', line: 1, confidence: 'resolved' })
     const result = await answer('search', { ref: second, query: 'empty.ts' })

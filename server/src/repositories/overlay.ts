@@ -1,4 +1,5 @@
 /** Unified Git patches, parsed and applied as data only; never checked out or executed. */
+import { isUtf8 } from 'node:buffer'
 
 /** Bytes of diff and files it changes one call takes. */
 export const OVERLAY_MAX_BYTES = 200_000
@@ -49,12 +50,15 @@ function unquote(quoted: string): string {
     } else if (next !== undefined && next in ESCAPES) bytes.push(ESCAPES[next]!)
     else throw new OverlayError(`unreadable quoted path: ${quoted.slice(0, 60)}`)
   }
-  return Buffer.from(bytes).toString('utf8')
+  const encoded = Buffer.from(bytes)
+  if (!isUtf8(encoded)) throw new OverlayError('non-UTF-8 quoted paths are not supported')
+  return encoded.toString('utf8')
 }
 
 /** The text patches of a unified diff. Unsupported changes are refused, never silently left out. */
 export function parseOverlay(diff: string): FilePatch[] {
   if (Buffer.byteLength(diff) > OVERLAY_MAX_BYTES) throw new OverlayError(`the overlay is over ${OVERLAY_MAX_BYTES / 1000} KB`)
+  if (Buffer.from(diff).toString('utf8') !== diff) throw new OverlayError('the overlay must be well-formed UTF-8 text')
   const lines = diff.split('\n')
   if (lines.at(-1) === '') lines.pop()
   const patches: FilePatch[] = []

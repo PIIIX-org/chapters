@@ -8,7 +8,8 @@ import { ORIENT_ENTRIES, type OrientOptions, type OrientOffsets, type OrientFold
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0
 const inner = (s: { name: string; parent?: string }) => s.parent ? `${s.parent}.${s.name}` : s.name
 const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')))
-interface Edge extends CodeSite {
+interface Edge extends Omit<CodeSite, 'line'> {
+  line: number
   name: string
   qualified: string | null
   member: boolean
@@ -16,7 +17,7 @@ interface Edge extends CodeSite {
   target: Definition | null
   source: Definition | null
 }
-const siteOrder = (a: CodeSite, b: CodeSite) => Number(b.confidence === 'resolved') - Number(a.confidence === 'resolved') || compare(a.path, b.path) || a.line - b.line || a.col - b.col || compare(a.kind, b.kind)
+const siteOrder = (a: CodeSite, b: CodeSite) => Number(b.confidence === 'resolved') - Number(a.confidence === 'resolved') || compare(a.path, b.path) || (a.line ?? Number.MAX_SAFE_INTEGER) - (b.line ?? Number.MAX_SAFE_INTEGER) || a.col - b.col || compare(a.kind, b.kind)
 const site = ({ path, line, col, kind, symbol, confidence, context }: Edge): CodeSite => ({ path, line, col, kind, symbol, confidence, context })
 const names = (edge: Edge, target: Target) => edge.target !== null
   ? edge.target.fileId === target.fileId && edge.target.blockIds.some((id) => target.blockIds.includes(id))
@@ -87,8 +88,12 @@ export function viewQueries(view: RepositoryView): CodeQueries & {
   }
   edges.sort(siteOrder)
   const callers = (target: Target, kinds: readonly string[], members: boolean) => edges.filter((e) => !e.external && (members || !(e.confidence === 'textual' && e.member)) && kinds.includes(e.kind) && names(e, target))
+  const requireRepository = (repositoryId: string): void => {
+    if (repositoryId !== view.repositoryId) throw new RefError('INVALID_ARGUMENT', 'code queries must use the selected repository view')
+  }
   const queries: CodeQueries = {
-    async findDefinitions(_repositoryId, ref) {
+    async findDefinitions(repositoryId, ref) {
+      requireRepository(repositoryId)
       const found = definitions.filter((d) => (ref.id !== undefined ? d.id === ref.id || d.blockIds.includes(ref.id) : d.name === ref.name || d.symbol === ref.name) && (ref.path === undefined || d.path === ref.path) && (ref.kind === undefined || d.kind === ref.kind)).slice(0, 1_000)
       const grouped: Definition[] = []
       for (const d of found) {
@@ -98,19 +103,22 @@ export function viewQueries(view: RepositoryView): CodeQueries & {
       }
       return grouped
     },
-    async symbolAt(_repositoryId, path, line, page) {
+    async symbolAt(repositoryId, path, line, page) {
+      requireRepository(repositoryId)
       if (!view.files.has(path)) return null
       const symbol = (byFile.get(path) ?? []).filter((d) => d.line <= line && d.endLine >= line).sort((a, b) => a.endLine - a.line - (b.endLine - b.line) || b.line - a.line)[0] ?? null
       const found = edges.filter((e) => e.path === path && e.line === line).sort((a, b) => a.col - b.col || compare(a.kind, b.kind)).slice(page.offset, page.offset + page.limit)
       return { symbol, sites: found.map((e) => ({ kind: e.kind, confidence: e.confidence, name: e.name, target: e.target ? { path: e.target.path, symbol: e.target.symbol, line: e.target.line } : null })) }
     },
-    async codeSites(_repositoryId, target, kinds, page, members = true) {
+    async codeSites(repositoryId, target, kinds, page, members = true) {
+      requireRepository(repositoryId)
       if (target.wholeFile) return kinds.includes('import')
         ? moduleImports.filter((i) => i.targetFileId === target.fileId).sort(siteOrder).slice(page.offset, page.offset + page.limit).map(({ path, line, col, kind, confidence, symbol, context }) => ({ path, line, col, kind, confidence, symbol, context }))
         : []
       return callers(target, kinds, members).slice(page.offset, page.offset + page.limit).map(site)
     },
-    async impact(_repositoryId, target, depth) {
+    async impact(repositoryId, target, depth) {
+      requireRepository(repositoryId)
       const levels: ImpactLevel[] = []
       const visited = new Set(definitions.filter((d) => d.fileId === target.fileId && d.blockIds.some((b) => target.blockIds.includes(b))).map((d) => d.id))
       let frontier = new Map<string, { definition: Definition; confidence: Edge['confidence'] }>()
@@ -141,7 +149,8 @@ export function viewQueries(view: RepositoryView): CodeQueries & {
       const d = definitions.find((s) => s.id === id)
       return d ? view.files.get(d.path)!.content.split('\n')[d.line - 1]!.trim() : null
     },
-    async repositoryMap(_repositoryId, opts, offsets = {}) {
+    async repositoryMap(repositoryId, opts, offsets = {}) {
+      requireRepository(repositoryId)
       const prefix = opts.folder ? `${opts.folder}/` : ''
       const focus = opts.focus ?? []
       const focused = (path: string) => focus.some((f) => path === f || path.startsWith(`${f.replace(/\/$/, '')}/`))
