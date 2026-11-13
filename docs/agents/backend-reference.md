@@ -3046,9 +3046,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     its same-id mutation case then passed on its own after draining
     pending embedding work before each fixture read. The earlier
     failed runs remain evidence, not a claimed clean all-suite run.
-    The cache dependency at `95e02f8a` has separate reported restore-point
-    and collaboration failures; merge its repaired head and rerun the
-    affected integration gates before accepting these stacked changes.
+    The original cache dependency `95e02f8a` had reported restore-point
+    and collaboration failures. This stack now normally merges its
+    repaired `72961238` head; its owner reports 21 focused checks passed.
+    Fresh affected integration gates and new-harness controls must still
+    cover this combined source before acceptance.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
