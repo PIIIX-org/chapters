@@ -56,12 +56,12 @@ export function browseView(view: RepositoryView, path: string | undefined, page:
 /** Both channels rank only the immutable tree plus this call's overlay. */
 export async function searchView(view: RepositoryView, accountId: string, args: { query: string; kind?: string; limit?: number; symbols?: boolean; route?: SearchRoute }, symbolsOnly: boolean): Promise<Budgeted> {
   const limit = args.limit ?? 20
-  let attempted: SearchRoute = 'conceptual'
+  let attempted: Exclude<SearchRoute, 'conceptual'> | undefined
   if (!symbolsOnly) {
     const answer = await routeRef(view, args.query, args.symbols ?? true, args.route)
-    attempted = answer.attempted
-    if (answer.routed) {
-      const { results, textual, ...head } = answer.routed
+    if (answer && 'fallback' in answer) attempted = answer.route
+    else if (answer) {
+      const { results, textual, ...head } = answer
       const items = results.map((h) => leanHit(h, true))
       return {
         head: { ...viewVersion(view), ...head, status: results.length ? 'ok' : 'no_match', retrieval_mode: 'exact', degraded: false, ...(results.length > limit || (textual?.length ?? 0) > limit ? { partial: true } : {}) },
@@ -84,7 +84,7 @@ export async function searchView(view: RepositoryView, accountId: string, args: 
     }
   })
   const retrieval = /[\p{L}\p{N}]/u.test(args.query) ? 'hybrid' : 'none'
-  const fallback = !symbolsOnly && attempted !== 'conceptual'
+  const fallback = attempted !== undefined
   return { head: { ...viewVersion(view), status: hits.length ? 'ok' : 'no_match', retrieval_mode: fallback && retrieval !== 'none' ? 'fallback' : retrieval, degraded: false, ...(!symbolsOnly ? { route: 'conceptual', ...(fallback ? { attempted_route: attempted, ...(retrieval !== 'none' ? { underlying_retrieval_mode: retrieval } : {}) } : {}) } : {}) }, sections: [ranked({ name: 'results', items, id: (h) => h.id, limit, ladder: { no_context: (h) => ({ ...h, snippet: undefined }), locations: (h) => h.startLine === undefined || h.endLine === undefined ? h.path : location(h.path, h.startLine, h.endLine), group: (h) => h.path } })] }
 }
 

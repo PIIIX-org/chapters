@@ -2800,8 +2800,12 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     at 20,000 files/32 MiB source; an over-cap tree is refused rather than
     answered partially. `refCacheStats`/`refSearchStats` count real work.
     Search keeps keyword+vector channels and existing per-file embedding
-    budgets, reusing same-owner vectors by embed key. Regex uses PostgreSQL
-    with the ordinary statement timeout, never JavaScript regex execution.
+    budgets, reusing same-owner vectors by embed key.
+    Exact routing uses the shared classifier, identifier-intent predicate and
+    routed/fallback outcome contract against only the selected tree and overlay:
+    a bare name missing there stays conceptual even if the current index has
+    it; explicit/backtick/forced misses and actual over-cap lookups report fallback.
+    Regex uses PostgreSQL with the ordinary statement timeout, never JavaScript regex execution.
     Live access/source checks surround work; cursors bind immutable versions,
     the caller and permission epoch. Session memory stores hashes/locations
     only. Ref explanations mark citing-note freshness `unverified`: the

@@ -18,6 +18,7 @@ import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { clearRefCache, REF_LIMITS, refCacheStats, repositoryViewAt } from '../src/repositories/ref-index.js'
 import { viewQueries, refQueryStats } from '../src/repositories/ref-queries.js'
 import { refSearchStats } from '../src/repositories/ref-search.js'
+import { MAX_ROUTED } from '../src/search/router.js'
 import { gitMirrorDir, removeGitMirror, withMirrorLock } from '../src/repositories/git-mirror.js'
 import { parseCacheStats } from '../src/repositories/blob-cache.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
@@ -255,10 +256,56 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
       expect(fallback).toMatchObject({ route: 'conceptual', attempted_route: route, retrieval_mode: 'fallback', underlying_retrieval_mode: 'hybrid' })
     }
     const deleted = await answer('search', { query: 'inserted', ref: second, overlay })
-    expect(deleted).toMatchObject({ route: 'conceptual', attempted_route: 'identifier', retrieval_mode: 'fallback' })
+    expect(deleted).toMatchObject({ route: 'conceptual', retrieval_mode: 'hybrid' })
+    expect(deleted).not.toHaveProperty('attempted_route')
     expect(deleted.results.some((r) => r.symbolName === 'inserted')).toBe(false)
     const privateMiss = await answer('search', { query: 'overlayOnly', ref: second })
     expect(privateMiss.results.some((r) => r.symbolName === 'overlayOnly')).toBe(false)
+  })
+
+  it.each([
+    { query: 'removed' },
+    { query: 'inserted', overlay: OVERLAY },
+    { query: 'overlayOnly' },
+    { query: 'retianed', overlay: OVERLAY },
+  ])('keeps bare $query conceptual using only the selected ref and overlay', async (input) => {
+    const args = { ...input, ref: second }
+    const automatic = await answer('search', args)
+    const conceptual = await answer('search', { ...args, route: 'conceptual' })
+    expect(automatic).toMatchObject({ route: 'conceptual', retrieval_mode: conceptual.retrieval_mode, commit: second })
+    expect(automatic.results).toEqual(conceptual.results)
+    expect(automatic).not.toHaveProperty('attempted_route')
+    expect(automatic).not.toHaveProperty('underlying_retrieval_mode')
+    expect(automatic).not.toHaveProperty('confidence')
+  })
+
+  it.each([
+    { query: 'where is inserted defined?', attempted: 'identifier' },
+    { query: '`inserted`', attempted: 'identifier' },
+    { query: 'inserted', route: 'identifier', attempted: 'identifier' },
+    { query: 'Missing.member', attempted: 'path' },
+  ])('retains $query intent when absent from the selected overlay', async ({ attempted, ...args }) => {
+    const missed = await answer('search', { ...args, ref: second, overlay: OVERLAY })
+    expect(missed).toMatchObject({ route: 'conceptual', attempted_route: attempted, retrieval_mode: 'fallback', underlying_retrieval_mode: 'hybrid', commit: second, overlay: true })
+    expect(missed).not.toHaveProperty('confidence')
+    expect(missed.results.some((r) => r.symbolName === 'inserted')).toBe(false)
+  })
+
+  it.each(['viewDuplicate', 'viewDuplicate.ts'])('reports actual over-cap overlay %s lookup as fallback', async (query) => {
+    const overlay = Array.from({ length: MAX_ROUTED + 1 }, (_, i) => `diff --git a/src/duplicate-${i}/viewDuplicate.ts b/src/duplicate-${i}/viewDuplicate.ts
+--- /dev/null
++++ b/src/duplicate-${i}/viewDuplicate.ts
+@@ -0,0 +1,1 @@
++export function viewDuplicate() { return ${i} }
+`).join('')
+    const args = { query, ref: second, overlay }
+    const capped = await answer('search', args)
+    const conceptual = await answer('search', { ...args, route: 'conceptual' })
+    expect(capped).toMatchObject({ route: 'conceptual', attempted_route: query.endsWith('.ts') ? 'path' : 'identifier', retrieval_mode: 'fallback', underlying_retrieval_mode: conceptual.retrieval_mode, commit: second, overlay: true })
+    expect(capped.results).toEqual(conceptual.results)
+    expect(capped).not.toHaveProperty('confidence')
+    expect(capped).not.toHaveProperty('ambiguous')
+    expect((await answer('search', { query: 'viewDuplicate', ref: second })).attempted_route).toBeUndefined()
   })
 
   it('continues grep by the established scalar position without skipping lines or crossing overlay views', async () => {
