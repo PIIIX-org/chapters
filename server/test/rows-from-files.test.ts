@@ -13,7 +13,7 @@ import { INSTANCE_LOCK_KEY, MaintenanceInProgressError, holdsExclusiveLock } fro
 import { flushProjections } from '../src/notes/projector.js'
 import { rowsFromFiles } from '../src/notes/rows-from-files.js'
 import { withKeyLock } from '../src/notes/key-lock.js'
-import { createNote, getLiveNote, noteFile, noteLock, trashFile, vaultDir } from '../src/notes/store.js'
+import { createNote, getLiveNote, noteFile, noteLock, readAsset, trashFile, vaultDir } from '../src/notes/store.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // ADR-003 Q9 default (S6, #495): the last-resort import that rebuilds note
@@ -185,4 +185,29 @@ describe('rows-from-files', () => {
     await expect(run).rejects.toThrow(/lock was lost/)
     await flushProjections()
   })
+})
+
+it('recovers an orphan legacy vault with --owner, migrating Markdown attachments before importing its notes', async () => {
+  const orphan = randomUUID()
+  const attachment = '---\ntype: docs\n---\nAn attachment that deliberately looks like a note.\n'
+  try {
+    await writeVaultFile(orphan, 'docs/recovered.md', '---\ntype: docs\n---\nRecovered ordinary note.\n')
+    await writeVaultFile(orphan, 'assets/readme.md', attachment)
+    const preview = await rowsFromFiles({ dryRun: true, vaultId: orphan, ownerEmail })
+    expect(preview.vaultsCreated).toEqual([orphan])
+    expect(preview.created).toEqual([{ vaultId: orphan, path: 'docs/recovered' }])
+    const result = await rowsFromFiles({ vaultId: orphan, ownerEmail })
+    expect(result.vaultsCreated).toEqual([orphan])
+    expect(result.failed).toEqual([])
+    expect(result.created).toEqual([{ vaultId: orphan, path: 'docs/recovered' }])
+    expect((await getLiveNote(orphan, 'docs/recovered'))!.body).toBe('Recovered ordinary note.\n')
+    expect(await getLiveNote(orphan, 'assets/readme')).toBeNull()
+    expect((await readAsset(orphan, 'readme.md'))!.buffer.toString()).toBe(attachment)
+    expect(await readFile(join(vaultDir(orphan), '.assets/readme.md'), 'utf8')).toBe(attachment)
+    expect((await rowsFromFiles({ vaultId: orphan, ownerEmail })).created).toEqual([])
+    expect((await readAsset(orphan, 'readme.md'))!.buffer.toString()).toBe(attachment)
+  } finally {
+    await db.execute(sql`DELETE FROM vaults WHERE id = ${orphan}`)
+    await rm(vaultDir(orphan), { recursive: true, force: true })
+  }
 })

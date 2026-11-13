@@ -155,25 +155,28 @@ describe('boot clears the claims a killed process left (§7)', { timeout: 60_000
 })
 
 describe('boot step 9: orphan sweep (§7)', { timeout: 60_000 }, () => {
-  it('moves only *.md files without an owner to .orphans/, outside assets/ and dot-directories', async () => {
+  it('moves only unowned note files, including assets/ notes, while preserving .assets attachments and dot-directories', async () => {
     await createNote(vaultId, { type: 'docs', name: 'owned', body: 'mine' })
+    await createNote(vaultId, { path: 'assets/owned', body: 'a valid owned assets/ note' })
     await flushProjections()
     // Owned by the live note even without a projected_files row (e.g. written by old code).
     await db.execute(sql`DELETE FROM projected_files WHERE vault_id = ${vaultId} AND path = 'docs/owned.md'`)
     await mkdir(file('stray'), { recursive: true })
-    await mkdir(file('assets'), { recursive: true })
+    await mkdir(file('.assets'), { recursive: true })
     await mkdir(file('.conflicts'), { recursive: true })
     await writeFile(file('stray.md'), 'no owner\n')
     await writeFile(file('stray/deep.md'), 'no owner either\n')
     await writeFile(file('stray/notes.txt'), 'not markdown\n')
-    await writeFile(file('assets/readme.md'), 'an attachment\n')
+    await writeFile(file('.assets/readme.md'), 'an attachment\n')
+    await writeFile(file('assets/unowned.md'), 'an unowned modern note\n')
     await writeFile(file('.conflicts/kept.md'), 'a conflict copy\n')
     const moved = (await sweepOrphanFiles()).filter((o) => o.vaultId === vaultId)
-    expect(moved.map((o) => o.path).sort()).toEqual(['stray.md', 'stray/deep.md'])
+    expect(moved.map((o) => o.path).sort()).toEqual(['assets/unowned.md', 'stray.md', 'stray/deep.md'])
     expect(await readFile(file('.orphans/stray.md'), 'utf8')).toBe('no owner\n')
     expect(await readFile(file('.orphans/stray/deep.md'), 'utf8')).toBe('no owner either\n')
+    expect(await readFile(file('.orphans/assets/unowned.md'), 'utf8')).toBe('an unowned modern note\n')
     expect(await exists(file('stray.md'))).toBe(false)
-    for (const kept of ['docs/owned.md', 'docs/index.md', 'stray/notes.txt', 'assets/readme.md', '.conflicts/kept.md']) {
+    for (const kept of ['docs/owned.md', 'docs/index.md', 'assets/owned.md', 'stray/notes.txt', '.assets/readme.md', '.conflicts/kept.md']) {
       expect(await exists(file(kept)), kept).toBe(true)
     }
     // A second sweep finds nothing new and never re-sweeps .orphans/.

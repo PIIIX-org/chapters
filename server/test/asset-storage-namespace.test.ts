@@ -264,3 +264,29 @@ it('the real offline rollback CLI restores unambiguous new/changed attachment by
   expect(await readFile(storedAssetFile(id, 'proof.txt'), 'utf8')).toBe('Changed after upgrade')
   expect((await runAssetStorage('rollback', id))[0]!.conflicts).toEqual([])
 })
+
+it('republishes readiness after a real SIGKILL between complete-journal fsync and marker publication, restoring assets/ note classification', async () => {
+  const id = await vault()
+  await createNote(id, { path: 'assets/design', body: 'A valid note after recovery.\n' })
+  await flushProjections()
+  await legacy(id, { 'image.png': 'Durable attachment at completion' })
+  let killed: unknown
+  try { await sh(process.execPath, ['--import', loader, 'src/scripts/asset-storage.ts', 'migrate', id], { env: { ...process.env, DATABASE_URL: config.databaseUrl, DATA_DIR: config.dataDir, ELARA_FAILPOINTS: 'assets.after-complete-journal' }, timeout: 20_000 }) } catch (err) { killed = err }
+  expect(killed).toMatchObject({ signal: 'SIGKILL' })
+  expect(JSON.parse(await readFile(join(vaultDir(id), '.asset-storage.json'), 'utf8')).state).toBe('complete')
+  await expect(readFile(join(vaultDir(id), '.asset-storage-ready'))).rejects.toMatchObject({ code: 'ENOENT' })
+  expect(await vaultMarkdownFiles(id)).not.toContain('assets/design.md')
+  const [unready] = await runAssetStorage('verify', id)
+  expect(unready).toMatchObject({ state: 'complete', baselineVerified: true, ready: false })
+  let refused: unknown
+  try { await sh(process.execPath, ['--import', loader, 'src/scripts/asset-storage.ts', 'verify', id], { env: { ...process.env, DATABASE_URL: config.databaseUrl, DATA_DIR: config.dataDir, ELARA_FAILPOINTS: '' }, timeout: 20_000 }) } catch (err) { refused = err }
+  expect(refused).toMatchObject({ code: 2 })
+  expect((await runAssetStorage('migrate', id))[0]).toMatchObject({ state: 'complete', baselineVerified: true, ready: true })
+  expect(await vaultMarkdownFiles(id)).toContain('assets/design.md')
+  await flushProjections()
+  expect(await readFile(join(vaultDir(id), 'assets/design.md'), 'utf8')).toContain('A valid note after recovery.')
+  await writeFile(join(vaultDir(id), 'assets/stray.md'), 'Unowned modern note bytes.\n')
+  expect((await sweepOrphanFiles()).filter(item => item.vaultId === id)).toContainEqual(expect.objectContaining({ path: 'assets/stray.md' }))
+  expect(await readFile(join(vaultDir(id), '.orphans/assets/stray.md'), 'utf8')).toBe('Unowned modern note bytes.\n')
+  expect((await readAsset(id, 'image.png'))!.buffer.toString()).toBe('Durable attachment at completion')
+}, 30_000)

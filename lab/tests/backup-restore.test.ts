@@ -591,11 +591,15 @@ const test: LabTest = {
       })
       diffTable.push({ table: 'note_links', source: srcNotes.reduce((n, r) => n + r.links.length, 0), restored: restoredNotes.reduce((n, r) => n + r.links.length, 0), missingOrChanged: 0, extra: 0 })
       const sumAssets = async (root: string) =>
-        (await appExec(ctx, `cd ${root} 2>/dev/null && find . -path '*/assets/*' -type f -exec sha256sum {} + 2>/dev/null | sort -k2; true`)).stdout
+        (await appExec(ctx, `cd ${root} 2>/dev/null && find . -path '*/.assets/*' -type f -exec sha256sum {} + 2>/dev/null | sort -k2; true`)).stdout
           .split('\n')
           .filter(Boolean)
       const srcAssetFiles = await sumAssets('/data/elara/vaults')
       const restoredAssetFiles = await sumAssets(`${RESTORE_DIR}/vaults`)
+      const seededAssetsPresent = [
+        `${sha256(pngBytes)}  ./${V}/.assets/${pngName}`,
+        `${sha256(pdfBytes)}  ./${V}/.assets/${pdfName}`,
+      ].every((expected) => srcAssetFiles.includes(expected))
       diffTable.push({
         table: 'attachments (files on disk)',
         source: srcAssetFiles.length,
@@ -636,7 +640,7 @@ const test: LabTest = {
       checks.push({ name: 'restored live notes: frontmatter + body identical', expected: `${row('notes (live)').source}`, actual: `${row('notes (live)').restored} restored, ${row('notes (live)').missingOrChanged} missing/changed`, ok: row('notes (live)').missingOrChanged === 0, severity: 'critical', detail: noteDiff })
       checks.push({ name: 'restored trash', expected: `${row('notes (trash)').source} trashed notes`, actual: `${row('notes (trash)').restored}`, ok: same('notes (trash)'), severity: 'medium' })
       checks.push({ name: 'restored revision history', expected: `${row('note_revisions').source} revisions`, actual: `${row('note_revisions').restored}`, ok: row('note_revisions').missingOrChanged === 0, severity: 'high' })
-      checks.push({ name: 'restored attachments', expected: `${srcAssetFiles.length} files`, actual: `${restoredAssetFiles.length} files`, ok: same('attachments (files on disk)'), severity: 'high' })
+      checks.push({ name: 'restored attachments', expected: `${srcAssetFiles.length} files, including both seeded PNG/PDF checksums`, actual: `${restoredAssetFiles.length} files; seeded source checksums present: ${seededAssetsPresent}`, ok: seededAssetsPresent && same('attachments (files on disk)'), severity: 'high' })
       checks.push({ name: 'restored repositories (repo: links, pinned tokens)', expected: `${row('repositories').source}`, actual: `${row('repositories').restored}`, ok: same('repositories'), severity: 'medium' })
       checks.push({ name: 'restored MFA state usable (secret + backup codes)', expected: 'mfa users keep a TOTP secret', actual: JSON.stringify({ src: row('mfa_backup_codes'), restored: restoredTables.mfa_backup_codes, dumpTotp: archiveSummary.mfaUserHasTotpInDump ? 'present' : 'missing (the backup strips totpSecret)' }), ok: archiveSummary.mfaUserHasTotpInDump && same('mfa_backup_codes'), severity: 'high' })
       // Every table's row count in the restored database against backup.json (#493). The restore

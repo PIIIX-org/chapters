@@ -143,6 +143,10 @@ export async function rowsFromFiles(options: { dryRun?: boolean; vaultId?: strin
         report.vaultsCreated.push(vaultId)
         if (!dryRun) {
           await db.execute(sql`INSERT INTO vaults (id, name, owner_id) VALUES (${vaultId}, ${`Restored ${vaultId.slice(0, 8)}`}, ${ownerId})`)
+          // This vault did not exist when the initial all-vault migration ran.
+          // Migrate its legacy attachments under our still-held exclusive fence
+          // before the scanner can mistake them for notes or createNote refuses.
+          await runAssetStorage('migrate', vaultId)
         }
       }
       for (const rel of await vaultMarkdownFiles(vaultId)) {

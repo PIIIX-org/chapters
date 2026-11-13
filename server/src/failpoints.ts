@@ -33,6 +33,7 @@ export const FAILPOINTS = [
   'assets.after-plan',
   'assets.after-copy',
   'assets.after-unlink',
+  'assets.after-complete-journal',
   'assets.rollback-after-copy',
 ] as const
 

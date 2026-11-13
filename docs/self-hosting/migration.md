@@ -26,11 +26,17 @@ Production execution is a separate owner-approved deployment step. No production
 5. If interrupted, keep writers stopped and rerun `migrate`: its durable plan and verified destination bytes allow resumption, including a crash after source removal. A differing source/destination is an explicit conflict: preserve both, inspect the reported paths against the fresh backup and move the unwanted version to an operator-owned recovery location before retrying. Do not overwrite it or delete the audit to manufacture success. Transient copies live outside the attachment namespace in `.asset-migration-work/` and are reclaimed on resumption.
 6. Start only the fixed image after verification. Keep the fresh backup and audit until the release is accepted. A historical attachment already overwritten by old code cannot be reconstructed automatically; retain all existing `.conflicts` and backup bytes for owner review.
 
+A completed audit without `.asset-storage-ready` is not an active namespace: `verify` reports `ready: false` and exits 2. Rerunning `migrate` validates the completed journal and republishes readiness durably before returning; it does not recopy or overwrite current attachment versions. This also covers interruption between complete-journal fsync and marker publication.
+
 ### Vault archives and full-instance backups
 
 Vault ZIP **format 2** puts attachments in `.assets/<name>` while notes remain `<path>.md`, so `assets/design.md` and `.assets/design.md` coexist. Legacy unversioned/v1 archives still read `assets/` as their attachment namespace. Duplicate/unsafe ZIP paths and legacy files claimed simultaneously as notes and attachments are refused **before a vault is created**, not resolved by overwriting. Old ambiguous exports may already have lost a version: keep their bytes and the original backup rather than guessing.
 
 Full-instance backups already separate note and attachment entries; their logical names and old-format readers are unchanged. Restore writes attachment bytes through the new physical-path helper, initializes the namespace before projecting restored rows, and leaves API links unchanged. A raw data-volume backup additionally retains the original migration audit and rollback artifacts.
+
+Actual restore takes the exclusive instance fence and prepares each known-disjoint namespace **before publishing any note file or committing restore rows/events**. Existing-volume legacy attachments use the same verified migration; the restore then replans files so differing kept attachments are retained rather than overwritten by archive bytes. A failed transaction discards only freshly prepared, still-empty namespaces whose vault rows did not commit; existing/migrated bytes and committed namespaces are never treated as scratch. Replaying a completed archive does not recreate a subsequently purged vault. `--dry-run` does not prepare namespaces.
+
+File recovery with `rows-from-files --owner` also migrates a missing vault's legacy attachment directory immediately after recreating its row, under the command's existing exclusive fence and before scanning/importing notes. Markdown attachments remain attachments, not guessed note content.
 
 ### No-clobber rollback
 

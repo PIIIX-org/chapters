@@ -33,6 +33,7 @@ export interface AssetStorageReport {
   vaultId: string
   state: Journal['state']
   before: Summary
+  ready: boolean
   migrated: Summary | null
   current: Summary
   baselineVerified: boolean
@@ -111,8 +112,10 @@ async function save(value: Journal): Promise<void> {
   await realDirectory(assetDirectory(value.vaultId), true)
   await atomicWrite(join(root(value.vaultId), JOURNAL), JSON.stringify(value, null, 2) + '\n', { mode: 0o600, durable: true })
   const ready = join(root(value.vaultId), '.asset-storage-ready')
-  if (value.state === 'complete') await atomicWrite(ready, '2\n', { mode: 0o600, durable: true })
-  else { await rm(ready, { force: true }); await syncDirectory(root(value.vaultId)) }
+  if (value.state === 'complete') {
+    failpoint('assets.after-complete-journal')
+    await atomicWrite(ready, '2\n', { mode: 0o600, durable: true })
+  } else { await rm(ready, { force: true }); await syncDirectory(root(value.vaultId)) }
 }
 
 function requireExclusive(): void {
@@ -188,7 +191,7 @@ async function report(value: Journal, conflicts: string[] = []): Promise<AssetSt
   const changed = value.entries.filter(e => byName.has(e.name) && !same(byName.get(e.name)!, e)).map(e => e.name)
   const removed = value.entries.filter(e => !byName.has(e.name)).map(e => e.name)
   const added = current.filter(e => !original.has(e.name)).map(e => e.name)
-  return { vaultId: value.vaultId, state: value.state, before: value.before, migrated: value.after, current: summarize(current), baselineVerified: changed.length + removed.length + added.length === 0, changed, added, removed, conflicts }
+  return { vaultId: value.vaultId, state: value.state, before: value.before, ready: await isAssetStorageReady(value.vaultId), migrated: value.after, current: summarize(current), baselineVerified: changed.length + removed.length + added.length === 0, changed, added, removed, conflicts }
 }
 
 async function assertLegacyInventory(dir: string, planned: ReadonlySet<string>): Promise<void> {
@@ -198,11 +201,14 @@ async function assertLegacyInventory(dir: string, planned: ReadonlySet<string>):
   }
 }
 
-async function migrate(id: string): Promise<AssetStorageReport> {
+async function migrate(id: string, restoredNotePaths: readonly string[] = []): Promise<AssetStorageReport> {
   await cleanupWork(id)
   let value = await journal(id)
   if (value?.state === 'rolled-back') throw new Error(`vault ${id} was rolled back; preserve both trees and resolve/rehearse a fresh upgrade before restarting`)
-  if (value?.state === 'complete') return report(value)
+  if (value?.state === 'complete') {
+    if (!(await isAssetStorageReady(id))) { requireExclusive(); await save(value) }
+    return report(value)
+  }
   const legacy = join(root(id), 'assets')
   if (!value) {
     await realDirectory(root(id), true)
@@ -211,7 +217,7 @@ async function migrate(id: string): Promise<AssetStorageReport> {
     await syncDirectory(root(id))
     const owned = await db.execute(sql`SELECT path FROM projected_files WHERE vault_id = ${id}
       UNION SELECT path || '.md' AS path FROM notes WHERE vault_id = ${id} AND deleted_at IS NULL`)
-    const paths = new Set(owned.map(row => String(row.path)))
+    const paths = new Set([...owned.map(row => String(row.path)), ...restoredNotePaths])
     const entries = inventory.map(e => ({ ...e, projected: paths.has(`assets/${e.name}`) }))
     value = { version: 2, vaultId: id, state: 'pending', entries, before: summarize(entries), after: null }
     await save(value) // Durable plan precedes every mutation; no recovery guesses from .conflicts.
@@ -306,4 +312,29 @@ export async function runAssetStorage(mode: 'migrate' | 'verify' | 'rollback', v
     }
     return reports
   } finally { await lock?.release() }
+}
+
+/** A validated backup has disjoint logical note/asset entries. Prepare BEFORE
+ * publishing any note file, preserving existing-volume legacy bytes by the same
+ * verified migration. Caller holds the exclusive restore fence; no vault row is needed yet. */
+export async function prepareRestoredAssetStorage(id: string, notePaths: readonly string[]): Promise<boolean> {
+  requireExclusive()
+  const existed = await journal(id)
+  const result = await migrate(id, notePaths)
+  return !existed && result.before.files === 0 && result.current.files === 0
+}
+
+/** Undo only a newly prepared EMPTY namespace after the restore transaction failed.
+ * Never remove pre-existing audit files, migrated legacy bytes, or later/new data. */
+export async function discardEmptyRestoredAssetStorage(id: string): Promise<void> {
+  requireExclusive()
+  // The SQL commit can precede a failed derived projection. Its namespace is
+  // already durable state, not scratch to undo when that later stage fails.
+  if ((await db.select({ id: vaults.id }).from(vaults).where(eq(vaults.id, id)).limit(1)).length) return
+  const value = await journal(id)
+  if (!value || value.state !== 'complete' || value.entries.length || (await files(assetDirectory(id))).length) return
+  await rm(join(root(id), '.asset-storage-ready'), { force: true })
+  await rm(join(root(id), JOURNAL), { force: true })
+  await rmdir(assetDirectory(id))
+  await syncDirectory(root(id))
 }

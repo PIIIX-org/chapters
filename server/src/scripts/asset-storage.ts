@@ -10,7 +10,7 @@ try {
   }
   const reports = await runAssetStorage(mode as 'migrate' | 'verify' | 'rollback', vaultId)
   console.log(JSON.stringify(reports, null, 2))
-  if (reports.some(r => r.conflicts.length > 0 || (mode === 'verify' && (r.state !== 'complete' || !r.baselineVerified)))) {
+  if (reports.some(r => r.conflicts.length > 0 || (mode === 'verify' && (r.state !== 'complete' || !r.ready || !r.baselineVerified)))) {
     console.error('Review the reported differing/preserved bytes. Do not start the old image when rollback has conflicts. No source or hidden attachment was overwritten.')
     exitCode = 2
   }
