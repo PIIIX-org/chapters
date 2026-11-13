@@ -73,7 +73,7 @@ const ROW = z.looseObject({ path: z.string().optional(), name: z.string().option
 const BODY = z.looseObject({
   results: z.array(ROW).default([]), files: z.array(ROW).default([]), hits: z.array(ROW).optional(), depth1: z.array(ROW).default([]), textual: z.array(ROW).optional(),
   content: z.string().optional(), diff: z.string().optional(), targets: z.array(z.looseObject({ symbol: z.string().optional(), text: z.string().optional(), lines: z.tuple([z.number(), z.number()]).optional() })).optional(),
-  truncated: z.union([z.literal(false), z.looseObject({ cursor: z.string().optional() })]).optional(),
+  truncated: z.union([z.literal(false), z.looseObject({ cursor: z.string().nullable().optional() })]).optional(),
 })
 
 async function call(name: string, args: Record<string, unknown>, client = owner) {
@@ -305,6 +305,9 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     expect(capped.results).toEqual(conceptual.results)
     expect(capped).not.toHaveProperty('confidence')
     expect(capped).not.toHaveProperty('ambiguous')
+    expect(capped.results).toHaveLength(20)
+    expect(capped.truncated).toMatchObject({ cursor: null })
+    expect(conceptual.truncated).toMatchObject({ cursor: null })
     expect((await answer('search', { query: 'viewDuplicate', ref: second })).attempted_route).toBeUndefined()
   })
 
