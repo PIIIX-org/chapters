@@ -4,7 +4,7 @@
 // within it, and ends its answer with `truncated`: false, or what it showed,
 // the total from the page start (">n" when the fetch of limit+1 found more),
 // what it dropped, and a cursor that continues with the same arguments only.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { and, eq } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -17,6 +17,8 @@ import { createNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import * as graph from '../src/graph/assemble.js'
+import * as cache from '../src/cache/key.js'
 import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
@@ -503,7 +505,13 @@ describe('stateless result handles: literal grep before paging (#423)', () => {
       await updateNote(graphVaultId, 'c0/link', { body: `${'apple '.repeat(40)}[[c1/link]] changed text ${grep ?? 'ordinary'}` })
       const after = await db.select({ id: notes.id }).from(notes).where(and(eq(notes.vaultId, graphVaultId), eq(notes.path, 'c0/link')))
       expect(after).toEqual(before)
-      await refused('graph', { ...args, cursor: cursorOf(first) }, /CURSOR_STALE/)
+      const compute = vi.spyOn(graph, 'buildGraph')
+      try {
+        await refused('graph', { ...args, cursor: cursorOf(first) }, /CURSOR_STALE/)
+        expect(compute).not.toHaveBeenCalled()
+      } finally {
+        compute.mockRestore()
+      }
     }
   })
 
@@ -515,6 +523,72 @@ describe('stateless result handles: literal grep before paging (#423)', () => {
     expect(json.filter).toMatchObject({ within: 'computed', sections: { results: { scanned: 6, matched: 0, more: true } } })
     expect(json.truncated).toMatchObject({ cursor: null, narrow: expect.arrayContaining([expect.stringContaining('computed candidates only')]) })
     await refused('find_symbols', { repositoryId: repoId, query: 'alphaHandler', grep: '' }, /INVALID_ARGUMENT/)
+  })
+
+  it('keeps ordinary raced first pages successful without a snapshot, but rejects explicit filtered races', async () => {
+    const original = graph.buildGraph
+    for (const grep of [undefined, 'link']) {
+      await flushEmbeddings()
+      const compute = vi.spyOn(graph, 'buildGraph').mockImplementationOnce(async (...args) => {
+        const answer = await original(...args)
+        await updateNote(graphVaultId, 'c0/link', { body: `${'apple '.repeat(40)}[[c1/link]] raced ${grep ?? 'ordinary'}` })
+        return answer
+      })
+      try {
+        const args = { vaultId: graphVaultId, aggregate: 'none', ...(grep ? { grep } : {}), budget_tokens: LIST_PAGE }
+        if (grep) {
+          await refused('graph', args, /"code":"BUSY"/)
+        } else {
+          const raced = await page('graph', args)
+          const cursor = cursorOf(raced)
+          expect(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))).not.toHaveProperty('h')
+          compute.mockClear()
+          await refused('graph', { ...args, cursor }, /CURSOR_STALE/)
+          expect(compute).not.toHaveBeenCalled()
+        }
+      } finally {
+        compute.mockRestore()
+      }
+    }
+  })
+
+  it('rejects a missing snapshot on a legacy continuation before computing results', async () => {
+    await flushEmbeddings()
+    const args = { vaultId: graphVaultId, aggregate: 'none', budget_tokens: LIST_PAGE }
+    const first = await page('graph', args)
+    const legacy: unknown = JSON.parse(Buffer.from(cursorOf(first), 'base64url').toString('utf8'))
+    if (legacy === null || typeof legacy !== 'object') throw new Error('expected an object cursor')
+    Reflect.deleteProperty(legacy, 'h')
+    const cursor = Buffer.from(JSON.stringify(legacy)).toString('base64url')
+    // Simulate a resource disappearing after its live access check, before
+    // the snapshot query, without substituting any MCP result.
+    const epochs = vi.spyOn(cache, 'readEpochs').mockResolvedValueOnce({ permission: '0', vaults: {}, repositories: {} })
+    const compute = vi.spyOn(graph, 'buildGraph')
+    try {
+      await refused('graph', { ...args, cursor }, /CURSOR_STALE/)
+      expect(compute).not.toHaveBeenCalled()
+    } finally {
+      epochs.mockRestore()
+      compute.mockRestore()
+    }
+  })
+
+  it('invalidates ordinary and filtered cursors after a live permission change before computing results', async () => {
+    const member = await createActiveUser()
+    for (const grep of [undefined, 'link']) {
+      await flushEmbeddings()
+      const args = { vaultId: graphVaultId, aggregate: 'none', ...(grep ? { grep } : {}), budget_tokens: LIST_PAGE }
+      const first = await page('graph', args)
+      const share = await call('share_vault', { vaultId: graphVaultId, granteeType: 'user', granteeId: member.id, permission: grep ? 'edit' : 'read' })
+      expect(share.isError, share.text).toBe(false)
+      const compute = vi.spyOn(graph, 'buildGraph')
+      try {
+        await refused('graph', { ...args, cursor: cursorOf(first) }, /CURSOR_STALE/)
+        expect(compute).not.toHaveBeenCalled()
+      } finally {
+        compute.mockRestore()
+      }
+    }
   })
 })
 
