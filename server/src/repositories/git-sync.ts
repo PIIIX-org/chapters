@@ -17,7 +17,7 @@ import {
 import { authenticatedUrl, redactGitSecrets, splitGitUrlCredential } from './git-remote.js'
 import { isSafeGitUrl } from './permissions.js'
 import { listRepositoryFiles, syncRepositoryFiles } from './store.js'
-import { recordJob } from '../monitoring/metrics.js'
+import { recordCacheLookup, recordJob } from '../monitoring/metrics.js'
 
 export type RepositorySyncStatus = (typeof repositories.$inferSelect)['syncStatus']
 
@@ -90,6 +90,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       // A row with no skip report was last synced before #465 indexed every
       // tracked file: sync once more so a committed build/ shows up.
       if (remote && repo.lastSyncedCommit && remote.commit === repo.lastSyncedCommit && repo.skippedFiles) {
+        recordCacheLookup('git_mirror', true)
         await db
           .update(repositories)
           .set({
@@ -109,6 +110,7 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       )
     }
 
+    recordCacheLookup('git_mirror', false)
     const synced = await withMirrorLock(repositoryId, async () => {
       // Read again under the lock: an overlapping sync may have indexed a
       // newer commit (the diff base), or a delete removed the row (its

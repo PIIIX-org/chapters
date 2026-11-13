@@ -4,6 +4,7 @@ import { vaults } from '../src/db/schema.js'
 import { embedder, normalizeQueryText, QueryEmbeddingCache, type Embedder } from '../src/search/embeddings.js'
 import { searchNotes } from '../src/search/search.js'
 import { createActiveUser } from './helpers.js'
+import { metricsSnapshot } from '../src/monitoring/metrics.js'
 
 // #684: a repeated search query must not run the embedder again. The key is
 // the embedder id (model + embed-text version), the asking account and the
@@ -30,12 +31,15 @@ describe('query-embedding cache (#684)', () => {
   it('the second identical query, after normalisation, makes zero embedder calls', async () => {
     const inner = countingEmbedder()
     const cache = new QueryEmbeddingCache(inner, () => 'model-a+text1', 10)
+    const before = metricsSnapshot().caches.query_embedding!
 
     const first = await cache.embed('acct-a', '  where is   the\tsync scheduler ')
     const second = await cache.embed('acct-a', 'where is the sync scheduler')
 
     expect(inner.calls).toEqual([['where is the sync scheduler']])
     expect(second).toEqual(first)
+    const after = metricsSnapshot().caches.query_embedding!
+    expect({ hit: after.hit - before.hit, miss: after.miss - before.miss }).toEqual({ hit: 1, miss: 1 })
   })
 
   it('concurrent identical queries share one embed', async () => {
