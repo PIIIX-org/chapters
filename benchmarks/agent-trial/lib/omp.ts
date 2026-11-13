@@ -36,18 +36,25 @@ export function parseOmpAnswer(message: Pick<NativeMessage, 'content'>, req: Pic
     })
     const final = parts.filter((c) => c.phase === 'final_answer')
     if (final.length !== 1) throw new Error('Expected one native final_answer phase')
-    const answer = JSON.parse(final[0]!.text) as { text?: unknown; tool_calls?: unknown }
-    if (typeof answer.text !== 'string' || !Array.isArray(answer.tool_calls)) throw new Error('Expected text and tool_calls')
-    const toolCalls: ToolCall[] = answer.tool_calls.map((call: { name?: unknown; arguments?: unknown }, index) => {
-      if (typeof call.name !== 'string' || !req.tools.some((t) => t.name === call.name)) throw new Error('Unknown tool')
-      const value: unknown = call.arguments
-      if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Tool arguments must be an object')
-      return { id: `${id}:${index}`, name: call.name, args: value as Record<string, unknown> }
-    })
-    return { text: [...parts.filter((c) => c.phase === 'commentary').map((c) => c.text), answer.text].filter(Boolean).join('\n'), toolCalls }
+    let text = final[0]!.text
+    let toolCalls: ToolCall[] = []
+    // Native reports are text; only a whole JSON envelope can request tools.
+    // Never extract executable JSON from prose or a Markdown code fence.
+    if (text.trimStart().startsWith('{')) {
+      const answer = JSON.parse(text) as { text?: unknown; tool_calls?: unknown }
+      if (typeof answer.text !== 'string' || !Array.isArray(answer.tool_calls)) throw new Error('Expected text and tool_calls')
+      toolCalls = answer.tool_calls.map((call: { name?: unknown; arguments?: unknown }, index) => {
+        if (typeof call.name !== 'string' || !req.tools.some((t) => t.name === call.name)) throw new Error('Unknown tool')
+        const value: unknown = call.arguments
+        if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Tool arguments must be an object')
+        return { id: `${id}:${index}`, name: call.name, args: value as Record<string, unknown> }
+      })
+      text = answer.text
+    }
+    return { text: [...parts.filter((c) => c.phase === 'commentary').map((c) => c.text), text].filter(Boolean).join('\n'), toolCalls }
   } catch (err) {
     // Preserve actual provider accounting even when the model violates the response protocol.
-    return { text: '', toolCalls: [], error: `Invalid native JSON answer: ${err instanceof Error ? err.message : String(err)}; raw answer retained in events` }
+    return { text: '', toolCalls: [], error: `Invalid native answer protocol: ${err instanceof Error ? err.message : String(err)}; raw answer retained in events` }
   }
 }
 
@@ -64,7 +71,7 @@ export function ompSubscriptionModel(model: string, evidenceDir: string): Model 
       const dir = mkdtempSync(join(root, 'turn-'))
       const config = join(dir, 'isolation.json')
       writeFileSync(config, JSON.stringify({ ...ISOLATION, enabledModels: [`${PROVIDER}/${model}`] }))
-      const instructions = 'You are the model in a controlled benchmark. Return exactly one JSON object {"text":string,"tool_calls":[{"name":string,"arguments":object}]}, without markdown. The external harness executes these tool calls and supplies genuine results in the next request. Full history is supplied explicitly on every request. For a final answer use tool_calls:[]. Use no native tools, delegation, external knowledge or outside context. Follow the supplied system rules. The requested output budget is recorded and enforced after the provider reports usage; an overrun ends the episode without retry.'
+      const instructions = 'You are the model in a controlled benchmark. To request tools, return exactly one whole JSON object {"text":string,"tool_calls":[{"name":string,"arguments":object}]}, without a code fence. The external harness executes these tool calls and supplies genuine results in the next request. Full history is supplied explicitly on every request. For a final answer return your actual report as plain text/Markdown, or use the JSON object with tool_calls:[]. JSON embedded in prose is never executed. Use no native tools, delegation, external knowledge or outside context. Follow the supplied system rules. The requested output budget is recorded and enforced after the provider reports usage; an overrun ends the episode without retry.'
       const payload = JSON.stringify({ id: 'turn', type: 'prompt', message: JSON.stringify({ system: req.system, tools: req.tools, messages: req.messages, toolChoice: req.toolChoice, maxOutputTokens: req.maxOutputTokens }) })
       const args = ['--mode', 'rpc', '--model', `${PROVIDER}/${model}`, '--thinking', 'medium', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-context-files', '--no-lsp', '--no-title', '--no-session', '--no-prewalk', '--config', config, '--system-prompt', instructions]
       return new Promise<ModelTurn>((resolveTurn, reject) => {
@@ -95,7 +102,7 @@ export function ompSubscriptionModel(model: string, evidenceDir: string): Model 
               sessionId = state.sessionId
               proof = true
               // Keep only non-secret state metadata, never model headers or stored credentials.
-              evidence.push({ type: 'isolation', model: { id: selected.id, provider: selected.provider, api: selected.api, baseUrl: selected.baseUrl }, tools: [], messageCount: 0 })
+              evidence.push({ type: 'isolation', threadId: sessionId, model: { id: selected.id, provider: selected.provider, api: selected.api, baseUrl: selected.baseUrl }, tools: [], messageCount: 0 })
               child.stdin.write(payload + '\n')
             } else {
               evidence.push(frame)

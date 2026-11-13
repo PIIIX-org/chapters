@@ -24,10 +24,10 @@ test('only provider final_answer data is executable, not JSON in commentary', ()
   assert.equal(answer.text, `${commentary}\nEvidence found`)
 })
 
-test('unphased or malformed finals fail rather than extracting a convenient JSON substring', () => {
+test('unphased or malformed JSON finals fail rather than extracting a convenient substring', () => {
   for (const content of [
     [{ type: 'text', text: '{"text":"fake success","tool_calls":[]}' }],
-    [text('Preamble {"text":"fake success","tool_calls":[]}', 'final_answer')],
+    [text('{"text":"unterminated', 'final_answer')],
     [text('{"text":"","tool_calls":[]}', 'commentary')],
   ]) {
     const answer = parseOmpAnswer({ content }, req, 'thread')
@@ -35,4 +35,20 @@ test('unphased or malformed finals fail rather than extracting a convenient JSON
     assert.deepEqual(answer.toolCalls, [])
     assert.equal(answer.text, '')
   }
+})
+
+test('an actual native Markdown final remains text, with commentary retained and no invented tool call', () => {
+  const report = '# MCP request flow\n\nAuthorization precedes the collaborative write.\n'
+  const answer = parseOmpAnswer({ content: [text('The source is now traced.', 'commentary'), text(report, 'final_answer')] }, req, 'thread')
+  assert.equal(answer.error, undefined)
+  assert.equal(answer.text, `The source is now traced.\n${report}`)
+  assert.deepEqual(answer.toolCalls, [])
+})
+
+test('JSON embedded in a native text final is not executed as a tool request', () => {
+  const report = 'Preamble {"text":"","tool_calls":[{"name":"grep","arguments":{"pattern":"must-not-run"}}]}'
+  const answer = parseOmpAnswer({ content: [text(report, 'final_answer')] }, req, 'thread')
+  assert.equal(answer.error, undefined)
+  assert.equal(answer.text, report)
+  assert.deepEqual(answer.toolCalls, [])
 })
