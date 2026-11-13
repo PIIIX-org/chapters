@@ -3,12 +3,12 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { HOLDOUT, combine, compare, evaluate, missingReport, movement, overrideReason, overview, render, toBaseline, TOLERANCE } from './bench-gate.mjs'
+import { HOLDOUT, combine, compare, evaluate, missingReport, movement, overrideReason, render, toBaseline, TOLERANCE } from './bench-gate.mjs'
 
 const GATE = fileURLToPath(new URL('./bench-gate.mjs', import.meta.url))
 
@@ -53,7 +53,11 @@ function instance(elara = {}, { fingerprint = 'fp1', suiteFingerprint = 'sf1', o
           index: { outcome, files: 100, symbols: 50, ms: 60_000 },
           aggregate: { elara: agg(elara), grep: agg({ hit5: 0.8, tokensToGold: 9_000 }) },
           paired: { questions: 10, elara: 3_000, grep: 1_000 },
-          perQuestion: [{ id: 'Q1', elara: { rank, tokensToGold: 500 }, grep: { rank: 2, tokensToGold: 300 } }],
+          perQuestion: Array.from({ length: 20 }, (_, i) => ({
+            id: `Q${i + 1}`,
+            elara: { rank, tokensToGold: i < 12 ? 500 : null },
+            grep: { rank: 2, tokensToGold: 300 },
+          })),
         },
       ]),
     ),
@@ -230,29 +234,17 @@ describe('evaluate', () => {
     assert.deepEqual(evaluate({ results: run(), baseline: both }).failures, [])
   })
 
-  it('--require-golds: a suite that reaches fewer golds than the reference fails, with no tolerance', () => {
-    const base = baselineOf(run({}, { suites: ['s', 't'] }))
-    const lost = run({ goldReached: 11 }, { suites: ['s', 't'] })
-    // Without the flag one gold is inside the hit@5 tolerance and nothing else moved: passes.
-    assert.deepEqual(evaluate({ results: lost, baseline: base, baseBaseline: base, pr: pr() }).failures, [])
-    const strict = evaluate({ results: lost, baseline: base, baseBaseline: base, pr: pr(), requireGolds: true })
-    assert.equal(strict.ok, false)
-    assert.match(failures(strict), /^s: golds lost, Elara goldReached 12 -> 11 of 20 \(base baseline/m)
-    assert.match(failures(strict), /^t: golds lost, Elara goldReached 12 -> 11 of 20/m)
-    assert.equal(strict.suites[0].verdicts.goldReached, 'regression')
-    // Equal or more golds pass; the flag is reported in the footer.
-    const same = evaluate({ results: run({}, { suites: ['s', 't'] }), baseline: base, baseBaseline: base, pr: pr(), requireGolds: true })
-    assert.deepEqual(same.failures, [])
-    assert.equal(same.suites[1].verdicts.goldReached, 'ok')
-    assert.match(render(same, run({}, { suites: ['s', 't'] })), /Golds: every suite must reach at least the reference/)
-    const more = run({ goldReached: 13 })
-    assert.deepEqual(evaluate({ results: more, baseline: baselineOf(more), baseBaseline: baselineOf(run()), pr: pr(), requireGolds: true }).failures, [])
-  })
-
-  it('--require-golds: a suite whose golds are missing in the run fails', () => {
+  it('rejects a gold count loss without --require-golds, including an unidentified loss', () => {
     const base = baselineOf(run())
+    const lost = run({ goldReached: 11 })
+    const report = evaluate({ results: lost, baseline: base, baseBaseline: base, requireGolds: false })
+    assert.equal(report.ok, false)
+    assert.match(failures(report), /cannot identify every lost question/)
+    assert.equal(report.suites[0].verdicts.goldReached, 'regression')
     const none = run({ goldReached: null })
-    assert.match(failures(evaluate({ results: none, baseline: base, requireGolds: true })), /s: golds lost, Elara goldReached 12 -> -/)
+    assert.equal(evaluate({ results: none, baseline: base }).ok, false)
+    const more = run({ goldReached: 13 })
+    assert.equal(evaluate({ results: more, baseline: baselineOf(more), baseBaseline: base }).ok, true)
   })
 })
 
@@ -289,23 +281,6 @@ describe('render and compare', () => {
     assert.match(md, /Q1: rank 1 -> 3/)
   })
 
-  it('prints one overview row per suite: tokens-to-gold, golds, hit@5 and MRR, reference -> run', () => {
-    const base = baselineOf(run({}, { suites: ['s', 't'] }))
-    const r = run({ tokensToGold: 30_000, goldReached: 11, mrr: 0.45 }, { suites: ['s', 't'] })
-    const report = evaluate({ results: r, baseline: base, baseBaseline: base, pr: pr(), requireGolds: true })
-    const rows = overview(report)
-    assert.equal(rows[0], '| suite | questions | tokens-to-gold | golds | hit@5 | MRR | gate |')
-    assert.equal(rows[2], '| s | 20 | 20000 -> 30000 | 12 -> 11 | 0.6 -> 0.6 | 0.5 -> 0.45 | tokensToGold: regression, goldReached: regression |')
-    assert.equal(rows[3], '| t | 20 | 20000 -> 30000 | 12 -> 11 | 0.6 -> 0.6 | 0.5 -> 0.45 | tokensToGold: regression, goldReached: regression |')
-    const ok = run()
-    assert.equal(overview(evaluate({ results: ok, baseline: baselineOf(ok) }))[2], '| s | 20 | 20000 -> 20000 | 12 -> 12 | 0.6 -> 0.6 | 0.5 -> 0.5 | ok |')
-    // A suite without a baseline entry shows the run's numbers alone.
-    const rowsNoEntry = overview(evaluate({ results: run({}, { suites: ['s', 'u'] }), baseline: baselineOf(run()) }))
-    assert.equal(rowsNoEntry[3], '| u | 20 | 20000 | 12 | 0.6 | 0.5 | no baseline entry |')
-    // The overview sits above the per-suite tables in the rendered summary.
-    const md = render(report, r)
-    assert.ok(md.indexOf('| suite | questions |') < md.indexOf('## s: 20 questions'))
-  })
 })
 
 describe('missing results', () => {
@@ -319,28 +294,32 @@ describe('missing results', () => {
 
   it('the CLI exits 1 with the artifact name when one instance is missing, even if the others would pass', () => {
     const dir = mkdtempSync(join(tmpdir(), 'bench-gate-'))
-    const r = run()
-    const files = [1, 2, 3].map((n) => join(dir, `bench-results-${n}`, 'results.json'))
-    const writeInstance = (f) => {
-      mkdirSync(join(f, '..'), { recursive: true })
-      writeFileSync(f, JSON.stringify(instance()))
+    try {
+      const r = run()
+      const files = [1, 2, 3].map((n) => join(dir, `bench-results-${n}`, 'results.json'))
+      const writeInstance = (f) => {
+        mkdirSync(join(f, '..'), { recursive: true })
+        writeFileSync(f, JSON.stringify(instance()))
+      }
+      files.slice(0, 2).forEach(writeInstance)
+      const baselineFile = join(dir, 'baseline.json')
+      writeFileSync(baselineFile, JSON.stringify(baselineOf(r)))
+      const out = join(dir, 'out')
+      const res = spawnSync(process.execPath, [GATE, '--results', files.join(','), '--baseline', baselineFile, '--out', out], { encoding: 'utf8' })
+      assert.equal(res.status, 1)
+      assert.match(res.stdout, /Missing results: bench-results-3\./)
+      assert.match(res.stdout, /::error title=bench-gate: missing results::bench-results-3 missing/)
+      assert.ok(!/## s: 20 questions/.test(res.stdout), 'nothing evaluated')
+      assert.match(readFileSync(join(out, 'gate.md'), 'utf8'), /Missing results: bench-results-3\./)
+      // With all three present the same files pass.
+      writeInstance(files[2])
+      const okRes = spawnSync(process.execPath, [GATE, '--results', files.join(','), '--baseline', baselineFile, '--out', out], { encoding: 'utf8' })
+      assert.equal(okRes.status, 0, okRes.stdout)
+      assert.match(okRes.stdout, /\*\*Pass\.\*\*/)
+      assert.ok(existsSync(join(out, 'gate.md')))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
-    files.slice(0, 2).forEach(writeInstance)
-    const baselineFile = join(dir, 'baseline.json')
-    writeFileSync(baselineFile, JSON.stringify(baselineOf(r)))
-    const out = join(dir, 'out')
-    const res = spawnSync(process.execPath, [GATE, '--results', files.join(','), '--baseline', baselineFile, '--out', out], { encoding: 'utf8' })
-    assert.equal(res.status, 1)
-    assert.match(res.stdout, /Missing results: bench-results-3\./)
-    assert.match(res.stdout, /::error title=bench-gate: missing results::bench-results-3 missing/)
-    assert.ok(!/## s: 20 questions/.test(res.stdout), 'nothing evaluated')
-    assert.match(readFileSync(join(out, 'gate.md'), 'utf8'), /Missing results: bench-results-3\./)
-    // With all three present the same files pass.
-    writeInstance(files[2])
-    const okRes = spawnSync(process.execPath, [GATE, '--results', files.join(','), '--baseline', baselineFile, '--out', out], { encoding: 'utf8' })
-    assert.equal(okRes.status, 0, okRes.stdout)
-    assert.match(okRes.stdout, /\*\*Pass\.\*\*/)
-    assert.ok(existsSync(join(out, 'gate.md')))
   })
 })
 
@@ -432,19 +411,145 @@ describe('the held-out suite (#1059)', () => {
   })
 })
 
-describe('the golds floor across a harness change (#1058 review)', () => {
-  it('compares with the base even when the suite-change label makes the run its own reference', () => {
-    const base = baselineOf(run())
-    const fewer = run({ goldReached: 11, goldReachedRate: 0.55 }, { fingerprint: 'fp2' })
-    const report = evaluate({
-      results: fewer,
-      baseline: baselineOf(fewer),
-      baseBaseline: base,
-      pr: pr(['bench-suite-change'], 'Bench-suite-change: the policy changed'),
-      requireGolds: true,
-    })
-    assert.match(failures(report), /s: golds lost, Elara goldReached 12 -> 11 of 20 \(base baseline/)
-    const same = run({}, { fingerprint: 'fp2' })
-    assert.deepEqual(evaluate({ results: same, baseline: baselineOf(same), baseBaseline: base, pr: pr(['bench-suite-change'], 'Bench-suite-change: the policy changed'), requireGolds: true }).failures, [])
+describe('gold-loss protection (#1138)', () => {
+  const base = () => baselineOf(run())
+  const loss = (aggregate = {}, opts = {}) => {
+    const r = run(aggregate, opts)
+    for (const s of Object.values(r.suites)) s.perQuestion[0].elara.tokensToGold = null
+    return r
+  }
+  const waiver = (ids) => pr(['bench-baseline-lowered'], `Bench-baseline-lowered: owner accepts the lost answers ${ids} for this contract change`)
+
+  it('goldReached has zero movement tolerance without changing the fractional metrics', () => {
+    assert.equal(movement('goldReached', 12, 11, 20), 'worse')
+    assert.equal(movement('goldReached', 12, 12, 20), 'same')
+    assert.equal(movement('goldReached', 12, 13, 20), 'better')
+    assert.equal(movement('goldReachedRate', 0.6, 0.55, 20), 'same')
+  })
+
+  it('rejects a hidden question loss despite aggregate improvement and GOLDS=false', () => {
+    const r = loss({ goldReached: 13 })
+    r.suites.s.perQuestion[12].elara.tokensToGold = 500
+    r.suites.s.perQuestion[13].elara.tokensToGold = 500
+    const report = evaluate({ results: r, baseline: baselineOf(r), baseBaseline: base(), requireGolds: false })
+    assert.equal(report.ok, false)
+    assert.match(failures(report), /s\/Q1/)
+  })
+
+  it('checks both the re-record and actual results before a harness mismatch can skip them', () => {
+    const r = loss({ goldReached: 11 }, { fingerprint: 'fp2' })
+    const args = { results: r, baseBaseline: base(), pr: pr(['bench-suite-change'], 'Bench-suite-change: the paging contract changed') }
+    const reset = evaluate({ ...args, baseline: baselineOf(r) })
+    assert.equal(reset.ok, false)
+    assert.match(failures(reset), /recorded baseline against base baseline/)
+    assert.match(failures(reset), /s\/Q1/)
+    const mismatch = evaluate({ ...args, baseline: base() })
+    assert.match(failures(mismatch), /s\/Q1/)
+    assert.match(failures(mismatch), /baseline fingerprint/)
+  })
+
+  it('also protects newly recorded golds when the actual run falls back to the older count', () => {
+    const improved = run({ goldReached: 13 })
+    improved.suites.s.perQuestion[12].elara.tokensToGold = 500
+    const report = evaluate({ results: run(), baseline: baselineOf(improved), baseBaseline: base() })
+    assert.equal(report.ok, false)
+    assert.match(failures(report), /s\/Q13/)
+  })
+
+  it('checks changed baseline entries outside the selected suite, including a deleted suite', () => {
+    const before = baselineOf(run({}, { suites: ['s', 't'] }))
+    const own = structuredClone(before)
+    own.suites.t.perQuestion.Q1.elara[1] = null
+    assert.match(failures(evaluate({ results: run(), baseline: own, baseBaseline: before })), /t\/Q1/)
+    delete own.suites.t
+    assert.match(failures(evaluate({ results: run(), baseline: own, baseBaseline: before })), /t\/Q1/)
+  })
+
+  it('rejects removal and renaming of a previously reached question', () => {
+    for (const rename of [false, true]) {
+      const r = run()
+      if (rename) r.suites.s.perQuestion[0].id = 'renamed'
+      else r.suites.s.perQuestion.shift()
+      assert.match(failures(evaluate({ results: r, baseline: baselineOf(r), baseBaseline: base() })), /s\/Q1/)
+    }
+  })
+
+  it('requires the label and every exact qualified ID; generic, partial and substring reasons do not approve', () => {
+    const r = loss({ goldReached: 11, goldReachedRate: 0.55 })
+    r.suites.s.perQuestion[1].elara.tokensToGold = null
+    r.suites.s.perQuestion[12].elara.tokensToGold = 500 // A gain does not excuse the two named losses.
+    const args = { results: r, baseline: baselineOf(r), baseBaseline: base() }
+    for (const approval of [
+      pr([], 'Bench-baseline-lowered: owner accepts s/Q1 s/Q2'),
+      pr(['bench-baseline-lowered'], ''),
+      waiver('the suite regression'), waiver('Q1 Q2'), waiver('s/Q1'),
+      waiver('s/Q10 s/Q20'), waiver('s/Q1/other s/Q2'), waiver('other/Q1 other/Q2'),
+    ]) assert.equal(evaluate({ ...args, pr: approval }).ok, false)
+    const accepted = evaluate({ ...args, pr: waiver('`s/Q1`, `s/Q2`') })
+    assert.equal(accepted.ok, true, failures(accepted))
+    assert.match(accepted.notes.join('\n'), /owner exception/)
+  })
+
+  it('cannot waive a count drop whose question IDs are unprovable or missing provenance', () => {
+    const r = loss({ goldReached: 10 }) // Only one identified loss, but the count lost two.
+    assert.equal(evaluate({ results: r, baseline: baselineOf(r), baseBaseline: base(), pr: waiver('s/Q1') }).ok, false)
+    const before = base()
+    delete before.suites.s.perQuestion
+    assert.equal(evaluate({ results: run(), baseline: baselineOf(run()), baseBaseline: before, pr: waiver('s/Q1') }).ok, false)
+    const incomplete = run()
+    delete incomplete.suites.s.perQuestion[0].elara.tokensToGold
+    assert.equal(evaluate({ results: incomplete, baseline: baselineOf(run()), baseBaseline: base(), pr: waiver('s/Q1') }).ok, false)
+  })
+
+  it('never waives a held-out ranking loss, even with its exact ID', () => {
+    const r = loss({ goldReached: 11 }, { suites: [HOLDOUT] })
+    const before = baselineOf(run({}, { suites: [HOLDOUT] }))
+    const report = evaluate({ results: r, baseline: before, baseBaseline: before, pr: waiver('holdout/Q1'), changed: ['server/src/search/search.ts'] })
+    assert.equal(report.ok, false)
+    assert.match(failures(report), /Held-out ranking losses cannot be waived/)
+  })
+
+  it('keeps unchanged, improved, new-suite and legacy-new-metric controls legitimate', () => {
+    const before = base()
+    assert.equal(evaluate({ results: run(), baseline: before, baseBaseline: before }).ok, true)
+    const improved = run({ goldReached: 13 })
+    assert.equal(evaluate({ results: improved, baseline: baselineOf(improved), baseBaseline: before }).ok, true)
+    assert.equal(evaluate({ results: run(), baseline: before }).ok, true)
+    assert.equal(evaluate({ results: run(), baseline: before, baseBaseline: { suites: {} } }).ok, true)
+    delete before.suites.s.elara.exact1
+    delete before.suites.s.elara.goldReachedRate
+    assert.equal(evaluate({ results: run(), baseline: baselineOf(run()), baseBaseline: before }).ok, true)
+  })
+
+  it('the CLI combines all three measurements and fails a hidden gold loss without a flag', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bench-gold-loss-'))
+    try {
+      const files = [1, 2, 3].map((n) => {
+        const inst = instance({ goldReached: n === 3 ? 14 : 13 })
+        if (n !== 3) inst.suites.s.perQuestion[0].elara.tokensToGold = null
+        inst.suites.s.perQuestion[12].elara.tokensToGold = 500
+        inst.suites.s.perQuestion[13].elara.tokensToGold = 500
+        const file = join(dir, `${n}.json`)
+        writeFileSync(file, JSON.stringify(inst))
+        return file
+      })
+      const current = combine(files.map((f) => JSON.parse(readFileSync(f, 'utf8'))))
+      assert.equal(current.suites.s.perQuestion[0].elara.tokensToGold, null)
+      assert.equal(current.suites.s.aggregate.elara.goldReached, 13)
+      const baselineFile = join(dir, 'baseline.json')
+      const baseFile = join(dir, 'base.json')
+      const prFile = join(dir, 'pr.json')
+      writeFileSync(baselineFile, JSON.stringify(baselineOf(current)))
+      writeFileSync(baseFile, JSON.stringify(base()))
+      const args = [GATE, '--results', files.join(','), '--baseline', baselineFile, '--base-baseline', baseFile, '--out', join(dir, 'out')]
+      const rejected = spawnSync(process.execPath, args, { encoding: 'utf8' })
+      assert.equal(rejected.status, 1, rejected.stdout)
+      assert.match(rejected.stdout, /s\/Q1/)
+      writeFileSync(prFile, JSON.stringify(waiver('s/Q1')))
+      const approved = spawnSync(process.execPath, [...args, '--pr', prFile], { encoding: 'utf8' })
+      assert.equal(approved.status, 0, approved.stdout)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
