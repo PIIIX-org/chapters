@@ -208,6 +208,10 @@ export interface Budgeted {
   /** Fields shown whole, before the sections. */
   head: Record<string, unknown>
   sections: Section[]
+  /** Scope/content/index/permission version for stateless result handles (#423). Never serialized as answer data. */
+  snapshot?: string
+  /** A filtered computed candidate set does not claim coverage beyond its fetch cap. */
+  incomplete?: boolean
   /** Arguments that would narrow this answer, e.g. `path: "docs"`; shown when something was left out. */
   narrow?: string[]
   /**
@@ -244,12 +248,13 @@ const CursorJson = z
     f: z.string(),
     k: z.object({ s: z.number().int().min(0), p: z.union([z.string(), z.number(), z.null()]) }).strict(),
     g: z.string().optional(),
+    h: z.string().optional(),
     // Sections a session reference (#683) answered on the first page: the pages after it leave them out.
     r: z.array(z.number().int().min(0)).optional(),
   })
   .strict()
 type CursorJson = z.infer<typeof CursorJson>
-export type CursorAt = CursorJson['k'] & { g?: string; r?: number[] }
+export type CursorAt = CursorJson['k'] & { g?: string; h?: string; r?: number[] }
 
 const sha256 = (value: string) => createHash('sha256').update(value).digest('hex')
 
@@ -297,8 +302,8 @@ export function decodeCursor(cursor: string, tool: string, fingerprint: string):
   if (!parsed.success) throw invalid('not a cursor this server issued')
   if (parsed.data.t !== tool) throw invalid(`issued by ${parsed.data.t}`)
   if (parsed.data.f !== fingerprint) throw invalid('issued for other arguments')
-  const { g, r } = parsed.data
-  return { ...parsed.data.k, ...(g === undefined ? {} : { g }), ...(r === undefined ? {} : { r }) }
+  const { g, h, r } = parsed.data
+  return { ...parsed.data.k, ...(g === undefined ? {} : { g }), ...(h === undefined ? {} : { h }), ...(r === undefined ? {} : { r }) }
 }
 
 /** Where a budgeted handler's answer starts. */
@@ -319,17 +324,17 @@ export function compareCodeUnits(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
 }
 
-const guardOf = (value: string) => sha256(value).slice(0, 8)
+const guardOf = (value: string, snapshot?: string) => sha256(snapshot === undefined ? value : `${snapshot}\0${value}`).slice(0, 8)
 
 /**
  * The guard of a ranked section's cursor at `p`: the ids before it, and the text of every text section before
  * the ranked one, so a symbols-only `read_file` page is refused once the file changed under it.
  */
-function rankedGuard(sections: readonly Section[], n: number, p: number): string {
+function rankedGuard(sections: readonly Section[], n: number, p: number, snapshot?: string): string {
   const section = sections[n]!
   if (section.kind !== 'ranked') throw new Error(`section ${section.name} is not ranked`)
   const texts = sections.slice(0, n).flatMap((s) => (s.kind === 'text' ? [s.text] : []))
-  return guardOf([...texts, section.items.slice(0, p).map(section.id).join('\n')].join('\0'))
+  return guardOf([...texts, section.items.slice(0, p).map(section.id).join('\n')].join('\0'), snapshot)
 }
 
 /** `\n`s in `text` before `end`. */
@@ -359,6 +364,9 @@ interface Slot {
 function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
   // A cursor names a section; an answer of its head alone (read's `unchanged`, #682) has none to name.
   if (at !== null && at.s >= answer.sections.length) throw invalid('not a position of this answer')
+  if (at !== null && answer.snapshot !== undefined && at.h !== answer.snapshot.slice(0, 16)) {
+    throw new CursorError('CURSOR_STALE', 'stale cursor: the result snapshot changed; start again without `cursor`')
+  }
   const s0 = at?.s ?? 0
   return answer.sections.map((section, i): Slot => {
     // A section the first page answered by a session reference (#683) is left out of every later page, as one an
@@ -367,13 +375,16 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
     if (refOf(section)) return { section, start: 0, avail: [], more: false, limit: 0 }
     const here = at !== null && i === s0
     if (section.kind === 'keyset') {
+      if (here && answer.snapshot !== undefined && at.g !== guardOf('', answer.snapshot)) {
+        throw new CursorError('CURSOR_STALE', 'stale cursor: the result snapshot changed; start again without `cursor`')
+      }
       const limit = section.limit ?? Infinity
       return { section, start: 0, avail: section.items.slice(0, limit), more: section.more === true || section.items.length > limit, limit }
     }
     if (section.kind === 'ranked') {
       const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
       if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
-      if (here && (start > section.items.length || at.g !== rankedGuard(answer.sections, i, start))) {
+      if (here && (start > section.items.length || at.g !== rankedGuard(answer.sections, i, start, answer.snapshot))) {
         throw new CursorError('CURSOR_STALE', `stale cursor: the ${section.name} changed since this cursor was issued; start again without \`cursor\``)
       }
       const limit = section.limit ?? Infinity
@@ -383,7 +394,7 @@ function slots(answer: Budgeted, at: CursorAt | null): Slot[] {
     }
     const start = here ? (typeof at.p === 'number' ? at.p : NaN) : 0
     if (!Number.isSafeInteger(start) || start < 0) throw invalid('not a position of this answer')
-    if (here && (start > section.text.length || at.g !== guardOf(section.text))) {
+    if (here && (start > section.text.length || at.g !== guardOf(section.text, answer.snapshot))) {
       throw new CursorError('CURSOR_STALE', `stale cursor: the ${section.name} changed since this cursor was issued; start again without \`cursor\``)
     }
     return { section, start, avail: [], more: false, limit: Infinity }
@@ -626,7 +637,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
   // Every cursor of this answer carries the sections answered by reference, on this page or the first (#683).
   const refs = [...(ctx.at?.r ?? []), ...plan.flatMap((slot, n) => (refOf(slot.section) ? [n] : []))]
   const cursorOf = (k: CursorJson['k'], g?: string) =>
-    encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k, ...(g === undefined ? {} : { g }), ...(refs.length > 0 ? { r: refs } : {}) })
+    encodeCursor({ v: 1, t: ctx.tool, f: ctx.fingerprint, k, ...(g === undefined ? {} : { g }), ...(answer.snapshot === undefined ? {} : { h: answer.snapshot.slice(0, 16) }), ...(refs.length > 0 ? { r: refs } : {}) })
   for (const [n, slot] of plan.entries()) {
     const { section } = slot
     if (ctx.at?.r?.includes(n)) continue
@@ -650,7 +661,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
         counts.shown[section.name] = 0
         counts.total[section.name] = total
         counts.dropped[section.name] = total
-        if (cursor === null && total > 0) cursor = cursorOf({ s: n, p: 0 }, guardOf(section.text))
+        if (cursor === null && total > 0) cursor = cursorOf({ s: n, p: 0 }, guardOf(section.text, answer.snapshot))
         anyDropped ||= total > 0
         withheld = true
         continue
@@ -699,7 +710,7 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
         if (section.lines && partial && chunk !== '') out.lines = [first, first + totalLines(chunk) - 1]
       }
       if (cursor === null && !counted && chunk.length < rest.length) {
-        cursor = cursorOf({ s: n, p: slot.start + chunk.length }, guardOf(section.text))
+        cursor = cursorOf({ s: n, p: slot.start + chunk.length }, guardOf(section.text, answer.snapshot))
       }
       anyDropped ||= chunk.length < rest.length
       continue
@@ -728,15 +739,15 @@ function compose(answer: Budgeted, plan: Slot[], shown: number[], ctx: Rendering
     if (section.kind === 'keyset') {
       const last = items.length - 1
       const p: Resume = last >= 0 ? section.resume(items[last] as never, last) : n === ctx.at?.s ? ctx.at.p : null
-      cursor = cursorOf({ s: n, p })
+      cursor = cursorOf({ s: n, p }, answer.snapshot === undefined ? undefined : guardOf('', answer.snapshot))
     } else {
       const p = slot.start + items.length
-      cursor = cursorOf({ s: n, p }, rankedGuard(answer.sections, n, p))
+      cursor = cursorOf({ s: n, p }, rankedGuard(answer.sections, n, p, answer.snapshot))
     }
   }
   for (const [name, value] of values) out[name] = value
   // Below full every item lost its context or more, so the answer is never whole.
-  const whole = cursor === null && !anyDropped && !anyMore && ctx.level === 'full'
+  const whole = cursor === null && !anyDropped && !anyMore && ctx.level === 'full' && !answer.incomplete
   const truncated: Truncated = whole ? false : { ...counts, level: withheld && ctx.level === 'full' ? 'locations' : ctx.level, cursor, narrow: ctx.narrow }
   out.truncated = truncated
   return { text: JSON.stringify(out), blocks, truncated, seen }
