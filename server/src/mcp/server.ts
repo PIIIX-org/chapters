@@ -94,7 +94,7 @@ import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord, restoreVaultRecord, trashVaultRecord } from '../vaults/routes.js'
 import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
-import { findSymbols, searchNotes } from '../search/search.js'
+import { findSymbols } from '../search/search.js'
 import { leanHit, type LeanHit } from './search-hit.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
@@ -120,7 +120,7 @@ import { manualText, manualVisible, toolManuals, type ToolManual } from './manua
 import { strictArgs } from './strict-input.js'
 import { McpToolError, argumentRefusal, closest, envelope, errorResult, toErrorEnvelope, type ErrorEnvelope } from './errors.js'
 import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
-import { advanceRead, confirmRead, lastRead, rememberRead } from './last-read.js'
+import { confirmRead, lastRead, rememberRead } from './last-read.js'
 import {
   MARKDOWN_PATH,
   OUTLINE_ARG,
@@ -141,6 +141,8 @@ import {
 } from './read-targets.js'
 import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
+import { cacheCaller } from '../cache/key.js'
+import { cachedSearch } from '../cache/search.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
 import { noteDrift } from '../notes/staleness.js'
@@ -1539,7 +1541,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       // rev, so the base a whole-body edit merges from moves to it, as after a read; no body is recorded, since this
       // answer sent none (confirmRead keeps one sent with that rev, last-read.ts). It has no passage, so its session
       // document needs no text (and the note's file is not rendered).
-      if (page.at === null && args.if_rev === String(note.row.seq) && !(await pathHadOtherNote(note.row))) {
+      // A numeric revision alone cannot identify a purged-and-recreated path. Require this token's observed note id.
+      if (page.at === null && args.if_rev === String(note.row.seq) && await lastRead(auth.connection.id, note.row.id) && !(await pathHadOtherNote(note.row))) {
         const answer = { ...unchanged({ rev: note.row.seq }), rendered: () => confirmRead(auth.connection.id, note.row.id, note.row.seq) }
         return inSession(session, { path: note.row.path, version: { rev: note.row.seq }, text: '' }, answer, page.at)
       }
@@ -1732,7 +1735,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         if (!updated) throw await noteNotFound(target, args.path)
         if (!dryRun) {
           showAgentPresence(target, updated.id, presence, 'editing')
-          if (args.body !== undefined) await advanceRead(auth.connection.id, updated.id, updated.seq, updated.body === args.body ? null : args.body)
+          if (args.body !== undefined) await rememberRead(auth.connection.id, updated.id, updated.seq, updated.body === args.body ? null : args.body)
         }
         return answer(updated, dryRun ? false : await noteIndexed(updated.id, updated.seq))
       })
@@ -1860,7 +1863,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     if (!note) throw await noteNotFound(target, path)
     if (!dryRun) {
       showAgentPresence(target, note.id, presence, 'editing')
-      if (edit.body !== undefined) await advanceRead(auth.connection.id, note.id, note.seq, note.body === edit.body ? null : edit.body)
+      if (edit.body !== undefined) await rememberRead(auth.connection.id, note.id, note.seq, note.body === edit.body ? null : edit.body)
     }
     return editedAnswer(note, dryRun ? false : await noteIndexed(note.id, note.seq))
   }
@@ -3052,13 +3055,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         everywhere: z.boolean().optional().describe('Everything accessible (account tokens)'),
         symbols: z.boolean().optional().describe('Include code symbols'),
         limit: intRange('limit', 1, 100).optional().describe('Max results'),
+        if_rev: z.string().optional().describe('Your search rev: unchanged if current'),
       },
       budget: 'list',
     },
-    async (args: { query: string; symbols?: boolean; limit?: number; everywhere?: boolean }, { resources }) => {
+    async (args: { query: string; symbols?: boolean; limit?: number; everywhere?: boolean; if_rev?: string }, { resources }, page) => {
       const limit = args.limit ?? 20
-      // The first `limit` hits of the ranking, plus one to know whether more match.
-      const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id })
+      const { answer, version, rev } = await cachedSearch(resources, args, cacheCaller(auth))
+      if (page.at === null && rev !== null && args.if_rev === rev) return { head: { unchanged: true, rev }, sections: [] }
+      const { results, ...head } = answer
       // Keep passage identity outside the serialized hits: leanHit removes internal block IDs.
       const identities = new Map<LeanHit, string>()
       const hits = results.map((r) => {
@@ -3070,8 +3075,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         // One repository: its indexed version, once in the head (#471).
         head: {
           ...head,
-          ...(resources.repositoryIds.length === 1 ? await repositoryIndexedVersion(resources.repositoryIds[0]!) : {}),
+          ...version,
           hint: routingHint({ tool: 'search', query: args.query, vaults: resources.vaultIds.length, repositories: resources.repositoryIds.length }),
+          ...(rev === null ? {} : { rev }),
         },
         sections: [
           ranked({

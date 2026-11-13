@@ -13,6 +13,7 @@ import { flushEmbeddings, scheduleMissingEmbeddings } from '../src/search/embedd
 import { embedder } from '../src/search/embeddings.js'
 import type * as Extraction from '../src/repositories/extraction.js'
 import { createActiveUser } from './helpers.js'
+import { metricsSnapshot } from '../src/monitoring/metrics.js'
 
 // The parses that run: every call of extractStructure, by file path (an existing export, so this counts on dev too).
 const parses = vi.hoisted(() => [] as string[])
@@ -92,11 +93,15 @@ describe('vectors are shared by embed key between the repositories of one accoun
 
     const b = await newRepo(owner.id, 'blob-b')
     parses.length = 0
+    const before = metricsSnapshot().caches.blob_vector!
     const second = await sync(b, FILES)
     expect(second).toEqual([])
     // Equal contents are parsed once per process, whichever repository holds them.
     expect(parses).toEqual([])
     expect(await vectors(b)).toEqual(await vectors(a))
+    const after = metricsSnapshot().caches.blob_vector!
+    expect(after.hit - before.hit).toBeGreaterThan(0)
+    expect(after.miss - before.miss).toBe(0)
   })
 
   it('a changed file in the second repository embeds only its own new texts', async () => {

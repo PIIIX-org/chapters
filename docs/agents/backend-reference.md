@@ -2192,7 +2192,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `sessionIdGenerator: undefined`, a fresh `McpServer` + transport
   built per HTTP request; auth and permissions are recomputed every call.
   Answers may be cached across connections only under the caching
-  contract (§5.11, D7 on #930); none is cached yet (#685).
+  contract (§5.11, D7 on #930); MCP search caches unrendered results.
   With no session and no stream, the server can send nothing unasked
   (#436): `GET` and `DELETE` on both paths answer `405` with
   `Allow: POST` and the SDK transport's JSON-RPC error
@@ -2503,8 +2503,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     trashed note has the path or another note of the vault has a revision
     with `from_path` = the path (a rename, a restore elsewhere): two
     lookups of migration 0051's partial indexes, run only when the `rev`
-    matches. A purged predecessor (owner-only `purge_note` after trash)
-    leaves no trace, the one case left.
+    matches. A matching numeric revision also requires this token's
+    last-read identity for the same note (within 24 hours). Purging removes
+    that identity, so a recreated path is sent in full. A first read,
+    another token, or an expired identity conservatively gets full content.
   - Files compare the per-file `hash`, never the repository `commit` /
     `tree`: `syncRepositoryFiles` updates rows one by one and writes the
     commit and tree at its end, so mid-sync (or after a failed sync) a
@@ -2524,8 +2526,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     No body is recorded, since the answer sent none: a base already at
     that rev keeps the body the connection sent with a merged write, and
     an older base takes the revision's text.
-  - `if_rev` is in the cursor fingerprint like any argument. Search and
-    graph have no not-modified answer: that is the result cache's (#685).
+  - `if_rev` is in the cursor fingerprint like any argument. MCP `search`
+    also accepts it, using an opaque scoped revision (§5.11); graph does not.
   `test/mcp-read-if-rev.test.ts`.
 - **Session references** (#683, ADR-004 §2.1, §2.9, D7):
   `read_note` and `read_file` take `session_id` (`session-reads.ts`
@@ -4257,24 +4259,47 @@ itself.
 
 ### 5.11 Caching contract (`server/src/cache/`, ADR-004 §2.9, #680)
 
-The rules every cache of an answer follows. No answer is cached yet: the
-search and graph result cache (#685, which also adds per-cache hit/miss
-metrics and the test that a cached answer is never served stale) builds
-on this contract, and none may cache without it. Per-session
-de-duplication (#683, **Session memory** below) caches no answer; it
-remembers what a session was sent, under the same scoping rules. D7 on #930
-replaced the old promise of no cross-connection caching (§5.8) with this
-contract. Permission checks themselves stay live (§1): a cache never
-authorizes anything. The query-embedding cache (below) caches no answer,
-only a function of the query text, and so needs no epochs.
+The rules every cache of an answer follows. MCP search uses
+`cache/search.ts`, an in-process LRU of 128 unrendered search results.
+It resolves live access first and uses `cacheKey` with the caller's account,
+token scope/pin/access/profile/allow-list, all answer-affecting arguments,
+resource index epochs, permission epoch and derived-artifact versions.
+Cursor, budget and the `if_rev` condition do not change the cached ranking;
+rendering, hints and budgets are applied per call. Repository commit/tree
+metadata is stored with the ranking under the same epoch checks.
+Epochs are checked again before a hit is published or a miss is stored.
+A concurrent mutation suppresses storage and revision issuance; a degraded
+answer is never stored (service recovery need not change an epoch).
+No TTL is used. A process generation in the key invalidates client-held
+revisions on restart/build change, as well as discarding entries.
 
-**Every in-process cache keys by account** (#684). A hit answers faster
-than a miss, so an entry one account filled and another account hits tells
-the second that the first asked the same thing (a query-vector hit is
-about 3.8 ms faster than an embed). So every cache in the process keeps the
-asking account in its key, even one whose entries depend on nothing about
-the caller. Agents and tokens of one account share entries. A caller that
-has no account at hand computes and caches nothing.
+Every cache lookup is counted in `elara_cache_lookups_total{cache,outcome}`
+and `/api/admin/monitoring.caches`: fixed labels `search`, `query_embedding`,
+`blob_parse`, `blob_vector`, `git_mirror`, `session_passage`, outcomes `hit`/`miss`.
+There are no query/account/content labels. Vector counts are per distinct
+embed key; git mirror hits are unchanged-HEAD syncs (misses require a fetch);
+session counts measure a matching held passage before deciding whether its
+reference saves bytes.
+
+MCP search returns `rev` on a stable, nondegraded result. Repeat the same
+query with `if_rev: rev` to get `{unchanged:true,rev,truncated:false}` on
+the first page (under 50 tokens); a cursor always continues its full answer.
+A write, access change, different caller/profile/pin or changed arguments
+gets a full result instead. The epoch itself is never exposed.
+The broader search/graph result-cache work remains #685.
+
+Per-session de-duplication (#683, **Session memory** below) remembers what a
+token/session was sent, not an answer. Permission checks stay live: no cache
+authorizes anything. Pure computation caches (query vectors and blob
+parse/vector reuse) key by their actual text/content and algorithm versions,
+not answer epochs: a permission/content change cannot change the value of
+the same input computation. Their consumers still perform live access checks.
+
+**Account isolation.** Search results and query embeddings key by account;
+vector reuse reads only repositories owned by the same account. The blob
+parse cache shares only the pure parse of supplied content/hash and grammar
+across accounts, never stored content or an access decision. Query callers
+without an account compute without keeping an entry.
 
 **Epochs** (migration 0041). Triggers bump them, so every writer is
 covered (MCP, REST, the collab relay, the workers, the CLIs) without a call
@@ -4347,7 +4372,7 @@ sha256 of:
 - the permission epoch;
 - `argsFingerprint(args, resources)` (`mcp/response.ts`).
 
-An entry is the whole result (ids and spans, never rendered text): a call's
+An entry is the unrendered search result, never a rendered page: a call's
 `cursor` and `budget_tokens` page and budget it, so they are not in the key.
 Argument order, resource order and allow-list order do not change the key.
 
@@ -4380,11 +4405,11 @@ nothing):
   running build or be emptied at boot, because ranking code is not in
   `versionsKey`. An in-process cache is emptied by every restart.
 
-Epochs are internal: no answer carries them, and `tools/list` and
-`initialize.instructions` are unchanged (0 tokens). Answers carry content
-versions (`rev`, file `hash`, `commit` / `tree`) as ADR-004 §2.9 lists;
-`read_note` / `read_file` `if_rev` (#682, §5.8 **Unchanged reads**)
-compares `rev` or `hash` live after the access check and caches nothing.
+Epochs stay internal. Answers carry content versions (`rev`, file `hash`,
+`commit` / `tree`); search's `rev` is an opaque digest including scope,
+epochs and process generation. `read_note` / `read_file` compare their
+versions live after access checks and cache no answer. Search alone adds
+an optional `if_rev` schema argument; the existing schema ceilings stay intact.
 Tests: `cache-epochs.test.ts` (every write path bumps its own scope and no
 other; reads bump nothing) and `cache-key.test.ts` (key fields, refusals,
 real epochs around writes and reads).
