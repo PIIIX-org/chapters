@@ -498,8 +498,10 @@ cost), 8,192 output tokens per turn, 100,000 characters per tool result,
   or sends nothing: T5's Elara answer in run 42395876734 was empty after 30
   calls) is asked again, up to 3 times, in plain words; each ask counts as a
   turn, the ignored tool calls leave the history, and after the third the
-  episode ends with an empty answer and an `error` saying why. **`HARNESS_VERSION`
-  is 3** for this change: results of v2 and v3 are never compared.
+  episode ends with an empty answer and an `error` saying why. Version 3
+  introduced this capped-final behavior. Current `HARNESS_VERSION` is 4,
+  additionally declaring the native external-tool turn handshake. Results
+  from different harness versions are never compared.
 - **Time.** Tools stop at 15 minutes minus a reserve for the final answer
   (a fifth of the cap, at most 3 minutes); every model request carries an
   abort signal for the time left, retries included; a tool turn cut off at
@@ -591,6 +593,11 @@ the same RPC process must report the exact model, `openai-codex-responses`,
 the first-party ChatGPT endpoint, no tools and empty native history.
 Full harness history and the arm's tools are explicit JSON on every request;
 the real harness executes returned calls and feeds back their results.
+Each native invocation is one model turn. An external tool request must be
+the sole final-answer JSON envelope and end that turn; the model must not
+wait for results within the invocation or mistake disabled native tools for
+unavailable external tools. The actual task instructions, gold and caps are
+unchanged for both arms; the new handshake requires fresh matched controls.
 Native tools, extensions, skills, rules and context files are disabled, as
 are retries, compaction and cache warming. Unexpected native tool or model
 changes invalidate the turn.
