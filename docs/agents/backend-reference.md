@@ -1584,9 +1584,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     Structural answers use existing code queries; resolved sites alone enter `results`, textual sites are
     separate `textual` rows. Whole-file imports include modules without symbols. Ambiguous targets are shown
     rather than guessed. Work and responses are bounded; `partial` reports omitted sites/results.
-    Every search names its actual `route`. A missed/over-cap lookup takes unchanged conceptual retrieval with
-    `route: conceptual`, `attempted_route`, `retrieval_mode: fallback`, and `underlying_retrieval_mode` retaining
-    the actual channels; a failed lookup is never counted as an exact success. Benchmarks count all four routes
+    Every search names its actual `route`. Bare words/typos without an exact indexed symbol stay conceptual,
+    preserving the original retrieval mode; probing them does not itself classify them as identifiers.
+    Definition/backtick, path/structural, and forced-route misses, plus over-cap lookups, use `route: conceptual`, `attempted_route`,
+    `retrieval_mode: fallback`, and `underlying_retrieval_mode` retaining actual channels. No miss counts as an
+    exact success. Benchmarks count all four routes
     and attempted-route fallbacks separately. No server LLM or ranking/confidence expansion is involved.
   - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
     merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a

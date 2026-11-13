@@ -127,9 +127,11 @@ describe('identifier route (#1060)', () => {
   })
 
   it('misses fall back honestly and conceptual answers retain the underlying bytes', async () => {
-    const missed = await ask('parseFrontmatterX')
-    expect(missed).toMatchObject({ route: 'conceptual', attempted_route: 'identifier', retrieval_mode: 'fallback', underlying_retrieval_mode: 'hybrid' })
-    expect(missed.confidence).toBeUndefined()
+    for (const query of ['where is parseFrontmatterX defined?', '`parseFrontmatterX`']) {
+      const missed = await ask(query)
+      expect(missed).toMatchObject({ route: 'conceptual', attempted_route: 'identifier', retrieval_mode: 'fallback', underlying_retrieval_mode: 'hybrid' })
+      expect(missed.confidence).toBeUndefined()
+    }
     for (const query of ['how does the parser handle `parseFrontmatter` when the text has no fence', 'parseFrontmatter']) {
       const baseline = await searchNotes(code, query, 10, {}, { includeSymbols: false, route: false })
       const conceptual = await searchNotes(code, query, 10, {}, { includeSymbols: false, route: 'conceptual' })
