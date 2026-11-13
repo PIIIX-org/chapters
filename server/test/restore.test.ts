@@ -281,9 +281,13 @@ describe('restoreBackup: validate and plan', () => {
     await expect(restoreBackup(zip.toBuffer())).rejects.toThrow(BackupInvalidError)
   })
 
-  it.each([1, 2].flatMap(format => [true, false].map(existing => ({ format, existing }))))(
-    'validates every empty-vault id before filesystem preparation (format $format, existing escape target $existing)',
-    async ({ format, existing }) => {
+  it.each([1, 2].flatMap(format => [
+    { format, existing: true, id: '../../restore-escape' },
+    { format, existing: false, id: '../../restore-escape' },
+    { format, existing: false, id: '12345678-1234-4ABC-8DEF-1234567890AB' },
+  ]))(
+    'validates every empty-vault id before filesystem preparation (format $format, id $id, existing escape target $existing)',
+    async ({ format, existing, id }) => {
       const outer = await mkdtemp(join(tmpdir(), 'restore-vault-id-'))
       const originalDataDir = config.dataDir
       config.dataDir = join(outer, 'data')
@@ -300,7 +304,7 @@ describe('restoreBackup: validate and plan', () => {
         // not a check after preparing each preceding vault's filesystem.
         const rows = [
           { id: randomUUID(), ownerId: owner.id, name: 'Valid empty vault', mergeable: false, createdAt: now, deletedAt: null },
-          { id: '../../restore-escape', ownerId: owner.id, name: 'Invalid empty vault', mergeable: false, createdAt: now, deletedAt: null },
+          { id, ownerId: owner.id, name: 'Invalid empty vault', mergeable: false, createdAt: now, deletedAt: null },
         ]
         let archive: Buffer
         if (format === 1) archive = legacyArchive({ users: [owner], vaults: rows })
@@ -319,7 +323,7 @@ describe('restoreBackup: validate and plan', () => {
           zip.addFile('backup.json', Buffer.from(JSON.stringify({ format: BACKUP_FORMAT, tables: counts, parts })))
           archive = zip.toBuffer()
         }
-        await expect(restoreBackup(archive)).rejects.toThrow(/vault id is not a UUID/)
+        await expect(restoreBackup(archive)).rejects.toThrow(/vault id is not a canonical lowercase UUID/)
         expect(await readdir(config.dataDir)).toEqual([])
         if (existing) expect(await readFile(witness, 'utf8')).toBe('Owned witness: must not be cleaned up.')
         else await expect(stat(escaped)).rejects.toMatchObject({ code: 'ENOENT' })

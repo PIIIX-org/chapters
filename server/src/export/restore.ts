@@ -106,7 +106,8 @@ interface BackupContents {
   warnings: string[]
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// PostgreSQL exports lowercase UUIDs: paths must keep that exact identity.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const RESTORE_EVENT = 'instance_restored'
 
 const keyOf = (row: Row, keys: string[]): string => JSON.stringify(keys.map((k) => row[k] ?? null))
@@ -144,7 +145,7 @@ function toInsertable(spec: BackupTable, raw: unknown, where: string, strict: bo
   // Vault ids become filesystem roots, including empty vaults with no note
   // entries. Validate every row while parsing, before planning or namespace prep.
   if (spec.name === 'vaults' && (typeof row.id !== 'string' || !UUID.test(row.id))) {
-    throw new BackupInvalidError(`${where}: vault id is not a UUID`)
+    throw new BackupInvalidError(`${where}: vault id is not a canonical lowercase UUID`)
   }
   for (const key of timestampKeysOf(spec.table)) {
     const value = row[key]

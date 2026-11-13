@@ -142,6 +142,8 @@ docker compose up -d app
 
 An actual restore while a server is running exits **2** with `Restore failed: the instance is in use: ...; stop it first`. That maintenance fence is distinct from the empty-instance check below: stopping the server does not permit overwriting an instance that already has users. A dry run takes only a shared lease and never prepares attachment storage.
 
+Archive vault IDs must be canonical lowercase UUIDs, as exported by PostgreSQL. Noncanonical IDs are refused before planning or preparing files, so database normalization cannot select a different filesystem root.
+
 The restore runs in three steps:
 
 1. **Validate**: a readable zip, a format this version knows, every entry with the SHA-256 and size `backup.json` lists for it (nothing missing, nothing added), every table file present with the row count `backup.json` names, well-formed rows, and every row's parent (vault of a note, note of a revision, repository of a pinned token, ...) in the archive. A damaged, truncated, incomplete or modified archive is refused with the reason and the entry, and nothing is written, e.g. `Refusing to restore: vaults/<id>/notes/ideas/x.md does not match its SHA-256 in backup.json: the archive was changed or damaged after the backup`. The digests catch damage and accidental edits, not a deliberate forgery: whoever can rewrite the archive can rewrite `backup.json` too, so keep the archive where only you can write it. An archive made before #493 has no digests: it restores, with a warning in the plan that only the zip's own checksums were checked.
