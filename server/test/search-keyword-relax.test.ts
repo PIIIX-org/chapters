@@ -74,6 +74,8 @@ async function search(query: string, type: 'code' | 'symbol' | 'note'): Promise<
   keywordOnly()
   const answer = await searchNotes({ vaultIds: [vault], repositoryIds: [repo] }, query, 20, {}, { includeSymbols: true })
   expect(answer.retrieval_mode).toBe('keyword_only')
+  expect(answer.route).toBe('conceptual')
+  expect(answer.attempted_route).toBeUndefined()
   return answer.results.filter((r) => r.resourceType === type).map((r) => (type === 'symbol' ? `${r.path}#${r.symbolName}` : r.path))
 }
 

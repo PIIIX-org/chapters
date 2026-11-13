@@ -1185,9 +1185,11 @@ export async function searchNotes(
   const symbolRepos = includeSymbols ? repositoryIds : []
   const state = indexState(vaultIds, repositoryIds)
   const [notes, files, symbols] = [noteFilter(filters), fileFilter(filters), symbolFilter(filters)]
+  let fallback: Exclude<SearchRoute, 'conceptual'> | undefined
   if (route !== 'conceptual') {
     const routed = await routeQuery(resources, query, includeSymbols, route, filters, options.route === undefined)
-    if (routed) {
+    if (routed && 'fallback' in routed) fallback = routed.route
+    else if (routed) {
       const { results, ...answer } = routed
       // A symbol in a file still awaiting extraction is reported with the index block, as any answer is.
       const indexed = await state
@@ -1308,5 +1310,5 @@ export async function searchNotes(
   observeSearchLeg('fusion', performance.now() - fusionStarted)
   await locateHits(results, query, vectorBlocks, vec ?? undefined)
   const response = respond(results, vec !== null, keyword, vector, await state)
-  return { ...response, route: 'conceptual', ...(route !== 'conceptual' ? { attempted_route: route, retrieval_mode: 'fallback', underlying_retrieval_mode: response.retrieval_mode as Exclude<RetrievalMode, 'fallback'> } : {}) }
+  return { ...response, route: 'conceptual', ...(fallback !== undefined ? { attempted_route: fallback, retrieval_mode: 'fallback', underlying_retrieval_mode: response.retrieval_mode as Exclude<RetrievalMode, 'fallback'> } : {}) }
 }

@@ -33,6 +33,16 @@ export interface Routed {
   ambiguous?: true
 }
 
+export interface RoutedFallback {
+  route: Exclude<SearchRoute, 'conceptual'>
+  fallback: true
+}
+
+/** After term parsing, prose asks for a definition and backticks explicitly name an identifier. */
+export function hasIdentifierIntent(query: string): boolean {
+  return /[\s`]/.test(query.trim())
+}
+
 /** The one term a query asks for, or null: backticked, or the only word left once the filler words are dropped. */
 export function routeTerm(query: string): string | null {
   const words = query.trim().split(/\s+/).filter(Boolean)
@@ -47,6 +57,7 @@ export function routeTerm(query: string): string | null {
 const uuids = (ids: readonly string[]) => sql`${`{${ids.join(',')}}`}::uuid[]`
 const texts = (values: readonly string[]) => sql`${`{${values.map((v) => JSON.stringify(v)).join(',')}}`}::text[]`
 
+/** Candidate shape only: a bare identifier is classified by an actual exact index match. */
 export function classifyQuery(query: string): SearchRoute {
   if (classifyStructural(query)) return 'structural'
   const term = routeTerm(query)
@@ -57,11 +68,12 @@ export function classifyQuery(query: string): SearchRoute {
 export async function routeQuery(
   resources: { vaultIds: string[]; repositoryIds: string[] }, query: string, includeSymbols: boolean,
   route: SearchRoute = classifyQuery(query), filters: SearchFilters = {}, automatic = true,
-): Promise<Routed | null> {
+): Promise<Routed | RoutedFallback | null> {
   if (route === 'conceptual') return null
+  const requestedRoute = route
   const question = route === 'structural' ? classifyStructural(query) : null
   const term = question?.term ?? routeTerm(query)
-  if (term === null || (route === 'structural' && question === null)) return null
+  if (term === null || (route === 'structural' && question === null)) return { route: requestedRoute, fallback: true }
   const lower = term.toLowerCase()
   const [fileClauses, noteClauses, symbolClauses] = [fileFilter(filters), noteFilter(filters), symbolFilter(filters)]
   const clauses = (value: SQL[] | null) => value === null ? sql`AND false` : sql.join(value, sql` `)
@@ -97,7 +109,7 @@ export async function routeQuery(
       })),
     ]
     // More than `MAX_ROUTED` exact answers is not an answer: the hybrid path ranks them.
-    if (results.length > MAX_ROUTED) return null
+    if (results.length > MAX_ROUTED) return { route: requestedRoute, fallback: true }
     if (question?.kind === 'imports' && files.length === 1) {
       const f = files[0]!
       return structuralAnswer(question, [{ repositoryId: f.container_id, target: { fileId: f.id, blockIds: [], name: term, symbol: term, wholeFile: true } }], filters)
@@ -136,12 +148,12 @@ export async function routeQuery(
     if (route === 'path') {
       // Dotted symbols and file extensions share a shape. Auto tries the indexed path first;
       // an explicit path override never silently turns into a symbol lookup.
-      if (!automatic || term.includes('/')) return null
+      if (!automatic || term.includes('/')) return { route: requestedRoute, fallback: true }
       route = 'identifier'
     }
   }
 
-  if ((!includeSymbols && route !== 'structural') || resources.repositoryIds.length === 0) return null
+  if ((!includeSymbols && route !== 'structural') || resources.repositoryIds.length === 0) return { route: requestedRoute, fallback: true }
   // An identifier: the symbols named so, in any spelling, or by their `Class.name`.
   const id = splitIdentifier(term)
   const spellings = [...new Set([lower, id.whole, id.parts.join(''), id.parts.join('_'), id.parts.join('-')].filter((s) => s.length > 0))]
@@ -158,7 +170,12 @@ export async function routeQuery(
     id: string; file_id: string; block_id: string; container_id: string; path: string; kind: string; parent: string | null; inner_path: string
     start_line: number; end_line: number; snippet: string; updated: string; name: string
   }>
-  if (symbols.length === 0 || symbols.length > MAX_ROUTED) return null
+  if (symbols.length === 0) {
+    // A bare word (or typo) without an exact definition is conceptual, not a failed identifier route.
+    if (automatic && requestedRoute === 'identifier' && !hasIdentifierIntent(query)) return null
+    return { route: requestedRoute, fallback: true }
+  }
+  if (symbols.length > MAX_ROUTED) return { route: requestedRoute, fallback: true }
   if (question !== null && question.kind !== 'definition' && symbols.length === 1) {
     const s = symbols[0]!
     return structuralAnswer(question, [{ repositoryId: s.container_id, target: { fileId: s.file_id, blockIds: [s.block_id], name: s.name, symbol: s.inner_path } }], filters)
