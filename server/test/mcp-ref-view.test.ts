@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { existsSync } from 'node:fs'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { simpleGit } from 'simple-git'
@@ -71,7 +71,7 @@ async function connect(email: string, name: string): Promise<Client> {
 const ROW = z.looseObject({ path: z.string().optional(), name: z.string().optional(), symbolName: z.string().optional(), snippet: z.string().optional(), at: z.string().optional(), to: z.string().optional(), startLine: z.number().optional(), endLine: z.number().optional(), edge: z.looseObject({ confidence: z.string(), kind: z.string(), col: z.number(), symbol: z.string().nullable() }).optional() })
 const BODY = z.looseObject({
   results: z.array(ROW).default([]), files: z.array(ROW).default([]), hits: z.array(ROW).optional(), depth1: z.array(ROW).default([]), textual: z.array(ROW).optional(),
-  content: z.string().optional(), diff: z.string().optional(),
+  content: z.string().optional(), diff: z.string().optional(), targets: z.array(z.looseObject({ symbol: z.string().optional(), text: z.string().optional(), lines: z.tuple([z.number(), z.number()]).optional() })).optional(),
   truncated: z.union([z.literal(false), z.looseObject({ cursor: z.string().optional() })]).optional(),
 })
 
@@ -134,7 +134,8 @@ beforeAll(async () => {
   await flushExtraction()
   await db.insert(repositoryShares).values({ repositoryId: repoId, granteeType: 'user', granteeId: viewerId })
   await mkdir(config.localReposRoot, { recursive: true })
-  localRoot = await mkdtemp(join(config.localReposRoot, 'ref-local-'))
+  // Match routes.ts registration: the stored source is absolute even with a relative LOCAL_REPOS_ROOT.
+  localRoot = await realpath(await mkdtemp(join(config.localReposRoot, 'ref-local-')))
   await simpleGit().clone(root, localRoot, ['--quiet'])
   const [local] = await db.insert(repositories).values({ ownerId: user.id, name: 'local-refs-676', ingestionMethod: 'local_path', localPath: localRoot }).returning()
   localId = local!.id
@@ -161,7 +162,8 @@ describe('ref and overlay consumers (#676/#471)', () => {
     expect(next.content).toBe(NEXT)
     expect(next.commit).toBe(sameTree)
     const target = await answer('read_file', { path: 'src/api.ts', ref: second, targets: [{ symbol: 'inserted' }] })
-    expect(JSON.stringify(target.parts)).toContain('return 8')
+    expect(target.commit).toBe(second)
+    expect(target.targets).toEqual([expect.objectContaining({ symbol: 'inserted', text: 'export function inserted() { return 8 }\n', lines: [1, 1] })])
     const outlined = await answer('read_file', { path: 'src/api.ts', ref: second, outline: true })
     expect(JSON.stringify(outlined.outline)).toContain('inserted')
     const unchanged = await answer('read_file', { path: 'src/api.ts', ref: second, if_rev: next.hash })
@@ -244,7 +246,7 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     const tests = await answer('search', { query: 'tests for retained', route: 'structural', ref: second, overlay })
     expect(tests.results.map((r) => r.path)).toEqual(['src/retained.test.ts'])
     const imports = await answer('search', { query: 'what imports empty.ts', route: 'structural', ref: second, overlay })
-    expect(imports.results).toEqual([expect.objectContaining({ path: 'src/side.ts', startLine: 1, edge: expect.objectContaining({ kind: 'import' }) })])
+    expect(imports.results).toEqual([expect.objectContaining({ path: 'side.ts', startLine: 1, edge: expect.objectContaining({ kind: 'import' }) })])
     const conceptual = await answer('search', { query: 'retained', route: 'conceptual', ref: second, overlay })
     expect(conceptual).toMatchObject({ route: 'conceptual', retrieval_mode: 'hybrid', commit: second })
     expect(conceptual.results.some((r) => r.symbolName === 'retained')).toBe(true)
