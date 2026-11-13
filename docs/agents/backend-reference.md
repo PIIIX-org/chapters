@@ -3049,6 +3049,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     added. Separate tests retain raced-first-page success, explicit
     filter-race `BUSY`, and stale content/permission/absent-snapshot
     refusal before the handler. No legacy no-snapshot bypass was added.
+    After the power outage, only the fixed pagination case was rerun:
+    **1/1 passed** on fresh private fixture setup. The terminal pre-outage
+    18/19 result remains the evidence for the other 18 cases; no passing
+    batch or native episode was rerun. No owned job was active during
+    the outage, no owned PID/git locks needed clearing, and no shared
+    container lifecycle action was taken. The owned DB and test/cache
+    files were removed after the run. Fresh CI and independent review
+    still gate acceptance of the normally merged repair.
 
     A filtered reference-list cursor replays the first bounded source set
     and then pages its matches; it cannot claim matches below its source
