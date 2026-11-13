@@ -270,7 +270,7 @@ function mask(world: World, raw: string, tool?: string): string {
     // A conditional revision deliberately binds the caller/scope, unlike the ranked result's content.
     const answer = JSON.parse(raw) as { structuredContent: { rev?: string } }
     const rev = answer.structuredContent.rev
-    expect(rev).toMatch(/^[0-9a-f]{64}$/)
+    expect(rev).toEqual(expect.stringMatching(/^[0-9a-f]{64}$/))
     out = out.split(rev!).join('<search-revision>')
   }
   return out
