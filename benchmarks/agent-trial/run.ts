@@ -72,6 +72,13 @@ if (!Number.isInteger(caps.maxToolCalls) || caps.maxToolCalls < 1 || !Number.isI
 
 const env = loadEnv()
 assertLabBaseUrl(env.baseUrl)
+const health = await fetch(`${env.baseUrl}/health`, { signal: AbortSignal.timeout(10_000) })
+if (!health.ok) throw new Error(`lab health returned ${health.status}`)
+const healthBody = await health.json() as { version?: unknown }
+const serverCommit = typeof healthBody.version === 'string' ? healthBody.version : null
+const expectedServer = process.env.AGENT_TRIAL_SERVER_COMMIT ?? process.env.GITHUB_SHA
+if (expectedServer && serverCommit !== expectedServer) throw new Error(`lab runs ${serverCommit}, expected ${expectedServer}`)
+if (mode.mode === 'subscription' && !serverCommit?.match(/^[a-f0-9]{40,64}$/)) throw new Error('native trial requires a reported pinned server commit')
 const ctx = new LabContext(env, 'agent-trial', 'full')
 const t0 = Date.now()
 
@@ -181,14 +188,15 @@ function flush(complete: boolean): string {
     complete,
     dryRun,
     model: modelInfo,
-    commit: process.env.GITHUB_SHA ?? null,
+    commit: serverCommit,
+    harnessCommit: process.env.GITHUB_SHA ?? null,
     runId: process.env.GITHUB_RUN_ID ?? null,
     runUrl,
     updatedAt: at,
     ms: Date.now() - t0,
     harness: HARNESS,
     harnessVersion: HARNESS_VERSION,
-    ...(mode.mode === 'subscription' ? { transport: 'omp-rpc', auth: 'chatgpt', outputCapPolicy: 'provider-reported overrun: retain full output and usage, stop without tool execution, truncation or retry' } : {}),
+    ...(mode.mode === 'subscription' ? { transport: 'omp-rpc', auth: 'chatgpt', usageCostMeaning: 'API-equivalent catalog estimates, not subscription charges', outputCapPolicy: 'provider-reported overrun: retain full output and usage, stop without tool execution, truncation or retry' } : {}),
     repo: file.repo,
     caps,
     runBudgetMs: RUN_BUDGET_MS,
@@ -217,7 +225,7 @@ function flush(complete: boolean): string {
     '',
     ...(dryRun ? ['**DRY RUN**: scripted model (a fixed tool-call script, no language model). These numbers test the plumbing; they are not agent numbers.', ''] : []),
     ...(complete ? [] : [`**INCOMPLETE**: ${rows.length} of ${tasks.length * arms.length} episodes run${notRun.length > 0 ? `, ${notRun.length} not run (run budget)` : ' so far'}.`, '']),
-    `Model ${modelInfo.provider}/${modelInfo.name}; Elara at ${process.env.GITHUB_SHA ?? '(local)'}; run ${runUrl ?? '-'}; tasks on ${file.repo.url} @ ${file.repo.commit.slice(0, 7)}; harness v${HARNESS_VERSION} ${HARNESS}; ${at}`,
+    `Model ${modelInfo.provider}/${modelInfo.name}; Elara at ${serverCommit ?? '(unreported)'}; harness source ${process.env.GITHUB_SHA ?? '(local)'}; run ${runUrl ?? '-'}; tasks on ${file.repo.url} @ ${file.repo.commit.slice(0, 7)}; harness v${HARNESS_VERSION} ${HARNESS}; ${at}`,
     '',
     `Index: ${index.outcome}, ${index.files} files, ${index.symbols} symbols, ${Math.round(index.ms / 1000)} s. Caps per task: ${caps.maxToolCalls} tool calls, ${caps.maxTokens} tokens (judge included), ${Math.round(caps.maxWallMs / 60_000)} min.`,
     '',

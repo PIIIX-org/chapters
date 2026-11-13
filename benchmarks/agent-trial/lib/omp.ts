@@ -16,7 +16,7 @@ const ISOLATION = {
 }
 interface NativeMessage {
   role: string
-  content: Array<{ type: string; text?: string }>
+  content: Array<{ type: string; text?: string; textSignature?: string }>
   api: string
   provider: string
   model: string
@@ -25,10 +25,18 @@ interface NativeMessage {
   errorMessage?: string
 }
 
-function parseAnswer(message: NativeMessage, req: CompletionRequest, id: string): Pick<ModelTurn, 'text' | 'toolCalls' | 'error'> {
-  const raw = message.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
+export function parseOmpAnswer(message: Pick<NativeMessage, 'content'>, req: Pick<CompletionRequest, 'tools'>, id: string): Pick<ModelTurn, 'text' | 'toolCalls' | 'error'> {
   try {
-    const answer = JSON.parse(raw) as { text?: unknown; tool_calls?: unknown }
+    const parts = message.content.filter((c) => c.type === 'text').map((c) => {
+      const signature: unknown = c.textSignature ? JSON.parse(c.textSignature) : null
+      if (!signature || typeof signature !== 'object' || !('phase' in signature) || (signature.phase !== 'commentary' && signature.phase !== 'final_answer')) {
+        throw new Error('Missing or unsupported native text phase')
+      }
+      return { text: c.text ?? '', phase: signature.phase }
+    })
+    const final = parts.filter((c) => c.phase === 'final_answer')
+    if (final.length !== 1) throw new Error('Expected one native final_answer phase')
+    const answer = JSON.parse(final[0]!.text) as { text?: unknown; tool_calls?: unknown }
     if (typeof answer.text !== 'string' || !Array.isArray(answer.tool_calls)) throw new Error('Expected text and tool_calls')
     const toolCalls: ToolCall[] = answer.tool_calls.map((call: { name?: unknown; arguments?: unknown }, index) => {
       if (typeof call.name !== 'string' || !req.tools.some((t) => t.name === call.name)) throw new Error('Unknown tool')
@@ -36,7 +44,7 @@ function parseAnswer(message: NativeMessage, req: CompletionRequest, id: string)
       if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Tool arguments must be an object')
       return { id: `${id}:${index}`, name: call.name, args: value as Record<string, unknown> }
     })
-    return { text: answer.text, toolCalls }
+    return { text: [...parts.filter((c) => c.phase === 'commentary').map((c) => c.text), answer.text].filter(Boolean).join('\n'), toolCalls }
   } catch (err) {
     // Preserve actual provider accounting even when the model violates the response protocol.
     return { text: '', toolCalls: [], error: `Invalid native JSON answer: ${err instanceof Error ? err.message : String(err)}; raw answer retained in events` }
@@ -117,7 +125,7 @@ export function ompSubscriptionModel(model: string, evidenceDir: string): Model 
           const input = Number(usage.input) + Number(usage.cacheRead) + Number(usage.cacheWrite)
           if (input + Number(usage.output) !== usage.totalTokens) return reject(new Error('Native provider token totals do not reconcile'))
           resolveTurn({
-            ...parseAnswer(answer, req, sessionId), stop: answer.stopReason,
+            ...parseOmpAnswer(answer, req, sessionId), stop: answer.stopReason,
             ...(answer.errorMessage ? { error: answer.errorMessage } : {}),
             usage: { input, output: Number(usage.output), uncachedInput: Number(usage.input), cachedInput: Number(usage.cacheRead), cacheWriteInput: Number(usage.cacheWrite) },
             native: { transport: 'omp-rpc', cliVersion, protocolVersion: version, auth: 'chatgpt', model, provider: PROVIDER, api: API, endpoint: ORIGIN, threadId: sessionId, usage },

@@ -594,6 +594,10 @@ the real harness executes returned calls and feeds back their results.
 Native tools, extensions, skills, rules and context files are disabled, as
 are retries, compaction and cache warming. Unexpected native tool or model
 changes invalidate the turn.
+Only the provider's `final_answer` text phase supplies executable JSON;
+commentary remains in harness history and all output counts toward usage.
+The runner checks `/health.version` against `AGENT_TRIAL_SERVER_COMMIT`
+(default `GITHUB_SHA`) and records server and harness source commits separately.
 
 The native subscription route has no enforced per-turn output limit. The declared adaptation,
 identical in both arms, uses reported output tokens: a turn above its requested
