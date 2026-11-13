@@ -397,7 +397,7 @@ describe('search if_rev and the scoped result cache (#680, #682)', () => {
     const args = { vaultId, query: 'Guide setup install' }
     const before = metricsSnapshot()
     const first = await ok(owner, 'search', args)
-    expect(first.json.rev).toMatch(/^[0-9a-f]{64}$/)
+    expect(first.json.rev).toEqual(expect.stringMatching(/^[0-9a-f]{64}$/))
     expect((await ok(owner, 'search', args)).json).toEqual(first.json)
     expectUnchanged(await ok(owner, 'search', { ...args, if_rev: first.json.rev, budget_tokens: 256 }), 'rev', first.json.rev)
     const after = metricsSnapshot()
