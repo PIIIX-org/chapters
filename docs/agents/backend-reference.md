@@ -1788,7 +1788,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   job for a seq the note has moved past is skipped (every write that moves
   `seq` queues that seq's job); the blocks are computed and only the texts
   whose `embed_key` none of the note's blocks has are embedded, outside any
-  transaction; one short transaction then locks the row, drops the result if
+  transaction; one short transaction then locks the row `FOR NO KEY UPDATE`
+  (excluding edits/deletes but allowing collab appends' foreign-key checks,
+  #1126), drops the result if
   an edit moved `seq` meanwhile, replaces the whole block set (upsert by
   `block_id`, `search/block-rows.ts`, shared with extraction) and records
   `notes.embedder_id` and `notes.chunk_version`. A frontmatter-only edit
