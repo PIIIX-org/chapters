@@ -2439,6 +2439,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   cover targets, outlines, grep, unchanged/session answers and invalid
   typed identities. No provider model trial was run for this schema
   change; fresh controls and independent CI/lab review remain gates.
+  The source stack now normally merges repaired cache head `72961238`.
+  Its earlier `95e02f8a` restore-point/collaboration failures are not
+  covered by the 17 schema checks above; fresh integration checks and
+  new-harness controls must use the repaired combined source.
   Bare-array read answers (`list_vaults`, `list_repositories`,
   `list_vault_shares`, `list_repository_shares`, `list_teams`,
   `list_team_members`, `list_notifications`, `list_graph_perspectives`)
