@@ -24,7 +24,7 @@ import { notes, writeIdempotency } from '../db/schema.js'
 import { withKeyLock } from '../notes/key-lock.js'
 import { NOTE_REPLY_FIELDS, noteReply } from '../notes/reply-fields.js'
 import { noteIndexed, type RecordKey, type WrittenNote } from '../notes/store.js'
-import { StoreBusyError } from '../notes/store-tx.js'
+import { StoreBusyError, storeTransaction } from '../notes/store-tx.js'
 import { diffLines } from '../sync/text-diff.js'
 
 export type WriteStatus = 'applied' | 'merged' | 'conflicted' | 'retry'
@@ -88,6 +88,7 @@ const INTERNAL_NOTE_FIELDS = [
   'embedding',
   'frontmatterSrc',
   'seq',
+  'purgeEpoch',
 ]
 
 /** A stored answer without the internal note columns an answer recorded before #427 carried. */
@@ -208,7 +209,9 @@ export async function runWrite(
       return { ...storedAnswer(stored.result), replayed: true }
     }
     const entry = { connectionId, key, tool: call.tool, argsHash: hash }
+    let written: { id: string; purgeEpoch: number } | undefined
     const keyed: KeyedAnswer = (answer) => async (tx, row) => {
+      written = { id: row.id, purgeEpoch: row.purgeEpoch }
       const result = answer(row)
       await tx
         .insert(writeIdempotency)
@@ -216,9 +219,24 @@ export async function runWrite(
         .onConflictDoUpdate({ target: [writeIdempotency.connectionId, writeIdempotency.key], set: { ...entry, noteId: row.id, result, createdAt: sql`now()` } })
     }
     const result = await attempt(keyed)
-    const committed = await recorded()
-    if (committed) return result.status === 'retry' ? storedAnswer(committed.result) : result
-    if (result.status !== 'retry') await db.insert(writeIdempotency).values({ ...entry, result }).onConflictDoNothing()
-    return result
+    // Completion is a retention writer too: fence the vault before note mutexes, and never replace a purge tombstone.
+    return storeTransaction(written ? [written.id] : [], async (tx) => {
+      const [committed] = await tx.select({ argsHash: writeIdempotency.argsHash, result: writeIdempotency.result }).from(writeIdempotency).where(thisKey)
+      if (committed) {
+        if (committed.argsHash !== hash) throw new IdempotencyKeyReusedError(key, call.tool)
+        return result.status === 'retry' || (committed.result as Record<string, unknown>).purged === true ? storedAnswer(committed.result) : result
+      }
+      if (result.status === 'retry') return result
+      const live = await tx.execute(sql`SELECT id FROM vaults WHERE id = ${call.target} AND deleted_at IS NULL`)
+      const valid = written ? await tx.execute(sql`SELECT id FROM notes WHERE id = ${written.id} AND vault_id = ${call.target} AND purge_epoch = ${written.purgeEpoch}`) : null
+      const erased = live.length === 0 || (valid !== null && valid.length === 0)
+      const retained = erased ? { rev: null, status: 'conflicted', indexed: false, purged: true,
+        message: 'the recorded result was purged; this idempotency key will not apply again within its original window' } : result
+      await tx.insert(writeIdempotency).values({ ...entry, noteId: erased ? null : written?.id, result: retained }).onConflictDoNothing()
+      // CAS: an existing effect/tombstone wins over a delayed post-write result.
+      const [saved] = await tx.select({ argsHash: writeIdempotency.argsHash, result: writeIdempotency.result }).from(writeIdempotency).where(thisKey)
+      if (saved?.argsHash !== hash) throw new IdempotencyKeyReusedError(key, call.tool)
+      return storedAnswer(saved.result)
+    }, [call.target])
   })
 }

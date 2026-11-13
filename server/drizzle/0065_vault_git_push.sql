@@ -23,3 +23,6 @@ CREATE TABLE vault_git_push_operations (
 ALTER TABLE write_idempotency DROP CONSTRAINT write_idempotency_note_id_fkey;
 --> statement-breakpoint
 ALTER TABLE write_idempotency ADD CONSTRAINT write_idempotency_note_id_fkey FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE SET NULL;
+--> statement-breakpoint
+-- Internal retention generation. The content-based seq trigger deliberately does not change seq for this column.
+ALTER TABLE notes ADD COLUMN purge_epoch bigint NOT NULL DEFAULT 0;

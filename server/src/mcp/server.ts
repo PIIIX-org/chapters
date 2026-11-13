@@ -1534,7 +1534,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       // document needs no text (and the note's file is not rendered).
       // A numeric revision alone cannot identify a purged-and-recreated path. Require an observed immutable note id.
       if (page.at === null && args.if_rev === String(note.row.seq) && await hasObservedNote(auth.connection.id, note.row.id, note.row.seq) && !(await pathHadOtherNote(note.row))) {
-        const answer = { ...unchanged({ rev: note.row.seq }), rendered: () => confirmRead(auth.connection.id, note.row.id, note.row.seq) }
+        const answer = { ...unchanged({ rev: note.row.seq }), rendered: () => confirmRead(auth.connection.id, note.row.id, note.row.seq, note.row.purgeEpoch) }
         return inSession(session, { path: note.row.path, version: { rev: note.row.seq }, text: '' }, answer, page.at)
       }
       // Lines count over the note's file (ADR-004 §2.2, D3): line 1 is `---`, the body starts at body_start_line.
@@ -1548,7 +1548,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       // later whole-body edit three-way merges from (#864, #961); it replaces an older read. A body page's cursor
       // is refused once the body changed; a targets cursor, once the text of the part it resumes changed.
       const rendered = async () => {
-        await rememberRead(auth.connection.id, note.row.id, note.row.seq)
+        await rememberRead(auth.connection.id, note.row.id, note.row.seq, note.row.purgeEpoch)
       }
       const parts = () => markdownParts(note.row.id, note.row.path, note.body, file, bodyStart - 1)
       if (args.targets) {
@@ -1726,7 +1726,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         if (!updated) throw await noteNotFound(target, args.path)
         if (!dryRun) {
           showAgentPresence(target, updated.id, presence, 'editing')
-          if (args.body !== undefined) await advanceRead(auth.connection.id, updated.id, updated.seq, updated.body === args.body ? null : args.body)
+          if (args.body !== undefined) await advanceRead(auth.connection.id, updated.id, updated.seq, updated.purgeEpoch, updated.body === args.body ? null : args.body)
         }
         return answer(updated, dryRun ? false : await noteIndexed(updated.id, updated.seq))
       })
@@ -1828,7 +1828,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     if (made) {
       showAgentPresence(target, made.id, presence, 'editing')
       // The body it created is what this connection has: the base of its next whole body (#879 review).
-      if (edit.body !== undefined) await rememberRead(auth.connection.id, made.id, made.seq, made.body === edit.body ? null : edit.body)
+      if (edit.body !== undefined) await rememberRead(auth.connection.id, made.id, made.seq, made.purgeEpoch, made.body === edit.body ? null : edit.body)
       return createdAnswer(made, await noteIndexed(made.id, made.seq))
     }
     const requested = requestedEdit(edit)
@@ -1854,7 +1854,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     if (!note) throw await noteNotFound(target, path)
     if (!dryRun) {
       showAgentPresence(target, note.id, presence, 'editing')
-      if (edit.body !== undefined) await advanceRead(auth.connection.id, note.id, note.seq, note.body === edit.body ? null : edit.body)
+      if (edit.body !== undefined) await advanceRead(auth.connection.id, note.id, note.seq, note.purgeEpoch, note.body === edit.body ? null : edit.body)
     }
     return editedAnswer(note, dryRun ? false : await noteIndexed(note.id, note.seq))
   }
@@ -2917,7 +2917,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       await requireAccess(target, 'read')
       const note = await readLiveNote(target, path)
       if (!note) throw await noteNotFound(target, path)
-      await rememberRead(auth.connection.id, note.row.id, note.row.seq)
+      await rememberRead(auth.connection.id, note.row.id, note.row.seq, note.row.purgeEpoch)
       showAgentPresence(target, note.row.id, presence, 'reading')
       return {
         path: note.row.path,

@@ -27,6 +27,7 @@ import { emitPermissionChange } from '../sync/permission-events.js'
 import { invalidateVaultGit, withVaultGit } from '../git-remote/lifecycle.js'
 import { closeNoteEditors } from '../sync/live-docs.js'
 import { drainCollabAppends } from '../notes/store.js'
+import { clearNoteRetention, lockNote, lockVault, storeTransaction } from '../notes/store-tx.js'
 
 async function requireOwner(userId: string, vaultId: string) {
   const access = await resolveAccess(userId, vaultId)
@@ -38,28 +39,23 @@ export function purgeVaultRecord(vaultId: string): Promise<void> {
 }
 
 async function purgeVaultRecordLocked(vaultId: string): Promise<void> {
-  await invalidateVaultGit(vaultId)
-  // semanticEdges is polymorphic with no FK, so it does not cascade (#92).
-  // Collect note ids BEFORE deleting the vault row.
-  const noteIds = (
-    await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId))
-  ).map((n) => n.id)
-  for (const noteId of noteIds) closeNoteEditors(noteId)
-  await Promise.all(noteIds.map(drainCollabAppends))
-  // notifications is the other polymorphic table with no FK (#101): a
-  // grantee's feed would otherwise keep `vault_shared` rows pointing at a
-  // vault that no longer exists.
-  await db
-    .delete(notifications)
-    .where(and(eq(notifications.entityType, 'vault'), eq(notifications.entityId, vaultId)))
-
-  // Everything else referencing the vault cascades via FK. Edges after the
-  // rows, in the same transaction: an embedding that locked its note before
-  // the delete has committed its edges by now, and none can be added after
-  // it. The files that held one of its notes are queued (#1015).
-  await db.transaction(async (tx) => {
+  const closing = (await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId))).map((n) => n.id)
+  for (const noteId of closing) closeNoteEditors(noteId)
+  await Promise.all(closing.map(drainCollabAppends))
+  const noteIds = await storeTransaction([], async (tx) => {
+    await lockVault(tx, vaultId, true)
+    // FK inserts/key-share admission of a create serialize with this vault fence, including other DB clients.
+    const [vault] = await tx.select({ id: vaults.id }).from(vaults).where(eq(vaults.id, vaultId)).for('update')
+    if (!vault) return []
+    const ids = (await tx.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId))).map((n) => n.id).sort()
+    for (const id of ids) await lockNote(tx, id)
+    // Wait for admitted writers first, then scrub their results before FK SET NULL can unlink them.
+    await invalidateVaultGit(vaultId, tx)
+    await clearNoteRetention(tx, ids)
+    await tx.delete(notifications).where(and(eq(notifications.entityType, 'vault'), eq(notifications.entityId, vaultId)))
     await tx.delete(vaults).where(eq(vaults.id, vaultId))
-    await removeSemanticNodes(tx, 'note', vaultId, noteIds)
+    await removeSemanticNodes(tx, 'note', vaultId, ids)
+    return ids
   })
   kickSemanticEdges()
   for (const noteId of noteIds) closeNoteEditors(noteId, true)

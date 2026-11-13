@@ -5,6 +5,9 @@ import { assertBodyFits, assertFrontmatterFits } from '../notes/size-cap.js'
 import { isSafeAssetName } from '../notes/store.js'
 import { boundedGit, GitPushError, PACK_LIMITS } from './pack.js'
 
+/** Git-only attachment namespace: dot segments cannot be valid note paths. Disk/API paths stay assets/. */
+export const ASSET_PREFIX = '.assets/'
+
 export interface NoteBase { id: string; rev: number; blob: string }
 export interface Manifest { notes: Record<string, NoteBase>; assets: Record<string, string> }
 export interface TreeFile { oid: string; data: Buffer; note?: OkfNote }
@@ -25,9 +28,9 @@ export async function validatedTree(dir: string, commit: string, deadline = perf
     if (!entry) throw new GitPushError('only regular non-executable files are supported')
     const oid = entry[1]!
     const path = entry[2]!
-    const asset = path.startsWith('assets/')
+    const asset = path.startsWith(ASSET_PREFIX)
     if (asset) {
-      const name = path.slice(7)
+      const name = path.slice(ASSET_PREFIX.length)
       if (!isSafeAssetName(name) || name.startsWith('.')) throw new GitPushError('unsupported asset path')
     } else {
       if (!path.endsWith('.md') || resolveNotePath(path.slice(0, -3)).fullPath + '.md' !== path) throw new GitPushError('only canonical note paths and assets are supported')

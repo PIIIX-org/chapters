@@ -8,11 +8,11 @@
  * Locks (§5.1), in this order, as the first statements of the transaction:
  * `SET LOCAL lock_timeout`, the shared form of the instance maintenance lock
  * (`pg_try_advisory_xact_lock_shared`: false while `store-export-legacy`
- * holds the exclusive form, and the write answers "retry"), then the note's
- * own advisory lock keyed by its id. Per-note locks are always
+ * holds the exclusive form, and the write answers "retry"), shared vault
+ * retention fences, then sorted note-id advisory mutexes. All are
  * transaction-scoped. Table order: notes → note_projections → projected_files.
  */
-import { getTableColumns, sql, eq, and, desc, notInArray } from 'drizzle-orm'
+import { getTableColumns, sql, eq, and, desc, inArray, notInArray } from 'drizzle-orm'
 import { isDeepStrictEqual } from 'node:util'
 import { db } from '../db/client.js'
 import { noteLinks, noteRevisions, notes } from '../db/schema.js'
@@ -91,16 +91,24 @@ export async function lockNote(tx: Tx, noteId: string): Promise<void> {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${noteId}::text, 0))`)
 }
 
+/** Vault fence precedes note mutexes, including creates whose new note id has no row yet. */
+export async function lockVault(tx: Tx, vaultId: string, exclusive = false): Promise<void> {
+  const key = `vault-retention:${vaultId}`
+  await tx.execute(exclusive
+    ? sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`
+    : sql`SELECT pg_advisory_xact_lock_shared(hashtextextended(${key}, 0))`)
+}
+
 /**
- * Runs `fn` in one store transaction: lock timeout, the instance check and,
- * for each id in `noteIds`, the note's advisory lock (sorted, so two
- * transactions over the same notes never wait on each other in a cycle).
+ * Runs `fn` with lock timeout and the instance check, then shared vault
+ * fences BEFORE sorted note mutexes. Explicit `vaultIds` cover the full
+ * transaction (including new note ids); otherwise discover existing notes' vaults.
  * A lock timeout, a held maintenance lock or a paused process (its own
  * maintenance-lock connection dropped, maintenance-lock.ts) becomes
  * StoreBusyError before anything is written. The exporter, which holds the
  * exclusive form itself, skips the shared check.
  */
-export async function storeTransaction<T>(noteIds: readonly string[], fn: (tx: Tx) => Promise<T>): Promise<T> {
+export async function storeTransaction<T>(noteIds: readonly string[], fn: (tx: Tx) => Promise<T>, vaultIds: readonly string[] = []): Promise<T> {
   if (writesPaused()) throw new StoreBusyError('maintenance lock connection lost, reconnecting')
   try {
     return await db.transaction(async (tx) => {
@@ -111,6 +119,8 @@ export async function storeTransaction<T>(noteIds: readonly string[], fn: (tx: T
         )) as unknown as Array<{ ok: boolean }>
         if (!instance?.ok) throw new StoreBusyError('maintenance in progress')
       }
+      const existing = vaultIds.length > 0 || noteIds.length === 0 ? [] : await tx.select({ vaultId: notes.vaultId }).from(notes).where(inArray(notes.id, noteIds))
+      for (const vaultId of [...new Set([...vaultIds, ...existing.map((n) => n.vaultId)])].sort()) await lockVault(tx, vaultId)
       for (const id of [...new Set(noteIds)].sort()) await lockNote(tx, id)
       return fn(tx)
     })
@@ -120,17 +130,30 @@ export async function storeTransaction<T>(noteIds: readonly string[], fn: (tx: T
   }
 }
 
+/** Caller holds these notes' database mutexes; purge generation, plaintext eviction and deletion commit together. */
+export async function clearNoteRetention(tx: Tx, noteIds: readonly string[]): Promise<void> {
+  if (noteIds.length === 0) return
+  const ids = sql.join(noteIds.map(id => sql`${id}`), sql`, `)
+  await tx.execute(sql`UPDATE notes SET purge_epoch = purge_epoch + 1 WHERE id IN (${ids})`)
+  await tx.execute(sql`DELETE FROM note_reads WHERE note_id IN (${ids})`)
+  await tx.execute(sql`UPDATE write_idempotency SET result = jsonb_build_object(
+    'rev', NULL, 'status', 'conflicted', 'indexed', false, 'purged', true,
+    'message', 'the recorded result was purged; this idempotency key will not apply again within its original window')
+    WHERE note_id IN (${ids})`)
+}
+
 /** A note row as the store reads it under its locks: the model's columns plus `seq` and `frontmatter_src`. */
-export type StoredNote = NoteRow & { seq: number; frontmatterSrc: Record<string, unknown> | null }
+export type StoredNote = NoteRow & { seq: number; purgeEpoch: number; frontmatterSrc: Record<string, unknown> | null }
 
 export const storedColumns = {
   ...getTableColumns(notes),
   seq: sql<string>`${notes}.seq`.as('seq'),
+  purgeEpoch: sql<string>`${notes}.purge_epoch`.as('purge_epoch'),
   frontmatterSrc: sql<Record<string, unknown> | null>`${notes}.frontmatter_src`.as('frontmatter_src'),
 }
 
-export function toStored(row: NoteRow & { seq: string | number; frontmatterSrc: Record<string, unknown> | null }): StoredNote {
-  return { ...row, seq: Number(row.seq) }
+export function toStored(row: NoteRow & { seq: string | number; purgeEpoch: string | number; frontmatterSrc: Record<string, unknown> | null }): StoredNote {
+  return { ...row, seq: Number(row.seq), purgeEpoch: Number(row.purgeEpoch) }
 }
 
 /**

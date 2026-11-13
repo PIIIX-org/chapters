@@ -16,7 +16,7 @@ import { notes, vaults } from '../db/schema.js'
 import { renderNoteFile } from '../notes/projector.js'
 import { assetBlobId, listAssets, readAsset } from '../notes/store.js'
 import { saveManifest } from './metadata.js'
-import type { Manifest } from './tree.js'
+import { ASSET_PREFIX, type Manifest } from './tree.js'
 import { boundedGit, GitPushError, MAIN, PACK_LIMITS } from './pack.js'
 import { vaultRemoteDir, vaultRemotesRoot, withVaultGit } from './lifecycle.js'
 
@@ -36,8 +36,8 @@ export async function ensureVaultRemote(vaultId: string): Promise<string> {
     if (asset.size > PACK_LIMITS.object) throw new GitPushError('vault asset exceeds supported Git object size')
     const read = await readAsset(vaultId, asset.fileName)
     if (!read) throw new GitPushError('vault asset is unreadable or unsafe')
-    manifest.assets[`assets/${asset.fileName}`] = assetBlobId(read.buffer)
-    files.push({ path: `assets/${asset.fileName}`, data: read.buffer })
+    manifest.assets[`${ASSET_PREFIX}${asset.fileName}`] = assetBlobId(read.buffer)
+    files.push({ path: `${ASSET_PREFIX}${asset.fileName}`, data: read.buffer })
   }
   if (files.length > PACK_LIMITS.objects || files.some((f) => f.data.length > PACK_LIMITS.object) || files.reduce((n, f) => n + f.data.length, 0) > PACK_LIMITS.expanded) throw new GitPushError('vault exceeds supported Git tree limits')
   files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)

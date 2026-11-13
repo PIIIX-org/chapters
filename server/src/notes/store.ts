@@ -1,4 +1,4 @@
-import { lstat, mkdir, open, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { lstat, open, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -55,7 +55,7 @@ import {
   splitPath,
 } from './okf/paths.js'
 import { withKeyLock, withKeyLocks } from './key-lock.js'
-import { atomicWrite } from './atomic-write.js'
+import { atomicWrite, ensureDirectory, syncDirectory } from './atomic-write.js'
 import { assertBodyFits, assertFrontmatterFits, NoteTooLargeError } from './size-cap.js'
 import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from './growth-guard.js'
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
@@ -65,6 +65,7 @@ import {
   StoreBusyError,
   applyRowChange,
   collabNoteMigrated,
+  clearNoteRetention,
   enqueueEmbeddingTx,
   insertRevision,
   insertStoreJob,
@@ -359,14 +360,14 @@ export function noteLock(vaultId: string, path: string): string {
   return `note:${vaultId}/${path}`
 }
 
-/** A note row as writes and reads return it: the model's columns plus `seq`, the note's `rev` (#477). */
-export type WrittenNote = NoteRow & { seq: number }
+/** Internal read/write row: `seq` is the public rev; `purgeEpoch` is only a delayed-retention token. */
+export type WrittenNote = NoteRow & { seq: number; purgeEpoch: number }
 
-/** A row as callers see it: the model's columns and `seq` (`frontmatter_src` stays internal). */
+/** Remove rendering metadata; reply serializers separately allow-list public note fields. */
 function plainRow(row: StoredNote): WrittenNote {
   const plain: Partial<StoredNote> = { ...row }
   delete plain.frontmatterSrc
-  // Only the internal field was removed: the rest is the model's row and seq.
+  // Keep the captured purge epoch for internal retention callers, never for noteReply.
   return plain as WrittenNote
 }
 
@@ -618,6 +619,9 @@ export async function createNote(
     try {
       // One transaction (ADR-003 §5.3): row, revision at seq 1, links, projection targets, embedding job.
       row = await storeTransaction([id], async (tx) => {
+        // Fence delayed creates against trash/purge; the vault purge's FOR UPDATE waits for an already admitted insert.
+        const liveVault = await tx.execute(sql`SELECT id FROM vaults WHERE id = ${vaultId} AND deleted_at IS NULL FOR KEY SHARE`)
+        if (liveVault.length === 0) throw new OkfValidationError('vault not found or in the trash')
         const [inserted] = await tx
           .insert(notes)
           .values({ id, vaultId, type: resolved.type, name: resolved.name, path: resolved.fullPath, frontmatter, body })
@@ -629,10 +633,10 @@ export async function createNote(
         // Written by the store: nothing for the S2a backfill to do.
         await tx.execute(sql`INSERT INTO note_projections (note_id, projection, target_seq, applied_seq) VALUES (${id}, ${BACKFILL_MARKER}, 1, 1)`)
         await enqueueEmbeddingTx(tx, id, 1)
-        const created = { ...inserted!, seq: 1 }
+        const created = { ...inserted!, seq: 1, purgeEpoch: 0 }
         await options.recordKey?.(tx, created)
         return created
-      })
+      }, [vaultId])
     } catch (err) {
       if (isUniqueViolation(err)) {
         throw new NoteExistsError(resolved.fullPath)
@@ -1866,32 +1870,32 @@ async function purgeRevisionLocked(vaultId: string, revisionId: string): Promise
   closeNoteEditors(note.id)
   // No note/SQL lock is held while the already accepted appends finish their durable acknowledgement path.
   await drainCollabAppends(note.id)
-  return withKeyLock(noteLock(vaultId, note.path), () => purgeRevisionOfLockedNote(vaultId, revisionId))
+  return withKeyLock(noteLock(vaultId, note.path), () => purgeRevisionOfLockedNote(vaultId, note.id, revisionId))
 }
 
-async function purgeRevisionOfLockedNote(vaultId: string, revisionId: string): Promise<boolean> {
-  const [found] = (await db.execute(sql`
-    SELECT r.note_id, r.seq = n.seq AS current,
-      (c.folded_seq IS NOT NULL AND r.seq = c.folded_seq AND n.seq > c.folded_seq) AS base
-    FROM note_revisions r JOIN notes n ON n.id = r.note_id LEFT JOIN note_crdt c ON c.note_id = n.id
-    WHERE r.id = ${revisionId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ note_id: string; current: boolean | null; base: boolean }>
-  if (!found) return false
-  // ADR-003 §5.5: the note's text still holds what this revision holds (invariant I2).
-  if (found.current) {
-    throw new OkfValidationError('this revision is the note as it is now; edit the note first, then purge the revision')
-  }
-  if (found.base) {
-    throw new OkfValidationError('this revision is the base of a pending merge of the note; open or edit the note first, then purge the revision')
-  }
-  await invalidateVaultGit(vaultId)
-  await storeTransaction([found.note_id], async (tx) => {
+async function purgeRevisionOfLockedNote(vaultId: string, noteId: string, revisionId: string): Promise<boolean> {
+  const purged = await storeTransaction([noteId], async (tx) => {
+    const locked = await lockedNote(tx, noteId)
+    if (!locked || locked.vaultId !== vaultId) return false
+    const [found] = (await tx.execute(sql`
+      SELECT r.seq = n.seq AS current,
+        (c.folded_seq IS NOT NULL AND r.seq = c.folded_seq AND n.seq > c.folded_seq) AS base
+      FROM note_revisions r JOIN notes n ON n.id = r.note_id LEFT JOIN note_crdt c ON c.note_id = n.id
+      WHERE r.id = ${revisionId} AND n.id = ${noteId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ current: boolean | null; base: boolean }>
+    if (!found) return false
+    if (found.current) throw new OkfValidationError('this revision is the note as it is now; edit the note first, then purge the revision')
+    if (found.base) throw new OkfValidationError('this revision is the base of a pending merge of the note; open or edit the note first, then purge the revision')
+    await invalidateVaultGit(vaultId, tx)
+    // Same database note mutex/transaction as delayed retention writers: seq stays, the purge generation changes.
+    await clearNoteRetention(tx, [noteId])
     await expandDependents(tx, revisionId)
     await tx.delete(noteRevisions).where(eq(noteRevisions.id, revisionId))
-    const crdt = await readNoteCrdt(tx, found.note_id)
+    const crdt = await readNoteCrdt(tx, noteId)
     if (crdt) await compactNoteCrdt(tx, crdt)
+    return true
   })
-  closeNoteEditors(found.note_id, true)
-  return true
+  if (purged) closeNoteEditors(noteId, true)
+  return purged
 }
 
 /**
@@ -1907,10 +1911,11 @@ export function purgeNote(vaultId: string, noteId: string): Promise<boolean> {
 
 async function purgeNoteLocked(vaultId: string, noteId: string): Promise<boolean> {
   const purged = await withTrashedNote(vaultId, noteId, async (row) => {
-    await invalidateVaultGit(vaultId)
     const done = await storeTransaction([row.id], async (tx) => {
       const locked = await lockedNote(tx, row.id)
       if (!locked || !locked.deletedAt) return false
+      await invalidateVaultGit(vaultId, tx)
+      await clearNoteRetention(tx, [row.id])
       await tx.delete(notes).where(eq(notes.id, row.id))
       // semanticEdges is polymorphic and has no FK (spec 9), so it does not
       // cascade — clear it by hand or the rows leak (#92). The trash removed
@@ -2316,9 +2321,9 @@ export function assetBlobId(buffer: Buffer): string {
   return createHash('sha1').update(`blob ${buffer.length}\0`).update(buffer).digest('hex')
 }
 
-async function assetDirectory(vaultId: string): Promise<void> {
+async function assetDirectory(vaultId: string, durable = false): Promise<void> {
   const dir = join(vaultDir(vaultId), 'assets')
-  await mkdir(dir, { recursive: true })
+  await ensureDirectory(dir, durable)
   if (!(await lstat(dir)).isDirectory()) throw new OkfValidationError('assets must be a real directory')
 }
 
@@ -2331,7 +2336,7 @@ export async function compareAndSetAsset(
 ): Promise<boolean> {
   if (!isSafeAssetName(fileName) || fileName.startsWith('.')) throw new OkfValidationError('unsafe asset filename')
   return withKeyLock(`asset:${vaultId}/${fileName}`, async () => {
-    await assetDirectory(vaultId)
+    await assetDirectory(vaultId, true)
     const file = assetFile(vaultId, fileName)
     const stats = await lstat(file).catch((err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') return null
@@ -2339,11 +2344,21 @@ export async function compareAndSetAsset(
     })
     if (stats && !stats.isFile()) throw new OkfValidationError('assets must be regular files')
     const current = stats ? assetBlobId(await readFile(file)) : null
-    // A retry after a crash between the filesystem mutation and its receipt is a no-op.
-    if (current === (proposed ? assetBlobId(proposed) : null)) return true
+    // A retry after mutation but before its receipt must finish durability, not merely match bytes.
+    if (current === (proposed ? assetBlobId(proposed) : null)) {
+      if (proposed) {
+        const handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+        try { await handle.sync() } finally { await handle.close() }
+      }
+      await syncDirectory(join(vaultDir(vaultId), 'assets'))
+      return true
+    }
     if (current !== expected) return false
-    if (proposed) await atomicWrite(file, proposed, { mode: 0o600 })
-    else await rm(file)
+    if (proposed) await atomicWrite(file, proposed, { mode: 0o600, durable: true })
+    else {
+      await rm(file)
+      await syncDirectory(join(vaultDir(vaultId), 'assets'))
+    }
     return true
   })
 }

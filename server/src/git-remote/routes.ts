@@ -13,6 +13,7 @@ import { getRevision, isSafeAssetName } from '../notes/store.js'
 import { withVaultGit } from './lifecycle.js'
 import { advertisement, boundedGit, GitPushError, PACK_LIMITS } from './pack.js'
 import { receiveHead, receivePush } from './receive.js'
+import { ASSET_PREFIX } from './tree.js'
 
 const MAX_UPLOAD_REQUEST = 1024 * 1024
 let receiving = 0
@@ -137,7 +138,7 @@ export function vaultGitRoutes(app: FastifyInstance) {
         const { commitId, name } = req.params
         if (!/^[0-9a-f]{40}$/.test(commitId) || !isSafeAssetName(name) || name.startsWith('.')) return reply.code(404).send({ error: 'not found' })
         const operations = await operationResults(allowed.vaultId, allowed.auth.connection.id, commitId)
-        if (!operations.some((entry) => entry.path === `assets/${name}` && entry.result.status === 'conflicted')) return reply.code(404).send({ error: 'not found' })
+        if (!operations.some((entry) => entry.path === `${ASSET_PREFIX}${name}` && entry.result.status === 'conflicted')) return reply.code(404).send({ error: 'not found' })
         const data = await readFile(assetProposalFile(allowed.vaultId, commitId, name)).catch(() => null)
         if (!data) return reply.code(404).send({ error: 'not found' })
         return reply.header('content-type', 'application/octet-stream').header('content-disposition', `attachment; filename="${name}"`).header('cache-control', 'no-store').send(data)

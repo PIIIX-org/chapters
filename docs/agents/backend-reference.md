@@ -3148,7 +3148,9 @@ v2/v3; one non-deleting, fast-forward `refs/heads/main` update; 32 commits,
 4096 packed objects/tree files, 128 changed files, 16 MiB HTTP/inflated
 request, 8 MiB per object and 64 MiB inflated pack/delta work or tree.
 Notes also obey the store's body/frontmatter limits and canonical slug
-paths; assets use direct safe names under `assets/`. Regular `100644`
+paths; Git attachments use direct safe names under `.assets/` (disk/API
+paths stay `assets/`). Dot segments cannot name notes, so valid
+`assets/design` and nested notes cannot collide with attachments. Regular `100644`
 files only: no symlinks, executable bits, submodules or Git configuration.
 Upload negotiation has a 1 MiB gzip/plain cap; child processes have a 15 s
 deadline and bounded output, no hooks/global Git config/server secrets.
@@ -3162,7 +3164,12 @@ alone. Recreated paths never alias the served note. Git path moves import
 as a create plus a base-checked trash operation. Destructive comparisons
 fence CRDT appends through COMMIT. Asset additions/replacements/removals
 compare blob identities under the same lock as ordinary asset uploads;
-atomic replacement avoids truncation and symlink following.
+atomic replacement avoids truncation and symlink following. Git attachment
+mutations synchronize the completed file before rename and the containing
+directory after rename/unlink, before their database receipt and ref ACK.
+A crash before a receipt leaves an honest partial failure: retry verifies
+desired bytes/absence and completes sync, or keeps a later human version
+as a conflict. An existing applied receipt skips replay of that mutation.
 
 Cross-note imports are **non-atomic**. `vault_git_push_operations` receipts
 commit with each note operation. Conflicts/failures return Git `ng`, name
@@ -3186,6 +3193,17 @@ write answers with content-free effect tombstones (a same-key retry cannot
 resurrect the purged write within its original 24 h window), drains accepted
 collab appends without holding note locks, compacts durable CRDT state and
 evicts loaded documents. Search cache generations reject in-flight fills.
+The internal `notes.purge_epoch` does not change the public `rev`. Reads and
+committed writes capture it before delayed retention callbacks. Retention
+writers take the database vault-shared fence before the note mutex and
+recheck live note identity, exact revision and epoch. Revision purge bumps
+the epoch, clears caller text/results and deletes the revision in that same
+transaction. Whole-vault purge takes the exclusive vault fence before its
+vault row lock and sorted note mutexes, then scrubs admitted writers'
+results and cascades deletion in one transaction. Post-write idempotency
+completion shares this fence and cannot replace an effect tombstone or
+retain plaintext for a missing vault. These are database boundaries,
+including writers on separate database connections, not process-only locks.
 Session passage caches hold hashes/ranges, not note text. Query embedding
 caches hold query-derived vectors. Preserve Git files with a database/data
 volume backup if retaining accepted Git OIDs matters; the portable instance

@@ -29,7 +29,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { mcpConnections, noteReads, noteRevisions, repositoryFiles, repositoryShares, vaultShares } from '../src/db/schema.js'
+import { noteReads, noteRevisions, repositoryFiles, repositoryShares, vaultShares } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { appendCollabUpdate, createNote, loadCollabState, purgeNote, renameNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
@@ -111,7 +111,7 @@ beforeAll(async () => {
   repoId = (await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'if-rev-repo', ingestionMethod: 'agent_push' } })).json<{ id: string }>().id
   const minted = await app.inject({ method: 'POST', url: '/api/mcp-connections', headers: { cookie }, body: { name: 'if-rev-owner', scope: 'account' } })
   owner = await mcpClient(minted.json<{ token: string }>().token)
-  ownerConnectionId = (await db.select({ id: mcpConnections.id }).from(mcpConnections).where(eq(mcpConnections.name, 'if-rev-owner')))[0]!.id
+  ownerConnectionId = minted.json<{ id: string }>().id
 
   const guestUser = await createActiveUser()
   guestId = guestUser.id

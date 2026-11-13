@@ -1,5 +1,5 @@
 // #677/#1087: real Git smart-HTTP clone/edit/push, live collaborative edits, bounded failures and explicit purge.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -16,11 +16,61 @@ import { existsSync } from 'node:fs'
 import { db } from '../src/db/client.js'
 import { vaults } from '../src/db/schema.js'
 import { sweepVaultRemotes, vaultRemoteDir } from '../src/git-remote/vault-remote.js'
-import { createNote, getBaseRevision, getLiveNote, purgeNote, purgeRevision, readAsset, readLiveNote, renameNote, softDeleteNote, updateNote, writeAsset } from '../src/notes/store.js'
+import { assetFile, createNote, getBaseRevision, getLiveNote, purgeNote, purgeRevision, readAsset, readLiveNote, renameNote, softDeleteNote, updateNote, writeAsset } from '../src/notes/store.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { setFailpointHandler } from '../src/failpoints.js'
 import { purgeVaultRecord } from '../src/vaults/routes.js'
+import type * as FsPromises from 'node:fs/promises'
+import type * as GitMetadata from '../src/git-remote/metadata.js'
+
+// setup-jobs imports the projector/atomic-write before test mocks; reload those modules
+// so the instrumentation observes real filesystem calls in the actual store path.
+vi.hoisted(() => vi.resetModules())
+// Instrument the real filesystem and real database receipt, rather than substitute a successful mutation.
+const durability = vi.hoisted(() => ({ enabled: false, file: '', directory: '', vaultId: '', failDirectorySync: false, events: [] as string[] }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof FsPromises>()
+  return {
+    ...real,
+    open: async (...args: Parameters<typeof real.open>) => {
+      const handle = await real.open(...args)
+      const name = String(args[0])
+      const sync = handle.sync.bind(handle)
+      handle.sync = async () => {
+        if (durability.enabled) {
+          if (name === durability.directory) {
+            durability.events.push('directory-sync')
+            if (durability.failDirectorySync) {
+              durability.failDirectorySync = false
+              throw new Error('injected failure before durable directory sync')
+            }
+          } else if (name === durability.file || name.startsWith(durability.file + '.')) durability.events.push('file-sync')
+        }
+        await sync()
+      }
+      return handle
+    },
+    rename: async (...args: Parameters<typeof real.rename>) => {
+      if (durability.enabled && String(args[1]) === durability.file) durability.events.push('rename')
+      return real.rename(...args)
+    },
+    rm: async (...args: Parameters<typeof real.rm>) => {
+      if (durability.enabled && String(args[0]) === durability.file) durability.events.push('unlink')
+      return real.rm(...args)
+    },
+  }
+})
+vi.mock('../src/git-remote/metadata.js', async (importOriginal) => {
+  const real = await importOriginal<typeof GitMetadata>()
+  return {
+    ...real,
+    recordOperation: async (...args: Parameters<typeof real.recordOperation>) => {
+      await real.recordOperation(...args)
+      if (durability.enabled && args[1] === durability.vaultId && args[4] === '.assets/proof.txt' && args[5].status === 'applied') durability.events.push('receipt')
+    },
+  }
+})
 
 const sh = promisify(execFile)
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', HOME: tmpdir() }
@@ -82,8 +132,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   providers.forEach((provider) => provider.destroy())
-  await collab.destroy()
-  await app.close()
+  await collab?.destroy()
+  await app?.close()
   for (const dir of dirs) await rm(dir, { recursive: true, force: true })
 })
 
@@ -274,7 +324,7 @@ describe('safe writable vault round trips (#677/#1087)', () => {
   it('keeps actual incoming OIDs through status, next fetch and a second push; creates/deletes notes and replaces/removes assets', async () => {
     const f = await pushFixture()
     await editFile(f.dir, 'docs/a.md', 'Middle line.', 'Agent middle.')
-    await writeFile(join(f.dir, 'assets/proof.txt'), 'replacement asset')
+    await writeFile(join(f.dir, '.assets/proof.txt'), 'replacement asset')
     const first = await commit(f.dir)
     const pushed = await git(['push', 'origin', 'HEAD:main'], f.dir)
     expect(pushed.ok, pushed.out).toBe(true)
@@ -285,7 +335,7 @@ describe('safe writable vault round trips (#677/#1087)', () => {
     expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('replacement asset')
     await writeFile(join(f.dir, 'docs/new.md'), '---\ntype: docs\ntitle: New\n---\nNewly pushed note.\n')
     await rm(join(f.dir, 'docs/b.md'))
-    await rm(join(f.dir, 'assets/proof.txt'))
+    await rm(join(f.dir, '.assets/proof.txt'))
     const second = await commit(f.dir)
     const again = await git(['push', 'origin', 'HEAD:main'], f.dir)
     expect(again.ok, again.out).toBe(true)
@@ -383,7 +433,7 @@ describe('safe writable vault round trips (#677/#1087)', () => {
     expect(rejected.ok, rejected.out).toBe(false)
     expect((await readLiveNote(unsafe.id, 'docs/a'))!.body).not.toContain('Should not be applied.')
     const f = await pushFixture()
-    await writeFile(join(f.dir, 'assets/proof.txt'), 'agent asset version')
+    await writeFile(join(f.dir, '.assets/proof.txt'), 'agent asset version')
     const oid = await commit(f.dir)
     await writeAsset(f.id, 'proof.txt', Buffer.from('new human asset version'))
     const conflict = await git(['push', 'origin', 'HEAD:main'], f.dir)
@@ -458,4 +508,96 @@ it('purging an old revision evicts live CRDT history while preserving every ackn
   const reconnected = await human(f.id, f.a.id)
   expect(reconnected.text.toString()).toBe('Current clean body.\nAcknowledged human typing before purge.\n')
   expect((await readLiveNote(f.id, 'docs/a'))!.body).toBe(reconnected.text.toString())
+}, 30_000)
+
+it('keeps valid assets/ note identities and nested notes disjoint from attachments across edit/delete/fetch/second push', async () => {
+  const f = await pushFixture()
+  const design = await createNote(f.id, { path: 'assets/design', body: 'This is a note, not an attachment.\n' })
+  await createNote(f.id, { path: 'assets/design/overview', body: 'A valid nested note under assets.\n' })
+  await writeAsset(f.id, 'design.md', Buffer.from('Independent attachment bytes'))
+  const c = await clone(f.token, f.id)
+  expect(c.ok, c.out).toBe(true)
+  await git(['config', 'user.email', 'git-proof@localhost'], c.dir)
+  await git(['config', 'user.name', 'Git proof'], c.dir)
+  expect(await readFile(join(c.dir, 'assets/design.md'), 'utf8')).toContain('This is a note')
+  expect(await readFile(join(c.dir, '.assets/design.md'), 'utf8')).toBe('Independent attachment bytes')
+  expect(await readFile(join(c.dir, 'assets/design/overview.md'), 'utf8')).toContain('valid nested note')
+  await editFile(c.dir, 'assets/design.md', 'This is a note', 'Edited note')
+  await editFile(c.dir, 'docs/a.md', 'Middle line.', 'Another unrelated edit.')
+  await commit(c.dir)
+  expect((await git(['rev-parse', 'refs/heads/main'], vaultRemoteDir(f.id))).out.trim()).toBe((await git(['rev-parse', 'HEAD^'], c.dir)).out.trim())
+  const first = await git(['push', 'origin', 'HEAD:main'], c.dir)
+  expect(first.ok, first.out).toBe(true)
+  expect((await getLiveNote(f.id, 'assets/design'))!.id).toBe(design.id)
+  expect((await readLiveNote(f.id, 'assets/design'))!.body).toContain('Edited note')
+  expect((await readAsset(f.id, 'design.md'))!.buffer.toString()).toBe('Independent attachment bytes')
+  await rm(join(c.dir, 'assets/design.md'))
+  await writeFile(join(c.dir, '.assets/design.md'), 'Replacement attachment bytes')
+  const secondOid = await commit(c.dir)
+  const limited = await mint({ name: 'note-delete-is-not-asset-edit', scope: 'vault', vaultId: f.id, access: 'write', allowedTools: ['read_note', 'edit_note'] })
+  expect((await git(['-c', `http.extraHeader=Authorization: Bearer ${limited}`, 'push', `${baseUrl}/git/vaults/${f.id}`, 'HEAD:main'], c.dir)).ok).toBe(false)
+  expect((await getLiveNote(f.id, 'assets/design'))!.id).toBe(design.id)
+  expect((await readAsset(f.id, 'design.md'))!.buffer.toString()).toBe('Independent attachment bytes')
+  const second = await git(['push', 'origin', 'HEAD:main'], c.dir)
+  expect(second.ok, second.out).toBe(true)
+  expect(await getLiveNote(f.id, 'assets/design')).toBeNull()
+  expect((await readAsset(f.id, 'design.md'))!.buffer.toString()).toBe('Replacement attachment bytes')
+  expect((await git(['fetch', 'origin'], c.dir)).ok).toBe(true)
+  expect((await git(['merge-base', '--is-ancestor', secondOid, 'origin/main'], c.dir)).ok).toBe(true)
+  expect((await readLiveNote(f.id, 'assets/design/overview'))!.body).toContain('valid nested note')
+}, 30_000)
+
+it('synchronizes real attachment replacement/deletion before the durable receipt and Git acknowledgement', async () => {
+  const f = await pushFixture()
+  Object.assign(durability, { enabled: true, file: assetFile(f.id, 'proof.txt'), directory: assetFile(f.id, ''), vaultId: f.id, events: [] })
+  try {
+    await writeFile(join(f.dir, '.assets/proof.txt'), 'Durable replacement.')
+    await commit(f.dir)
+    const replacement = await git(['push', 'origin', 'HEAD:main'], f.dir)
+    durability.events.push('ack')
+    expect(replacement.ok, replacement.out).toBe(true)
+    expect(durability.events).toEqual(['file-sync', 'rename', 'directory-sync', 'receipt', 'ack'])
+    durability.events.length = 0
+    await rm(join(f.dir, '.assets/proof.txt'))
+    await commit(f.dir)
+    const deletion = await git(['push', 'origin', 'HEAD:main'], f.dir)
+    durability.events.push('ack')
+    expect(deletion.ok, deletion.out).toBe(true)
+    expect(durability.events).toEqual(['unlink', 'directory-sync', 'receipt', 'ack'])
+  } finally { durability.enabled = false }
+}, 30_000)
+
+it('does not acknowledge a failed directory sync; a verified-byte retry completes durability before recording its receipt', async () => {
+  const f = await pushFixture()
+  Object.assign(durability, { enabled: true, file: assetFile(f.id, 'proof.txt'), directory: assetFile(f.id, ''), vaultId: f.id, events: [], failDirectorySync: true })
+  try {
+    await writeFile(join(f.dir, '.assets/proof.txt'), 'Bytes before the directory-sync crash.')
+    const oid = await commit(f.dir)
+    const failed = await git(['push', 'origin', 'HEAD:main'], f.dir)
+    expect(failed.ok, failed.out).toBe(false)
+    expect(durability.events).toEqual(['file-sync', 'rename', 'directory-sync'])
+    const report = await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}`, headers: { authorization: `Bearer ${f.token}` } })
+    expect(report.statusCode).toBe(404)
+    durability.events.length = 0
+    const retry = await git(['push', 'origin', 'HEAD:main'], f.dir)
+    durability.events.push('ack')
+    expect(retry.ok, retry.out).toBe(true)
+    expect(durability.events).toEqual(['file-sync', 'directory-sync', 'receipt', 'ack'])
+  } finally { durability.enabled = false; durability.failDirectorySync = false }
+}, 30_000)
+
+it('keeps a later human attachment version when retry resumes after an already durable attachment receipt', async () => {
+  const f = await pushFixture()
+  await writeFile(join(f.dir, '.assets/proof.txt'), 'Agent attachment committed first.')
+  await editFile(f.dir, 'docs/a.md', 'Middle line.', 'Agent middle after attachment.')
+  const oid = await commit(f.dir)
+  setFailpointHandler((name) => { if (name === 'edit.before-commit') throw new Error('injected failure after attachment receipt') })
+  try { expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(false) } finally { setFailpointHandler(null) }
+  const report = await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}`, headers: { authorization: `Bearer ${f.token}` } })
+  expect(report.statusCode, report.body).toBe(200)
+  expect(report.json<{ operations: Array<{ path: string; result: { status: string } }> }>().operations).toContainEqual(expect.objectContaining({ path: '.assets/proof.txt', result: expect.objectContaining({ status: 'applied' }) }))
+  await writeAsset(f.id, 'proof.txt', Buffer.from('Human version after the durable import.'))
+  const retry = await git(['push', 'origin', 'HEAD:main'], f.dir)
+  expect(retry.ok, retry.out).toBe(true)
+  expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('Human version after the durable import.')
 }, 30_000)

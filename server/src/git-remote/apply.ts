@@ -12,7 +12,7 @@ import { NoteEditConflictError, writeThroughCollab, type EditBase } from '../syn
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import { GitPushError } from './pack.js'
 import { operationResults, recordOperation, type OperationResult } from './metadata.js'
-import type { Manifest, NoteBase, TreeFile } from './tree.js'
+import { ASSET_PREFIX, type Manifest, type NoteBase, type TreeFile } from './tree.js'
 
 async function baseRevision(vaultId: string, base: NoteBase): Promise<EditBase | null> {
   const [revision] = await db.select({ id: noteRevisions.id, body: revisionBody, frontmatter: noteRevisions.frontmatter })
@@ -46,7 +46,7 @@ export async function applyTree(vaultId: string, auth: McpAuth, commitId: string
   for (const path of changed) {
     if (done.has(path)) continue
     const base = manifest.notes[path]
-    const tool = path.startsWith('assets/') ? 'edit_note' : base ? tree.has(path) ? 'edit_note' : 'delete_note' : 'create_note'
+    const tool = path.startsWith(ASSET_PREFIX) ? 'edit_note' : base ? tree.has(path) ? 'edit_note' : 'delete_note' : 'create_note'
     if (auth.connection.allowedTools && !auth.connection.allowedTools.includes(tool)) throw new GitPushError(`token does not allow ${tool}`)
     if (tool === 'delete_note' && auth.connection.profile !== 'admin') throw new GitPushError('delete_note requires the admin profile')
     if (base) {
@@ -61,15 +61,15 @@ export async function applyTree(vaultId: string, auth: McpAuth, commitId: string
     const proposed = tree.get(path)
     const base = manifest.notes[path]
     const revision = bases.get(path)
-    const action: OperationResult['action'] = path.startsWith('assets/') ? 'asset' : !base ? 'create' : proposed ? 'edit' : 'delete'
+    const action: OperationResult['action'] = path.startsWith(ASSET_PREFIX) ? 'asset' : !base ? 'create' : proposed ? 'edit' : 'delete'
     const record: RecordKey = async (tx, row) => {
       await recordOperation(tx, vaultId, connectionId, commitId, path, { action, status: 'applied', noteId: row.id, rev: row.seq })
     }
     try {
       if (action === 'asset') {
-        const name = path.slice(7)
+        const name = path.slice(ASSET_PREFIX.length)
         const applied = await compareAndSetAsset(vaultId, name, manifest.assets[path] ?? null, proposed?.data ?? null)
-        if (!applied && proposed) await atomicWrite(assetProposalFile(vaultId, commitId, name), proposed.data, { mode: 0o600 })
+        if (!applied && proposed) await atomicWrite(assetProposalFile(vaultId, commitId, name), proposed.data, { mode: 0o600, durable: true })
         await recordOperation(db, vaultId, connectionId, commitId, path, { action, status: applied ? 'applied' : 'conflicted', ...(!applied ? { error: proposed ? 'asset changed since base; proposed file is available from the push report API' : 'asset changed since base; deletion was not applied' } : {}) })
       } else if (!base) {
         // The unique path index decides creates. A concurrently created note becomes a reviewable proposal, never an upsert.
