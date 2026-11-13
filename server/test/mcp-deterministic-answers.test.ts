@@ -21,6 +21,8 @@
 //  - ids: the world's own vault, repository, note, file and block ids
 //    (and the 8-character prefixes names carry), each replaced by a label
 //    built from its fixture path;
+//  - view ids: the fixture overlay's exact source, file and structural block
+//    identities, labelled by fixture path/kind/symbol/line;
 //  - times: the values of the keys in TIME_KEYS.
 // Anything else that differs fails the test.
 //
@@ -43,6 +45,7 @@ import { createNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction, scheduleImportReresolution } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import { repositoryViewAt, type RepositoryView } from '../src/repositories/ref-index.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // createNote takes its id from `randomUUID()`: the next one is queued here before each call.
@@ -129,10 +132,13 @@ const FILES: Array<{ path: string; content: string }> = [
   { path: 'README.md', content: '# determinism-repo\n\nUpload, retry and checksum chunks.\n' },
 ]
 
+const SYMBOL_OVERLAY = '--- a/src/checksum.ts\n+++ b/src/checksum.ts\n@@ -1,4 +1,7 @@\n /** A chunk checksum. */\n+export function checksumAll(chunks: string[]): string[] {\n+  return chunks.map((c) => String(c.length))\n+}\n export function checksum(chunk: string): string {\n   return String(chunk.length)\n }\n'
+
 interface World {
   agent: Client
   vaultId: string
   repoId: string
+  overlayView: RepositoryView
   /** Generated id → its label, longest first when applied. */
   labels: Array<[string, string]>
   /** The labels of the world's notes, files and blocks, in id order (as Postgres sorts the ids). */
@@ -213,6 +219,14 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
   // A block's text id (`b_…`, grep's hits) is a hash of its owner's id: it differs per database like the uuids.
   for (const b of renamed) labels.push([b.id, b.label], [b.blockId, `${b.label}#`])
   for (const [id, label] of ownerLabel) labels.push([id, label])
+  // View identities have a repository/source salt too; allowlist only this
+  // fixture's actual identities, leaving its tree/content/overlay hashes intact.
+  const overlayView = await repositoryViewAt(owner.id, repoId, { overlay: SYMBOL_OVERLAY })
+  labels.push([overlayView.source, '<view-source>'])
+  for (const file of overlayView.files.values()) {
+    labels.push([file.id, `<view-file:${file.path}>`])
+    for (const block of file.blocks) labels.push([block.blockId, `<view-block:${file.path}:${block.kind}:${block.innerPath}:${block.startLine}>`])
+  }
   // Names carry the container's first 8 id characters (`name#1a2b3c4d`).
   labels.push([vaultId.slice(0, 8), '<vault8>'], [repoId.slice(0, 8), '<repository8>'])
   labels.sort((a, b) => b[0].length - a[0].length)
@@ -223,7 +237,7 @@ async function buildWorld(name: string, reverse: boolean): Promise<World> {
     (await db.select({ id: repositoryFiles.id }).from(repositoryFiles).where(eq(repositoryFiles.repositoryId, repoId)).orderBy(repositoryFiles.id)).map((r) => label(r.id)),
     (await db.select({ id: blocks.id }).from(blocks).where(inArray(blocks.containerId, [vaultId, repoId])).orderBy(blocks.id)).map((r) => label(r.id)),
   ]
-  return { agent, vaultId, repoId, labels, idOrder }
+  return { agent, vaultId, repoId, overlayView, labels, idOrder }
 }
 
 /** One answer, serialized as it came over the wire: `content` blocks, `structuredContent` and `isError`. */
@@ -335,8 +349,7 @@ const QUESTIONS: Question[] = [
     args: (w) => ({
       repositoryId: w.repoId,
       query: 'checksum',
-      overlay:
-        '--- a/src/checksum.ts\n+++ b/src/checksum.ts\n@@ -1,4 +1,7 @@\n /** A chunk checksum. */\n+export function checksumAll(chunks: string[]): string[] {\n+  return chunks.map((c) => String(c.length))\n+}\n export function checksum(chunk: string): string {\n   return String(chunk.length)\n }\n',
+      overlay: SYMBOL_OVERLAY,
     }),
   },
   { name: 'graph vault communities', tool: 'graph', args: (w) => ({ vaultId: w.vaultId }) },
@@ -400,6 +413,29 @@ describe('read tools answer deterministically (#473)', () => {
       for (const q of QUESTIONS) for (const key of answerTimes(await ask(A, q.tool, q.args(A))).values()) keys.add(key)
       expect([...keys].sort()).toEqual([...TIME_KEYS].sort())
     })
+  })
+
+  it('keeps fixture view identities repository-scoped without changing content or granting cross-world access', async () => {
+    expect(A.overlayView.source).not.toBe(B.overlayView.source)
+    expect(A.overlayView.tree).toBe(B.overlayView.tree)
+    expect(A.overlayView.overlay).toBe(B.overlayView.overlay)
+    expect([...A.overlayView.files.keys()]).toEqual([...B.overlayView.files.keys()])
+    for (const [path, file] of A.overlayView.files) {
+      const other = B.overlayView.files.get(path)!
+      expect(file.id).not.toBe(other.id)
+      expect(file.content).toBe(other.content)
+      expect(file.contentHash).toBe(other.contentHash)
+      for (const block of file.blocks) expect(other.blocks.some((candidate) => candidate.blockId === block.blockId)).toBe(false)
+      expect(file.blocks.map((block) => ({ ...block, blockId: '<scoped-block>' })))
+        .toEqual(other.blocks.map((block) => ({ ...block, blockId: '<scoped-block>' })))
+    }
+    const denied = await ask(B, 'find_symbols', { repositoryId: A.repoId, query: 'checksum', overlay: SYMBOL_OVERLAY })
+    expect(JSON.parse(denied).isError).toBe(true)
+    expect(denied).not.toContain(A.overlayView.source)
+    for (const file of A.overlayView.files.values()) {
+      expect(denied).not.toContain(file.id)
+      for (const block of file.blocks) expect(denied).not.toContain(block.blockId)
+    }
   })
 
   // The graph cases above mixed three causes; each is pinned here on its own, independent of id order. A fixed

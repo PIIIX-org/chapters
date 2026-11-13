@@ -4690,8 +4690,11 @@ pnpm -C server test # vitest run — needs Postgres reachable at DATABASE_URL
   `read_note`, `read_file`, `repository_status`) must give the same bytes
   twice in one database, which only catches randomness inside the process.
   In the other database they must give the same bytes once that database's
-  ids and the allowlisted time keys are masked. A new read tool, or a new
-  argument that changes an answer's shape, adds its questions there. An
+  ids and the allowlisted time keys are masked. Overlay fixture identities
+  are allowlisted by actual source/file/structural-block identity; tree,
+  overlay and content hashes remain compared. Separate assertions keep
+  those identities repository-scoped and refuse the other world's access.
+  A new read tool, or a new argument that changes an answer's shape, adds its questions there. An
   answer that still differs across databases names its issue and is
   `it.fails`, which goes red once the issue is fixed; none does since graph
   order from ids (#1006), semantic edges from embed order (#1007) and
