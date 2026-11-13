@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { HOLDOUT, combine, compare, evaluate, missingReport, movement, overrideReason, render, toBaseline, TOLERANCE } from './bench-gate.mjs'
+import { HOLDOUT, combine, compare, evaluate, missingReport, movement, overrideReason, overview, render, toBaseline, TOLERANCE } from './bench-gate.mjs'
 
 const GATE = fileURLToPath(new URL('./bench-gate.mjs', import.meta.url))
 
@@ -279,6 +279,37 @@ describe('render and compare', () => {
     const md = compare(a, b)
     assert.match(md, /\| mrr \| 0\.5 \| 0\.4 \| -0\.1 \(worse\)/)
     assert.match(md, /Q1: rank 1 -> 3/)
+  })
+
+  it('overview preserves per-suite regression data, passing values and missing-reference values', () => {
+    const values = (cell) => (cell.match(/\d+(?:\.\d+)?/g) ?? []).map(Number)
+    const table = (lines) => new Map(lines.slice(2).map((line) => {
+      const cells = line.split('|').slice(1, -1).map((cell) => cell.trim())
+      return [cells[0], cells]
+    }))
+    const base = baselineOf(run({}, { suites: ['s', 't'] }))
+    const r = run({ tokensToGold: 30_000, goldReached: 11, mrr: 0.45 }, { suites: ['s', 't'] })
+    const report = evaluate({ results: r, baseline: base, baseBaseline: base, pr: pr(), requireGolds: true })
+    const rows = overview(report)
+    const displayed = table(rows)
+    assert.deepEqual([...displayed.keys()], ['s', 't'])
+    for (const name of ['s', 't']) {
+      const cells = displayed.get(name)
+      assert.deepEqual(cells.slice(1, 6).map(values), [[20], [20_000, 30_000], [12, 11], [0.6, 0.6], [0.5, 0.45]])
+      const verdicts = new Map(cells[6].split(',').map((part) => part.trim().split(/:\s*/)))
+      assert.equal(verdicts.get('tokensToGold'), 'regression')
+      assert.equal(verdicts.get('goldReached'), 'regression')
+    }
+    const ok = run()
+    const passing = table(overview(evaluate({ results: ok, baseline: baselineOf(ok) }))).get('s')
+    assert.deepEqual(passing.slice(1, 6).map(values), [[20], [20_000, 20_000], [12, 12], [0.6, 0.6], [0.5, 0.5]])
+    assert.equal(passing[6], 'ok')
+    const missing = table(overview(evaluate({ results: run({}, { suites: ['s', 'u'] }), baseline: baselineOf(run()) }))).get('u')
+    assert.deepEqual(missing.slice(1, 6).map(values), [[20], [20_000], [12], [0.6], [0.5]])
+    const md = render(report, r)
+    const summary = md.indexOf(rows.join('\n'))
+    assert.ok(summary >= 0)
+    for (const name of displayed.keys()) assert.ok(md.indexOf(`## ${name}:`) > summary)
   })
 
 })
