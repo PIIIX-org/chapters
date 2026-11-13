@@ -276,7 +276,7 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   (projection rows, raised targets, a revision at every `seq`; renderer
   version bumps) → the projector drains → `listen` → in the background,
   the **orphan sweep**: `*.md` under `vaults/<id>/`,
-  outside `assets/` and every dot-directory, with no `projected_files` row
+  outside dot-directories (including `.assets/`), with no `projected_files` row
   and no owner in the DB (a live note at the path, or the `dir_index` of a
   directory with live notes) is moved to `.orphans/<path>`, never deleted.
   Graceful shutdown: the relay flushes its stores, then the projector gets
@@ -988,7 +988,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   states fails CI. Tests that damage a note on purpose restore its file
   before they end, and tests that insert note rows without files delete
   their fixture vaults. It also reports
-  `orphan-file`: a `.md` file outside `assets/` and the dot-directories
+  `orphan-file`: a `.md` file outside dot-directories (legacy `assets/` is also excluded until its namespace migration completes)
   with no `projected_files` row, no live note at its path and (for an
   `index.md`) no live note under its directory, i.e. what the boot orphan
   sweep would move to `.orphans/` (#495). Shared helpers: `compareNoteFile`,
@@ -1063,8 +1063,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   (not in a dry run) it clears the leases of pending `file`/`dir_index`
   projections and store jobs and drains them, so a rename or trash move
   committed before the stop has moved its file. Then, for every vault
-  directory (or `--vault`), each `*.md` outside `assets/` and the
-  dot-directories: no live row → `createNote(…, { asImported: true })`
+  directory (or `--vault`), each `*.md` outside dot-directories:
+  valid `assets/` notes are included after attachment migration; no live row → `createNote(…, { asImported: true })`
   from the file (the frontmatter as given, no `timestamp` added; row,
   revision, links, projections, embedding job; the projector then adopts
   a file that already is a valid note as it is; one without `type`, which
@@ -2973,8 +2973,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   access ("a copy outlives later revocation" — read access isn't
   enough). Sessionless, time-boxed **export links**
   (`EXPORT_LINK_TTL_HOURS`, default 24h) for sharing outside the app.
-  Entries: live notes as OKF `<path>.md`, `assets/<name>`,
-  `manifest.json` (`formatVersion` 1, `vaultId`, `name`, `mergeable`,
+  Entries: live notes as OKF `<path>.md`, `.assets/<name>` attachments,
+  `manifest.json` (`formatVersion` 2, `vaultId`, `name`, `mergeable`,
   `shares`) and, per
   note live or trashed, `.elara/history/<noteId>.json`
   (`vault-history.ts`, #499): `path`, `createdAt`/`updatedAt`/`deletedAt`
@@ -2989,10 +2989,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
   note is skipped and reported, not fatal). Refused with 400 before any
-  vault is created: a manifest `formatVersion` newer than the server's,
-  or a history file with a time that is not a real UTC instant. Assets
-  keep their archive file names (unsafe names, `.` and `..` are
-  dropped); `.md` files under `assets/` stay attachments, never notes. Trashed notes are recreated in
+  vault is created: an unsupported manifest version, duplicate/unsafe ZIP paths,
+  a legacy entry claimed as both note and attachment, or an invalid history time.
+  Attachments retain names; unsafe names are refused, never guessed or overwritten.
+  V2 `.assets/*.md` stay attachments; legacy unversioned/v1 reads `assets/`.
+  V2 `assets/design.md` is an ordinary valid note, disjoint from `.assets/design.md`. Trashed notes are recreated in
   the trash, then live notes; each note with a history file gets the
   archive's revisions (new ids, original order and times; a revert's
   `sourceRevisionId` is pointed at the new id of the archived revision

@@ -6,7 +6,8 @@
  * are not in the files and are not recovered.
  *
  * For every vault directory under `DATA_DIR/vaults` (one vault with
- * `vaultId`), every `*.md` outside `assets/` and the dot-directories:
+ * `vaultId`), every `*.md` outside hidden attachment/metadata directories
+ * (and outside legacy assets/ until its namespace has been migrated):
  * - no live row at that path: the note is created through the store
  *   (`createNote`: row, revision, links, projections, embedding job), and the
  *   projector then adopts the file as it is when its content equals the row;
@@ -46,6 +47,7 @@ import { parseNote, type OkfNote } from './okf.js'
 import { STORE_JOBS, flushProjections } from './projector.js'
 import { createNote, getLiveNote, vaultDir } from './store.js'
 import { crdtFile } from '../sync/crdt-store.js'
+import { runAssetStorage } from './asset-storage.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
@@ -100,6 +102,7 @@ export async function rowsFromFiles(options: { dryRun?: boolean; vaultId?: strin
   }
   try {
     if (!dryRun) {
+      await runAssetStorage('migrate')
       // A rename or trash move committed before the stop may not have moved its file yet: finish them first.
       await db.execute(sql`
         UPDATE note_projections SET lease_until = NULL, attempts = 0

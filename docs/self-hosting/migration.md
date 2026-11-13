@@ -13,6 +13,35 @@ them. Promotion step A (`ae6ffb9`; `prod` commit `f3724d0`, which reports
 that `version`) shipped S1 and the S2a migration only, without
 `store-export-legacy` and without S2b and S3.
 
+## Attachment storage upgrade (#1139)
+
+**PUBLIC BETA BLOCKER — data-loss fix.** Older versions place both the valid note `assets/design` and attachment `design.md` at `vaults/<id>/assets/design.md`. The fixed release keeps note projections in their existing paths and attachments in hidden `vaults/<id>/.assets/`. HTTP URLs and logical attachment names do not change. No valid note name is banned.
+
+Production execution is a separate owner-approved deployment step. No production migration is authorized by this documentation or performed as part of this change.
+
+1. Quiesce **all** app instances, schedulers and writing CLIs; keep them stopped throughout the upgrade. Do not run old and new images against one data directory. Take a **fresh verified PostgreSQL dump and complete data-volume backup** immediately before the owner-approved deployment ([backup.md](backup.md)). Rehearse the upgrade and restoration on an isolated copy first.
+2. With only the fixed image, run `pnpm asset-storage migrate` (optionally append one vault UUID). The command takes the existing exclusive instance maintenance lock and refuses a running app/writer. Startup performs the same migration before any projector drain or HTTP listener; it refuses incomplete or conflicting migrations rather than silently serving a partial layout.
+3. Retain each `vaults/<id>/.asset-storage.json` audit: planned filenames, byte counts and individual SHA-256s, aggregate **before** and verified **after** counts/checksums, and completion state. The `.asset-storage-ready` marker is written durably only after completion. `pnpm asset-storage verify` reports the current checksums and any added/changed/missing files against that baseline (exit 2 on differences). Check immediately while still quiesced; later deliberate attachment edits naturally differ from the upgrade baseline.
+4. Sources are opened without following symlinks. Each destination is written, fsynced, published **without overwrite**, directory-fsynced and independently checksummed before an ordinary legacy source is removed and its directory fsynced. Known projected-note files are **copied**, never stolen; their projections are queued for reconciliation only after the attachment copy is safe. Nested note directories remain untouched. No `.conflicts` recovery is guessed.
+5. If interrupted, keep writers stopped and rerun `migrate`: its durable plan and verified destination bytes allow resumption, including a crash after source removal. A differing source/destination is an explicit conflict: preserve both, inspect the reported paths against the fresh backup and move the unwanted version to an operator-owned recovery location before retrying. Do not overwrite it or delete the audit to manufacture success. Transient copies live outside the attachment namespace in `.asset-migration-work/` and are reclaimed on resumption.
+6. Start only the fixed image after verification. Keep the fresh backup and audit until the release is accepted. A historical attachment already overwritten by old code cannot be reconstructed automatically; retain all existing `.conflicts` and backup bytes for owner review.
+
+### Vault archives and full-instance backups
+
+Vault ZIP **format 2** puts attachments in `.assets/<name>` while notes remain `<path>.md`, so `assets/design.md` and `.assets/design.md` coexist. Legacy unversioned/v1 archives still read `assets/` as their attachment namespace. Duplicate/unsafe ZIP paths and legacy files claimed simultaneously as notes and attachments are refused **before a vault is created**, not resolved by overwriting. Old ambiguous exports may already have lost a version: keep their bytes and the original backup rather than guessing.
+
+Full-instance backups already separate note and attachment entries; their logical names and old-format readers are unchanged. Restore writes attachment bytes through the new physical-path helper, initializes the namespace before projecting restored rows, and leaves API links unchanged. A raw data-volume backup additionally retains the original migration audit and rollback artifacts.
+
+### No-clobber rollback
+
+Keep all writers stopped and first take another fresh **current-state** database/data-volume backup, including any notes and attachments changed since the upgrade. Run `pnpm asset-storage rollback [vaultId]` with the fixed image **before** attempting to start an old image.
+
+For a full code-only rollback, use the existing `pnpm store-export-legacy` command first: it folds/exports note and CRDT state and then performs attachment rollback under the **same exclusive lock**, refusing old-image activation if either stage has pending work/conflicts. `asset-storage rollback` alone is the attachment stage, or a way to resume that stage after interruption. Do not run another migration or projector between these stages.
+
+Rollback copies current `.assets/` bytes back only where the old path is unoccupied or identical; it never removes the hidden copy. New and changed attachments are included. A note-owned path or differing legacy file is left untouched, and the attachment is also durably preserved at `.asset-rollback/<name>.<sha256>`. The report lists these conflicts and the CLI exits 2: **do not start the old image**, which cannot represent both resources. Inspect/retain both versions and use the fixed release or an isolated restore; do not ban or delete the valid note. Interrupted rollback is resumable by rerunning the same command.
+
+The audit becomes `rolled-back`, so the fixed server will not silently treat subsequent old-image writes as migrated. To return to the fixed release, restore a fresh current-state instance backup with the fixed image into a clean, isolated target and verify it before switching over ([backup.md](backup.md)); preserve any edits made under the old image in that backup too. Do not reuse a completed audit as proof that later legacy writes were migrated. This procedure preserves bytes and explicitly refuses an unrepresentable downgrade; it cannot make the old storage model safe for colliding names.
+
 ## Before you upgrade
 
 1. Take a verified backup right before: the pg_dump and the data volume

@@ -34,6 +34,7 @@ import { claimJob, completeJob, failJob, jobDrainer, type ClaimedJob } from '../
 import { recordConflictCopy, recordJob } from '../monitoring/metrics.js'
 import { failpoint } from '../failpoints.js'
 import { atomicWrite } from './atomic-write.js'
+import { isAssetStorageReady } from './asset-storage.js'
 import { withKeyLock } from './key-lock.js'
 import { parseNote, serializeNote, type Frontmatter } from './okf.js'
 import { resolveNotePath } from './okf/paths.js'
@@ -640,8 +641,9 @@ async function hasOwner(tx: Tx, vaultId: string, rel: string): Promise<boolean> 
   return (rows as unknown as unknown[]).length > 0
 }
 
-/** Every `*.md` under a vault directory, outside `assets/` and every dot-directory, vault-relative. */
-async function sweepCandidates(root: string): Promise<string[]> {
+/** Every note `*.md`, including assets/ notes; hidden .assets attachments are never note projections. */
+async function sweepCandidates(root: string, vaultId: string): Promise<string[]> {
+  const migrated = await isAssetStorageReady(vaultId)
   const found: string[] = []
   async function visit(rel: string): Promise<void> {
     let entries
@@ -654,7 +656,7 @@ async function sweepCandidates(root: string): Promise<string[]> {
     for (const entry of entries) {
       const child = rel ? `${rel}/${entry.name}` : entry.name
       if (entry.isDirectory()) {
-        if (entry.name.startsWith('.') || child === 'assets') continue
+        if (entry.name.startsWith('.') || (!migrated && child === 'assets')) continue
         await visit(child)
       } else if (entry.isFile() && entry.name.endsWith('.md')) found.push(child)
     }
@@ -665,8 +667,8 @@ async function sweepCandidates(root: string): Promise<string[]> {
 
 /**
  * The orphan sweep (§7 boot step 9), after the projector's first drain:
- * a `*.md` file under `vaults/<id>/` (outside `assets/` and every
- * dot-directory: `.trash`, `.conflicts`, `.orphans`, `.migration`, `.crdt*`)
+ * a `*.md` file under `vaults/<id>/`, including assets/ notes but outside
+ * dot-directories (.assets, .trash, .conflicts, .orphans, .migration, .crdt*),
  * that has no `projected_files` row and no owner in the DB is moved to
  * `.orphans/<path>` and reported, never deleted. Each path is decided under
  * its path lock, so a file the projector is writing for a new note is kept.
@@ -684,7 +686,7 @@ export async function sweepOrphanFiles(): Promise<OrphanFile[]> {
   const moved: OrphanFile[] = []
   for (const vaultId of dirs) {
     const root = vaultRoot(vaultId)
-    for (const rel of await sweepCandidates(root)) {
+    for (const rel of await sweepCandidates(root, vaultId)) {
       const orphan = await withPathLock(vaultId, rel, async (tx) => {
         if (!(await vaultLive(tx, vaultId))) return null
         if (await projectedFile(tx, vaultId, rel)) return null

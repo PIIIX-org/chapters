@@ -15,6 +15,7 @@ import {
 import { reconcileStore } from '../notes/store-reconcile.js'
 import { linkRows } from '../notes/store-tx.js'
 import { flushProjections, projectDirIndices } from '../notes/projector.js'
+import { initializeAssetStorage } from '../notes/asset-storage.js'
 import {
   OkfValidationError,
   parseNote,
@@ -546,6 +547,7 @@ function numberRows(rows: Row[], key: string): Row[] {
  * from the rows (a crash after the commit can have left one missing).
  */
 async function projectRestored(contents: BackupContents): Promise<void> {
+  for (const vault of contents.tables.get('vaults')!) await initializeAssetStorage(String(vault.id))
   await reconcileStore()
   await flushProjections()
   const dirsByVault = new Map<string, Set<string>>()

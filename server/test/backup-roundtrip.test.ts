@@ -307,7 +307,7 @@ describe('instance backup round trip (#409)', () => {
   it('restores every entity class with its ids after a wipe', async () => {
     expect(Object.keys(sourceFiles)).toEqual(
       expect.arrayContaining([
-        `${fixture.vaultId}/assets/${fixture.assetName}`,
+        `${fixture.vaultId}/.assets/${fixture.assetName}`,
         `${fixture.vaultId}/.trash/${fixture.trashedNoteId}.md`,
         `${fixture.vaultId}/concepts/deep/a/b/leaf.md`,
         `${fixture.vaultId}/concepts/index.md`,
@@ -380,7 +380,7 @@ describe('instance backup round trip (#409)', () => {
     await db
       .delete(vaultShares)
       .where(and(eq(vaultShares.vaultId, fixture.vaultId), eq(vaultShares.granteeType, 'team')))
-    await unlink(join(config.dataDir, 'vaults', fixture.vaultId, 'assets', fixture.assetName))
+    await unlink(join(config.dataDir, 'vaults', fixture.vaultId, '.assets', fixture.assetName))
     // Rotating the backup codes deletes the old ones: a re-run must not revive them.
     await issueBackupCodes(fixture.mfaUserId)
     const before = await snapshotDb()
