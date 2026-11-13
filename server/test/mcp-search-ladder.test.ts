@@ -12,7 +12,6 @@ import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 import * as search from '../src/search/search.js'
-import { clearSearchCache } from '../src/cache/search.js'
 
 let app: FastifyInstance
 let vaultId: string
@@ -96,10 +95,9 @@ describe('search answers down the budget ladder (#414)', () => {
       snippet: `Passage ${i}: ${'pomelo harvest '.repeat(70)}`,
     }))
     const ranking = vi.spyOn(search, 'searchNotes').mockResolvedValue({ ...answer, results })
-    clearSearchCache()
     const call = async (cursor?: string) => {
       resetRateLimits()
-      const response = await agent.callTool({ name: 'search', arguments: { vaultId, query: 'pomelo harvest', limit: 12, budget_tokens: 2500, ...(cursor ? { cursor } : {}) } })
+      const response = await agent.callTool({ name: 'search', arguments: { vaultId, query: 'pomelo harvest continuation', limit: 12, budget_tokens: 2500, ...(cursor ? { cursor } : {}) } })
       return {
         isError: response.isError,
         json: JSON.parse((response.content as Array<{ text: string }>)[0]!.text),
@@ -115,8 +113,8 @@ describe('search answers down the budget ladder (#414)', () => {
       expect((await call(cursor)).isError).not.toBe(true)
 
       ranking.mockResolvedValue({ ...answer, results: [results[1]!, results[0]!, ...results.slice(2)] })
-      // The mock replaces ranking without a database write/epoch bump; discard the prior mocked snapshot.
-      clearSearchCache()
+      // A committed public write changes the scope's epoch, just as a real ranking change does.
+      await createNote(vaultId, { path: 'cache/ranking-change', body: 'A committed ranking change.\n' })
       const stale = await call(cursor)
       expect(stale.isError).toBe(true)
       expect(stale.json).toMatchObject({ error: { code: 'CURSOR_STALE' } })

@@ -31,15 +31,16 @@ describe('query-embedding cache (#684)', () => {
   it('the second identical query, after normalisation, makes zero embedder calls', async () => {
     const inner = countingEmbedder()
     const cache = new QueryEmbeddingCache(inner, () => 'model-a+text1', 10)
-    const before = metricsSnapshot().caches.query_embedding!
+    const before = metricsSnapshot()
 
     const first = await cache.embed('acct-a', '  where is   the\tsync scheduler ')
     const second = await cache.embed('acct-a', 'where is the sync scheduler')
 
     expect(inner.calls).toEqual([['where is the sync scheduler']])
     expect(second).toEqual(first)
-    const after = metricsSnapshot().caches.query_embedding!
-    expect({ hit: after.hit - before.hit, miss: after.miss - before.miss }).toEqual({ hit: 1, miss: 1 })
+    const after = metricsSnapshot()
+    expect(after).toHaveProperty('caches.query_embedding', { hit: expect.any(Number), miss: expect.any(Number) })
+    expect({ hit: after.caches.query_embedding!.hit - before.caches.query_embedding!.hit, miss: after.caches.query_embedding!.miss - before.caches.query_embedding!.miss }).toEqual({ hit: 1, miss: 1 })
   })
 
   it('concurrent identical queries share one embed', async () => {

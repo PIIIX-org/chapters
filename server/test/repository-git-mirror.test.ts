@@ -132,14 +132,15 @@ describe('git sync into a persistent mirror (#684)', () => {
     expect(existsSync(mirrorDir(repo.id))).toBe(true)
 
     resetCounts()
-    const before = metricsSnapshot().caches.git_mirror!
+    const before = metricsSnapshot()
     await syncAndDrain(repo.id)
 
     expect(gitCalls).not.toContain('clone')
     expect(parsed).toEqual([])
     expect(embedCalls).toBe(0)
-    const after = metricsSnapshot().caches.git_mirror!
-    expect({ hit: after.hit - before.hit, miss: after.miss - before.miss }).toEqual({ hit: 1, miss: 0 })
+    const after = metricsSnapshot()
+    expect(after).toHaveProperty('caches.git_mirror', { hit: expect.any(Number), miss: expect.any(Number) })
+    expect({ hit: after.caches.git_mirror!.hit - before.caches.git_mirror!.hit, miss: after.caches.git_mirror!.miss - before.caches.git_mirror!.miss }).toEqual({ hit: 1, miss: 0 })
     const [row] = await db.select().from(repositories).where(eq(repositories.id, repo.id))
     expect(row!.syncStatus).toBe('idle')
   })
