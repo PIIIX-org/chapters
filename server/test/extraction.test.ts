@@ -8,7 +8,7 @@ describe('isSupportedLanguage', () => {
     expect(isSupportedLanguage('javascript')).toBe(true)
     expect(isSupportedLanguage('python')).toBe(true)
     expect(isSupportedLanguage('go')).toBe(true)
-    expect(isSupportedLanguage('swift')).toBe(false)
+    expect(isSupportedLanguage('swift')).toBe(true)
     expect(isSupportedLanguage(null)).toBe(false)
   })
 })
@@ -243,6 +243,6 @@ describe('extractStructure', () => {
   })
 
   it('throws for an unsupported language', async () => {
-    await expect(extractStructure('swift', 'func main() {}', 'Sources/main.swift')).rejects.toThrow()
+    await expect(extractStructure('text', 'plain text', 'README.txt')).rejects.toThrow()
   })
 })

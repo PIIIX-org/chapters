@@ -1,5 +1,5 @@
 /**
- * The grammars #464 added: Rust, Java, C, C++, C#, Kotlin, Ruby and PHP, on
+ * The grammars #464 added, plus Swift (#988), on
  * the #450 symbol contract (extraction.ts `SymbolKind`). Their queries name
  * candidate declarations (`@decl.<kind>` with their `@name`); `scopedSymbol`
  * keeps those at module level, in a namespace, or directly in a class that is
@@ -84,6 +84,12 @@ function typeName(node: Node | null): string | null {
     case 'scoped_type_identifier':
     case 'qualified_identifier':
       return typeName(node.childForFieldName('name'))
+    case 'user_type': {
+      // Swift extensions: `Module.Store<T>` belongs to the bare type `Store`.
+      let name: string | null = null
+      for (const child of node.namedChildren) if (child.type === 'type_identifier') name = child.text
+      return name
+    }
     default:
       return node.text
   }
@@ -92,7 +98,7 @@ function typeName(node: Node | null): string | null {
 /** A container's name: its `name` (the last part of `class A::B {}`), or the type an `impl` block is for; null for an anonymous namespace. */
 function containerName(node: Node): string | null {
   const name = node.childForFieldName('name')
-  return name ? (name.type === 'qualified_identifier' ? typeName(name) : name.text) : typeName(node.childForFieldName('type'))
+  return name ? typeName(name) : typeName(node.childForFieldName('type'))
 }
 
 type Place = { at: 'module' } | { at: 'namespace' | 'class'; name: string }
@@ -212,8 +218,8 @@ export function jvmImportTarget(node: Node): string[] {
 }
 
 export interface LanguageGrammar {
-  /** The `.wasm` file in its npm package. */
-  wasm: [pkg: string, file: string]
+  /** The `.wasm` file in its npm package, or a source-built grammar shipped with the server. */
+  wasm: [pkg: string, file: string] | URL
   /** `@src`: the import's node; `importTarget` turns it into the specifiers when it is not the specifier's text. None: C#, whose `using` names namespaces, not files. */
   importQuery?: string
   importTarget?: (node: Node) => string[]
@@ -262,9 +268,32 @@ const kotlinVisible = (decl: Node) => {
   return !words.has('private') && !words.has('protected')
 }
 
-export type NewLanguage = 'rust' | 'java' | 'c' | 'cpp' | 'csharp' | 'kotlin' | 'ruby' | 'php'
+export type NewLanguage = 'rust' | 'java' | 'c' | 'cpp' | 'csharp' | 'kotlin' | 'ruby' | 'php' | 'swift'
 
 export const LANGUAGE_GRAMMARS: Record<NewLanguage, LanguageGrammar> = {
+  swift: {
+    wasm: new URL('../../grammars/tree-sitter-swift.wasm', import.meta.url),
+    importQuery: '(import_declaration (identifier) @src)',
+    // A scoped import (`import func Module.member`) still imports from Module.
+    importTarget: (node) => [node.namedChildren[0]?.text ?? node.text],
+    symbolQuery: `
+      [
+        (function_declaration "func" . name: _ @name) @decl.function
+        (protocol_function_declaration "func" . name: _ @name) @decl.method
+        (class_declaration declaration_kind: ["class" "struct" "actor"] name: (type_identifier) @name) @decl.class
+        (class_declaration declaration_kind: "enum" name: (type_identifier) @name) @decl.enum
+        (protocol_declaration name: (type_identifier) @name) @decl.interface
+      ]
+    `,
+    scopes: {
+      transparent: new Set(['class_body', 'enum_class_body', 'protocol_body']),
+      containers: { class_declaration: 'class', protocol_declaration: 'class' },
+      exported: (decl) => {
+        const words = modifiers(decl)
+        return words.has('public') || words.has('open')
+      },
+    },
+  },
   rust: {
     wasm: ['tree-sitter-rust', 'tree-sitter-rust.wasm'],
     // `use` trees, and `mod x;` (a module whose body is another file).
