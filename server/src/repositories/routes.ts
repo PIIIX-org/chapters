@@ -346,6 +346,7 @@ export function repositoryRoutes(app: FastifyInstance) {
       return searchNotes({ vaultIds: [], repositoryIds: [req.params.id] }, req.query.q, req.query.limit, parseSearchFilters(req.query), {
         includeSymbols: req.query.symbols,
         accountId: req.user!.id,
+        route: req.query.route,
       })
     },
   )

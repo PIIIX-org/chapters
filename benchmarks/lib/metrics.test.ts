@@ -245,3 +245,38 @@ test('routed questions are counted, and exact1 over them alone (#1060)', () => {
   assert.equal(a.exact1, 0.5)
   assert.equal(aggregate([{ ...base, route: 'conceptual', hits: [] }], 1000, 15).exact1Routed, 0)
 })
+
+test('all route classes and failed lookup attempts are measured separately', () => {
+  const base = { judgments: rel(['a', 1]), gold: [{ path: 'a', start: 1, end: 2 }], callsToGold: 1, tokensToAllGold: 1, precision: 1, recall: 1, tokens: 1, calls: 1, ms: 1, ranking: ['a'], tokensToGold: 1, abstained: false, hits: [{ path: 'a', start: 1, end: 2 }] }
+  const measured = aggregate([
+    { ...base, route: 'identifier' },
+    { ...base, route: 'path' },
+    { ...base, route: 'structural' },
+    { ...base, route: 'conceptual', attemptedRoute: 'identifier', hits: [], ranking: [] },
+  ], 1000, 15)
+  assert.equal(measured.identifierQuestions, 1)
+  assert.equal(measured.identifierAttempts, 2)
+  assert.equal(measured.identifierExact1, 1)
+  assert.equal(measured.identifierExact1Attempts, 0.5)
+  assert.equal(measured.identifierFallbacks, 1)
+  assert.equal(measured.pathQuestions, 1)
+  assert.equal(measured.pathExact1, 1)
+  assert.equal(measured.structuralQuestions, 1)
+  assert.equal(measured.structuralExact1, 1)
+  assert.equal(measured.conceptualQuestions, 1)
+  assert.equal(measured.conceptualExact1, 0)
+  assert.ok(Object.values(measured).every((value) => typeof value === 'number'))
+  assert.equal(measured.routed, 0.75)
+})
+
+test('independent identifier cohort includes fallback, miss and ambiguous cases', () => {
+  const base = { judgments: rel(['a', 1]), gold: [{ path: 'a', start: 1, end: 2 }], callsToGold: 1, tokensToAllGold: 1, precision: 1, recall: 1, tokens: 1, calls: 1, ms: 1, ranking: ['a'], tokensToGold: 1, abstained: false, hits: [{ path: 'a', start: 1, end: 2 }], category: 'identifier' }
+  const measured = aggregate([
+    { ...base, route: 'identifier' },
+    { ...base, route: 'conceptual', attemptedRoute: 'identifier', hits: [], ranking: [] },
+    { ...base, route: 'identifier', abstained: true },
+    { ...base, route: 'conceptual', category: 'architecture' },
+  ], 1000, 15)
+  assert.equal(measured.identifierCohortQuestions, 3)
+  assert.equal(measured.identifierCohortExact1, 0.3333)
+})
