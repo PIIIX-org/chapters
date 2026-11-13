@@ -98,6 +98,7 @@ import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord, restoreVaultRecord, trashVaultRecord } from '../vaults/routes.js'
 import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
 import { findSymbols, searchNotes } from '../search/search.js'
+import { SEARCH_ROUTES, type SearchRoute } from '../search/router.js'
 import { leanHit, type LeanHit } from './search-hit.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
@@ -3057,28 +3058,29 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Hybrid note/code search.',
+        'Search notes/code: exact names, paths, graph questions or hybrid.',
       inputSchema: {
-        query: z.string().describe('Search text'),
+        query: z.string().describe('Text'),
         ...REF_INPUT,
         vaultId: ID_ARG.optional(),
         repositoryId: ID_ARG.optional(),
-        everywhere: z.boolean().optional().describe('Everything accessible (account tokens)'),
-        symbols: z.boolean().optional().describe('Include code symbols'),
+        everywhere: z.boolean().optional().describe('All accessible (account tokens)'),
+        symbols: z.boolean().optional().describe('Include symbols'),
         limit: intRange('limit', 1, 100).optional().describe('Max results'),
+        route: z.enum(SEARCH_ROUTES).optional().describe('Override; auto if omitted'),
       },
       budget: 'list',
     },
-    async (args: { query: string; symbols?: boolean; limit?: number; everywhere?: boolean }, { resources }, _page, view) => {
+    async (args: { query: string; symbols?: boolean; limit?: number; everywhere?: boolean; route?: SearchRoute }, { resources }, _page, view) => {
       if (view) return searchView(view, auth.user.id, args, false)
       const limit = args.limit ?? 20
       // The first `limit` hits of the ranking, plus one to know whether more match.
-      const { results, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id })
+      const { results, textual, ...head } = await searchNotes(resources, args.query, limit + 1, {}, { includeSymbols: args.symbols ?? true, accountId: auth.user.id, route: args.route })
       // Keep passage identity outside the serialized hits: leanHit removes internal block IDs.
       const identities = new Map<LeanHit, string>()
       const hits = results.map((r) => {
         const hit = leanHit(r, args.everywhere !== true && resources.vaultIds.length + resources.repositoryIds.length === 1)
-        identities.set(hit, `${r.resourceType}:${r.id}:${r.block ?? r.startLine ?? ''}`)
+        identities.set(hit, `${r.resourceType}:${r.id}:${r.block ?? r.startLine ?? ''}:${r.edge?.kind ?? ''}:${r.edge?.col ?? ''}`)
         return hit
       })
       return {
@@ -3103,6 +3105,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
               group: (r) => r.path,
             },
           }),
+          ...(textual === undefined ? [] : [ranked({ name: 'textual', items: textual, id: (r) => `${r.repositoryId}:${r.path}:${r.line}:${r.col}:${r.kind}`, limit })]),
         ],
         narrow: args.symbols === false ? [] : ['symbols: false'],
       }

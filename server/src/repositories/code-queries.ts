@@ -60,14 +60,14 @@ const EXTERNAL_SPECIFIER_LANGUAGES = ['typescript', 'javascript']
 /** What a question names: a symbol of the repository, or only a name nothing in it defines. */
 export interface Target {
   fileId: string | null
-  /** A file dependency question: import destination, even when the file defines no symbols. */
-  wholeFile?: true
   /** The `block_id`s of the definition: overloads are several blocks of one inner path. */
   blockIds: string[]
   /** The bare name, as `code_edges.target_name`. */
   name: string
   /** The inner path (`Class.method`). */
   symbol: string
+  /** A module target, including files with no symbols: match imports to the file itself. */
+  wholeFile?: true
 }
 
 /** A symbol definition. */
@@ -135,7 +135,8 @@ export async function findDefinitions(repositoryId: string, ref: DefinitionRef):
 /** A site: an edge row as #470 shows it. */
 export interface CodeSite {
   path: string
-  line: number
+  /** Null only for legacy file-import rows whose extractor stored no source line. */
+  line: number | null
   col: number
   /** Why the row exists: the kind of edge. */
   kind: CodeEdgeKind
@@ -185,6 +186,16 @@ export async function codeSites(
   /** False for `callers`: member calls matched by name alone are not listed (`NOT_GUESSED_MEMBER`). */
   members = true,
 ): Promise<CodeSite[]> {
+  if (target.wholeFile) {
+    if (!kinds.includes('import') || target.fileId === null) return []
+    return await db.execute(sql`
+      SELECT sf.path, i.line, 1 AS col, 'import' AS kind, 'resolved' AS confidence, NULL AS symbol,
+        CASE WHEN i.line IS NULL THEN i.target_path ELSE left(trim(split_part(sf.content, E'\n', i.line)), 200) END AS context
+      FROM repository_file_imports i JOIN repository_files sf ON sf.id = i.source_file_id
+      WHERE sf.repository_id = ${repositoryId} AND i.resolved_target_file_id = ${target.fileId}
+      ORDER BY sf.path COLLATE "C", i.line NULLS LAST, i.target_path COLLATE "C"
+      LIMIT ${page.limit} OFFSET ${page.offset}`) as unknown as CodeSite[]
+  }
   return (await db.execute(sql`
     SELECT ${SITE_COLUMNS}
     FROM code_edges e ${SITE_JOINS}
@@ -312,7 +323,7 @@ export async function impact(repositoryId: string, target: Target, depth: number
       (a, b) =>
         Number(b.confidence === 'resolved') - Number(a.confidence === 'resolved') ||
         compare(a.path, b.path) ||
-        a.line - b.line ||
+        (a.line ?? Number.MAX_SAFE_INTEGER) - (b.line ?? Number.MAX_SAFE_INTEGER) ||
         a.col - b.col ||
         compare(a.kind, b.kind),
     )
