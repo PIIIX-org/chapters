@@ -1,5 +1,5 @@
-import { describe, type Row } from '../repositories/code-refs.js'
-import { MAX_DEFINITIONS, SITE_KINDS, codeSites, findDefinitions, isSymbolId, symbolAt, type CodeSite, type Definition } from '../repositories/code-queries.js'
+import { describe, indexedCodeQueries, type CodeQueries, type Row } from '../repositories/code-refs.js'
+import { MAX_DEFINITIONS, SITE_KINDS, isSymbolId, type CodeSite, type Definition } from '../repositories/code-queries.js'
 import { CITATION_ROWS, citationsOf, declarationOf } from '../repositories/explain.js'
 import { bodyStartLine } from '../notes/projector.js'
 import { McpToolError } from './errors.js'
@@ -29,7 +29,7 @@ const SITES: Ladder<Row> = {
 interface Cite {
   vault: string
   at: string
-  fresh: 'current' | 'stale'
+  fresh: 'current' | 'stale' | 'unverified'
   context: string | null
 }
 
@@ -46,18 +46,20 @@ export async function explainAnswer(
   args: { query: string; kind?: string; path?: string },
   vaultIds: readonly string[],
   version: Record<string, unknown>,
+  view?: CodeQueries & { declarationOf: typeof declarationOf },
 ): Promise<Budgeted> {
+  const queries = view ?? indexedCodeQueries
   let definition: Definition | null
   let filePath: string
   const lineQuery = /^(.+):(\d+)$/.exec(args.query)
   if (lineQuery && !isSymbolId(args.query)) {
     if (args.path !== undefined || args.kind !== undefined) throw new McpToolError('INVALID_ARGUMENT', '`path:line` names its file: `path` and `kind` pick among definitions', { field: args.path !== undefined ? 'path' : 'kind' })
     filePath = lineQuery[1]!
-    const found = await symbolAt(repositoryId, filePath, Number(lineQuery[2]), { limit: 0, offset: 0 })
+    const found = await queries.symbolAt(repositoryId, filePath, Number(lineQuery[2]), { limit: 0, offset: 0 })
     if (found === null) throw new McpToolError('NOT_FOUND', `no file "${filePath}" in this repository`)
     definition = found.symbol
   } else {
-    const found = await findDefinitions(repositoryId, { ...(isSymbolId(args.query) ? { id: args.query } : { name: args.query }), path: args.path, kind: args.kind })
+    const found = await queries.findDefinitions(repositoryId, { ...(isSymbolId(args.query) ? { id: args.query } : { name: args.query }), path: args.path, kind: args.kind })
     if (found.length > 1) {
       return {
         head: { refs: 'explain', ...version, ...(found.length > MAX_DEFINITIONS ? { matches: found.length } : {}) },
@@ -69,19 +71,19 @@ export async function explainAnswer(
     filePath = definition.path
   }
 
-  const callers = definition ? await codeSites(repositoryId, definition, SITE_KINDS.callers, { limit: CALLERS + 1, offset: 0 }, false) : []
-  const tests = definition ? await codeSites(repositoryId, definition, SITE_KINDS.tests, { limit: TESTS + 1, offset: 0 }) : []
+  const callers = definition ? await queries.codeSites(repositoryId, definition, SITE_KINDS.callers, { limit: CALLERS + 1, offset: 0 }, false) : []
+  const tests = definition ? await queries.codeSites(repositoryId, definition, SITE_KINDS.tests, { limit: TESTS + 1, offset: 0 }) : []
   const cited = (await citationsOf(repositoryId, filePath, vaultIds)).slice(0, CITATION_ROWS)
   const starts = new Map<string, number>()
   const cites: Cite[] = cited.map((c) => {
     const key = `${c.vaultId}/${c.path}`
-    if (c.startLine === 0) return { vault: c.vaultId, at: c.path, fresh: c.fresh ? 'current' : 'stale', context: c.context }
+    if (c.startLine === 0) return { vault: c.vaultId, at: c.path, fresh: view ? 'unverified' : c.fresh ? 'current' : 'stale', context: c.context }
     let start = starts.get(key)
     if (start === undefined) starts.set(key, (start = bodyStartLine(c)))
-    return { vault: c.vaultId, at: location(c.path, c.startLine + start - 1, c.endLine + start - 1), fresh: c.fresh ? 'current' : 'stale', context: c.context }
+    return { vault: c.vaultId, at: location(c.path, c.startLine + start - 1, c.endLine + start - 1), fresh: view ? 'unverified' : c.fresh ? 'current' : 'stale', context: c.context }
   })
 
-  const declaration = definition ? await declarationOf(definition.id) : null
+  const declaration = definition ? await (view?.declarationOf ?? declarationOf)(definition.id) : null
   return {
     head: {
       refs: 'explain',

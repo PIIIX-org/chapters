@@ -27,7 +27,7 @@ let stranger: Client
 let repoId: string
 
 type Hit = { id: string; path: string; name: string; startLine: number; endLine: number; snippet?: string | null }
-type Answer = { commit?: string; overlay?: boolean; skipped?: string[]; stale?: string[]; results: Hit[]; truncated: unknown }
+type Answer = { commit?: string; tree?: string; overlay?: boolean; skipped?: string[]; stale?: string[]; results: Hit[]; truncated: unknown }
 
 async function connect(email: string, name: string, port: number): Promise<Client> {
   const cookie = await loginCookie(app, email)
@@ -54,7 +54,7 @@ async function find(query: string, overlay?: string, extra: Record<string, unkno
 const OVERLAY = `diff --git a/src/store.ts b/src/store.ts
 --- a/src/store.ts
 +++ b/src/store.ts
-@@ -1,7 +1,7 @@
+@@ -1,7 +1,6 @@
 +export function freshlyAdded(): number {
 +  return 9
 +}
@@ -98,10 +98,11 @@ afterAll(async () => {
 })
 
 describe('find_symbols overlay', () => {
-  it('finds a symbol added only in the overlay, with its overlay line, and names the base commit', async () => {
+  it('finds overlay-only symbols at their exact lines and names the actual indexed content tree of an agent push', async () => {
     expect((await find('freshlyAdded')).results).toEqual([])
     const json = await find('freshlyAdded', OVERLAY)
-    expect(json.commit).toBe(COMMIT)
+    expect(json.commit).toBeUndefined()
+    expect(json.tree).toMatch(/^[0-9a-f]{64}$/)
     expect(json.overlay).toBe(true)
     expect(json.results).toHaveLength(1)
     expect(json.results[0]).toMatchObject({ path: 'src/store.ts', name: 'freshlyAdded', startLine: 1, endLine: 3 })
@@ -131,13 +132,14 @@ describe('find_symbols overlay', () => {
     expect((await find('freshlyAdded')).results).toEqual([])
   })
 
-  it('refuses a diff that is not against the indexed content, a malformed one, one with refs, and one without a repository', async () => {
+  it('refuses malformed or non-applicable diffs and missing repository scope; refs now read the overlay', async () => {
     const wrong = OVERLAY.replace(' export function keep', ' export function other')
     const r = await ask(owner, { query: 'keep', overlay: wrong })
     expect(r.isError).toBe(true)
     expect(r.text).toMatch(/does not apply to src\/store.ts/)
     expect((await ask(owner, { query: 'keep', overlay: 'nonsense' })).text).toMatch(/no file changes/)
-    expect((await ask(owner, { query: 'keep', overlay: OVERLAY, refs: 'callers' })).text).toMatch(/overlay/)
+    const refs = await ask(owner, { query: 'keep', overlay: OVERLAY, refs: 'callers' })
+    expect(refs.isError, refs.text).toBe(false)
     resetRateLimits()
     expect((await owner.callTool({ name: 'find_symbols', arguments: { query: 'keep', overlay: OVERLAY } })).isError).toBe(true)
   })
@@ -163,24 +165,24 @@ describe('find_symbols overlay', () => {
     const mixed = '--- /dev/null\n+++ b/src/shapes.ts\n@@ -0,0 +1,4 @@\n+export class Shape {}\n+export function shapeOf(): Shape {\n+  return new Shape()\n+}\n'
     expect((await find('shape', mixed, { kind: 'class' })).results.map((r) => r.name)).toEqual(['Shape'])
     expect((await find('shape', mixed)).results.map((r) => r.name).sort()).toEqual(['Shape', 'shapeOf'])
-    expect((await find('. _', mixed)).results.filter((r) => r.id.startsWith('overlay:'))).toEqual([])
+    expect((await find('. _', mixed)).results).toEqual([])
   })
 
-  it('a changed file that is not source has no symbols and is not an error; one that is not indexed is skipped and said so', async () => {
-    const diff = '--- a/notes.txt\n+++ b/notes.txt\n@@ -1,1 +1,2 @@\n plain text, not source\n+export function inText() {}\n' +
-      '--- a/src/ghost.ts\n+++ b/src/ghost.ts\n@@ -1,1 +1,1 @@\n-a\n+b\n' +
-      '--- a/src/gone.ts\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-a\n' + OVERLAY.replace(/^diff --git.*\n/gm, '').replace(/^new file mode.*\n/gm, '')
-    const json = await find('brandNew', diff)
-    expect(json.skipped).toEqual(['src/ghost.ts', 'src/gone.ts'])
-    expect(json.results.map((r) => r.name)).toEqual(['brandNew'])
-    expect((await find('inText', diff)).results).toEqual([])
+  it('accepts changed plain text but rejects missing base files instead of silently narrowing the overlay', async () => {
+    const plain = '--- a/notes.txt\n+++ b/notes.txt\n@@ -1,1 +1,2 @@\n plain text, not source\n+export function inText() {}\n'
+    expect((await find('inText', plain)).results).toEqual([])
+    const missing = await ask(owner, { query: 'keep', overlay: plain + '--- a/src/ghost.ts\n+++ b/src/ghost.ts\n@@ -1,1 +1,1 @@\n-a\n+b\n' })
+    expect(missing.isError).toBe(true)
+    expect(missing.text).toMatch(/base does not match src\/ghost.ts/)
   })
 
-  it('flags a diff whose old blob is not the indexed content, and not one whose blob is', async () => {
+  it('rejects a stale old blob, even when its context would apply', async () => {
     const blob = createHash('sha1').update(`blob ${Buffer.byteLength(STORE)}\0`).update(STORE).digest('hex')
     const withIndex = (id: string) => OVERLAY.replace('--- a/src/store.ts', `index ${id}..abcdef0 100644\n--- a/src/store.ts`)
     expect((await find('keep', withIndex(blob.slice(0, 7)))).stale).toBeUndefined()
-    expect((await find('keep', withIndex('1234567'))).stale).toEqual(['src/store.ts'])
+    const stale = await ask(owner, { query: 'keep', overlay: withIndex('1234567') })
+    expect(stale.isError).toBe(true)
+    expect(stale.text).toMatch(/stale overlay base/)
   })
 
   it('reads at most 2 MiB of changed source in one call', async () => {

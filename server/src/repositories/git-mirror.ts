@@ -1,6 +1,8 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { isUtf8 } from 'node:buffer'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rm } from 'node:fs/promises'
+import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { simpleGit } from 'simple-git'
 import { eq } from 'drizzle-orm'
@@ -132,6 +134,25 @@ export async function openMirror(repositoryId: string, format: ObjectFormat | nu
   return dir
 }
 
+/** A separate object store inside the owned mirror: a replaced source must never borrow the old source's objects. */
+export async function openQueryMirror(repositoryId: string, source: string, format: ObjectFormat): Promise<string> {
+  const parent = await openMirror(repositoryId, null)
+  const dir = join(parent, 'elara-query.git')
+  if (existsSync(dir)) {
+    try {
+      const git = simpleGit(dir)
+      if ((await git.raw(['config', '--get', 'elara.source'])).trim() === source && (await git.raw(['rev-parse', '--show-object-format'])).trim() === format) return dir
+    } catch {
+      // Incomplete initialization is not evidence of the configured source.
+    }
+    await rm(dir, { recursive: true, force: true })
+  }
+  await simpleGit().raw(['init', '--bare', '--quiet', `--object-format=${format}`, dir])
+  for (const [key, value] of MIRROR_CONFIG) await simpleGit(dir).raw(['config', key, value])
+  await simpleGit(dir).raw(['config', 'elara.source', source])
+  return dir
+}
+
 /** The remote's default branch (null when the server does not advertise HEAD as a symref) and its commit. */
 export interface RemoteHead {
   branch: string | null
@@ -199,7 +220,7 @@ export async function markMirrorSynced(dir: string, commit: string): Promise<voi
   }
 }
 
-interface TreeEntry {
+export interface TreeEntry {
   mode: string
   type: string
   sha: string
@@ -208,8 +229,19 @@ interface TreeEntry {
   path: string
 }
 
-async function listTree(dir: string, commit: string): Promise<TreeEntry[]> {
-  const out = await simpleGit(dir).raw(['ls-tree', '-r', '-l', '-z', '--full-tree', commit])
+const execGit = promisify(execFile)
+async function listTree(dir: string, commit: string, maxBytes = Infinity): Promise<TreeEntry[]> {
+  let out: string
+  if (Number.isFinite(maxBytes)) {
+    try {
+      const raw = (await execGit('git', ['--no-replace-objects', 'ls-tree', '-r', '-l', '-z', '--full-tree', commit], { cwd: dir, maxBuffer: maxBytes, timeout: 30_000, encoding: null })).stdout
+      if (!isUtf8(raw)) throw new Error('Git ref contains non-UTF-8 paths')
+      out = raw.toString('utf8')
+    } catch (err) {
+      if (typeof err === 'object' && err !== null && ('code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || 'killed' in err && err.killed)) throw new MirrorReadLimitError('Git tree listing exceeded the ref byte/time budget')
+      throw err
+    }
+  } else out = await simpleGit(dir, { allowEnvironment: ['GIT_NO_REPLACE_OBJECTS'] }).env('GIT_NO_REPLACE_OBJECTS', '1').raw(['ls-tree', '-r', '-l', '-z', '--full-tree', commit])
   const entries: TreeEntry[] = []
   for (const record of out.split('\0')) {
     const m = /^(\d+) (\w+) ([0-9a-f]+) +(\S+)\t([\s\S]+)$/.exec(record)
@@ -224,7 +256,7 @@ function readBlobs(dir: string, shas: string[]): Promise<Map<string, Buffer>> {
   const blobs = new Map<string, Buffer>()
   if (shas.length === 0) return Promise.resolve(blobs)
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['cat-file', '--batch'], { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn('git', ['cat-file', '--batch'], { cwd: dir, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' }, stdio: ['pipe', 'pipe', 'pipe'] })
     const chunks: Buffer[] = []
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -262,17 +294,22 @@ function readBlobs(dir: string, shas: string[]): Promise<Map<string, Buffer>> {
  * `indexedPaths`. Without `previous` every file is read and the store's
  * content-hash skip keeps the unchanged ones from extraction.
  */
+export class MirrorReadLimitError extends Error {}
+
 export async function scanMirrorTree(
   dir: string,
   commit: string,
   previous: string | null,
   indexedPaths: ReadonlySet<string>,
   maxFiles = MAX_INDEXED_FILES,
-): Promise<RepositoryScan & { read: number }> {
+  maxReadBytes = Infinity,
+): Promise<RepositoryScan & { read: number; blobsRead: number; entries: TreeEntry[] }> {
   const before = previous ? new Map((await listTree(dir, previous)).map((e) => [e.path, e.sha])) : null
   const listed: TreeEntry[] = []
   const skipped: SkippedFile[] = []
-  for (const entry of await listTree(dir, commit)) {
+  const entries = await listTree(dir, commit, maxReadBytes)
+  if (Number.isFinite(maxReadBytes) && entries.length > maxFiles) throw new MirrorReadLimitError('Git tree exceeds the ref file budget')
+  for (const entry of entries) {
     // A clone checks a symlink out as a link and a submodule as an empty directory: the scan reads neither.
     if (entry.type !== 'blob' || entry.mode === '120000' || GIT_METADATA.test(entry.path)) continue
     if (BINARY_EXTENSIONS.test(entry.path)) skipped.push({ path: entry.path, reason: 'binary' })
@@ -282,9 +319,10 @@ export async function scanMirrorTree(
   const toRead = inCap.filter(
     (e) => e.size! <= MAX_FILE_BYTES && !(before?.get(e.path) === e.sha && indexedPaths.has(e.path)),
   )
+  if (toRead.reduce((sum, e) => sum + e.size!, 0) > maxReadBytes) throw new MirrorReadLimitError('Git tree exceeds the ref byte budget')
   const blobs = await readBlobs(dir, [...new Set(toRead.map((e) => e.sha))])
   const readPaths = new Set(toRead.map((e) => e.path))
-  const scan: RepositoryScan & { read: number } = { files: [], currentPaths: [], skipped, read: toRead.length }
+  const scan: RepositoryScan & { read: number; blobsRead: number; entries: TreeEntry[] } = { files: [], currentPaths: [], skipped, read: toRead.length, blobsRead: blobs.size, entries }
   for (const entry of inCap) {
     if (entry.size! > MAX_FILE_BYTES) {
       skipped.push({ path: entry.path, reason: 'too_large' })
@@ -293,8 +331,8 @@ export async function scanMirrorTree(
     if (readPaths.has(entry.path)) {
       const bytes = blobs.get(entry.sha)
       if (!bytes) throw new Error(`git mirror is missing blob ${entry.sha} (${entry.path})`)
-      // Only a 0x00 byte decodes to U+0000 in UTF-8, so a binary is never decoded.
-      if (bytes.includes(0)) {
+      // A string answer must not silently replace invalid UTF-8 bytes from the named commit.
+      if (bytes.includes(0) || !isUtf8(bytes)) {
         skipped.push({ path: entry.path, reason: 'binary' })
         continue
       }

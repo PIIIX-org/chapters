@@ -2773,22 +2773,52 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     lines turned into lines of the note's file as backlinks do (#472);
     `fresh` is note `updated_at` >= file `updated_at`. The MCP-only `explain`
     value is not in `REFS`, so the REST `code-refs` route does not take it.
-  - `find_symbols` with `overlay` (#676, `mcp/overlay.ts` over
-    `repositories/overlay.ts`) answers on base + overlay without writing:
-    `parseOverlay` reads a `git diff --no-renames` (200 KB, 50 files;
-    renames and binaries refused), `overlaySymbols` applies the hunks to the
-    stored content of the changed files with every context line checked
-    (`OverlayError` -> `INVALID_ARGUMENT` on `overlay`) and runs the
-    existing `extractStructure` on the result in memory, and `overlayHits`
-    drops the base hits of the changed files and merges the lexical matches
-    (exact name first, then the rest, then the base hits: an overlay hit is
-    never pushed out by a full page of base hits); `OVERLAY_MAX_PARSED` (2 MiB)
-    bounds the source parsed per call and `extractStructure` runs with
-    `edges: false`; files not in the index are `skipped`, a diff whose `index`
-    blob differs from the stored content's git blob id is `stale`. The base search is asked for
-    `OVERLAY_SPARE` more hits for what is dropped. No blocks, edges or
-    versions are written; `server/src/search/**` is untouched. The head's
-    `commit`/`tree` is the base and `overlay: true` says it was used.
+  - Repository `ref` and `overlay` (#676/#471, `repositories/ref-index.ts`,
+    `ref-queries.ts`, `ref-search.ts`, `mcp/ref-view.ts`) work across
+    `read_file`, `browse_repository`, `search`, `grep`, `find_symbols`
+    (including every `refs` operation and `explain`) and `orient`.
+    Exactly one readable repository is required, never a mixed vault or
+    `everywhere` scope. A branch/tag/HEAD/full SHA resolves once to a commit;
+    immutable bytes, symbols and edges come from that tree, not the shared
+    current rows. Git refs use existing credentials, a separately isolated
+    query object store nested in the owned mirror, the mirror lock and purge
+    lifecycle. Registered local Git roots support committed refs only; a
+    plain folder/agent push has no Git refs and reports that explicitly.
+    Without `ref`, an overlay uses the indexed Git commit when retrievable;
+    non-Git indexed sources name their actual content tree, not a claimed
+    push SHA. Normal calls without either argument are unchanged.
+    Unified patches are limited to 200 KB/50 files/2 MiB changed source.
+    Paths, hunk counts/context/newlines and old blob ids are checked;
+    missing/stale bases, renames and binary patches are refused, never skipped.
+    Added/modified/deleted files affect all consumers, including unchanged
+    callers whose imported definitions changed. Overlay extraction and
+    embedding are call-local; no shared files, blocks, edges or parse-cache
+    entries are written. Committed trees are LRU-cached by repository,
+    source identity, extractor version and tree (8 trees/64 MiB estimated
+    weight, including metadata, blocks and vector capacity);
+    same-tree commits retain their own commit identity. Indexing is bounded
+    at 20,000 files/32 MiB source; an over-cap tree is refused rather than
+    answered partially. `refCacheStats`/`refSearchStats` count real work.
+    Search keeps keyword+vector channels and existing per-file embedding
+    budgets, reusing same-owner vectors by embed key.
+    Exact routing uses the shared classifier, identifier-intent predicate and
+    routed/fallback outcome contract against only the selected tree and overlay:
+    a bare name missing there stays conceptual even if the current index has
+    it; explicit/backtick/forced misses and actual over-cap lookups report fallback.
+    Regex uses PostgreSQL with the ordinary statement timeout, never JavaScript regex execution.
+    Live access/source checks surround work; cursors bind immutable versions,
+    the caller and permission epoch. Session memory stores hashes/locations
+    only. Ref explanations mark citing-note freshness `unverified`: the
+    current shared index's timestamps do not prove a citation at another ref.
+    `browse_repository(diff: baseRef, ref: targetRef?, overlay?, path?)`
+    returns a budget-paged full-file unified patch with explicit base/target
+    identities, preserving final-newline bytes and regular-file modes.
+    Binary, oversized, symlink and submodule changes are not silently
+    deleted from the diff: a paged `metadata` list names actual before/after
+    blob/commit ids and modes when text cannot be rendered. Invalid UTF-8
+    is explicitly unindexed, never decoded with replacement bytes.
+    `changed_since` remains the
+    indexed-history operation, not a synonym for arbitrary Git history.
     With `changed_since` (#471, `mcp/changes.ts` over `repositories/changes.ts`)
     it lists the files changed after a commit or a date instead, from the
     index's own history: `syncRepositoryFiles` records a `repository_versions`
@@ -3315,7 +3345,8 @@ carry no version of their own beyond `content_hash`, whose first 16 hex
 every `read_file` answer carries as `hash` (what `if_rev` takes, #682;
 `~pending` / `~failed` appended while it carries `index`).
 `list_repositories` and the REST rows do not carry the indexed version.
-Git history (`changed_since`, `diff`, reads at a `ref`) is deferred (D11).
+MCP ref reads and diffs are implemented as described above; indexed
+`changed_since` dates remain sync times, not Git author/committer dates.
 
 **Credential encryption** (`credentials.ts`): AES-256-GCM,
 `CREDENTIALS_ENCRYPTION_KEY` (32-byte hex), used for both git
@@ -4659,8 +4690,11 @@ pnpm -C server test # vitest run — needs Postgres reachable at DATABASE_URL
   `read_note`, `read_file`, `repository_status`) must give the same bytes
   twice in one database, which only catches randomness inside the process.
   In the other database they must give the same bytes once that database's
-  ids and the allowlisted time keys are masked. A new read tool, or a new
-  argument that changes an answer's shape, adds its questions there. An
+  ids and the allowlisted time keys are masked. Overlay fixture identities
+  are allowlisted by actual source/file/structural-block identity; tree,
+  overlay and content hashes remain compared. Separate assertions keep
+  those identities repository-scoped and refuse the other world's access.
+  A new read tool, or a new argument that changes an answer's shape, adds its questions there. An
   answer that still differs across databases names its issue and is
   `it.fails`, which goes red once the issue is fixed; none does since graph
   order from ids (#1006), semantic edges from embed order (#1007) and
