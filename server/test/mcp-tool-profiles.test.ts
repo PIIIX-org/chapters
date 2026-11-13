@@ -336,7 +336,7 @@ describe('opt-in long-tail discovery over stateless HTTP (#431)', () => {
     const share = { vaultId, granteeType: 'user', granteeId: member.id }
     expect((await call(admin, 'share_vault', { ...share, permission: 'read' })).isError).toBe(false)
     const minted = await app.inject({ method: 'POST', url: '/api/mcp-connections', headers: { cookie }, body: { name: 'discovery-pinned-member', scope: 'vault', vaultId, access: 'read', profile: 'admin' } })
-    expect(minted.statusCode).toBe(201)
+    expect(minted.statusCode).toBe(200)
     const client = await mcpClient(field(minted.json(), 'token'), true)
     const hidden = await call(client, 'tool_search', { query: 'note_history' })
     expect(JSON.parse(hidden.text)).toMatchObject({ tools: [], total: 0 })

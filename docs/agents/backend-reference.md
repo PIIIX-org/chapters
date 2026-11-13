@@ -2495,6 +2495,19 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   before any model-availability claim; its trial is separate from the
   unchanged study allow-list. Independent GPT review, fresh CI/lab and
   correctly fingerprinted controls remain closure gates.
+  Actual HTTP SDK measurement on the repaired #1132/#1135 stack:
+  legacy admin **42,979 chars / 63 tools**, opted-in admin
+  **16,997 chars / 16 tools**, the same 443-character instructions.
+  The bootstrap descriptor costs 867 characters against the 26,849
+  long-tail bytes removed, for **25,982 fewer tools/list characters**
+  (about 6,496 tokens by the budget's estimate). This is a definition
+  payload comparison, not measured provider cache reuse.
+  Five new SDK cases plus the hidden-long-tail definition-version case
+  passed across scoped runs. The first pinned-fixture run assumed HTTP
+  201 for an API that returns 200; correcting that fixture expectation
+  allowed the live permission checks to execute and pass. No production
+  refusal or permission condition was relaxed, and no passing full batch
+  was rerun to print green.
 - **Instructions** (#435): `instructionsFor(profile)` in
   `mcp/instructions.ts` is the `initialize` result's `instructions`
   (`new McpServer(info, {instructions})` in `buildServer`): one constant
