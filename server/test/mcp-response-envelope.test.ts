@@ -16,6 +16,7 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
@@ -472,6 +473,48 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     const walked = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 29, budget_tokens: LIST_PAGE })
     expect(walked.length).toBeGreaterThan(2)
     expect(ids(walked, 'results')).toEqual(ids([capped], 'results'))
+  })
+})
+
+describe('stateless result handles: literal grep before paging (#423)', () => {
+  it('a real SDK consumer follows filtered search, graph and symbol pages without losing matches', async () => {
+    for (const [tool, args, section] of [
+      ['search', { vaultId, query: 'Note', limit: 100, grep: 'note' }, 'results'],
+      ['graph', { vaultId: graphVaultId, aggregate: 'none', grep: 'link' }, 'nodes'],
+      ['find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 50, grep: 'handler' }, 'results'],
+    ] as const) {
+      const all = await page(tool, { ...args, budget_tokens: 25_000 })
+      expect(all.filter).toMatchObject({ within: 'computed' })
+      expect((all[section] as unknown[]).length).toBeGreaterThan(5)
+      const pages = await walk(tool, { ...args, budget_tokens: LIST_PAGE })
+      expect(pages.length, tool).toBeGreaterThan(1)
+      expect(ids(pages, section)).toEqual(ids([all], section))
+      expect(new Set(ids(pages, section)).size).toBe(ids([all], section).length)
+      await refused(tool, { ...args, grep: 'DIFFERENT', budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /CURSOR_INVALID/)
+    }
+  })
+
+  it('same-id changed note text invalidates both ordinary and filtered result snapshots', async () => {
+    for (const grep of [undefined, 'link']) {
+      await flushEmbeddings()
+      const args = { vaultId: graphVaultId, aggregate: 'none', ...(grep ? { grep } : {}), budget_tokens: LIST_PAGE }
+      const first = await page('graph', args)
+      const before = await db.select({ id: notes.id }).from(notes).where(and(eq(notes.vaultId, graphVaultId), eq(notes.path, 'c0/link')))
+      await updateNote(graphVaultId, 'c0/link', { body: `${'apple '.repeat(40)}[[c1/link]] changed text ${grep ?? 'ordinary'}` })
+      const after = await db.select({ id: notes.id }).from(notes).where(and(eq(notes.vaultId, graphVaultId), eq(notes.path, 'c0/link')))
+      expect(after).toEqual(before)
+      await refused('graph', { ...args, cursor: cursorOf(first) }, /CURSOR_STALE/)
+    }
+  })
+
+  it('does not call an unmatched bounded candidate set complete, or pretend to scan beyond limit', async () => {
+    const result = await call('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 5, grep: 'NO_SUCH_LITERAL' })
+    expect(result.isError).toBe(false)
+    const json = JSON.parse(result.text) as Answer
+    expect(json.results).toEqual([])
+    expect(json.filter).toMatchObject({ within: 'computed', sections: { results: { scanned: 6, matched: 0, more: true } } })
+    expect(json.truncated).toMatchObject({ cursor: null, narrow: expect.arrayContaining([expect.stringContaining('computed candidates only')]) })
+    await refused('find_symbols', { repositoryId: repoId, query: 'alphaHandler', grep: '' }, /INVALID_ARGUMENT/)
   })
 })
 
