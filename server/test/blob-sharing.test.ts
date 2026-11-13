@@ -93,15 +93,16 @@ describe('vectors are shared by embed key between the repositories of one accoun
 
     const b = await newRepo(owner.id, 'blob-b')
     parses.length = 0
-    const before = metricsSnapshot().caches.blob_vector!
+    const before = metricsSnapshot()
     const second = await sync(b, FILES)
     expect(second).toEqual([])
     // Equal contents are parsed once per process, whichever repository holds them.
     expect(parses).toEqual([])
     expect(await vectors(b)).toEqual(await vectors(a))
-    const after = metricsSnapshot().caches.blob_vector!
-    expect(after.hit - before.hit).toBeGreaterThan(0)
-    expect(after.miss - before.miss).toBe(0)
+    const after = metricsSnapshot()
+    expect(after).toHaveProperty('caches.blob_vector', { hit: expect.any(Number), miss: expect.any(Number) })
+    expect(after.caches.blob_vector!.hit - before.caches.blob_vector!.hit).toBeGreaterThan(0)
+    expect(after.caches.blob_vector!.miss - before.caches.blob_vector!.miss).toBe(0)
   })
 
   it('a changed file in the second repository embeds only its own new texts', async () => {

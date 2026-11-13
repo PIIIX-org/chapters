@@ -39,6 +39,24 @@ export async function rememberRead(connectionId: string, noteId: string, rev: nu
 }
 
 /**
+ * A conditional read may name only a note this token has observed: a read identity in the window, or the exact
+ * committed revision it wrote. Audit rows prove a blind write's identity without inventing an implicit edit base.
+ * Purging the note removes both forms of evidence. Proposal/quarantine/restore-point rows have no committed seq.
+ */
+export async function hasObservedNote(connectionId: string, noteId: string, rev: number): Promise<boolean> {
+  const [row] = (await db.execute(sql`
+    SELECT EXISTS (
+      SELECT 1 FROM note_reads WHERE connection_id = ${connectionId} AND note_id = ${noteId}
+        AND read_at >= now() - make_interval(hours => ${READ_WINDOW_HOURS})
+    ) OR EXISTS (
+      SELECT 1 FROM note_revisions WHERE note_id = ${noteId} AND seq = ${rev}
+        AND actor_type = 'mcp' AND actor_id = ${connectionId}
+        AND created_at >= now() - make_interval(hours => ${READ_WINDOW_HOURS})
+    ) AS observed`)) as unknown as Array<{ observed: boolean }>
+  return row!.observed
+}
+
+/**
  * `connectionId` showed it still holds note `noteId` at `rev` (read_note
  * `if_rev` answered `unchanged`, #682): its base moves to `rev`, as a read
  * of it would. The answer sent no text, so no body is recorded: a base
@@ -52,6 +70,14 @@ export async function confirmRead(connectionId: string, noteId: string, rev: num
     INSERT INTO note_reads (connection_id, note_id, rev, body) VALUES (${connectionId}, ${noteId}, ${rev}, NULL)
     ON CONFLICT (connection_id, note_id) DO UPDATE
       SET body = CASE WHEN note_reads.rev = EXCLUDED.rev THEN note_reads.body END, rev = EXCLUDED.rev, read_at = now()`)
+}
+
+/** Advance an existing read-derived base after a whole-body write; a blind write must not create one. */
+export async function advanceRead(connectionId: string, noteId: string, rev: number, sent: string | null): Promise<void> {
+  await db
+    .update(noteReads)
+    .set({ rev, body: sent, readAt: sql`now()` })
+    .where(and(eq(noteReads.connectionId, connectionId), eq(noteReads.noteId, noteId), inWindow))
 }
 
 /** `connectionId`'s base of note `noteId` within the window, if one is on record: the `rev`, and the body it sent when that is not the revision's. */
