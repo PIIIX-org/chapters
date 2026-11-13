@@ -120,7 +120,7 @@ import { manualText, manualVisible, toolManuals, type ToolManual } from './manua
 import { strictArgs } from './strict-input.js'
 import { McpToolError, argumentRefusal, closest, envelope, errorResult, toErrorEnvelope, type ErrorEnvelope } from './errors.js'
 import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
-import { confirmRead, lastRead, rememberRead } from './last-read.js'
+import { advanceRead, confirmRead, hasObservedNote, lastRead, rememberRead } from './last-read.js'
 import {
   MARKDOWN_PATH,
   OUTLINE_ARG,
@@ -1558,8 +1558,8 @@ function buildServer(auth: McpAuth, toolDiscovery = false): { server: McpServer;
       // rev, so the base a whole-body edit merges from moves to it, as after a read; no body is recorded, since this
       // answer sent none (confirmRead keeps one sent with that rev, last-read.ts). It has no passage, so its session
       // document needs no text (and the note's file is not rendered).
-      // A numeric revision alone cannot identify a purged-and-recreated path. Require this token's observed note id.
-      if (page.at === null && args.if_rev === String(note.row.seq) && await lastRead(auth.connection.id, note.row.id) && !(await pathHadOtherNote(note.row))) {
+      // A numeric revision alone cannot identify a purged-and-recreated path. Require an observed immutable note id.
+      if (page.at === null && args.if_rev === String(note.row.seq) && await hasObservedNote(auth.connection.id, note.row.id, note.row.seq) && !(await pathHadOtherNote(note.row))) {
         const answer = { ...unchanged({ rev: note.row.seq }), rendered: () => confirmRead(auth.connection.id, note.row.id, note.row.seq) }
         return inSession(session, { path: note.row.path, version: { rev: note.row.seq }, text: '' }, answer, page.at)
       }
@@ -1752,7 +1752,7 @@ function buildServer(auth: McpAuth, toolDiscovery = false): { server: McpServer;
         if (!updated) throw await noteNotFound(target, args.path)
         if (!dryRun) {
           showAgentPresence(target, updated.id, presence, 'editing')
-          if (args.body !== undefined) await rememberRead(auth.connection.id, updated.id, updated.seq, updated.body === args.body ? null : args.body)
+          if (args.body !== undefined) await advanceRead(auth.connection.id, updated.id, updated.seq, updated.body === args.body ? null : args.body)
         }
         return answer(updated, dryRun ? false : await noteIndexed(updated.id, updated.seq))
       })
@@ -1880,7 +1880,7 @@ function buildServer(auth: McpAuth, toolDiscovery = false): { server: McpServer;
     if (!note) throw await noteNotFound(target, path)
     if (!dryRun) {
       showAgentPresence(target, note.id, presence, 'editing')
-      if (edit.body !== undefined) await rememberRead(auth.connection.id, note.id, note.seq, note.body === edit.body ? null : edit.body)
+      if (edit.body !== undefined) await advanceRead(auth.connection.id, note.id, note.seq, note.body === edit.body ? null : edit.body)
     }
     return editedAnswer(note, dryRun ? false : await noteIndexed(note.id, note.seq))
   }
