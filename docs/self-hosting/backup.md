@@ -120,16 +120,27 @@ Every revision of every note is kept until someone purges it (`purge_revision`, 
 
 ### Restoring via CLI
 
-The CLI runs inside the app container, so the server must be running (`docker compose up -d`) on the new, empty database and data volume:
+Restore is **offline**: stop every server or writing CLI using the target database, including other replicas. The CLI runs in a short-lived container with the app's configuration and data mount; do not start the server first. Keep PostgreSQL running.
+
+- **Fresh database and data volume:** provision the empty target and its app configuration first. The CLI runs migrations itself. Do not start the app or complete setup before restoring.
+- **Fresh database, kept data volume:** keep the original data mount attached to the one-off container. The database must still have no users. Restore prepares attachment storage before projecting note files; differing attachments are preserved and reported in the plan. Take a separate copy of the kept volume before applying. Do not delete it to make a restore pass.
+
+Both procedures use the same commands below. `./backup.zip` is a host-side archive; the read-only bind makes it available to the one-off container, not to a running server. Its file permissions must allow the image's `node` user to read it without making the archive public.
 
 ```bash
+docker compose stop app
+docker compose up -d db
 # Check the archive and see the plan, writing nothing:
-docker compose exec app pnpm restore-backup --dry-run /path/to/backup.zip
-# Restore:
-docker compose exec app pnpm restore-backup /path/to/backup.zip
-# Then restart the app: embeddings are only computed when the server starts.
-docker compose restart app
+docker compose run --rm --no-deps -T --volume "$PWD/backup.zip:/restore.zip:ro" \
+  app pnpm restore-backup --dry-run /restore.zip
+# Apply while the app remains stopped:
+docker compose run --rm --no-deps -T --volume "$PWD/backup.zip:/restore.zip:ro" \
+  app pnpm restore-backup /restore.zip
+# Only after a successful restore; boot computes embeddings:
+docker compose up -d app
 ```
+
+An actual restore while a server is running exits **2** with `Restore failed: the instance is in use: ...; stop it first`. That maintenance fence is distinct from the empty-instance check below: stopping the server does not permit overwriting an instance that already has users. A dry run takes only a shared lease and never prepares attachment storage.
 
 The restore runs in three steps:
 

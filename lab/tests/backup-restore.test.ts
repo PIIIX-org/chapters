@@ -370,10 +370,10 @@ const test: LabTest = {
     )
     const liveUsersAfter = await ctx.docker.psql('select count(*) from users')
     checks.push({
-      name: 'documented `docker compose exec app pnpm restore-backup` refuses a non-empty instance',
-      expected: 'non-zero exit, "Refusing to restore", data untouched',
+      name: 'restore CLI excludes a running instance before considering its data',
+      expected: 'exit 2, "Restore failed: the instance is in use", data untouched',
       actual: `exit ${liveRestore.code}; ${(liveRestore.stderr + liveRestore.stdout).trim().slice(-200)}; users ${liveUsersAfter}`,
-      ok: liveRestore.code !== 0 && /Refusing to restore/.test(liveRestore.stderr + liveRestore.stdout) && Number(liveUsersAfter) === sourceTables.users.length,
+      ok: liveRestore.code === 2 && /Restore failed: the instance is in use:/.test(liveRestore.stderr) && Number(liveUsersAfter) === sourceTables.users.length,
       severity: 'high',
     })
 
@@ -525,6 +525,36 @@ const test: LabTest = {
         actual: `exit ${restored.code}, timedOut ${restored.timedOut}, ${restored.ms} ms`,
         ok: false,
         severity: 'medium',
+      })
+    }
+
+    if (restored?.code === 0 && !restored.timedOut) {
+      // Same rows and verified parts, a different archive identity: the original
+      // archive would exercise idempotent replay, not the non-empty-instance guard.
+      const probePath = '/data/backups-tampered/nonempty.zip'
+      const probe = await ctx.docker.exec([
+        ...ctx.docker.COMPOSE, 'exec', '-T', '-e', `SRC=${archive}`, '-e', `DST=${probePath}`, 'app', 'node', '-e',
+        `const fs = require('fs'); const z = new (require('adm-zip'))(process.env.SRC);
+         const name = z.getEntry('backup.json') ? 'backup.json' : 'account-dump.json';
+         const manifest = JSON.parse(z.readAsText(name)); manifest.restoreGuardProbe = true;
+         z.updateFile(name, Buffer.from(JSON.stringify(manifest)));
+         fs.mkdirSync(require('path').dirname(process.env.DST), {recursive:true}); z.writeZip(process.env.DST);`,
+      ])
+      const offlineRestore = await runWithDeadline(
+        ctx,
+        'lab-restore-nonempty',
+        [...ctx.docker.COMPOSE, 'run', '--rm', '--no-deps', '-T', '--name', 'lab-restore-nonempty',
+          '-e', `DATA_DIR=${RESTORE_DIR}`, '-e', `LOCAL_REPOS_ROOT=${RESTORE_DIR}/local-repos`, 'app', 'sh', '-c',
+          `export DATABASE_URL="\${DATABASE_URL%/*}/${RESTORE_DB}" COREPACK_ENABLE_DOWNLOAD_PROMPT=0; pnpm restore-backup ${probePath}`],
+        CLI_TIMEOUT_MS,
+      )
+      const usersAfter = await psqlDb(RESTORE_DB, 'select count(*) from users')
+      checks.push({
+        name: 'offline one-off restore still refuses an already populated instance',
+        expected: 'exit 1, "Refusing to restore: this instance already has", restored users untouched',
+        actual: `archive preparation ${probe.code}; exit ${offlineRestore.code}; ${offlineRestore.stderr.trim().slice(-200)}; users ${usersAfter}`,
+        ok: probe.code === 0 && offlineRestore.code === 1 && /Refusing to restore: this instance already has \d+ user\(s\)/.test(offlineRestore.stderr) && Number(usersAfter) === sourceTables.users.length,
+        severity: 'critical',
       })
     }
 

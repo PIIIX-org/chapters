@@ -141,6 +141,11 @@ function toInsertable(spec: BackupTable, raw: unknown, where: string, strict: bo
   for (const key of primaryKeyOf(spec.table)) {
     if (row[key] == null) throw new BackupInvalidError(`${where}: primary key "${key}" is missing`)
   }
+  // Vault ids become filesystem roots, including empty vaults with no note
+  // entries. Validate every row while parsing, before planning or namespace prep.
+  if (spec.name === 'vaults' && (typeof row.id !== 'string' || !UUID.test(row.id))) {
+    throw new BackupInvalidError(`${where}: vault id is not a UUID`)
+  }
   for (const key of timestampKeysOf(spec.table)) {
     const value = row[key]
     if (value == null) continue
