@@ -3123,6 +3123,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     ordinary/filtered races and assert no result computation after
     stale content, permission or absent-snapshot checks. Earlier local
     passes below do not constitute verification of this repair.
+    The focused replay of those 15 failures plus four snapshot checks
+    passed 18/19. The remaining backlink pagination fixture seeded 40
+    notes then walked while derived indexing still changed its epochs.
+    That one unchanged-snapshot paging fixture now finishes embeddings
+    once after seeding, before its first page. Its success, count and
+    budget assertions remain intact; no per-page drain or retry was
+    added. Separate tests retain raced-first-page success, explicit
+    filter-race `BUSY`, and stale content/permission/absent-snapshot
+    refusal before the handler. No legacy no-snapshot bypass was added.
 
     A filtered reference-list cursor replays the first bounded source set
     and then pages its matches; it cannot claim matches below its source
