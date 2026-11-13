@@ -116,7 +116,7 @@ function remember(key: string, view: RepositoryView): void {
   }
 }
 async function treeView(repositoryId: string, source: string, dir: string, commit: string): Promise<RepositoryView> {
-  const tree = (await simpleGit(dir).env('GIT_NO_REPLACE_OBJECTS', '1').raw(['rev-parse', '--verify', `${commit}^{tree}`])).trim()
+  const tree = (await simpleGit(dir, { allowEnvironment: ['GIT_NO_REPLACE_OBJECTS'] }).env('GIT_NO_REPLACE_OBJECTS', '1').raw(['rev-parse', '--verify', `${commit}^{tree}`])).trim()
   const key = `${EXTRACTOR_VERSION}:${repositoryId}:${source}:${tree}`
   const hit = cache.get(key)
   if (hit) {
@@ -202,7 +202,7 @@ export async function repositoryViewAt(userId: string, repositoryId: string, arg
       const root = await realpath(config.localReposRoot)
       const dir = await realpath(resolve(root, repo.localPath))
       if (dir !== root && !dir.startsWith(root + sep)) throw new RefError('INVALID_ARGUMENT', 'registered repository is outside the local repos root')
-      const git = simpleGit(dir, { timeout: { block: 30_000 } }).env('GIT_NO_REPLACE_OBJECTS', '1')
+      const git = simpleGit(dir, { timeout: { block: 30_000 }, allowEnvironment: ['GIT_NO_REPLACE_OBJECTS'] }).env('GIT_NO_REPLACE_OBJECTS', '1')
       // Do not discover a parent repository outside the registered source.
       if (await realpath((await git.raw(['rev-parse', '--show-toplevel'])).trim()) !== dir) throw new RefError('INVALID_ARGUMENT', 'registered folder is not a Git work tree root')
       const common = await realpath(resolve(dir, (await git.raw(['rev-parse', '--git-common-dir'])).trim()))

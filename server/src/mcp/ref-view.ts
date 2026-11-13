@@ -4,7 +4,10 @@ import { openSession } from '../cache/session.js'
 import { totalLines, sliceLines } from '../text/lines.js'
 import { viewId, viewVersion, type RepositoryView } from '../repositories/ref-index.js'
 import { searchRef } from '../repositories/ref-search.js'
-import { translatePattern, globToRegex, scanLimits, type GrepHit } from '../repositories/grep.js'
+import { routeRef } from '../repositories/ref-router.js'
+import type { SearchRoute } from '../search/router.js'
+import { leanHit } from './search-hit.js'
+import { translatePattern, globToRegex, scanLimits, encodePosition, parsePosition, type GrepHit } from '../repositories/grep.js'
 import { checkReadArgs, codeParts, markdownParts, MARKDOWN_PATH, targetSections, outlineFirst, outlineSection, outlineNarrow, largeNarrow, unchanged, type Target } from './read-targets.js'
 import { inSession } from './session-reads.js'
 import { keyset, ranked, textSection, location, compareCodeUnits, type Budgeted, type Page } from './response.js'
@@ -12,8 +15,8 @@ import { McpToolError } from './errors.js'
 
 // Two shared optional fields; no cross-tool stored overlay handle or implicit session overlay.
 export const REF_INPUT = {
-  ref: z.string().optional(),
-  overlay: z.string().optional(),
+  ref: z.string().optional().describe('Git ref'),
+  overlay: z.string().optional().describe('Private diff'),
 }
 export async function readView(view: RepositoryView, args: { path: string; targets?: Target[]; outline?: boolean; if_rev?: string; session_id?: string }, page: Page, connectionId: string): Promise<Budgeted> {
   checkReadArgs(args)
@@ -51,8 +54,24 @@ export function browseView(view: RepositoryView, path: string | undefined, page:
 }
 
 /** Both channels rank only the immutable tree plus this call's overlay. */
-export async function searchView(view: RepositoryView, accountId: string, args: { query: string; kind?: string; limit?: number; symbols?: boolean }, symbolsOnly: boolean): Promise<Budgeted> {
+export async function searchView(view: RepositoryView, accountId: string, args: { query: string; kind?: string; limit?: number; symbols?: boolean; route?: SearchRoute }, symbolsOnly: boolean): Promise<Budgeted> {
   const limit = args.limit ?? 20
+  let attempted: SearchRoute = 'conceptual'
+  if (!symbolsOnly) {
+    const answer = await routeRef(view, args.query, args.symbols ?? true, args.route)
+    attempted = answer.attempted
+    if (answer.routed) {
+      const { results, textual, ...head } = answer.routed
+      const items = results.map((h) => leanHit(h, true))
+      return {
+        head: { ...viewVersion(view), ...head, status: results.length ? 'ok' : 'no_match', retrieval_mode: 'exact', degraded: false, ...(results.length > limit || (textual?.length ?? 0) > limit ? { partial: true } : {}) },
+        sections: [
+          ranked({ name: 'results', items, id: (h) => `${h.id}:${h.startLine ?? ''}:${h.edge?.kind ?? ''}:${h.edge?.col ?? ''}`, limit, ladder: { no_context: (h) => ({ ...h, snippet: undefined, tokens: undefined }), locations: (h) => h.startLine === undefined || h.endLine === undefined ? h.path : location(h.path, h.startLine, h.endLine), group: (h) => h.path } }),
+          ...(textual === undefined ? [] : [ranked({ name: 'textual', items: textual, id: (h) => `${h.repositoryId}:${h.path}:${h.line}:${h.col}:${h.kind}`, limit, ladder: { no_context: (h) => ({ ...h, context: undefined }), locations: (h) => h.line === null ? h.path : location(h.path, h.line, h.line), group: (h) => h.path } })]),
+        ],
+      }
+    }
+  }
   const hits = await searchRef(view, accountId, args, symbolsOnly)
   const items = hits.map((h) => {
     const file = view.files.get(h.path)!
@@ -64,14 +83,17 @@ export async function searchView(view: RepositoryView, accountId: string, args: 
       snippet: h.snippet, score: Math.round(h.score * 1e5) / 1e5,
     }
   })
-  return { head: { ...viewVersion(view), status: hits.length ? 'ok' : 'no_match', retrieval_mode: 'hybrid', degraded: false }, sections: [ranked({ name: 'results', items, id: (h) => h.id, limit, ladder: { no_context: (h) => ({ ...h, snippet: undefined }), locations: (h) => h.startLine === undefined || h.endLine === undefined ? h.path : location(h.path, h.startLine, h.endLine), group: (h) => h.path } })] }
+  const retrieval = /[\p{L}\p{N}]/u.test(args.query) ? 'hybrid' : 'none'
+  const fallback = !symbolsOnly && attempted !== 'conceptual'
+  return { head: { ...viewVersion(view), status: hits.length ? 'ok' : 'no_match', retrieval_mode: fallback && retrieval !== 'none' ? 'fallback' : retrieval, degraded: false, ...(!symbolsOnly ? { route: 'conceptual', ...(fallback ? { attempted_route: attempted, ...(retrieval !== 'none' ? { underlying_retrieval_mode: retrieval } : {}) } : {}) } : {}) }, sections: [ranked({ name: 'results', items, id: (h) => h.id, limit, ladder: { no_context: (h) => ({ ...h, snippet: undefined }), locations: (h) => h.startLine === undefined || h.endLine === undefined ? h.path : location(h.path, h.startLine, h.endLine), group: (h) => h.path } })] }
 }
 
 /** PostgreSQL's bounded regex engine, exactly as normal grep; input is data, never a SQL fragment or JS regexp. */
 export async function grepView(view: RepositoryView, args: { pattern: string; path?: string; context?: number }, page: Page): Promise<Budgeted> {
   const pattern = translatePattern(args.pattern)
   const glob = args.path === undefined ? null : globToRegex(args.path.replace(/^(?:\.?\/)+/, ''))
-  const after = page.after(0, z.object({ path: z.string(), line: z.number().int().min(0) }))
+  const at = page.after(0, z.string().regex(/^0:\d+:/))
+  const after = at === null ? null : parsePosition(at)
   const limit = 20
   const documents = JSON.stringify([...view.files.values()].map((f) => ({ path: f.path, content: f.content })))
   let rows: Array<{ path: string; line: number }>
@@ -101,7 +123,7 @@ export async function grepView(view: RepositoryView, args: { pattern: string; pa
     const block = f.blocks.filter((b) => b.startLine <= r.line && b.endLine >= r.line).sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine))[0]
     return { path: r.path, line: r.line, ...(first === last ? {} : { lines: [first, last] as [number, number] }), ...(block ? { tokens: Math.ceil(sliceLines(f.content, block.startLine, block.endLine).length / 4) } : {}), snippet: sliceLines(f.content, first, last).split('\n').map((l) => l.slice(0, 500)).join('\n') }
   })
-  return { head: { ...viewVersion(view), scanned: view.files.size }, sections: [keyset({ name: 'hits', items: hits, limit, more: rows.length > limit, resume: (h) => ({ path: h.path, line: h.line }), ladder: { no_context: (h) => ({ ...h, snippet: undefined }), locations: (h) => location(h.path, h.lines?.[0] ?? h.line, h.lines?.[1] ?? h.line), group: (h) => h.path } })] }
+  return { head: { ...viewVersion(view), scanned: view.files.size }, sections: [keyset({ name: 'hits', items: hits, limit, more: rows.length > limit, resume: (h) => encodePosition({ c: 0, path: h.path, line: h.line }), ladder: { no_context: (h) => ({ ...h, snippet: undefined }), locations: (h) => location(h.path, h.lines?.[0] ?? h.line, h.lines?.[1] ?? h.line), group: (h) => h.path } })] }
 }
 
 /** Git C-quoted UTF-8 path, including control bytes JSON's \\u escapes cannot represent in patches. */

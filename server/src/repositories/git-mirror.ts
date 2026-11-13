@@ -241,7 +241,7 @@ async function listTree(dir: string, commit: string, maxBytes = Infinity): Promi
       if (typeof err === 'object' && err !== null && ('code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || 'killed' in err && err.killed)) throw new MirrorReadLimitError('Git tree listing exceeded the ref byte/time budget')
       throw err
     }
-  } else out = await simpleGit(dir).env('GIT_NO_REPLACE_OBJECTS', '1').raw(['ls-tree', '-r', '-l', '-z', '--full-tree', commit])
+  } else out = await simpleGit(dir, { allowEnvironment: ['GIT_NO_REPLACE_OBJECTS'] }).env('GIT_NO_REPLACE_OBJECTS', '1').raw(['ls-tree', '-r', '-l', '-z', '--full-tree', commit])
   const entries: TreeEntry[] = []
   for (const record of out.split('\0')) {
     const m = /^(\d+) (\w+) ([0-9a-f]+) +(\S+)\t([\s\S]+)$/.exec(record)

@@ -23,12 +23,27 @@ const names = (edge: Edge, target: Target) => edge.target !== null
   ? edge.target.fileId === target.fileId && edge.target.blockIds.some((id) => target.blockIds.includes(id))
   : edge.name === target.name && (edge.qualified === null || edge.qualified === target.symbol)
 
-/** Edges are resolved again after overlay application, including unchanged importers of changed/deleted files. */
-export function viewQueries(view: RepositoryView): CodeQueries & {
-  definitions: Definition[]
+export interface ViewQueries extends CodeQueries {
+  definitions: readonly Definition[]
   declarationOf: (id: string) => Promise<string | null>
   repositoryMap: (repositoryId: string, opts: OrientOptions, offsets?: OrientOffsets) => Promise<{ symbols: OrientSymbol[]; folders: OrientFolder[] }>
-} {
+}
+
+const queryViews = new WeakMap<RepositoryView['files'], ViewQueries>()
+export const refQueryStats = { built: 0, reused: 0 }
+
+/** Immutable tree maps share a graph; private overlay maps remain weakly held and unreachable by other calls. */
+export function viewQueries(view: RepositoryView): ViewQueries {
+  const held = queryViews.get(view.files)
+  if (held) { refQueryStats.reused++; return held }
+  const queries = buildViewQueries(view)
+  refQueryStats.built++
+  queryViews.set(view.files, queries)
+  return queries
+}
+
+/** Edges are resolved again after overlay application, including unchanged importers of changed/deleted files. */
+function buildViewQueries(view: RepositoryView): ViewQueries {
   const definitions: Definition[] = []
   const byBlock = new Map<string, Definition>()
   const byName = new Map<string, Definition[]>()

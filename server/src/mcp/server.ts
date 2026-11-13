@@ -180,10 +180,10 @@ const UUID_ARG = z
  * A vault or repository id argument. Listed as a UUID but not checked by the schema: a mis-copied id is refused by
  * `idRefusal` with the ids that would have worked (#1101), which the schema's "Invalid UUID" could not name.
  */
-const ID_ARG = z.string().meta({ format: 'uuid' })
+const ID_ARG = z.string().meta({ format: 'uuid' }).describe('UUID')
 /** The target vault (repository): a pinned connection may omit it, an account connection names it. */
-const VAULT_ID = ID_ARG.optional().describe('Vault id; omit when pinned')
-const REPOSITORY_ID = ID_ARG.optional().describe('Repository id; omit when pinned')
+const VAULT_ID = ID_ARG.optional().describe('Vault UUID')
+const REPOSITORY_ID = ID_ARG.optional().describe('Repository UUID')
 const NOTE_PATH = z.string().describe('Note path')
 
 /** One `edit_note` op (#408); each op object takes only its own keys. */
@@ -2323,11 +2323,11 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       },
       budget: 'list',
     },
-    async (args: { path?: string; changed_since?: string; diff?: string }, { repositoryId: target }, page, view, base) => {
+    async (args: { path?: string; changed_since?: string; diff?: string }, { repositoryId: target }, page, view, diffBase) => {
       await requireRepositoryAccess(target)
       if (view) {
         if (args.changed_since !== undefined) throw new McpToolError('INVALID_ARGUMENT', 'changed_since is indexed history; use diff for Git refs', { field: 'changed_since' })
-        if (base) return diffView(base, view, args.path)
+        if (diffBase) return diffView(diffBase, view, args.path)
         return browseView(view, args.path, page)
       }
       // `.`, `./docs`, `/docs/` and `docs//lib` name folders as a shell would (#1102): empty and `.` segments are dropped.
@@ -3141,7 +3141,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description:
         'Symbol search by name or meaning; refs: sites of query.',
       inputSchema: {
-        query: z.string(),
+        query: z.string().describe('Symbol query'),
         ...REF_INPUT,
         kind: z.enum(SYMBOL_KINDS).optional().describe('Symbol kind'),
         repositoryId: ID_ARG.optional(),

@@ -16,7 +16,7 @@ import { blocks, repositories, repositoryFiles, repositoryShares, teams, teamMem
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { clearRefCache, REF_LIMITS, refCacheStats, repositoryViewAt } from '../src/repositories/ref-index.js'
-import { viewQueries } from '../src/repositories/ref-queries.js'
+import { viewQueries, refQueryStats } from '../src/repositories/ref-queries.js'
 import { refSearchStats } from '../src/repositories/ref-search.js'
 import { gitMirrorDir, removeGitMirror, withMirrorLock } from '../src/repositories/git-mirror.js'
 import { parseCacheStats } from '../src/repositories/blob-cache.js'
@@ -68,9 +68,9 @@ async function connect(email: string, name: string): Promise<Client> {
   await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { authorization: `Bearer ${mint.json<{ token: string }>().token}` } } }))
   return client
 }
-const ROW = z.looseObject({ path: z.string().optional(), name: z.string().optional(), snippet: z.string().optional(), at: z.string().optional(), to: z.string().optional() })
+const ROW = z.looseObject({ path: z.string().optional(), name: z.string().optional(), symbolName: z.string().optional(), snippet: z.string().optional(), at: z.string().optional(), to: z.string().optional(), startLine: z.number().optional(), endLine: z.number().optional(), edge: z.looseObject({ confidence: z.string(), kind: z.string(), col: z.number(), symbol: z.string().nullable() }).optional() })
 const BODY = z.looseObject({
-  results: z.array(ROW).default([]), files: z.array(ROW).default([]), hits: z.array(ROW).optional(), depth1: z.array(ROW).default([]),
+  results: z.array(ROW).default([]), files: z.array(ROW).default([]), hits: z.array(ROW).optional(), depth1: z.array(ROW).default([]), textual: z.array(ROW).optional(),
   content: z.string().optional(), diff: z.string().optional(),
   truncated: z.union([z.literal(false), z.looseObject({ cursor: z.string().optional() })]).optional(),
 })
@@ -181,15 +181,92 @@ describe('ref and overlay consumers (#676/#471)', () => {
     expect(parseCacheStats).toEqual(parsed)
     expect(refSearchStats.embedded).toBe(embedded)
     expect(reused.results[0]).toMatchObject({ path: 'src/api.ts', name: 'inserted', startLine: 1 })
+    await answer('search', { query: 'who calls retained', ref: second })
+    const graph = { ...refQueryStats }
+    const graphReuse = await answer('search', { query: 'who calls retained', ref: 'same-tree' })
+    expect(graphReuse.commit).toBe(sameTree)
+    expect(refQueryStats.built).toBe(graph.built)
+    expect(refQueryStats.reused).toBe(graph.reused + 1)
   })
 
   it('searches both channels on the selected ref and never substitutes the default-index symbol set', async () => {
-    const found = await answer('search', { query: 'inserted', ref: second })
+    const found = await answer('search', { query: 'inserted', ref: second, route: 'conceptual' })
     expect(found.retrieval_mode ?? found.retrieval).toBe('hybrid')
     expect(found.results.some((r) => r.path === 'src/api.ts' && r.snippet?.includes('inserted'))).toBe(true)
     const symbols = await answer('find_symbols', { query: 'removed', ref: second })
     expect(symbols.results.some((r) => r.name === 'removed')).toBe(false)
-    expect((await answer('find_symbols', { query: 'removed', ref: first })).results[0].name).toBe('removed')
+    expect((await answer('find_symbols', { query: 'removed', ref: first })).results[0]?.name).toBe('removed')
+  })
+
+  it('composes all actual public routes with immutable bytes and private overlays, keeping textual sites separate', async () => {
+    const overlay = OVERLAY + `diff --git a/src/guess.ts b/src/guess.ts
+--- /dev/null
++++ b/src/guess.ts
+@@ -0,0 +1,1 @@
++export function guessed() { return retained() }
+diff --git a/src/store.ts b/src/store.ts
+--- /dev/null
++++ b/src/store.ts
+@@ -0,0 +1,1 @@
++export class Store { save() { return 1 } }
+diff --git a/src/retained.test.ts b/src/retained.test.ts
+--- /dev/null
++++ b/src/retained.test.ts
+@@ -0,0 +1,2 @@
++import { retained } from "./api.js"
++export function checksRetained() { return retained() }
+`
+    const exact = await answer('search', { query: 'inserted', ref: second })
+    expect(exact).toMatchObject({ route: 'identifier', retrieval_mode: 'exact', confidence: 1, commit: second })
+    expect(exact.results[0]).toMatchObject({ path: 'src/api.ts', symbolName: 'inserted', startLine: 1 })
+    expect(exact.results[0]).not.toHaveProperty('updated')
+    const file = await answer('search', { query: 'src/api.ts', route: 'path', ref: second, overlay })
+    expect(file).toMatchObject({ route: 'path', retrieval_mode: 'exact', commit: second, overlay: true })
+    expect(file.results[0]?.snippet).toBe(EDITED)
+    expect(JSON.stringify(file.results[0]?.outline)).toContain('overlayOnly')
+    const baseName = await answer('search', { query: 'Store.ts', ref: second, overlay })
+    expect(baseName).toMatchObject({ route: 'path', retrieval_mode: 'exact' })
+    expect(baseName.results[0]?.path).toBe('src/store.ts')
+    const dotted = await answer('search', { query: 'Store.save', ref: second, overlay })
+    expect(dotted).toMatchObject({ route: 'identifier', retrieval_mode: 'exact' })
+    expect(dotted.results[0]).toMatchObject({ path: 'src/store.ts', symbolName: 'save', symbolParent: 'Store' })
+    const defined = await answer('search', { query: 'defined in overlayOnly', route: 'structural', ref: second, overlay })
+    expect(defined).toMatchObject({ route: 'structural', retrieval_mode: 'exact' })
+    expect(defined.results[0]).toMatchObject({ path: 'src/api.ts', symbolName: 'overlayOnly', startLine: 1 })
+    const callers = await answer('search', { query: 'who calls retained', ref: second, overlay })
+    expect(callers).toMatchObject({ route: 'structural', retrieval_mode: 'exact', commit: second, overlay: true })
+    expect(callers.results.map((r) => r.path)).toEqual(['src/entry.ts', 'src/fresh.ts', 'src/retained.test.ts'])
+    expect(callers.results.every((r) => r.edge?.confidence === 'resolved')).toBe(true)
+    expect(callers.textual).toEqual([expect.objectContaining({ path: 'src/guess.ts', line: 1, confidence: 'textual' })])
+    const references = await answer('search', { query: 'references to retained', route: 'structural', ref: second, overlay })
+    expect(references.results.every((r) => r.edge?.confidence === 'resolved')).toBe(true)
+    expect(references.textual).toEqual([expect.objectContaining({ path: 'src/guess.ts', confidence: 'textual' })])
+    const tests = await answer('search', { query: 'tests for retained', route: 'structural', ref: second, overlay })
+    expect(tests.results.map((r) => r.path)).toEqual(['src/retained.test.ts'])
+    const imports = await answer('search', { query: 'what imports empty.ts', route: 'structural', ref: second, overlay })
+    expect(imports.results).toEqual([expect.objectContaining({ path: 'src/side.ts', startLine: 1, edge: expect.objectContaining({ kind: 'import' }) })])
+    const conceptual = await answer('search', { query: 'retained', route: 'conceptual', ref: second, overlay })
+    expect(conceptual).toMatchObject({ route: 'conceptual', retrieval_mode: 'hybrid', commit: second })
+    expect(conceptual.results.some((r) => r.symbolName === 'retained')).toBe(true)
+    for (const [query, route] of [['retained', 'path'], ['src/api.ts', 'identifier']] as const) {
+      const fallback = await answer('search', { query, route, ref: second, overlay })
+      expect(fallback).toMatchObject({ route: 'conceptual', attempted_route: route, retrieval_mode: 'fallback', underlying_retrieval_mode: 'hybrid' })
+    }
+    const deleted = await answer('search', { query: 'inserted', ref: second, overlay })
+    expect(deleted).toMatchObject({ route: 'conceptual', attempted_route: 'identifier', retrieval_mode: 'fallback' })
+    expect(deleted.results.some((r) => r.symbolName === 'inserted')).toBe(false)
+    const privateMiss = await answer('search', { query: 'overlayOnly', ref: second })
+    expect(privateMiss.results.some((r) => r.symbolName === 'overlayOnly')).toBe(false)
+  })
+
+  it('continues grep by the established scalar position without skipping lines or crossing overlay views', async () => {
+    const args = { ref: second, pattern: 'long repeated', path: 'large.txt' }
+    const firstPage = await answer('grep', args)
+    expect(firstPage.hits?.map((h) => h.line)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1))
+    if (!firstPage.truncated || !firstPage.truncated.cursor) throw new Error('expected grep continuation')
+    const nextPage = await answer('grep', { ...args, cursor: firstPage.truncated.cursor })
+    expect(nextPage.hits?.map((h) => h.line)).toEqual(Array.from({ length: 20 }, (_, i) => i + 21))
+    expect((await call('grep', { ...args, overlay: OVERLAY, cursor: firstPage.truncated.cursor })).error).toBe(true)
   })
 
   it('applies additions, modifications and deletions to reads, grep, hybrid search, browse, refs and the map', async () => {
