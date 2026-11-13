@@ -94,7 +94,7 @@ import { stopWatchingLocalRepository } from '../repositories/scheduler.js'
 import { isWithinLocalReposRoot, startSync } from '../repositories/routes.js'
 import { purgeVaultRecord, restoreVaultRecord, trashVaultRecord } from '../vaults/routes.js'
 import { notifyVaultOwnersOfMembershipChange } from '../vaults/team-routes.js'
-import { findSymbols, searchNotes } from '../search/search.js'
+import { findSymbols } from '../search/search.js'
 import { leanHit, type LeanHit } from './search-hit.js'
 import { EDGE_KINDS, buildGraph, findShortestPath, groupKeys, type CommunityEdge, type EdgeKind, type GraphEdge, type InternalNode } from '../graph/assemble.js'
 import { edgeRowKey, edgeRows, type EdgeRow } from '../graph/edges.js'
@@ -114,7 +114,7 @@ import { manualText, manualVisible, toolManuals, type ToolManual } from './manua
 import { strictArgs } from './strict-input.js'
 import { McpToolError, argumentRefusal, closest, envelope, errorResult, toErrorEnvelope, type ErrorEnvelope } from './errors.js'
 import { applyBodyOps, type EditOp } from '../sync/edit-ops.js'
-import { advanceRead, confirmRead, lastRead, rememberRead } from './last-read.js'
+import { confirmRead, lastRead, rememberRead } from './last-read.js'
 import {
   MARKDOWN_PATH,
   OUTLINE_ARG,
@@ -1726,7 +1726,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         if (!updated) throw await noteNotFound(target, args.path)
         if (!dryRun) {
           showAgentPresence(target, updated.id, presence, 'editing')
-          if (args.body !== undefined) await advanceRead(auth.connection.id, updated.id, updated.seq, updated.body === args.body ? null : args.body)
+          if (args.body !== undefined) await rememberRead(auth.connection.id, updated.id, updated.seq, updated.body === args.body ? null : args.body)
         }
         return answer(updated, dryRun ? false : await noteIndexed(updated.id, updated.seq))
       })
@@ -1854,7 +1854,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     if (!note) throw await noteNotFound(target, path)
     if (!dryRun) {
       showAgentPresence(target, note.id, presence, 'editing')
-      if (edit.body !== undefined) await advanceRead(auth.connection.id, note.id, note.seq, note.body === edit.body ? null : edit.body)
+      if (edit.body !== undefined) await rememberRead(auth.connection.id, note.id, note.seq, note.body === edit.body ? null : edit.body)
     }
     return editedAnswer(note, dryRun ? false : await noteIndexed(note.id, note.seq))
   }
