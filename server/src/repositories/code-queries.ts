@@ -60,6 +60,8 @@ const EXTERNAL_SPECIFIER_LANGUAGES = ['typescript', 'javascript']
 /** What a question names: a symbol of the repository, or only a name nothing in it defines. */
 export interface Target {
   fileId: string | null
+  /** A file dependency question: import destination, even when the file defines no symbols. */
+  wholeFile?: true
   /** The `block_id`s of the definition: overloads are several blocks of one inner path. */
   blockIds: string[]
   /** The bare name, as `code_edges.target_name`. */

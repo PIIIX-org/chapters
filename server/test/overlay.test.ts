@@ -42,7 +42,7 @@ deleted file mode 100644
 -export const gone = 1
 `)
     expect(patches.map((p) => [p.path, p.status])).toEqual([['new.ts', 'added'], ['old.ts', 'deleted']])
-    expect(applyHunks('new.ts', '', patches[0]!.hunks)).toBe('export const a = 1\nexport const b = 2')
+    expect(applyHunks('new.ts', '', patches[0]!.hunks)).toBe('export const a = 1\nexport const b = 2\n')
   })
 
   it('refuses a hunk whose context is not the indexed content, naming the file', () => {
@@ -65,5 +65,15 @@ deleted file mode 100644
     expect(patches.map((p) => p.path)).toEqual(['src/café.ts', 'src/say "hi".ts'])
     expect(parseOverlay('diff --git "a/\\346\\227\\245.ts" "b/\\346\\227\\245.ts"\n--- /dev/null\n+++ "b/\\346\\227\\245.ts"\n@@ -0,0 +1,1 @@\n+x\n')[0]).toMatchObject({ path: '日.ts', status: 'added' })
     expect(() => parseOverlay('--- "a/bad\\q.ts"\n+++ "b/bad\\q.ts"\n@@ -1,1 +1,1 @@\n-a\n+b\n')).toThrow(/quoted path/)
+  })
+
+  it('preserves final-newline bytes and rejects malformed counts and positions', () => {
+    const diff = '--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n one\n-last\n\\ No newline at end of file\n+next\n\\ No newline at end of file\n'
+    const [patch] = parseOverlay(diff)
+    expect(applyHunks('a.txt', 'one\nlast', patch!.hunks)).toBe('one\nnext')
+    expect(() => applyHunks('a.txt', 'one\nlast\n', patch!.hunks)).toThrow(/newline/)
+    expect(() => parseOverlay(diff.replace('+1,2', '+1,3'))).toThrow(/counts/)
+    const [shifted] = parseOverlay(diff.replace('+1,2', '+3,2'))
+    expect(() => applyHunks('a.txt', 'one\nlast', shifted!.hunks)).toThrow(/position/)
   })
 })

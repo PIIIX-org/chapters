@@ -18,6 +18,7 @@ import type { ToolProfile } from './server.js'
 const READ_RULES =
   'Tools with `budget_tokens` (characters / 4) fit it and end with `truncated`; for more, repeat with its `cursor`. ' +
   'read_note/read_file: `outline: true` maps a body; `targets` reads: {lines:"a-b"}, {heading:"A > B"}, {block}, {symbol} (files), {grep:"text"}. ' +
+  'Repository ref selects a commit; overlay is a private diff against it. ' +
   'Manuals: elara://manual/conventions and one per family.'
 
 const WRITE_RULES =

@@ -129,8 +129,16 @@ export function checkRefsArguments(args: { refs?: Refs; path?: string; depth?: n
 
 /** The bare name of a symbol reference: `Store.save` is looked for as `save`. */
 const bareName = (name: string) => name.slice(name.lastIndexOf('.') + 1)
+/** The same questions over the shared index or an immutable, request-scoped ref/overlay view. */
+export interface CodeQueries {
+  findDefinitions: typeof findDefinitions
+  symbolAt: typeof symbolAt
+  codeSites: typeof codeSites
+  impact: typeof impact
+}
+export const indexedCodeQueries: CodeQueries = { findDefinitions, symbolAt, codeSites, impact }
 
-export async function askCode(repositoryId: string, args: RefsArgs): Promise<CodeAnswer> {
+export async function askCode(repositoryId: string, args: RefsArgs, queries: CodeQueries = indexedCodeQueries): Promise<CodeAnswer> {
   checkRefsArguments(args)
   const limit = args.limit ?? DEFAULT_LIMIT
   const offset = args.offset ?? 0
@@ -139,7 +147,7 @@ export async function askCode(repositoryId: string, args: RefsArgs): Promise<Cod
     const match = /^(.+):(\d+)$/.exec(args.query)
     if (!match || Number(match[2]) < 1) throw refused('`refs: "at"` takes `query: "path:line"`, e.g. `src/store.ts:42`', 'query')
     const [, path, line] = match as unknown as [string, string, string]
-    const found = await symbolAt(repositoryId, path, Number(line), { limit: limit + 1, offset })
+    const found = await queries.symbolAt(repositoryId, path, Number(line), { limit: limit + 1, offset })
     if (found === null) throw new CodeQueryError('NOT_FOUND', `no file "${path}" in this repository`)
     const rows: LineSite[] = found.sites.map((s) => ({ kind: s.kind, name: s.name, confidence: s.confidence, ...(s.target ? { to: `${s.target.path}#${s.target.symbol}` } : {}) }))
     return {
@@ -150,7 +158,7 @@ export async function askCode(repositoryId: string, args: RefsArgs): Promise<Cod
   }
 
   const byId = isSymbolId(args.query)
-  const definitions = await findDefinitions(repositoryId, { ...(byId ? { id: args.query } : { name: args.query }), path: args.path, kind: args.kind })
+  const definitions = await queries.findDefinitions(repositoryId, { ...(byId ? { id: args.query } : { name: args.query }), path: args.path, kind: args.kind })
   if (definitions.length > 1) {
     return {
       head: { refs: args.refs, ...(definitions.length > MAX_DEFINITIONS ? { matches: definitions.length } : {}) },
@@ -169,7 +177,7 @@ export async function askCode(repositoryId: string, args: RefsArgs): Promise<Cod
 
   if (args.refs === 'impact') {
     const depth = Math.min(args.depth ?? DEFAULT_IMPACT_DEPTH, MAX_IMPACT_DEPTH)
-    const levels = await impact(repositoryId, target, depth)
+    const levels = await queries.impact(repositoryId, target, depth)
     if (definition === null && levels.length === 0) throw nothing()
     // Each level's number of sites: `">500"` when the level was cut at the rows read for it.
     const total = Object.fromEntries(levels.map((l, i) => [i + 1, l.capped ? `>${l.total}` : l.total]))
@@ -180,7 +188,7 @@ export async function askCode(repositoryId: string, args: RefsArgs): Promise<Cod
     }
   }
 
-  const sites = await codeSites(repositoryId, target, SITE_KINDS[args.refs], { limit: limit + 1, offset }, args.refs !== 'callers')
+  const sites = await queries.codeSites(repositoryId, target, SITE_KINDS[args.refs], { limit: limit + 1, offset }, args.refs !== 'callers')
   if (definition === null && offset === 0 && sites.length === 0) throw nothing()
   return { head: { refs: args.refs, symbol }, lists: [{ name: 'results', rows: sites.map(row), paged: true }], limit }
 }

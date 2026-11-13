@@ -17,6 +17,7 @@ export async function orientAnswer(
   resources: { vaultIds: string[]; repositoryIds: string[] },
   args: { query?: string; focus?: string[]; path?: string },
   page: Page,
+  view?: { repositoryMap: typeof repositoryMap; version: Record<string, unknown> },
 ): Promise<Budgeted> {
   const folder = args.path?.replace(/^\/+|\/+$/g, '') || null
   // Bounded: `focus` is unnested per candidate row in SQL.
@@ -28,9 +29,9 @@ export async function orientAnswer(
   const symbolAt = (i: number) => repos.length + resources.vaultIds.length + i
   const resumed = page.at?.s ?? -1
   const offsetOf = (n: number) => (n === resumed ? page.after(n, z.number().int().min(0)) ?? 0 : 0)
-  const maps = await Promise.all(repos.map((id, i) => repositoryMap(id, opts, { symbols: offsetOf(symbolAt(i)) })))
+  const maps = await Promise.all(repos.map((id, i) => (view?.repositoryMap ?? repositoryMap)(id, opts, { symbols: offsetOf(symbolAt(i)) })))
   // The indexed version once, when one repository is in scope (#471).
-  const head = repos.length === 1 ? await repositoryIndexedVersion(repos[0]!) : {}
+  const head = view?.version ?? (repos.length === 1 ? await repositoryIndexedVersion(repos[0]!) : {})
   const outlines = await Promise.all(resources.vaultIds.map((id) => vaultOutline(id, opts)))
   return {
     head,
