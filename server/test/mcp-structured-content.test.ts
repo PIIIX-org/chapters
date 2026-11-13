@@ -2,10 +2,9 @@
 // also comes as `structuredContent`, the same object as the text, which stays
 // the full JSON (many clients show the model only `content`). An answer that
 // is not an object (the admin list tools' bare arrays) has none: MCP's
-// `structuredContent` is an object. The write tools list one shared
-// `outputSchema` (`rev`, `status`, `indexed`, other keys allowed), so every
-// write answer validates, in the SDK on the server and in this real client;
-// an error answer stays `isError` text and is not validated.
+// `structuredContent` is an object. Write results and stable read identities
+// list meaningful schemas within the profile budgets (#957); errors stay
+// `isError` text without structuredContent and are not validated.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -25,11 +24,17 @@ type Json = Record<string, unknown>
 
 /** The tools that answer through runWrite (write-result.ts) and list the shared outputSchema. */
 const WRITE_TOOLS = ['create_note', 'edit_note', 'append_note', 'upsert_note', 'rename_note', 'delete_note', 'restore_note', 'revert_note']
+const READ_TOOLS = [
+  'read_note', 'read_file', 'note_history', 'get_revision', 'list_trash',
+  'get_vault_graph_preference', 'get_vault_preferences', 'get_repository_graph_preference',
+  'repository_status', 'export_vault', 'export_note', 'lookup_user', 'audit_okf_conformance', 'usage_report',
+]
 
 let app: FastifyInstance
 let vaultId: string
 let repoId: string
 let agent: Client
+let ownerEmail: string
 const clients: Client[] = []
 
 /**
@@ -44,7 +49,10 @@ async function call(tool: string, args: Args): Promise<{ isError: boolean; text:
   const result = await agent.callTool({ name: tool, arguments: args })
   const content = result.content as Array<{ type: string; text?: string }>
   const isError = result.isError === true
-  expect(content.length, `${tool}: one text block, and read_note's body after it`).toBe(tool === 'read_note' && !isError ? 2 : 1)
+  const header = JSON.parse(content[0]?.text ?? '{}') as Json
+  const body = header.body
+  const separateBody = body !== null && typeof body === 'object' && 'in' in body
+  expect(content.length, `${tool}: text JSON, plus a separate body only when named`).toBe(separateBody ? 2 : 1)
   const text = toolText(content)
   let json: unknown
   if (!isError) {
@@ -68,6 +76,7 @@ beforeAll(async () => {
   const address = app.server.address()
   const baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`
   const owner = await createActiveUser()
+  ownerEmail = owner.email
   const cookie = await loginCookie(app, owner.email)
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'structured vault' } })).json<{ id: string }>().id
   repoId = (
@@ -96,20 +105,35 @@ afterAll(async () => {
   await app.close()
 })
 
-describe('tools/list: outputSchema on the write tools only', () => {
-  it('lists the shared write-result schema on every runWrite tool, and none on the other tools', async () => {
+describe('tools/list: measured write and read output schemas', () => {
+  it('lists only the budgeted read contracts and the shared write-result schema', async () => {
     resetRateLimits()
     const { tools } = await agent.listTools()
     const withSchema = tools.filter((t) => t.outputSchema !== undefined).map((t) => t.name)
-    expect(withSchema.sort()).toEqual([...WRITE_TOOLS].sort())
-    const schemas = tools.filter((t) => t.outputSchema !== undefined).map((t) => JSON.stringify(t.outputSchema))
-    expect(new Set(schemas).size, 'one shared schema').toBe(1)
+    expect(withSchema.sort()).toEqual([...WRITE_TOOLS, ...READ_TOOLS].sort())
+    const schemas = tools.filter((t) => WRITE_TOOLS.includes(t.name)).map((t) => JSON.stringify(t.outputSchema))
+    expect(new Set(schemas).size, 'one shared write schema').toBe(1)
     const schema = tools.find((t) => t.name === 'edit_note')!.outputSchema!
     expect(schema).not.toHaveProperty('$schema')
     expect(schema.type).toBe('object')
     expect([...(schema.required ?? [])].sort()).toEqual(['indexed', 'rev', 'status'])
     // Other keys (path, diff_stats, conflicts, replayed, ...) are allowed, so no write answer fails validation.
     expect((schema as Json).additionalProperties).not.toBe(false)
+  })
+
+  it('rejects missing or mistyped read identities and malformed history continuations', async () => {
+    resetRateLimits()
+    const { tools } = await agent.listTools()
+    const validator = new AjvJsonSchemaValidator()
+    for (const [name, invalid] of [
+      ['read_note', { rev: '1' }], ['read_file', { hash: 123 }],
+      ['get_revision', { id: 'revision', body: null }],
+      ['note_history', { truncated: { cursor: 1 } }],
+    ] as const) {
+      const validate = validator.getValidator(tools.find((tool) => tool.name === name)!.outputSchema!)
+      expect(validate(invalid).valid, name).toBe(false)
+      expect(validate({}).valid, `${name}: required fields`).toBe(false)
+    }
   })
 })
 
@@ -120,6 +144,13 @@ describe('structuredContent is the text JSON, per tool family', () => {
     expect(vaults.structured).toBeUndefined()
     await ok('browse_vault', { vaultId, recursive: true })
     await ok('get_vault_preferences', {})
+    await ok('get_vault_graph_preference', { vaultId })
+    await ok('list_trash', { vaultId })
+    await ok('export_vault', { vaultId })
+    await ok('export_note', { vaultId, path: 'docs/alpha' })
+    await ok('lookup_user', { email: ownerEmail })
+    await ok('audit_okf_conformance', { vaultId })
+    await ok('usage_report', {})
   })
 
   it('note reads and history', async () => {
@@ -130,10 +161,29 @@ describe('structuredContent is the text JSON, per tool family', () => {
     await ok('get_revision', { vaultId, revisionId: revision!.id })
   })
 
+  it('validates read identities across outlines, multiple targets, grep, unchanged and session references', async () => {
+    for (const [tool, scope, path] of [
+      ['read_note', { vaultId }, 'docs/alpha'],
+      ['read_file', { repositoryId: repoId }, 'src/alpha.ts'],
+    ] as const) {
+      const first = await ok(tool, { ...scope, path })
+      const version = String(tool === 'read_note' ? first.rev : first.hash)
+      for (const args of [
+        { outline: true }, { targets: [{ lines: '1-1' }, { lines: '2-2' }] },
+        { targets: [{ grep: 'Alpha' }] }, { if_rev: version },
+        { session_id: 'structured-read' }, { session_id: 'structured-read' },
+      ]) {
+        const answer = await ok(tool, { ...scope, path, ...args })
+        expect(tool === 'read_note' ? answer.rev : answer.hash).toBe(tool === 'read_note' ? first.rev : first.hash)
+      }
+    }
+  })
+
   it('repository tools, search and graph', async () => {
     await ok('browse_repository', { repositoryId: repoId })
     await ok('read_file', { repositoryId: repoId, path: 'src/alpha.ts' })
     await ok('repository_status', { repositoryId: repoId })
+    await ok('get_repository_graph_preference', { repositoryId: repoId })
     expect(await ok('find_symbols', { repositoryId: repoId, query: 'alphaHandler' })).toHaveProperty('truncated')
     // search answers its envelope (#441, #442, #458), with the budget's `truncated`.
     expect(await ok('search', { vaultId, query: 'alpha' })).toMatchObject({ status: 'ok', truncated: false })

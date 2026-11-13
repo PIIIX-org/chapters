@@ -10,6 +10,7 @@
 // tools/list bytes do not depend on the call, nor, for reader tokens, on the
 // pin, so a client can cache them.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { z } from 'zod'
 import type { FastifyInstance } from 'fastify'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -105,6 +106,32 @@ describe('tools/list budget per profile (#429)', () => {
     const reader = sizes.reader.tools + sizes.reader.prompts + sizes.reader.instructions
     expect(Math.ceil(reader / 4), 'reader tokens').toBeLessThanOrEqual(BUDGET_TOKENS.reader!)
     expect(Math.ceil((sizes.writer.tools + sizes.writer.instructions) / 4), 'writer tokens').toBeLessThanOrEqual(BUDGET_TOKENS.writer!)
+  })
+
+  it('reports the minimal useful schemas deliberately excluded by the reader budget (#957)', async () => {
+    const client = await connect({ name: 'schema-costs', scope: 'account', access: 'admin', profile: 'reader' })
+    resetRateLimits()
+    const listed = await client.listTools()
+    const base = JSON.stringify(listed).length + (client.getInstructions() ?? '').length
+    // The bounded list can be a full row, a location, counts, or a session
+    // reference. Its cursor contract survives all those modes without a fake
+    // empty object schema or an unnecessarily exhaustive item union.
+    const continuation = z.looseObject({ truncated: z.union([z.literal(false), z.looseObject({ cursor: z.string().nullable() })]) })
+    const candidates = {
+      browse_vault: z.looseObject({ directory: z.string() }),
+      browse_repository: continuation, search: continuation,
+      grep: z.looseObject({ scanned: z.number() }),
+      find_symbols: continuation, orient: continuation, graph: continuation, find_graph_path: continuation,
+    }
+    for (const [name, schema] of Object.entries(candidates)) {
+      const outputSchema = z.toJSONSchema(schema)
+      delete outputSchema.$schema
+      const tools = listed.tools.map((tool) => tool.name === name ? { ...tool, outputSchema } : tool)
+      const delta = JSON.stringify({ ...listed, tools }).length - JSON.stringify(listed).length
+      const tokens = Math.ceil((base + delta) / 4)
+      console.log(`${name}: minimal meaningful outputSchema +${delta} chars; reader ${tokens}/${BUDGET_TOKENS.reader} tokens`)
+      expect(tokens, `${name}: an excluded schema must actually exceed the current reader bound`).toBeGreaterThan(BUDGET_TOKENS.reader!)
+    }
   })
 
   it('answers the same bytes on every call, and for every pin of one profile and scope', async () => {
