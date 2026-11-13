@@ -2416,17 +2416,29 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   | `browse_vault` | required string `directory` | 129, excluded |
   | `grep` | required numeric `scanned` | 125, excluded |
   | `browse_repository`, `search`, `find_symbols`, `orient`, `graph`, `find_graph_path` | required false-or-cursor continuation | 273 each, excluded |
-  | `usage_report` | required boolean `enabled` | 126, reserved for integration disposition |
+  | `usage_report` | required boolean `enabled` | 126, declared |
 
-  After the two reader schemas the control is 9,879 chars / 2,470
-  tokens: even `grep` would make it 2,501, `browse_vault` 2,502,
-  and a continuation schema 2,538. #1132 adds conditional-search
-  definitions: its reported reader baseline is 2,431, so those schemas
-  must also fit that dependency, not just this older control.
-  The declared admin schemas add 1,947 characters (42,823 total).
-  `usage_report` fits this older control alone, but its disposition
-  needs the actual #1132 integrated listing against the unchanged
-  43,000-character bound; this is not yet closure evidence.
+  The final measurement includes #1132 (`95e02f8a`), not a mixed
+  historical harness: reader tools/list 9,649 + instructions 311 =
+  **9,960 chars / 2,490 tokens**; writer 16,130 + 443 =
+  **16,573 chars / 4,144 tokens** (prompts 10,042 chars, reported
+  separately); admin tools/list **42,979 chars**.
+  Compared with that dependency alone, read schemas add 236 reader
+  characters and all declared read schemas add 2,073 admin characters.
+  Admin would have been 43,030: a meaning-preserving 51-character trim
+  of `repository_status`'s description retains sync state/time, queued
+  or running extraction, exhausted retries/errors and the freshness
+  warning. This brings it below 43,000 without changing any manual.
+  After these additions, `grep`'s minimal schema would cost the reader
+  2,522 tokens, `browse_vault` 2,523, and each continuation schema
+  2,559: every excluded object read is measured against the **current**
+  bound. The permanent budget regression recomputes these values from
+  the actual SDK listing, so newly available headroom requires revisiting
+  the disposition. Native SDK contract verification: 17 tests across
+  structured-content, tool-budget and tool-schema; new read regressions
+  cover targets, outlines, grep, unchanged/session answers and invalid
+  typed identities. No provider model trial was run for this schema
+  change; fresh controls and independent CI/lab review remain gates.
   Bare-array read answers (`list_vaults`, `list_repositories`,
   `list_vault_shares`, `list_repository_shares`, `list_teams`,
   `list_team_members`, `list_notifications`, `list_graph_perspectives`)
