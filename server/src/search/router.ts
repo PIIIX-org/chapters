@@ -50,13 +50,13 @@ const texts = (values: readonly string[]) => sql`${`{${values.map((v) => JSON.st
 export function classifyQuery(query: string): SearchRoute {
   if (classifyStructural(query)) return 'structural'
   const term = routeTerm(query)
-  return term === null ? 'conceptual' : term.includes('/') || (/[\p{L}\p{N}]\.[A-Za-z0-9]{1,8}$/u.test(term) && !/^[A-Z][\p{L}\p{N}_$]*\./u.test(term)) ? 'path' : 'identifier'
+  return term === null ? 'conceptual' : term.includes('/') || /[\p{L}\p{N}]\.[A-Za-z0-9]{1,8}$/u.test(term) ? 'path' : 'identifier'
 }
 
 /** Filters apply before bounded lookup, not after slicing away potential answers. */
 export async function routeQuery(
   resources: { vaultIds: string[]; repositoryIds: string[] }, query: string, includeSymbols: boolean,
-  route: SearchRoute = classifyQuery(query), filters: SearchFilters = {},
+  route: SearchRoute = classifyQuery(query), filters: SearchFilters = {}, automatic = true,
 ): Promise<Routed | null> {
   if (route === 'conceptual') return null
   const question = route === 'structural' ? classifyStructural(query) : null
@@ -133,7 +133,12 @@ export async function routeQuery(
       }
       return { route, results, ...(results.length === 1 ? { confidence: 1 as const } : { ambiguous: true as const }) }
     }
-    if (route === 'path') return null
+    if (route === 'path') {
+      // Dotted symbols and file extensions share a shape. Auto tries the indexed path first;
+      // an explicit path override never silently turns into a symbol lookup.
+      if (!automatic || term.includes('/')) return null
+      route = 'identifier'
+    }
   }
 
   if ((!includeSymbols && route !== 'structural') || resources.repositoryIds.length === 0) return null

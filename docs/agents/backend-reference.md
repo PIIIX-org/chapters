@@ -1579,7 +1579,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `conceptual` bypasses lookup and preserves hybrid results and channel/degraded/index metadata. Automatic
     filtered searches stay conceptual; explicit routes apply the same filters within the authorized scope.
     Identifier lookup returns one span with `confidence: 1`, or exact candidates labelled by file/kind with
-    `ambiguous: true`, no fuzzy hits. Paths return the file/note, files with a bounded outline and its truncation.
+    `ambiguous: true`, no fuzzy hits. Paths return the file/note with a bounded outline and its truncation.
+    Automatic dotted shapes try indexed paths before exact symbols; explicit overrides never switch routes.
     Structural answers use existing code queries; resolved sites alone enter `results`, textual sites are
     separate `textual` rows. Whole-file imports include modules without symbols. Ambiguous targets are shown
     rather than guessed. Work and responses are bounded; `partial` reports omitted sites/results.

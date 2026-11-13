@@ -33,6 +33,8 @@ beforeAll(async () => {
   const files = [
     { path: 'src/notes/frontmatter.ts', content: 'export function parseFrontmatter(text: string): string {\n  return text.trim()\n}\n\nexport function renderFrontmatter(value: string): string {\n  return value\n}\n' },
     { path: 'src/store.ts', content: 'export class Store {\n  save(item: string): string {\n    return item\n  }\n}\n' },
+    { path: 'src/Uppercase.ts', content: 'export const uppercaseFileToken = 1\n' },
+    { path: 'src/lower-holder.ts', content: 'export class holder {\n  save() { return \"lower\" }\n}\n' },
     { path: 'src/a/parse.ts', content: 'export function parse(s: string): string {\n  return s\n}\n' },
     { path: 'src/b/parse.ts', content: 'export function parse(s: string): string {\n  return s.toLowerCase()\n}\n' },
     { path: 'src/caller.ts', content: 'import { parseFrontmatter } from \"./notes/frontmatter.js\";\nexport function caller() { return parseFrontmatter(\"x\") }\n' },
@@ -106,6 +108,15 @@ describe('identifier route (#1060)', () => {
     const method = await ask('where is `Store.save` implemented')
     expect(method.route).toBe('identifier')
     expect(method.results.map((r) => `${r.symbolParent}.${r.symbolName}`)).toEqual(['Store.save'])
+  })
+
+  it('resolves dotted names and uppercase filenames by lookup, while overrides remain strict', async () => {
+    expect(await ask('Uppercase.ts')).toMatchObject({ route: 'path', confidence: 1, results: [expect.objectContaining({ path: 'src/Uppercase.ts' })] })
+    expect(await ask('holder.save')).toMatchObject({ route: 'identifier', confidence: 1, results: [expect.objectContaining({ symbolParent: 'holder', symbolName: 'save' })] })
+    const pathOnly = await searchNotes(code, 'holder.save', 10, {}, { includeSymbols: true, route: 'path' })
+    expect(pathOnly).toMatchObject({ route: 'conceptual', attempted_route: 'path', retrieval_mode: 'fallback' })
+    const identifiersOnly = await searchNotes(code, 'Uppercase.ts', 10, {}, { includeSymbols: true, route: 'identifier' })
+    expect(identifiersOnly).toMatchObject({ route: 'conceptual', attempted_route: 'identifier', retrieval_mode: 'fallback' })
   })
 
   it('several exact symbols are all listed, ambiguous, with no fuzzy hit added', async () => {

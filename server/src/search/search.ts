@@ -1186,7 +1186,7 @@ export async function searchNotes(
   const state = indexState(vaultIds, repositoryIds)
   const [notes, files, symbols] = [noteFilter(filters), fileFilter(filters), symbolFilter(filters)]
   if (route !== 'conceptual') {
-    const routed = await routeQuery(resources, query, includeSymbols, route, filters)
+    const routed = await routeQuery(resources, query, includeSymbols, route, filters, options.route === undefined)
     if (routed) {
       const { results, ...answer } = routed
       // A symbol in a file still awaiting extraction is reported with the index block, as any answer is.
