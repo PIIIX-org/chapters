@@ -202,6 +202,20 @@ would notice a change that memorises the other five. So:
   tuned set and a new held-out corpus is added, so the held-out set stays unseen.
   `holdout` was added in November 2026; the next rotation is due in February 2027.
 
+For [#1127](https://github.com/PIIIX-org/chapters/issues/1127), the held-out
+reference comes from the existing unchanged-dev
+[run 42629452299](https://github.com/PIIIX-org/chapters/actions/runs/42629452299)
+at `12f4db3b4cfecf761930a229b6362ea41d63b612`, median of three instances.
+The paired [head run 42631905536](https://github.com/PIIIX-org/chapters/actions/runs/42631905536)
+has the same held-out accuracy: 20/20 golds, exact@1 0.35, hit@5 0.95.
+Both used harness `e64a4937640aabc8`, holdout fingerprint
+`403184d375ae50bf` and question/repository fingerprint `f170a3448a6cf5a4`;
+the refresh changes no harness or questions. The recorded commit and run
+remain those measured, not the baseline-update PR's head. The holdout mean
+tokens-to-gold changes from 4,136 to the measured 4,170; exact@1 rises from
+0.30 to 0.35 and golds stay at 20. The separate baseline refresh preserves
+the other five references and does not rerun either completed benchmark.
+
 ### Phase-3 exit criteria
 
 The product goal is an exact answer, at least 99 % of the time, for fewer
