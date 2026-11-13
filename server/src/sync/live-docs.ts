@@ -83,8 +83,8 @@ export interface LiveDocument {
 export interface LiveDocs {
   /** The document of note `noteId` if it finished loading (a loading one counts as not loaded). */
   ofNote(noteId: string): LiveDocument | null
-  /** Closes every connection to note `noteId`'s document, with the reason `note-deleted`. */
-  closeNote(noteId: string): void
+  /** Closes connections; an explicit purge also synchronously evicts/destroys server-held CRDT state. */
+  closeNote(noteId: string, evict?: boolean): void
 }
 
 let registry: LiveDocs | null = null
@@ -104,8 +104,8 @@ export function liveDocumentOf(noteId: string): LiveDocument | null {
  * once with `note-deleted`, which the editor treats as final (no retry); a
  * reconnect is refused with the same reason until the note is restored.
  */
-export function closeNoteEditors(noteId: string): void {
-  registry?.closeNote(noteId)
+export function closeNoteEditors(noteId: string, evict = false): void {
+  registry?.closeNote(noteId, evict)
 }
 
 /**

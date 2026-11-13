@@ -7,6 +7,9 @@ import {
   readAsset,
   sanitizeAssetFilename,
   saveAsset,
+  assetBlobId,
+  compareAndSetAsset,
+  writeAsset,
 } from '../src/notes/store.js'
 
 function multipartPayload(filename: string, contentType: string, data: Buffer) {
@@ -94,6 +97,23 @@ describe('asset store functions', () => {
 
     const traverse3 = await readAsset(vaultId, 'sub/image.png')
     expect(traverse3).toBeNull()
+  })
+
+  it('compares Git asset replacements and deletions against their served blobs without clobbering a later upload', async () => {
+    const initial = Buffer.from('initial asset')
+    const person = Buffer.from('the later human asset')
+    const agent = Buffer.from('the agent asset')
+    expect(await compareAndSetAsset(vaultId, 'git-cas.txt', null, initial)).toBe(true)
+    await writeAsset(vaultId, 'git-cas.txt', person)
+    expect(await compareAndSetAsset(vaultId, 'git-cas.txt', assetBlobId(initial), agent)).toBe(false)
+    expect(await compareAndSetAsset(vaultId, 'git-cas.txt', assetBlobId(initial), null)).toBe(false)
+    expect((await readAsset(vaultId, 'git-cas.txt'))!.buffer).toEqual(person)
+    expect(await compareAndSetAsset(vaultId, 'git-cas.txt', assetBlobId(person), agent)).toBe(true)
+    // Lost-response retry is a no-op; it cannot apply a replacement a second time.
+    expect(await compareAndSetAsset(vaultId, 'git-cas.txt', assetBlobId(person), agent)).toBe(true)
+    expect(await compareAndSetAsset(vaultId, 'git-cas.txt', assetBlobId(agent), null)).toBe(true)
+    expect(await readAsset(vaultId, 'git-cas.txt')).toBeNull()
+    await expect(compareAndSetAsset(vaultId, '../escaped.txt', null, initial)).rejects.toThrow('unsafe')
   })
 })
 

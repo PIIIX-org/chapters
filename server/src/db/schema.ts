@@ -627,7 +627,7 @@ export const writeIdempotency = pgTable(
     foreignKey({ name: 'write_idempotency_connection_id_fkey', columns: [t.connectionId], foreignColumns: [mcpConnections.id] }).onDelete(
       'cascade',
     ),
-    foreignKey({ name: 'write_idempotency_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('cascade'),
+    foreignKey({ name: 'write_idempotency_note_id_fkey', columns: [t.noteId], foreignColumns: [notes.id] }).onDelete('set null'),
     index('write_idempotency_created_at').on(t.createdAt),
     index('write_idempotency_note_id').on(t.noteId),
   ],
@@ -1159,4 +1159,30 @@ export const usageDaily = pgTable(
     primaryKey({ name: 'usage_daily_pkey', columns: [t.day, t.accountId, t.tool, t.profile] }),
     index('usage_daily_account_day').on(t.accountId, t.day),
   ],
+)
+
+/** Private Git snapshot identities/revisions, not note text or Git history (#677/#1087). */
+export const vaultGitSnapshots = pgTable(
+  'vault_git_snapshots',
+  {
+    vaultId: uuid('vault_id').notNull().references(() => vaults.id, { onDelete: 'cascade' }),
+    commitId: text('commit_id').notNull(),
+    manifest: jsonb('manifest').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.vaultId, t.commitId] })],
+)
+
+/** An applied note receipt is committed atomically with that note's store write. */
+export const vaultGitPushOperations = pgTable(
+  'vault_git_push_operations',
+  {
+    vaultId: uuid('vault_id').notNull().references(() => vaults.id, { onDelete: 'cascade' }),
+    connectionId: uuid('connection_id').notNull().references(() => mcpConnections.id, { onDelete: 'cascade' }),
+    commitId: text('commit_id').notNull(),
+    path: text('path').notNull(),
+    result: jsonb('result').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.vaultId, t.connectionId, t.commitId, t.path] })],
 )

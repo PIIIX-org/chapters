@@ -155,6 +155,21 @@ A token's `tools/list` shows only the tools it can call: its allow-list, its acc
   - `summarize_concept_chain` — explains how two notes or code files connect, via `find_graph_path`.
   - `active_project_companion` — records decisions and notes in the project vault during a work session.
 
+### Vault Git workflow
+
+Clone notes and attachments with an MCP token, edit locally, then commit
+and push to `main`. Reads enforce vault access and token pins; pushes also
+require a write token and vault edit permission. Concurrent edits merge
+through the live document or remain as reviewable proposals. A rejected
+multi-note push can have committed partial effects; inspect its linked
+report before retrying. See the [protocol and limits](docs/agents/backend-reference.md).
+
+**Edits keep history; explicit Purge removes server-managed content from history/indexes/caches synchronously before further reads.**
+The server cannot erase external already-downloaded clones, exports or
+independently retained backups. Purge rebuilds the remote; clients may
+need to fetch/rebase or clone again.
+
+
 ---
 
 ## Codebase Architecture

@@ -249,6 +249,7 @@ export async function writeThroughCollab(
     dryRun?: boolean
     outcome?: WriteOutcome
     recordKey?: RecordKey
+    expectedNoteId?: string
   } = {},
 ): Promise<WrittenNote | null> {
   const dryRun = options.dryRun === true
@@ -309,7 +310,7 @@ export async function writeThroughCollab(
       return { frontmatter, body }
     },
     actor,
-    { revertOf: options.revertOf, actorDetail: options.actorDetail, dryRun, outcome: options.outcome, recordKey: options.recordKey },
+    { revertOf: options.revertOf, actorDetail: options.actorDetail, dryRun, outcome: options.outcome, recordKey: options.recordKey, expectedNoteId: options.expectedNoteId },
   )
 }
 

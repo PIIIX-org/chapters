@@ -229,23 +229,28 @@ export async function readNoteCrdt(tx: Tx, noteId: string, open?: OpenDocument):
   return materialise(tx, noteId)
 }
 
+/** A destructive CAS already holds appendGate through COMMIT, so no acknowledged append can land after its comparison. */
+export function readNoteCrdtAppendLocked(tx: Tx, noteId: string): Promise<NoteCrdt | null> {
+  return materialise(tx, noteId, true)
+}
+
 /** How readNoteCrdt served its callers: from an open document's cached state, or materialised (for tests and measurements). */
 export const materialised = { cached: 0, full: 0 }
 
 /** `snapshot ⊕` the non-rejected tail, rejecting a stored update that does not apply (see readNoteCrdt). */
-async function materialise(tx: Tx, noteId: string): Promise<NoteCrdt | null> {
+async function materialise(tx: Tx, noteId: string, appendLocked = false): Promise<NoteCrdt | null> {
   const [row] = await tx.select().from(noteCrdt).where(eq(noteCrdt.noteId, noteId)).for('update')
   if (!row) return null
   const doc = new Y.Doc()
   const snapshot = toBytes(row.snapshot)
   Y.applyUpdate(doc, snapshot)
-  const tail = await withKeyLock(appendGate(noteId), () =>
+  const readTail = () =>
     tx
       .select({ id: noteUpdates.id, update: noteUpdates.update })
       .from(noteUpdates)
       .where(and(eq(noteUpdates.noteId, noteId), gt(noteUpdates.id, row.snapshotThrough), isNull(noteUpdates.rejectedAt)))
-      .orderBy(asc(noteUpdates.id)),
-  )
+      .orderBy(asc(noteUpdates.id))
+  const tail = appendLocked ? await readTail() : await withKeyLock(appendGate(noteId), readTail)
   const crdt: NoteCrdt = {
     noteId,
     doc,

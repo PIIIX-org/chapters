@@ -24,18 +24,28 @@ import {
 } from '../search/semantic-edges.js'
 import { listAccessibleVaults, resolveAccess } from './permissions.js'
 import { emitPermissionChange } from '../sync/permission-events.js'
+import { invalidateVaultGit, withVaultGit } from '../git-remote/lifecycle.js'
+import { closeNoteEditors } from '../sync/live-docs.js'
+import { drainCollabAppends } from '../notes/store.js'
 
 async function requireOwner(userId: string, vaultId: string) {
   const access = await resolveAccess(userId, vaultId)
   return access === 'owner'
 }
 
-export async function purgeVaultRecord(vaultId: string): Promise<void> {
+export function purgeVaultRecord(vaultId: string): Promise<void> {
+  return withVaultGit(vaultId, () => purgeVaultRecordLocked(vaultId))
+}
+
+async function purgeVaultRecordLocked(vaultId: string): Promise<void> {
+  await invalidateVaultGit(vaultId)
   // semanticEdges is polymorphic with no FK, so it does not cascade (#92).
   // Collect note ids BEFORE deleting the vault row.
   const noteIds = (
     await db.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId))
   ).map((n) => n.id)
+  for (const noteId of noteIds) closeNoteEditors(noteId)
+  await Promise.all(noteIds.map(drainCollabAppends))
   // notifications is the other polymorphic table with no FK (#101): a
   // grantee's feed would otherwise keep `vault_shared` rows pointing at a
   // vault that no longer exists.
@@ -52,6 +62,7 @@ export async function purgeVaultRecord(vaultId: string): Promise<void> {
     await removeSemanticNodes(tx, 'note', vaultId, noteIds)
   })
   kickSemanticEdges()
+  for (const noteId of noteIds) closeNoteEditors(noteId, true)
   await rm(join(config.dataDir, 'vaults', vaultId), { recursive: true, force: true })
 }
 

@@ -199,7 +199,7 @@ revision bodies, so older code goes on a migrated database only after
 | `notes.frontmatter_src` | `json` copy of the frontmatter in its original key order (jsonb reorders keys); for rendering files and answering reads |
 | `note_revisions.seq` / `idempotency_key` / `actor_detail` | one revision per `seq` (partial unique `note_revisions_note_seq`), actor detail (#403). `idempotency_key` stays unused: #477's keys need the call's arguments and its whole answer, also for writes that record no revision, so they live in `write_idempotency` |
 | `note_revisions.body_delta` / `delta_base_id` / `body_bytes` (migration 0026) | a compacted revision (#501, **Revision compaction** below): `body` is `''`, `body_delta` (jsonb) rebuilds the body from the revision `delta_base_id` (FK to `note_revisions`, NO ACTION, partial index `note_revisions_delta_base`), `body_bytes` is its UTF-8 size; all three null on a revision stored whole (check `note_revisions_delta_check`). SQL `note_revision_body(body, body_delta, delta_base_id)` returns any revision's body (`revisionBody` in store-tx.ts); `note_revision_patch(base, delta)` applies a delta. Kept out of the Drizzle model like `seq`. 0026 merged after 0027, so its journal `when` (1791750000000) is above 0027's: drizzle applies an entry only when its `when` is above the newest one already applied, so an instance that ran 0027 first still runs 0026 (`test/migration-order.test.ts`) |
-| `write_idempotency` (migration 0025) | the first answer of an MCP write sent with `idempotency_key` (#477, `mcp/write-result.ts` `runWrite`): PK (`connection_id`, `key`), `tool`, `args_hash` (sha256 of the tool, vault and canonical arguments), `note_id` (FK to `notes`, cascade: purging the note deletes its keys and the note text their answers hold), `result` jsonb, `created_at` (indexed). A write that commits inserts its row **inside its own store transaction** (`WriteOptions.recordKey`, called with the committed row by `createNote`, `writeNote`, the rename move, `softDeleteNote`, `restoreNote`), so a crash after COMMIT and before the answer still leaves the key and the retry replays (ADR-003 §4, §10); its recorded answer has `indexed: false`. Answers that commit nothing (`conflicted`) are inserted after the call. A repeat with the same hash answers `result` + `replayed: true`; another hash is refused. Every keyed call first deletes rows older than 24 h. Calls with one key run one at a time (in-process key lock). Rows also go with their connection (FK cascade) |
+| `write_idempotency` (migrations 0025, 0065) | first answer of an MCP write with `idempotency_key` (`mcp/write-result.ts`): PK (`connection_id`, `key`), `tool`, `args_hash` (tool/vault/canonical arguments), nullable `note_id` (FK `SET NULL`), `result`, `created_at`. The store records an applied answer inside its write transaction, so a crash after COMMIT still leaves a replayable effect receipt. Same hash replays; another hash is refused. Keys expire after 24 h and cascade with their connection. Explicit purge replaces affected cached answers with content-free `{rev:null,status:"conflicted",indexed:false,purged:true,message}` tombstones before removing content. Keep the hash/key through note deletion: retry must not recreate a purged write. |
 | `note_reads` (migration 0028, after #861's 0026 and #869's 0027) | the `rev` an MCP connection last read of a note (#408, #476, `mcp/last-read.ts`): PK (`connection_id`, `note_id`), `rev` bigint, `read_at` (indexed). `read_note` (every page too: the `rev` it reports, #961) and `export_note` upsert it in one statement that also deletes rows older than 24 h; `edit_note` with `body` and no `base_rev` uses a row from the last 24 h as its base, and one whose result body is exactly the body sent moves it to the result's `rev`. Rows go with their connection and their note (FK cascade, so purging the note deletes them). Not in backups |
 | `note_crdt` | Yjs snapshot per note id (replaced `.crdt/<path>.bin` in S2b): `snapshot_through`, `folded_through`, `folded_seq`, `fold_error` |
 | `note_updates` | Yjs update log tail (collab journal), `bigserial` id = commit order per note, actor columns, `rejected_at`/`reject_reason` |
@@ -3105,39 +3105,86 @@ what's already indexed: unchanged content hashes are no-ops, changed/
 new files upsert, anything no longer present is **hard-deleted** (git
 is the history record, not Chapters).
 
-**Vault git remote** (#677, read-only slice; `server/src/git-remote/`):
+**Vault git remote** (#677/#1087; `server/src/git-remote/`):
 `GET /git/vaults/:vaultId/info/refs?service=git-upload-pack` and
-`POST /git/vaults/:vaultId/git-upload-pack` (smart HTTP, unprefixed like
-`/mcp`) serve `git clone`/`fetch`/`pull` of a vault; `receive-pack` is 403.
-`routes.ts` authenticates an MCP token (Basic password or Bearer,
-`resolveMcpToken`: live revoke/expiry) and authorises on EVERY request:
-account scope, or a vault pin equal to the path's vault, `read_note` in
-the allow-list if one is set, and `resolveAccess(user, vault)`; anything
-else is the 404 a missing vault gets (a repository pin included). The
-bare repository is content only, shared by the callers of a vault, at
-`DATA_DIR/git-remotes/<vaultId>.git` (`vault-remote.ts`): built lazily on
-a request from the live notes as `<path>.md` in the projector's file form,
-as a SNAPSHOT and never a history (a purged or replaced note's text must not
-stay readable through an old commit, and no purge hook reaches this
-repository): two commits, an EMPTY root (fixed author, date and message, so
-its id is stable across rebuilds and vaults) and the snapshot, its only
-child, rewritten with `git fast-import --force` on each change while
-`reflog expire` and `gc --prune=now` drop the previous snapshot and its
-objects (the snapshot's message holds the sha256 fingerprint of all paths
-and file hashes, so an unchanged vault costs one query and one `git log`,
-and the same content is the same commit: fixed author, newest `updated_at`
-as date). After a change a client's `git pull` is a forced non-fast-forward
-of that one commit and refuses; `git pull --rebase` (no local commits),
-`git fetch && git reset --hard origin/main` or a new clone update it. The manual's clone example sends the token as a header (`git -c http.extraHeader="Authorization: Bearer …" clone`), never as URL userinfo (a token in the URL lands in `.git/config` and shell history, and the secret scan reads the manuals). A body that is not a pkt-line upload request is a 400. A
-gzip request is inflated under a 1 MiB cap (413 above it, a bomb included). Served by spawning
-`git upload-pack --stateless-rpc` (git is in the image, no new dependency).
-A derived cache: leave it out of backups; `sweepVaultRemotes` removes the
-repositories of deleted vaults at boot. A rebuild holds the vault's notes in
-memory once. Not covered: push (see #677's plan: structural diff against
-the served base, compare-and-set per note, conflicts as proposals) and
-attachments. `test/vault-git-remote.test.ts` covers scopes, revoke,
-allow-list, push refusal, fetch and delete; the `git clone of a vault`
-matrix is in both access matrices.
+`POST /git/vaults/:vaultId/git-upload-pack` serve clone/fetch/pull;
+`git-receive-pack` advertisement and POST import pushes to `main`.
+Authenticate with an MCP token as a Basic password or Bearer header.
+Use `git -c http.extraHeader="Authorization: Bearer $ELARA_TOKEN" clone
+https://<host>/git/vaults/<vaultId>`; keep tokens out of URLs, shell
+history and `.git/config`. Account tokens need live vault access; a vault
+pin must match the URL; repository pins get the same 404 as missing vaults.
+An allow-list must include `read_note`. A push also needs write capability,
+writer-or-admin profile and live vault edit permission on its own POST.
+Each changed note needs its corresponding create/edit/delete tool in an
+allow-list; deletion retains `delete_note`'s admin-profile requirement.
+
+**Edits keep history; explicit Purge removes server-managed content from
+history/indexes/caches synchronously before further reads.** This
+[owner decision](https://github.com/PIIIX-org/chapters/issues/1087#issuecomment-6851891773)
+supersedes #1088's snapshot-only rule. The bare remote at
+`DATA_DIR/git-remotes/<vaultId>.git` retains incoming OIDs. A canonical
+export of live notes/assets fast-forwards that history. An exact incoming
+tree keeps its OID; a concurrent merge or file normalisation adds a real
+export child. A normal fetch/pull can fast-forward, then another push
+works. Explicit note/revision/vault purge shares the Git read/write barrier:
+it removes the entire object database, including unreachable objects,
+before deleting content. A later read rebuilds current content on the
+stable empty root. After purge or loss of this directory, fetch/rebase or
+clone again. The server cannot erase external already-downloaded clones,
+exports or independently retained backups.
+
+`vault_git_snapshots` (migration 0065) durably binds each served OID to
+note UUID/revision/blob identities and asset blob hashes, without old text.
+Pushes index real packs in disposable quarantine with read-only trusted
+base objects. Git verifies hashes/deltas/connectivity; the importer checks
+the complete incoming trees before mutation. Supported limits: SHA-1 packs
+v2/v3; one non-deleting, fast-forward `refs/heads/main` update; 32 commits,
+4096 packed objects/tree files, 128 changed files, 16 MiB HTTP/inflated
+request, 8 MiB per object and 64 MiB inflated pack/delta work or tree.
+Notes also obey the store's body/frontmatter limits and canonical slug
+paths; assets use direct safe names under `assets/`. Regular `100644`
+files only: no symlinks, executable bits, submodules or Git configuration.
+Upload negotiation has a 1 MiB gzip/plain cap; child processes have a 15 s
+deadline and bounded output, no hooks/global Git config/server secrets.
+Two imports may run across different vaults. Store imports stop between
+operations after 30 s and can resume from receipts.
+
+For note edits the importer resolves the served UUID/revision and invokes
+`writeThroughCollab(base)`. Its three-way structural diff keeps concurrent
+typing, or stores an attributed `proposal` revision and leaves live text
+alone. Recreated paths never alias the served note. Git path moves import
+as a create plus a base-checked trash operation. Destructive comparisons
+fence CRDT appends through COMMIT. Asset additions/replacements/removals
+compare blob identities under the same lock as ordinary asset uploads;
+atomic replacement avoids truncation and symlink following.
+
+Cross-note imports are **non-atomic**. `vault_git_push_operations` receipts
+commit with each note operation. Conflicts/failures return Git `ng`, name
+the report, and leave committed operations in place; retry skips those
+operations instead of overwriting subsequent human edits. No rollback
+pretends to undo concurrent typing. Git object promotion/ref CAS and
+success acknowledgement follow durable store operations, never precede
+them. Quarantine is removed on success or failure.
+
+`GET /git/vaults/:vaultId/pushes/:commitId` exposes this token's applied
+and conflicted operations to a writer with current edit access. Follow
+`.../proposals/:revisionId` for the saved note and base; the existing
+History UI also shows these proposal revisions. Review and apply a chosen
+change through the normal base-aware edit API. `.../assets/:name` downloads
+a conflicting asset proposal as an attachment; asset delete conflicts
+record the unapplied delete intent. Proposed binary files live under the
+vault's `.git-proposals/` directory.
+
+Purge also clears search snippets and caller-read text, replaces cached
+write answers with content-free effect tombstones (a same-key retry cannot
+resurrect the purged write within its original 24 h window), drains accepted
+collab appends without holding note locks, compacts durable CRDT state and
+evicts loaded documents. Search cache generations reject in-flight fills.
+Session passage caches hold hashes/ranges, not note text. Query embedding
+caches hold query-derived vectors. Preserve Git files with a database/data
+volume backup if retaining accepted Git OIDs matters; the portable instance
+backup restores note state, not Git history/import retry metadata.
 
 1. **git** (`git-sync.ts`, `git-mirror.ts`, #684) — fetches into a
    persistent bare, shallow mirror per repository
