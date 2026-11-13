@@ -2448,6 +2448,49 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   not a successful result union. No default response size or budget is
   raised. #433 waits for #957's per-tool disposition and independent
   review/gates; these measurements do not close either issue.
+- **Opt-in long-tail discovery (#431, ADR-004 D14 revisit).** The
+  measured control has 63 admin tools versus 15 writer tools; the 48
+  long-tail entries cost 25,063 characters on `be1581c5`, or 26,849
+  after #1132/#1135 schemas. These are definition bytes, not evidence of
+  provider cache hits or of how often an agent uses a tool. D14's
+  conditional deferral did not authorize breaking clients that load
+  callable functions only from `tools/list`.
+
+  A supporting custom loader opts in with **both** the version-1
+  experimental initialize capability `elara/tool-discovery` and
+  `Elara-Tool-Discovery: 1` on every HTTP POST. `routes.ts` builds a fresh
+  server per request; `server.ts` keeps no mutable token negotiation.
+  A second client using the same token without that header retains the
+  legacy catalog. Invalid header versions and a header-only initialize
+  fail. Reader/writer profiles and explicit allow-lists ignore discovery
+  and retain their exact tools; the nine-tool study allow-list stays
+  `search`, `find_symbols`, `read_file`, `browse_repository`,
+  `repository_status`, `graph`, `find_graph_path`, `grep`, `orient`.
+
+  Eligible opt-in admin connections list their reader/writer core plus
+  `tool_search`. It lexically returns bounded actual SDK descriptors
+  from the same registry, filtered by `listedTools` (capability, profile,
+  scope/allow-list and live pin permissions). A client installs those
+  returned schemas in its model's callable tool list. The subsequent
+  call uses standard `tools/call(originalName, arguments)` and the same
+  registry validation and handler, including output validation and error
+  envelopes. Discovery neither executes a generic payload nor widens a
+  token. The new `connection` scope covers registry metadata only.
+  Default clients still register the original catalog; the optional
+  metadata tool is absent unless negotiated.
+
+  The discovery definitions version hashes the full eligible registry,
+  including undisplayed long-tail descriptors, plus prompts/instructions.
+  Changing a long-tail schema must invalidate the negotiated catalog
+  fingerprint even when its bootstrap list does not mention that tool.
+  Both manual copies explain the loader requirement. SDK consumer
+  regressions cover shared-token/default isolation, strict discovered
+  calls, profiles/allow-lists, live pin permissions and bad negotiation.
+  These tests do not prove that an arbitrary LLM client can install
+  descriptors. An actual native GPT/custom-loader roundtrip must pass
+  before any model-availability claim; its trial is separate from the
+  unchanged study allow-list. Independent GPT review, fresh CI/lab and
+  correctly fingerprinted controls remain closure gates.
 - **Instructions** (#435): `instructionsFor(profile)` in
   `mcp/instructions.ts` is the `initialize` result's `instructions`
   (`new McpServer(info, {instructions})` in `buildServer`): one constant

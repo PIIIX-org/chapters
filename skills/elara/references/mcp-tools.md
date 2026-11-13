@@ -6,6 +6,7 @@ Parameters, scopes, capabilities, and return shapes for the 63 Elara MCP tools a
 
 - **Transport**: Streamable HTTP only, `POST /mcp` or `POST /elara/mcp` (same handler, `server/src/mcp/routes.ts`). There is no stdio transport. The server is stateless: each request gets a fresh server and transport, and responses are JSON. It sends nothing unasked: `initialize` advertises `listChanged: false` for tools, prompts (none on a `reader` token or with an allow-list) and resources (re-run `tools/list` after a permission change), and `GET` and `DELETE` on the endpoint answer `405` with `Allow: POST` (#436).
 - **Auth**: `Authorization: Bearer <token>`. A token is scoped to the whole **account**, one **vault**, or one **repository**.
+- **Opt-in tool discovery** (#431): legacy clients keep the full admin listing. A descriptor-loading custom client may request `Elara-Tool-Discovery: 1` on **every HTTP POST**, and must declare `initialize.capabilities.experimental["elara/tool-discovery"] = {"version": 1}`. Initialization returns that experimental capability. Initialization alone stores no negotiation: the fresh server for each later request reads its header, so two clients sharing one token remain isolated. Admin tokens without an explicit allow-list then list the eligible reader/writer core plus `tool_search`; reader/writer profiles and explicit allow-lists remain unchanged. The client must install returned real Tool descriptors in its model-callable schemas and call original tool names with their strict arguments. Ordinary MCP clients do not install JSON descriptors automatically and must not opt in without such a loader.
 - **Vault as a git remote** (#677, read-only): `git -c http.extraHeader="Authorization: Bearer $ELARA_TOKEN" clone https://<host>/git/vaults/<vaultId>` (a Basic password, any user name, works too, but a token in the URL lands in `.git/config` and your shell history) gives the vault's notes as `<path>.md` files, frontmatter included, to grep locally; The remote is a snapshot of the notes as they are now, no history: an empty root commit and one snapshot commit that is replaced on every change, so after a change a plain `git pull` refuses (not a fast-forward); update with `git pull --rebase` (no local commits), `git fetch && git reset --hard origin/main`, or clone again. Any token that can read the vault works: an account token (the vault's permissions apply on every request), a token pinned to that vault (never another), not a repository-pinned token or one whose tool allow-list lacks `read_note`; a refusal is the same 404 a missing vault gets. `git push` is refused (`403`): edit through the note tools. Attachments are not in the clone.
 - **Scope rules** (every tool declares its scope, and the server checks it before the tool runs):
   - Vault tools on a vault-scoped token use the pinned vault; passing a different `vaultId` is an error. Account-scoped tokens must pass `vaultId`. Repository-scoped tokens cannot use vault tools.
@@ -513,6 +514,13 @@ The write is committed when the call returns; a connection lost before the answe
 ---
 
 ## 4. Search & Code Symbols (4 tools)
+
+### `tool_search`
+- **Scope**: this connection's eligible tool registry, including its pin and live permissions; metadata only.
+- **Capability**: `read`.
+- **Profile**: negotiated `admin` only, without an explicit allow-list; see opt-in transport contract above. Absent for legacy clients.
+- **Parameters**: `query` (required tool name or operation words, 1-200 characters, nonblank), `limit` (integer 1-5, default 3).
+- **Returns**: `{tools: [Tool], total}` with actual SDK tool descriptors (`name`, description, strict `inputSchema`, outputSchema/annotations when declared), lexically ranked with exact names first. Search covers only the eligible long tail, after access/profile/scope/allow-list and live pin-permission filtering. Load those descriptors in the client, then use ordinary `tools/call` on the original name. The registry performs the same argument, capability, scope and result validation as a directly listed tool. There is no generic execute/call parameter. Unsupported negotiation versions fail; a header-only initialize without the matching capability fails.
 
 ### `search`
 - **Scope**: vault, repository, or account. Read access to each resource searched.
