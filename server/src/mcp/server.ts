@@ -950,7 +950,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         }
         const caller = resultResources ? cacheCaller(auth) : null
         const before = resultResources ? cacheKey(name, args, resultResources, await readEpochs(resultResources), caller!) : null
-        if (resultResources && at !== null && at.h !== before?.slice(0, 16)) {
+        if (resultResources && at !== null && (before === null || at.h !== before.slice(0, 16))) {
           throw new McpToolError('CURSOR_STALE', 'stale cursor: the result snapshot changed; start again without `cursor`')
         }
         // A literal result filter always replays the same bounded computed
@@ -958,8 +958,13 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         let answer = (await handler(args, scoped, new Page(RESULT_TOOLS[name] && args.grep !== undefined ? null : at))) as Budgeted
         if (resultResources) {
           const after = cacheKey(name, args, resultResources, await readEpochs(resultResources), caller!)
-          if (before === null || before !== after) throw new McpToolError('BUSY', 'the result snapshot changed during this call; retry')
-          answer = resultHandle(answer, before, typeof args.grep === 'string' ? args.grep : undefined)
+          if (before !== null && before === after) {
+            answer = resultHandle(answer, before, typeof args.grep === 'string' ? args.grep : undefined)
+          } else if (args.grep !== undefined || at !== null) {
+            throw new McpToolError('BUSY', 'the result snapshot changed during this call; retry')
+          }
+          // Ordinary first pages retain their uncached success on a race;
+          // only a stable computation can issue a snapshot-bound handle.
         }
         usage.answer = answer
         const budgetTokens = typeof args.budget_tokens === 'number' ? args.budget_tokens : DEFAULT_BUDGET[budget]
