@@ -22,19 +22,19 @@
 //   came from, and is stale once the content changed.
 import { createHash } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import * as Y from 'yjs'
 import type { FastifyInstance } from 'fastify'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { mcpConnections, noteReads, repositoryFiles, repositoryShares, vaultShares } from '../src/db/schema.js'
+import { mcpConnections, noteReads, noteRevisions, repositoryFiles, repositoryShares, vaultShares } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
-import { createNote, purgeNote, renameNote, softDeleteNote, updateNote } from '../src/notes/store.js'
+import { appendCollabUpdate, createNote, loadCollabState, purgeNote, renameNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction, scheduleMissingExtractions } from '../src/repositories/extraction-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
-import { clearSearchCache } from '../src/cache/search.js'
 import { metricsSnapshot, metricsText } from '../src/monitoring/metrics.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import * as search from '../src/search/search.js'
@@ -210,6 +210,60 @@ describe('read_note if_rev (#682)', () => {
     expect((await readNote({ path: 'docs/written', if_rev: editRev })).json.rev).toBe(upsertRev)
   })
 
+  it('keeps blind body writes as live replacements after actual CRDT typing, until an explicit read confirms a base', async () => {
+    const path = 'docs/blind-write-identity'
+    const note = await createNote(vaultId, { path, body: '@BASE@\ninitial body\nend base' })
+    await ok(owner, 'edit_note', { vaultId, path, body: '@MCP07@\nfirst body\nend 07' })
+    const { state } = await loadCollabState(vaultId, note.id)
+    const tab = new Y.Doc()
+    try {
+      Y.applyUpdate(tab, state)
+      const vector = Y.encodeStateVector(tab)
+      tab.getText('body').insert(tab.getText('body').length, ' @TYPING@')
+      expect(await appendCollabUpdate(vaultId, note.id, Y.encodeStateAsUpdate(tab, vector), { type: 'collab' })).not.toBeNull()
+    } finally {
+      tab.destroy()
+    }
+    const replacement = '@MCP08@\nsecond body\nend 08'
+    const written = await ok(owner, 'edit_note', { vaultId, path, body: replacement })
+    expect(written.json).toMatchObject({ status: 'applied', body: replacement })
+    expect(written.json).not.toHaveProperty('baseRev')
+    const reads = await db.select().from(noteReads).where(and(eq(noteReads.connectionId, ownerConnectionId), eq(noteReads.noteId, note.id)))
+    expect(reads).toEqual([])
+    expectUnchanged(await readNote({ path, if_rev: written.json.rev }), 'rev', written.json.rev)
+    const confirmed = await db.select().from(noteReads).where(and(eq(noteReads.connectionId, ownerConnectionId), eq(noteReads.noteId, note.id)))
+    expect(confirmed).toMatchObject([{ rev: written.json.rev }])
+  })
+
+  it('requires the exact successful writer revision, not another connection or a failed write', async () => {
+    const path = 'docs/writer-identity'
+    await createNote(vaultId, { path, body: 'original\n' })
+    const written = await ok(owner, 'edit_note', { vaultId, path, body: 'written\n' })
+    await db.insert(vaultShares).values({ vaultId, granteeType: 'user', granteeId: guestId, permission: 'read' })
+    try {
+      expect((await readNote({ path, if_rev: written.json.rev }, guest)).json).not.toHaveProperty('unchanged')
+    } finally {
+      await db.delete(vaultShares).where(and(eq(vaultShares.vaultId, vaultId), eq(vaultShares.granteeId, guestId)))
+    }
+    const changed = await updateNote(vaultId, path, { body: 'someone else changed it\n' })
+    expect((await readNote({ path, if_rev: changed!.seq })).json).not.toHaveProperty('unchanged')
+
+    const refusedPath = 'docs/refused-writer-identity'
+    const original = Array.from({ length: 40 }, (_, i) => `Paragraph ${i}: distinct observation ${i * 17} with enough content to exercise the growth guard.`).join('\n\n')
+    const refusedNote = await createNote(vaultId, { path: refusedPath, body: original })
+    const refused = await call(owner, 'edit_note', { vaultId, path: refusedPath, body: `${original}\n\n${original}` })
+    expect(refused.isError).toBe(true)
+    const afterFailure = await readNote({ path: refusedPath, if_rev: refusedNote.seq })
+    expect(afterFailure.json).not.toHaveProperty('unchanged')
+    expect(afterFailure.structured?.body).toBe(original)
+
+    const expiredPath = 'docs/expired-writer-identity'
+    const expiredNote = await createNote(vaultId, { path: expiredPath, body: 'original\n' })
+    const expiredWrite = await ok(owner, 'edit_note', { vaultId, path: expiredPath, body: 'written before the window\n' })
+    await db.update(noteRevisions).set({ createdAt: sql`now() - interval '25 hours'` }).where(eq(noteRevisions.noteId, expiredNote.id))
+    expect((await readNote({ path: expiredPath, if_rev: expiredWrite.json.rev })).json).not.toHaveProperty('unchanged')
+  })
+
   it('answers in full for a note created where another note was deleted or renamed from', async () => {
     await createNote(vaultId, { path: 'docs/scratch', body: 'old\n' })
     const old = await readNote({ path: 'docs/scratch' })
@@ -340,17 +394,17 @@ describe('read_file if_rev (#682)', () => {
 describe('search if_rev and the scoped result cache (#680, #682)', () => {
   it('serves a repeat from cache, renders each budget separately, and confirms a current revision under 50 tokens', async () => {
     await flushEmbeddings()
-    clearSearchCache()
     const args = { vaultId, query: 'Guide setup install' }
-    const before = metricsSnapshot().caches.search!
+    const before = metricsSnapshot()
     const first = await ok(owner, 'search', args)
     expect(first.json.rev).toMatch(/^[0-9a-f]{64}$/)
     expect((await ok(owner, 'search', args)).json).toEqual(first.json)
     expectUnchanged(await ok(owner, 'search', { ...args, if_rev: first.json.rev, budget_tokens: 256 }), 'rev', first.json.rev)
-    const after = metricsSnapshot().caches.search!
-    expect(after.miss - before.miss).toBe(1)
-    expect(after.hit - before.hit).toBe(2)
-    expect(metricsText()).toContain(`elara_cache_lookups_total{cache="search",outcome="hit"} ${after.hit}`)
+    const after = metricsSnapshot()
+    expect(after).toHaveProperty('caches.search', { hit: expect.any(Number), miss: expect.any(Number) })
+    expect(after.caches.search!.miss - before.caches.search!.miss).toBe(1)
+    expect(after.caches.search!.hit - before.caches.search!.hit).toBe(2)
+    expect(metricsText()).toContain(`elara_cache_lookups_total{cache="search",outcome="hit"} ${after.caches.search!.hit}`)
   })
 
   it('returns new full results after a write, never the prior cached snippets', async () => {
@@ -396,15 +450,17 @@ describe('search if_rev and the scoped result cache (#680, #682)', () => {
   })
 
   it('does not cache or issue a revision for a result computed across an epoch change', async () => {
-    clearSearchCache()
+    const path = 'docs/epoch-race-probe'
+    await createNote(vaultId, { path, body: 'Cacheepochrace before content.\n' })
+    await flushEmbeddings()
     const original = search.searchNotes
     const spy = vi.spyOn(search, 'searchNotes').mockImplementationOnce(async (...args) => {
       const answer = await original(...args)
-      await updateNote(vaultId, 'docs/cache-probe', { body: 'Cacheprobe concurrent change.\n' })
+      await updateNote(vaultId, path, { body: 'Cacheepochrace concurrent change.\n' })
       return answer
     })
     try {
-      const args = { vaultId, query: 'Cacheprobe', symbols: false }
+      const args = { vaultId, query: 'Cacheepochrace', symbols: false }
       const raced = await ok(owner, 'search', args)
       expect(raced.json).not.toHaveProperty('rev')
       await flushEmbeddings()
@@ -418,13 +474,12 @@ describe('search if_rev and the scoped result cache (#680, #682)', () => {
   })
 
   it('does not keep degraded results: recovery can occur without an epoch change', async () => {
-    clearSearchCache()
     const original = search.searchNotes
     const spy = vi.spyOn(search, 'searchNotes').mockImplementationOnce(async (...args) => ({
       ...await original(...args), degraded: { reason: 'embedder_failed' as const },
     }))
     try {
-      const args = { vaultId, query: 'Guide setup install' }
+      const args = { vaultId, query: 'unique degraded cache proof' }
       expect((await ok(owner, 'search', args)).json).not.toHaveProperty('rev')
       expect((await ok(owner, 'search', args)).json.rev).toEqual(expect.any(String))
       expect(spy).toHaveBeenCalledTimes(2)

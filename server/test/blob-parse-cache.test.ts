@@ -9,14 +9,15 @@ beforeEach(clearParseCache)
 
 describe('parsed (#684)', () => {
   it('parses a content once and returns the same result for the same hash, language and grammar', async () => {
-    const before = metricsSnapshot().caches.blob_parse!
+    const before = metricsSnapshot()
     const first = await parsed('typescript', SOURCE, 'src/a.ts', 'h1')
     const second = await parsed('typescript', SOURCE, 'src/b.ts', 'h1')
     expect(second).toBe(first)
     expect(first.symbols.map((s) => s.name)).toEqual(['one'])
     expect(parseCacheStats).toEqual({ parsed: 1, reused: 1 })
-    const after = metricsSnapshot().caches.blob_parse!
-    expect({ hit: after.hit - before.hit, miss: after.miss - before.miss }).toEqual({ hit: 1, miss: 1 })
+    const after = metricsSnapshot()
+    expect(after).toHaveProperty('caches.blob_parse', { hit: expect.any(Number), miss: expect.any(Number) })
+    expect({ hit: after.caches.blob_parse!.hit - before.caches.blob_parse!.hit, miss: after.caches.blob_parse!.miss - before.caches.blob_parse!.miss }).toEqual({ hit: 1, miss: 1 })
   })
 
   it('keeps a content parsed with another grammar (.ts, .tsx) or another hash apart', async () => {

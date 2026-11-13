@@ -2453,9 +2453,14 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     with `from_path` = the path (a rename, a restore elsewhere): two
     lookups of migration 0051's partial indexes, run only when the `rev`
     matches. A matching numeric revision also requires this token's
-    last-read identity for the same note (within 24 hours). Purging removes
-    that identity, so a recreated path is sent in full. A first read,
-    another token, or an expired identity conservatively gets full content.
+    observed immutable note identity within 24 hours: either an actual read,
+    or a successful MCP audit revision with the same note id, connection
+    and exact current `seq`. Failed writes have no committed `seq` and do
+    not qualify. Purging removes both kinds of evidence. Without evidence,
+    the full content is sent conservatively.
+    A blind body edit of an existing note does not invent a merge base:
+    it advances only an existing read-derived base. An explicit unchanged
+    confirmation records a read, separately from audit-based identity proof.
   - Files compare the per-file `hash`, never the repository `commit` /
     `tree`: `syncRepositoryFiles` updates rows one by one and writes the
     commit and tree at its end, so mid-sync (or after a failed sync) a
