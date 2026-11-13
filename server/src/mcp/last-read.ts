@@ -54,18 +54,6 @@ export async function confirmRead(connectionId: string, noteId: string, rev: num
       SET body = CASE WHEN note_reads.rev = EXCLUDED.rev THEN note_reads.body END, rev = EXCLUDED.rev, read_at = now()`)
 }
 
-/**
- * `connectionId` wrote note `noteId` to `rev` with a whole body: its new
- * base, if it has one in the window. `sent` is the body it sent when the
- * result differs from it (merged), null when the revision holds it.
- */
-export async function advanceRead(connectionId: string, noteId: string, rev: number, sent: string | null): Promise<void> {
-  await db
-    .update(noteReads)
-    .set({ rev, body: sent, readAt: sql`now()` })
-    .where(and(eq(noteReads.connectionId, connectionId), eq(noteReads.noteId, noteId), inWindow))
-}
-
 /** `connectionId`'s base of note `noteId` within the window, if one is on record: the `rev`, and the body it sent when that is not the revision's. */
 export async function lastRead(connectionId: string, noteId: string): Promise<{ rev: number; body: string | null } | undefined> {
   const [row] = await db

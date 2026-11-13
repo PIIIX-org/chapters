@@ -261,11 +261,18 @@ function answerTimes(raw: string): Map<string, string> {
 }
 
 /** The answer with the world's generated ids and the allowlisted times replaced by labels. */
-function mask(world: World, raw: string): string {
+function mask(world: World, raw: string, tool?: string): string {
   let out = raw
   // Longest first: a date (`updated`) is a prefix of a timestamp.
   for (const t of [...answerTimes(raw).keys()].sort((a, b) => b.length - a.length)) out = out.split(t).join('<time>')
   for (const [id, label] of world.labels) out = out.split(id).join(label)
+  if (tool === 'search') {
+    // A conditional revision deliberately binds the caller/scope, unlike the ranked result's content.
+    const answer = JSON.parse(raw) as { structuredContent: { rev?: string } }
+    const rev = answer.structuredContent.rev
+    expect(rev).toMatch(/^[0-9a-f]{64}$/)
+    out = out.split(rev!).join('<search-revision>')
+  }
   return out
 }
 
@@ -390,8 +397,8 @@ describe('read tools answer deterministically (#473)', () => {
     for (const q of QUESTIONS.filter((q) => !q.history)) {
       const test = q.differs ? it.fails : it
       test(`${q.name}${q.differs ? ` (differs on dev: ${q.differs})` : ''}`, async () => {
-        const other = mask(B, await ask(B, q.tool, q.args(B)))
-        expect(other).toBe(mask(A, await ask(A, q.tool, q.args(A))))
+        const other = mask(B, await ask(B, q.tool, q.args(B)), q.tool)
+        expect(other).toBe(mask(A, await ask(A, q.tool, q.args(A)), q.tool))
       })
     }
 
