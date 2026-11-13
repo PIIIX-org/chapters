@@ -12,7 +12,7 @@
 
 ### The open-source, self-hostable second brain for engineering teams and the AI agents that work alongside them.
 
-**Status: in testing.** The repository keeps its original name, `chapters`; the product is Elara. Bugs found in testing are tracked in [Issues](https://github.com/PIIIX-org/chapters/issues).
+**Status: beta / self-hostable.** Elara has a live deployment and documented self-hosting setup. APIs and migrations may change; review the [self-hosting checklist](docs/self-hosting/checklist.md) and [backup guide](docs/self-hosting/backup.md) before upgrading. Retrieval accuracy and token-efficiency validation remain incomplete; see [open issues](https://github.com/PIIIX-org/chapters/issues). The repository keeps its original name, `chapters`; the product is Elara.
 
 [Quickstart](#quickstart) • [Architectural Comparison](#architectural-comparison) • [Benchmarks (retracted)](#benchmarks-retracted) • [MCP Server](#model-context-protocol-mcp-interface)
 
