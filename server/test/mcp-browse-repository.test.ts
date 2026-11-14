@@ -9,7 +9,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { db } from '../src/db/client.js'
-import { repositoryFiles } from '../src/db/schema.js'
+import { repositories, repositoryFiles } from '../src/db/schema.js'
+import { inArray } from 'drizzle-orm'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -31,6 +32,7 @@ let cookie: string
 let agent: Client
 let repoId: string
 let largeRepoId: string
+const createdRepositoryIds: string[] = []
 
 /** Code-unit order, what `COLLATE "C"` gives whatever the database locale. */
 const byCodeUnits = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
@@ -56,7 +58,9 @@ async function addFiles(repositoryId: string, paths: string[]): Promise<void> {
 
 async function newRepo(name: string): Promise<string> {
   const res = await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name, ingestionMethod: 'agent_push' } })
-  return res.json<{ id: string }>().id
+  const id = res.json<{ id: string }>().id
+  createdRepositoryIds.push(id)
+  return id
 }
 
 async function call(args: Args): Promise<{ isError: boolean; text: string }> {
@@ -127,8 +131,14 @@ beforeAll(async () => {
 }, 120_000)
 
 afterAll(async () => {
-  await agent?.close().catch(() => {})
-  await app?.close()
+  try {
+    await agent?.close().catch(() => {})
+    await app?.close()
+  } finally {
+    // These raw rows have no extraction jobs. Leaving the 1,200-file fixture
+    // makes a later suite's global boot catch-up drain it inside its test.
+    if (createdRepositoryIds.length > 0) await db.delete(repositories).where(inArray(repositories.id, createdRepositoryIds))
+  }
 })
 
 describe('browse_repository path filter', () => {

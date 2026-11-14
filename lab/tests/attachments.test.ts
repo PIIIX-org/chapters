@@ -24,7 +24,7 @@ const test: LabTest = {
     const base = ctx.baseUrl
     const vault = await ctx.createVault('admin', ctx.uniq('att'))
     const V = vault.id
-    const dataDir = `/data/elara/vaults/${V}/assets`
+    const dataDir = `/data/elara/vaults/${V}/.assets`
     const lsAssets = async (dir = dataDir) =>
       (await ctx.docker.appExec(['sh', '-c', `ls -1 ${dir} 2>/dev/null; true`])).stdout
         .split('\n')
@@ -238,7 +238,7 @@ const test: LabTest = {
       actual: `purge ${purge?.ok}; download ${afterPurge.status}; files on disk ${afterPurgeDisk.length} (before ${before.length}); notes still referencing: ${refs}`,
       ok: afterPurge.status === 404 && !afterPurgeDisk.includes(pdfMeta.fileName),
       severity: 'medium',
-      detail: { before, afterPurgeDisk, code: 'store.ts:1027-1041 purgeNote never touches assets/; there is no asset delete function' },
+      detail: { before, afterPurgeDisk, code: 'purgeNote does not remove unreferenced attachments from physical .assets/; there is no asset delete function' },
     })
     const del = await admin.request('DELETE', `/api/vaults/${V}/assets/${pdfMeta.fileName}`)
     checks.push({

@@ -15,6 +15,7 @@ import { extractionWork, flushExtraction } from '../src/repositories/extraction-
 import { getRepositoryFile, listRepositoryFiles } from '../src/repositories/store.js'
 import { embedder } from '../src/search/embeddings.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+import { metricsSnapshot } from '../src/monitoring/metrics.js'
 
 // #684: a git sync fetches into a persistent mirror instead of cloning the
 // whole repository again (#542: 71 MB every 5 minutes), and only files whose
@@ -131,11 +132,15 @@ describe('git sync into a persistent mirror (#684)', () => {
     expect(existsSync(mirrorDir(repo.id))).toBe(true)
 
     resetCounts()
+    const before = metricsSnapshot()
     await syncAndDrain(repo.id)
 
     expect(gitCalls).not.toContain('clone')
     expect(parsed).toEqual([])
     expect(embedCalls).toBe(0)
+    const after = metricsSnapshot()
+    expect(after).toHaveProperty('caches.git_mirror', { hit: expect.any(Number), miss: expect.any(Number) })
+    expect({ hit: after.caches.git_mirror!.hit - before.caches.git_mirror!.hit, miss: after.caches.git_mirror!.miss - before.caches.git_mirror!.miss }).toEqual({ hit: 1, miss: 0 })
     const [row] = await db.select().from(repositories).where(eq(repositories.id, repo.id))
     expect(row!.syncStatus).toBe('idle')
   })

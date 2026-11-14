@@ -516,7 +516,7 @@ const test: LabTest = {
     const expectedNames = [
       ...srcLive.map((r) => `${r.path}.md`),
       ...srcRows.map((r) => `.elara/history/${r.id}.json`),
-      ...srcAssets.map((a) => `assets/${a.fileName}`),
+      ...srcAssets.map((a) => `.assets/${a.fileName}`),
       'manifest.json',
     ].sort()
     const missingInExport = expectedNames.filter((n) => !exportNames.includes(n))
@@ -557,8 +557,8 @@ const test: LabTest = {
       severity: 'high',
       detail: exportDiff,
     })
-    const exportedAssets = restZip.filter((e) => e.name.startsWith('assets/'))
-    const assetByteDiff = srcAssets.filter((a) => sha256(exportedAssets.find((e) => e.name === `assets/${a.fileName}`)?.data ?? new Uint8Array()) !== a.sha256)
+    const exportedAssets = restZip.filter((e) => e.name.startsWith('.assets/'))
+    const assetByteDiff = srcAssets.filter((a) => sha256(exportedAssets.find((e) => e.name === `.assets/${a.fileName}`)?.data ?? new Uint8Array()) !== a.sha256)
     checks.push({
       name: 'exported attachments byte-identical to downloads',
       expected: '0 differing',

@@ -5,6 +5,7 @@ import { teams, users, vaults, vaultShares } from '../db/schema.js'
 import { listAssets, listNotes, readAsset, readNote } from '../notes/store.js'
 import { serializeNote, type Frontmatter } from '../notes/okf.js'
 import { renderNoteFile } from '../notes/projector.js'
+import { ASSET_DIRECTORY } from '../notes/asset-storage.js'
 import {
   BACKUP_FORMAT,
   BACKUP_MANIFEST,
@@ -29,11 +30,10 @@ export interface ShareManifestEntry {
 }
 
 /**
- * Version of the vault archive layout. 1: OKF tree, `assets/`, manifest and
- * `.elara/history/` (#499). Archives without it are older exports; import
- * refuses a version newer than this one.
+ * Vault archive layout: v1 used assets/ for attachments (ambiguous with
+ * valid assets/ notes); v2 uses .assets/. Older formats remain readable.
  */
-export const VAULT_ARCHIVE_FORMAT_VERSION = 1
+export const VAULT_ARCHIVE_FORMAT_VERSION = 2
 
 export interface VaultManifest {
   formatVersion: number
@@ -93,7 +93,7 @@ export async function addVaultToZip(zip: AdmZip, vaultId: string, prefix = ''): 
   for (const asset of assets) {
     const data = await readAsset(vaultId, asset.fileName)
     if (data) {
-      zip.addFile(`${prefix}assets/${asset.fileName}`, data.buffer)
+      zip.addFile(`${prefix}${ASSET_DIRECTORY}/${asset.fileName}`, data.buffer)
     }
   }
   await addHistoryToZip(zip, vaultId, prefix)

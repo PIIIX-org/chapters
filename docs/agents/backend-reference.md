@@ -276,7 +276,7 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   (projection rows, raised targets, a revision at every `seq`; renderer
   version bumps) → the projector drains → `listen` → in the background,
   the **orphan sweep**: `*.md` under `vaults/<id>/`,
-  outside `assets/` and every dot-directory, with no `projected_files` row
+  outside dot-directories (including `.assets/`), with no `projected_files` row
   and no owner in the DB (a live note at the path, or the `dir_index` of a
   directory with live notes) is moved to `.orphans/<path>`, never deleted.
   Graceful shutdown: the relay flushes its stores, then the projector gets
@@ -988,7 +988,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   states fails CI. Tests that damage a note on purpose restore its file
   before they end, and tests that insert note rows without files delete
   their fixture vaults. It also reports
-  `orphan-file`: a `.md` file outside `assets/` and the dot-directories
+  `orphan-file`: a `.md` file outside dot-directories (legacy `assets/` is also excluded until its namespace migration completes)
   with no `projected_files` row, no live note at its path and (for an
   `index.md`) no live note under its directory, i.e. what the boot orphan
   sweep would move to `.orphans/` (#495). Shared helpers: `compareNoteFile`,
@@ -1063,8 +1063,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   (not in a dry run) it clears the leases of pending `file`/`dir_index`
   projections and store jobs and drains them, so a rename or trash move
   committed before the stop has moved its file. Then, for every vault
-  directory (or `--vault`), each `*.md` outside `assets/` and the
-  dot-directories: no live row → `createNote(…, { asImported: true })`
+  directory (or `--vault`), each `*.md` outside dot-directories:
+  valid `assets/` notes are included after attachment migration; no live row → `createNote(…, { asImported: true })`
   from the file (the frontmatter as given, no `timestamp` added; row,
   revision, links, projections, embedding job; the projector then adopts
   a file that already is a valid note as it is; one without `type`, which
@@ -1077,7 +1077,14 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `.crdt/<path>.bin` beside a created note is listed in `crdtBins` (the
   lost row's editor state; the doctor reports it if it differs). A
   directory with no vault row is skipped, or with `--owner <email>` gets
-  a vault row with that id (`Restored <id8>`). The real run holds the
+  a vault row with that id (`Restored <id8>`). Before the drain the real
+  run migrates every vault's attachment storage (#1139, as the boot
+  does); a vault whose `.asset-storage.json` is `rolled-back` is left as
+  it is: not migrated, not scanned, and kept out of the drain
+  (`excludeVaultsFromProjector`: its pending `file`/`dir_index`
+  projections and store jobs are neither lease-reset, claimed nor run, so
+  they stay queued). It is listed in `vaultsSkipped` (the dry run too),
+  so it never blocks the other vaults. The real run holds the
   exclusive instance maintenance lock (`holdInstanceLock('exclusive')`),
   so it refuses (exit 2) while a server or writing CLI is up; if the
   lock's connection drops it throws before the next create and after the
@@ -2194,7 +2201,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   `sessionIdGenerator: undefined`, a fresh `McpServer` + transport
   built per HTTP request; auth and permissions are recomputed every call.
   Answers may be cached across connections only under the caching
-  contract (§5.11, D7 on #930); none is cached yet (#685).
+  contract (§5.11, D7 on #930); MCP search caches unrendered results.
   With no session and no stream, the server can send nothing unasked
   (#436): `GET` and `DELETE` on both paths answer `405` with
   `Allow: POST` and the SDK transport's JSON-RPC error
@@ -2454,8 +2461,15 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     trashed note has the path or another note of the vault has a revision
     with `from_path` = the path (a rename, a restore elsewhere): two
     lookups of migration 0051's partial indexes, run only when the `rev`
-    matches. A purged predecessor (owner-only `purge_note` after trash)
-    leaves no trace, the one case left.
+    matches. A matching numeric revision also requires this token's
+    observed immutable note identity within 24 hours: either an actual read,
+    or a successful MCP audit revision with the same note id, connection
+    and exact current `seq`. Failed writes have no committed `seq` and do
+    not qualify. Purging removes both kinds of evidence. Without evidence,
+    the full content is sent conservatively.
+    A blind body edit of an existing note does not invent a merge base:
+    it advances only an existing read-derived base. An explicit unchanged
+    confirmation records a read, separately from audit-based identity proof.
   - Files compare the per-file `hash`, never the repository `commit` /
     `tree`: `syncRepositoryFiles` updates rows one by one and writes the
     commit and tree at its end, so mid-sync (or after a failed sync) a
@@ -2475,8 +2489,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     No body is recorded, since the answer sent none: a base already at
     that rev keeps the body the connection sent with a merged write, and
     an older base takes the revision's text.
-  - `if_rev` is in the cursor fingerprint like any argument. Search and
-    graph have no not-modified answer: that is the result cache's (#685).
+  - `if_rev` is in the cursor fingerprint like any argument. MCP `search`
+    also accepts it, using an opaque scoped revision (§5.11); graph does not.
   `test/mcp-read-if-rev.test.ts`.
 - **Session references** (#683, ADR-004 §2.1, §2.9, D7):
   `read_note` and `read_file` take `session_id` (`session-reads.ts`
@@ -2975,8 +2989,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   access ("a copy outlives later revocation" — read access isn't
   enough). Sessionless, time-boxed **export links**
   (`EXPORT_LINK_TTL_HOURS`, default 24h) for sharing outside the app.
-  Entries: live notes as OKF `<path>.md`, `assets/<name>`,
-  `manifest.json` (`formatVersion` 1, `vaultId`, `name`, `mergeable`,
+  Entries: live notes as OKF `<path>.md`, `.assets/<name>` attachments,
+  `manifest.json` (`formatVersion` 2, `vaultId`, `name`, `mergeable`,
   `shares`) and, per
   note live or trashed, `.elara/history/<noteId>.json`
   (`vault-history.ts`, #499): `path`, `createdAt`/`updatedAt`/`deletedAt`
@@ -2991,10 +3005,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
   note is skipped and reported, not fatal). Refused with 400 before any
-  vault is created: a manifest `formatVersion` newer than the server's,
-  or a history file with a time that is not a real UTC instant. Assets
-  keep their archive file names (unsafe names, `.` and `..` are
-  dropped); `.md` files under `assets/` stay attachments, never notes. Trashed notes are recreated in
+  vault is created: an unsupported manifest version, duplicate/unsafe ZIP paths,
+  a legacy entry claimed as both note and attachment, or an invalid history time.
+  Attachments retain names; unsafe names are refused, never guessed or overwritten.
+  V2 `.assets/*.md` stay attachments; legacy unversioned/v1 reads `assets/`.
+  V2 `assets/design.md` is an ordinary valid note, disjoint from `.assets/design.md`. Trashed notes are recreated in
   the trash, then live notes; each note with a history file gets the
   archive's revisions (new ids, original order and times; a revert's
   `sourceRevisionId` is pointed at the new id of the archived revision
@@ -4237,24 +4252,47 @@ itself.
 
 ### 5.11 Caching contract (`server/src/cache/`, ADR-004 §2.9, #680)
 
-The rules every cache of an answer follows. No answer is cached yet: the
-search and graph result cache (#685, which also adds per-cache hit/miss
-metrics and the test that a cached answer is never served stale) builds
-on this contract, and none may cache without it. Per-session
-de-duplication (#683, **Session memory** below) caches no answer; it
-remembers what a session was sent, under the same scoping rules. D7 on #930
-replaced the old promise of no cross-connection caching (§5.8) with this
-contract. Permission checks themselves stay live (§1): a cache never
-authorizes anything. The query-embedding cache (below) caches no answer,
-only a function of the query text, and so needs no epochs.
+The rules every cache of an answer follows. MCP search uses
+`cache/search.ts`, an in-process LRU of 128 unrendered search results.
+It resolves live access first and uses `cacheKey` with the caller's account,
+token scope/pin/access/profile/allow-list, all answer-affecting arguments,
+resource index epochs, permission epoch and derived-artifact versions.
+Cursor, budget and the `if_rev` condition do not change the cached ranking;
+rendering, hints and budgets are applied per call. Repository commit/tree
+metadata is stored with the ranking under the same epoch checks.
+Epochs are checked again before a hit is published or a miss is stored.
+A concurrent mutation suppresses storage and revision issuance; a degraded
+answer is never stored (service recovery need not change an epoch).
+No TTL is used. A process generation in the key invalidates client-held
+revisions on restart/build change, as well as discarding entries.
 
-**Every in-process cache keys by account** (#684). A hit answers faster
-than a miss, so an entry one account filled and another account hits tells
-the second that the first asked the same thing (a query-vector hit is
-about 3.8 ms faster than an embed). So every cache in the process keeps the
-asking account in its key, even one whose entries depend on nothing about
-the caller. Agents and tokens of one account share entries. A caller that
-has no account at hand computes and caches nothing.
+Every cache lookup is counted in `elara_cache_lookups_total{cache,outcome}`
+and `/api/admin/monitoring.caches`: fixed labels `search`, `query_embedding`,
+`blob_parse`, `blob_vector`, `git_mirror`, `session_passage`, outcomes `hit`/`miss`.
+There are no query/account/content labels. Vector counts are per distinct
+embed key; git mirror hits are unchanged-HEAD syncs (misses require a fetch);
+session counts measure a matching held passage before deciding whether its
+reference saves bytes.
+
+MCP search returns `rev` on a stable, nondegraded result. Repeat the same
+query with `if_rev: rev` to get `{unchanged:true,rev,truncated:false}` on
+the first page (under 50 tokens); a cursor always continues its full answer.
+A write, access change, different caller/profile/pin or changed arguments
+gets a full result instead. The epoch itself is never exposed.
+The broader search/graph result-cache work remains #685.
+
+Per-session de-duplication (#683, **Session memory** below) remembers what a
+token/session was sent, not an answer. Permission checks stay live: no cache
+authorizes anything. Pure computation caches (query vectors and blob
+parse/vector reuse) key by their actual text/content and algorithm versions,
+not answer epochs: a permission/content change cannot change the value of
+the same input computation. Their consumers still perform live access checks.
+
+**Account isolation.** Search results and query embeddings key by account;
+vector reuse reads only repositories owned by the same account. The blob
+parse cache shares only the pure parse of supplied content/hash and grammar
+across accounts, never stored content or an access decision. Query callers
+without an account compute without keeping an entry.
 
 **Epochs** (migration 0041). Triggers bump them, so every writer is
 covered (MCP, REST, the collab relay, the workers, the CLIs) without a call
@@ -4327,7 +4365,7 @@ sha256 of:
 - the permission epoch;
 - `argsFingerprint(args, resources)` (`mcp/response.ts`).
 
-An entry is the whole result (ids and spans, never rendered text): a call's
+An entry is the unrendered search result, never a rendered page: a call's
 `cursor` and `budget_tokens` page and budget it, so they are not in the key.
 Argument order, resource order and allow-list order do not change the key.
 
@@ -4360,11 +4398,11 @@ nothing):
   running build or be emptied at boot, because ranking code is not in
   `versionsKey`. An in-process cache is emptied by every restart.
 
-Epochs are internal: no answer carries them, and `tools/list` and
-`initialize.instructions` are unchanged (0 tokens). Answers carry content
-versions (`rev`, file `hash`, `commit` / `tree`) as ADR-004 §2.9 lists;
-`read_note` / `read_file` `if_rev` (#682, §5.8 **Unchanged reads**)
-compares `rev` or `hash` live after the access check and caches nothing.
+Epochs stay internal. Answers carry content versions (`rev`, file `hash`,
+`commit` / `tree`); search's `rev` is an opaque digest including scope,
+epochs and process generation. `read_note` / `read_file` compare their
+versions live after access checks and cache no answer. Search alone adds
+an optional `if_rev` schema argument; the existing schema ceilings stay intact.
 Tests: `cache-epochs.test.ts` (every write path bumps its own scope and no
 other; reads bump nothing) and `cache-key.test.ts` (key fields, refusals,
 real epochs around writes and reads).

@@ -95,12 +95,15 @@ describe('the cost of a delete (#1015)', () => {
     await flushExtraction()
     const kept = files.slice(0, 20)
     const keptIds = await Promise.all(kept.map((f) => fileId(id, f.path)))
+    const [before] = (await db.execute(sql`SELECT coalesce(max(id), 0)::text AS id FROM jobs`)) as unknown as Array<{ id: string }>
+    // sync starts the worker before it returns (#1114): count its work from the delete, not just the explicit drain.
+    scans.calls = 0
     expect((await syncRepositoryFiles(id, [], kept.map((f) => f.path))).deleted).toBe(100)
     // Each of the 20 files left held 5 of the removed ones (its 3 others of one content come first by path): one job each.
+    // Completed jobs stay in the table: include them, since the worker may already have run some during sync.
     const queued = (await db.execute(sql`
-      SELECT payload->>'nodeId' AS id FROM jobs WHERE kind = ${SEMANTIC_EDGES_JOB} AND done_at IS NULL`)) as unknown as Array<{ id: string }>
+      SELECT payload->>'nodeId' AS id FROM jobs WHERE kind = ${SEMANTIC_EDGES_JOB} AND id > ${before!.id}::bigint`)) as unknown as Array<{ id: string }>
     expect(queued.map((j) => j.id).sort()).toEqual([...keptIds].sort())
-    scans.calls = 0
     await runSemanticEdgeRebuild()
     expect(scans.calls).toBe(kept.length)
     const incremental = await rowsOf(id)

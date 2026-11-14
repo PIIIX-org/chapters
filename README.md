@@ -14,6 +14,8 @@
 
 **Status: beta / self-hostable.** Elara has a live deployment and documented self-hosting setup. APIs and migrations may change; review the [self-hosting checklist](docs/self-hosting/checklist.md) and [backup guide](docs/self-hosting/backup.md) before upgrading. Retrieval accuracy and token-efficiency validation remain incomplete; see [open issues](https://github.com/PIIIX-org/chapters/issues). The repository keeps its original name, `chapters`; the product is Elara.
 
+**Release note — PUBLIC BETA BLOCKER #1139:** attachments now use hidden physical `.assets/` storage and vault ZIP format 2, so valid `assets/` notes cannot overwrite attachments. Upgrade only while all app writers are stopped, after a fresh verified database **and data-volume** backup, with owner approval for the production deployment. Review the [migration, verification and no-clobber rollback procedure](docs/self-hosting/migration.md#attachment-storage-upgrade-1139). This repository change does not authorize or execute a production migration.
+
 [Quickstart](#quickstart) • [Architectural Comparison](#architectural-comparison) • [Benchmarks (retracted)](#benchmarks-retracted) • [MCP Server](#model-context-protocol-mcp-interface)
 
 </div>
