@@ -222,11 +222,34 @@ it('leaves a vault whose attachment storage was rolled back as it is, reports it
       await db.execute(sql`INSERT INTO vaults (id, name, owner_id) SELECT ${id}, ${name}, id FROM users WHERE email = ${ownerEmail}`)
       await createNote(id!, { path: 'docs/lost', body: 'Written before the rollback.\n' })
     }
+    const queued = await createNote(rolledBack, { path: 'docs/queued', body: 'Projected before the rollback.\n' })
     await writeAsset(rolledBack, 'design.png', Buffer.from('attachment bytes'))
     await flushProjections()
     expect((await runAssetStorage('rollback', rolledBack))[0]).toMatchObject({ state: 'rolled-back', conflicts: [] })
     const journal = await readFile(journalFile, 'utf8')
     await db.execute(sql`DELETE FROM notes WHERE vault_id IN (${rolledBack}, ${healthy}) AND path = 'docs/lost'`)
+    // Work queued for the rolled-back vault (a row changed behind the store, a leased store job): no run may claim, run or reset it.
+    await db.execute(sql`UPDATE notes SET body = 'Changed in the database after the rollback.\n' WHERE id = ${queued.id}`)
+    await db.execute(sql`
+      UPDATE note_projections p SET target_seq = n.seq FROM notes n
+      WHERE p.note_id = n.id AND n.id = ${queued.id} AND p.projection IN ('file', 'dir_index')`)
+    await db.execute(sql`
+      INSERT INTO jobs (kind, payload, lease_until, attempts)
+      VALUES ('store_dir_index', ${JSON.stringify({ vaultId: rolledBack, dirs: ['docs'] })}::jsonb, now() + interval '1 hour', 1)`)
+    const queue = async () =>
+      JSON.stringify([
+        await db.execute(sql`
+          SELECT projection, applied_seq, target_seq, attempts, lease_until, last_error FROM note_projections
+          WHERE note_id = ${queued.id} ORDER BY projection`),
+        await db.execute(sql`SELECT kind, attempts, lease_until, done_at FROM jobs WHERE payload->>'vaultId' = ${rolledBack} ORDER BY id`),
+      ])
+    const pending = await queue()
+    expect(pending).toContain('store_dir_index')
+    const [stale] = (await db.execute(sql`
+      SELECT count(*)::int AS n FROM note_projections WHERE note_id = ${queued.id} AND applied_seq < target_seq`)) as unknown as Array<{ n: number }>
+    expect(stale?.n).toBe(2)
+    const queuedFile = await readFile(noteFile(rolledBack, 'docs/queued'), 'utf8')
+    const treeBefore = (await readdir(vaultDir(rolledBack), { recursive: true })).sort()
     for (const dryRun of [true, false]) {
       const report = await rowsFromFiles({ dryRun, vaultId: rolledBack })
       expect(report.vaultsSkipped).toEqual([{ vaultId: rolledBack, reason: expect.stringContaining('No-clobber rollback') }])
@@ -236,13 +259,19 @@ it('leaves a vault whose attachment storage was rolled back as it is, reports it
     expect(await getLiveNote(rolledBack, 'docs/lost')).toBeNull()
     expect(await readFile(journalFile, 'utf8')).toBe(journal)
     expect(await readFile(join(vaultDir(rolledBack), 'assets/design.png'), 'utf8')).toBe('attachment bytes')
+    expect(await queue()).toBe(pending)
     // The all-vault attachment migration before the drain passes the rolled-back vault by instead of refusing every vault.
     const report = await rowsFromFiles({ vaultId: healthy })
     expect(report.created).toEqual([{ vaultId: healthy, path: 'docs/lost' }])
     expect((await getLiveNote(healthy, 'docs/lost'))!.body).toBe('Written before the rollback.\n')
     expect(await readFile(journalFile, 'utf8')).toBe(journal)
     expect(await getLiveNote(rolledBack, 'docs/lost')).toBeNull()
+    // The run's projector drain (before the scan and after creating rows) left the rolled-back vault's queue and files alone.
+    expect(await queue()).toBe(pending)
+    expect(await readFile(noteFile(rolledBack, 'docs/queued'), 'utf8')).toBe(queuedFile)
+    expect((await readdir(vaultDir(rolledBack), { recursive: true })).sort()).toEqual(treeBefore)
   } finally {
+    await db.execute(sql`DELETE FROM jobs WHERE payload->>'vaultId' = ${rolledBack}`)
     await db.execute(sql`DELETE FROM vaults WHERE id IN (${rolledBack}, ${healthy})`)
     for (const id of [rolledBack, healthy]) await rm(vaultDir(id), { recursive: true, force: true })
   }

@@ -451,12 +451,41 @@ interface ClaimedProjection {
   attempts: number
 }
 
+/** Vaults this process's projector leaves alone (excludeVaultsFromProjector). */
+let excludedVaults: readonly string[] = []
+
+/** SQL condition on a `note_projections` row: its note is in none of `vaultIds`. */
+export function projectionOutside(vaultIds: readonly string[]) {
+  return vaultIds.length ? sql`note_id NOT IN (SELECT id FROM notes WHERE vault_id IN (${sql.join(vaultIds.map((id) => sql`${id}`), sql`, `)}))` : sql`true`
+}
+
+/** SQL condition on a store `jobs` row: its payload's vault is none of `vaultIds`. */
+export function storeJobOutside(vaultIds: readonly string[]) {
+  return vaultIds.length ? sql`coalesce(payload->>'vaultId', '') NOT IN (${sql.join(vaultIds.map((id) => sql`${id}`), sql`, `)})` : sql`true`
+}
+
+/**
+ * Keeps this process's projector off `vaultIds` (rows-from-files, #1139: vaults
+ * whose attachment storage was rolled back): their pending projections and store
+ * jobs stay queued as they are, never claimed, run or dropped. Call it before the
+ * first drain; the returned release waits for a running drain, then lifts it.
+ */
+export function excludeVaultsFromProjector(vaultIds: readonly string[]): () => Promise<void> {
+  const previous = excludedVaults
+  excludedVaults = [...previous, ...vaultIds]
+  return async () => {
+    await projector.flush()
+    excludedVaults = previous
+  }
+}
+
 async function claimProjections(): Promise<ClaimedProjection[]> {
   return (await db.execute(sql`
     UPDATE note_projections p SET lease_until = now() + ${LEASE_MS} * interval '1 millisecond', attempts = p.attempts + 1
     FROM (
       SELECT note_id, projection FROM note_projections
       WHERE applied_seq < target_seq AND projection IN ('file', 'dir_index') AND (lease_until IS NULL OR lease_until < now())
+        AND ${projectionOutside(excludedVaults)}
       ORDER BY updated_at LIMIT ${CLAIM_BATCH}
       FOR UPDATE SKIP LOCKED
     ) c
@@ -545,7 +574,7 @@ async function removeFiles(payload: { vaultId: string; ownerId: string; paths: s
 }
 
 async function runJob<P>(kind: string, run: (payload: P) => Promise<void>): Promise<boolean> {
-  const job: ClaimedJob<P> | null = await claimJob<P>(kind)
+  const job: ClaimedJob<P> | null = await claimJob<P>(kind, storeJobOutside(excludedVaults))
   if (!job) return false
   try {
     await run(job.payload)

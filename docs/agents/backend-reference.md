@@ -1079,9 +1079,12 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   directory with no vault row is skipped, or with `--owner <email>` gets
   a vault row with that id (`Restored <id8>`). Before the drain the real
   run migrates every vault's attachment storage (#1139, as the boot
-  does); a vault whose `.asset-storage.json` is `rolled-back` is neither
-  migrated nor scanned and is listed in `vaultsSkipped` (the dry run
-  too), so it never blocks the other vaults. The real run holds the
+  does); a vault whose `.asset-storage.json` is `rolled-back` is left as
+  it is: not migrated, not scanned, and kept out of the drain
+  (`excludeVaultsFromProjector`: its pending `file`/`dir_index`
+  projections and store jobs are neither lease-reset, claimed nor run, so
+  they stay queued). It is listed in `vaultsSkipped` (the dry run too),
+  so it never blocks the other vaults. The real run holds the
   exclusive instance maintenance lock (`holdInstanceLock('exclusive')`),
   so it refuses (exit 2) while a server or writing CLI is up; if the
   lock's connection drops it throws before the next create and after the
