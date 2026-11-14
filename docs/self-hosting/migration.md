@@ -36,7 +36,7 @@ Full-instance backups already separate note and attachment entries; their logica
 
 Actual restore takes the exclusive instance fence and prepares each known-disjoint namespace **before publishing any note file or committing restore rows/events**. Existing-volume legacy attachments use the same verified migration; the restore then replans files so differing kept attachments are retained rather than overwritten by archive bytes. A failed transaction discards only freshly prepared, still-empty namespaces whose vault rows did not commit; existing/migrated bytes and committed namespaces are never treated as scratch. Replaying a completed archive does not recreate a subsequently purged vault. `--dry-run` does not prepare namespaces.
 
-File recovery with `rows-from-files --owner` also migrates a missing vault's legacy attachment directory immediately after recreating its row, under the command's existing exclusive fence and before scanning/importing notes. Markdown attachments remain attachments, not guessed note content.
+File recovery with `rows-from-files --owner` also migrates a missing vault's legacy attachment directory immediately after recreating its row, under the command's existing exclusive fence and before scanning/importing notes. Markdown attachments remain attachments, not guessed note content. A vault whose audit is `rolled-back` ([No-clobber rollback](#no-clobber-rollback)) is neither migrated nor scanned: `rows-from-files` lists it under `vaultsSkipped` with the way back described there, and still recovers every other vault.
 
 ### No-clobber rollback
 

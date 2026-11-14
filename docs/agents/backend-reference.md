@@ -1077,7 +1077,11 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `.crdt/<path>.bin` beside a created note is listed in `crdtBins` (the
   lost row's editor state; the doctor reports it if it differs). A
   directory with no vault row is skipped, or with `--owner <email>` gets
-  a vault row with that id (`Restored <id8>`). The real run holds the
+  a vault row with that id (`Restored <id8>`). Before the drain the real
+  run migrates every vault's attachment storage (#1139, as the boot
+  does); a vault whose `.asset-storage.json` is `rolled-back` is neither
+  migrated nor scanned and is listed in `vaultsSkipped` (the dry run
+  too), so it never blocks the other vaults. The real run holds the
   exclusive instance maintenance lock (`holdInstanceLock('exclusive')`),
   so it refuses (exit 2) while a server or writing CLI is up; if the
   lock's connection drops it throws before the next create and after the

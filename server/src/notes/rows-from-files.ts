@@ -26,15 +26,19 @@
  * left beside a created note is listed (`crdtBins`): it holds the editor
  * state of the lost row; `pnpm doctor` compares it, delete it if it differs.
  * A vault directory without a vault row is skipped, or, with `ownerEmail`,
- * gets a vault row with that id owned by that user.
+ * gets a vault row with that id owned by that user. A vault whose attachment
+ * storage an operator rolled back (#1139: `asset-storage rollback`,
+ * `store-export-legacy`) is skipped and reported, never migrated past that
+ * rollback; every other vault is still recovered.
  *
  * Unless `dryRun`, it holds the exclusive instance maintenance lock
  * (maintenance-lock.ts) for the whole run, so it refuses to run while a
  * server or writing CLI is up, and a server started meanwhile refuses to
  * start; if the lock's connection drops it stops before the next write.
- * Before the scan it drains every pending projection and store job (as
- * store-export-legacy does), so the files on disk match the rows that still
- * exist. The dry run reads only and takes no lock.
+ * Before the scan it migrates every vault's attachment storage (#1139, as
+ * the boot does, except rolled-back vaults) and drains every pending
+ * projection and store job (as store-export-legacy does), so the files on
+ * disk match the rows that still exist. The dry run reads only and takes no lock.
  */
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -47,9 +51,12 @@ import { parseNote, type OkfNote } from './okf.js'
 import { STORE_JOBS, flushProjections } from './projector.js'
 import { createNote, getLiveNote, vaultDir } from './store.js'
 import { crdtFile } from '../sync/crdt-store.js'
-import { runAssetStorage } from './asset-storage.js'
+import { isAssetStorageRolledBack, runAssetStorage } from './asset-storage.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const ROLLED_BACK =
+  'its attachment storage was rolled back (asset-storage rollback or store-export-legacy): left as it is, never migrated again; ' +
+  'to return it to this release, restore a fresh current-state backup into a clean target (docs/self-hosting/migration.md, No-clobber rollback)'
 
 export interface RowsFromFilesReport {
   kind: 'elara-rows-from-files'
@@ -68,7 +75,7 @@ export interface RowsFromFilesReport {
   failed: Array<{ vaultId: string; path: string; error: string }>
   /** Vault rows created (or, in a dry run, that would be) for directories without one. */
   vaultsCreated: string[]
-  /** Vault directories without a live vault row that were skipped. */
+  /** Vault directories skipped: no live vault row, or attachment storage rolled back (#1139). */
   vaultsSkipped: Array<{ vaultId: string; reason: string }>
 }
 
@@ -102,7 +109,12 @@ export async function rowsFromFiles(options: { dryRun?: boolean; vaultId?: strin
   }
   try {
     if (!dryRun) {
-      await runAssetStorage('migrate')
+      // #1139, as at boot: attachments move to .assets/ before any projector drain.
+      // A vault an operator rolled back stays as it is; the scan below reports it.
+      const vaultRows = (await db.execute(sql`SELECT id FROM vaults ORDER BY id`)) as unknown as Array<{ id: string }>
+      for (const { id } of vaultRows) {
+        if (!(await isAssetStorageRolledBack(id))) await runAssetStorage('migrate', id)
+      }
       // A rename or trash move committed before the stop may not have moved its file yet: finish them first.
       await db.execute(sql`
         UPDATE note_projections SET lease_until = NULL, attempts = 0
@@ -128,6 +140,10 @@ export async function rowsFromFiles(options: { dryRun?: boolean; vaultId?: strin
     if (options.vaultId) dirs = dirs.filter((id) => id === options.vaultId)
     for (const vaultId of dirs) {
       stillHeld()
+      if (await isAssetStorageRolledBack(vaultId)) {
+        report.vaultsSkipped.push({ vaultId, reason: ROLLED_BACK })
+        continue
+      }
       const [vault] = (await db.execute(sql`SELECT deleted_at FROM vaults WHERE id = ${vaultId}`)) as unknown as Array<{
         deleted_at: string | null
       }>

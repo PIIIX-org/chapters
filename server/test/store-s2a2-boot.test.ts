@@ -16,7 +16,7 @@ import { bootStore } from '../src/notes/store-reconcile.js'
 import { setStoreMigrationPending } from '../src/notes/store-tx.js'
 import { MaintenanceInProgressError, holdInstanceLock } from '../src/notes/maintenance-lock.js'
 import { BackfillPendingError, exportLegacyFiles } from '../src/notes/store-export.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, wipeInstance } from './helpers.js'
 
 /** The `backfill` marker rows of the vault's notes: never a projection, never reset or rendered. */
 async function backfillMarkers(vault: string): Promise<string> {
@@ -52,6 +52,12 @@ afterEach(async () => {
 
 afterAll(async () => {
   await other.end()
+  // The store-export-legacy CLI test rolls back every vault's attachment storage (#1139). Remove this
+  // file's (last) vault so its rolled-back journal does not reach a later file's all-vault migration or backup.
+  if (vaultId) {
+    await db.execute(sql`DELETE FROM vaults WHERE id = ${vaultId}`)
+    await rm(join(config.dataDir, 'vaults', vaultId), { recursive: true, force: true })
+  }
   await app.close()
 })
 
@@ -244,6 +250,13 @@ describe('store-export-legacy (§9)', { timeout: 60_000 }, () => {
   })
 
   it('runs a pending rename refactor as the CLI, in a process that never loaded the note store', async () => {
+    // The CLI rolls back EVERY vault's attachment storage (#1139), a one-way state the fixed release then refuses
+    // to migrate or back up: start from an empty instance, as the backup/restore tests do, so no other file's vault is rolled back.
+    await wipeInstance()
+    const owner = await createActiveUser()
+    const [vault] = (await db.execute(sql`
+      INSERT INTO vaults (name, owner_id) VALUES ('S2a-2 CLI export vault', ${owner.id}) RETURNING id`)) as unknown as Array<{ id: string }>
+    vaultId = vault!.id
     const target = await createNote(vaultId, { type: 'docs', name: 'cli-target', body: 'target' })
     const referrer = await createNote(vaultId, { type: 'docs', name: 'cli-ref', body: 'see [[docs/cli-target]]' })
     // The rename committed and its refactor job is left for later (the renaming process died), leased as a rename leases it.
@@ -256,8 +269,10 @@ describe('store-export-legacy (§9)', { timeout: 60_000 }, () => {
     // Only the CLI may run the job: this test process's projector (woken by the creates above) must be idle
     // first, or it can claim the job once the export clears its lease, and fail it (it holds no instance lock).
     await flushProjections()
-    // The export refuses to run before the backfill finished; this file may run alone (the marker is set by boot).
-    await db.execute(sql`UPDATE instance_state SET store_migrated_at = coalesce(store_migrated_at, now()) WHERE id = 'singleton'`)
+    // The export refuses to run before the backfill finished, and the wipe cleared the marker boot sets.
+    await db.execute(sql`
+      INSERT INTO instance_state (id, store_migrated_at) VALUES ('singleton', now())
+      ON CONFLICT (id) DO UPDATE SET store_migrated_at = coalesce(instance_state.store_migrated_at, now())`)
     const run = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'src/scripts/store-export-legacy.ts'], {
       cwd: join(import.meta.dirname, '..'),
       env: process.env,

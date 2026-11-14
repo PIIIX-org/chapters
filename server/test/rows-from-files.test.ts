@@ -13,7 +13,8 @@ import { INSTANCE_LOCK_KEY, MaintenanceInProgressError, holdsExclusiveLock } fro
 import { flushProjections } from '../src/notes/projector.js'
 import { rowsFromFiles } from '../src/notes/rows-from-files.js'
 import { withKeyLock } from '../src/notes/key-lock.js'
-import { createNote, getLiveNote, noteFile, noteLock, readAsset, trashFile, vaultDir } from '../src/notes/store.js'
+import { createNote, getLiveNote, noteFile, noteLock, readAsset, trashFile, vaultDir, writeAsset } from '../src/notes/store.js'
+import { runAssetStorage } from '../src/notes/asset-storage.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 // ADR-003 Q9 default (S6, #495): the last-resort import that rebuilds note
@@ -209,5 +210,40 @@ it('recovers an orphan legacy vault with --owner, migrating Markdown attachments
   } finally {
     await db.execute(sql`DELETE FROM vaults WHERE id = ${orphan}`)
     await rm(vaultDir(orphan), { recursive: true, force: true })
+  }
+})
+
+it('leaves a vault whose attachment storage was rolled back as it is, reports it, and still recovers the other vaults', async () => {
+  const rolledBack = randomUUID()
+  const healthy = randomUUID()
+  const journalFile = join(vaultDir(rolledBack), '.asset-storage.json')
+  try {
+    for (const [id, name] of [[rolledBack, 'Rolled-back attachments'], [healthy, 'Recovered beside a rollback']]) {
+      await db.execute(sql`INSERT INTO vaults (id, name, owner_id) SELECT ${id}, ${name}, id FROM users WHERE email = ${ownerEmail}`)
+      await createNote(id!, { path: 'docs/lost', body: 'Written before the rollback.\n' })
+    }
+    await writeAsset(rolledBack, 'design.png', Buffer.from('attachment bytes'))
+    await flushProjections()
+    expect((await runAssetStorage('rollback', rolledBack))[0]).toMatchObject({ state: 'rolled-back', conflicts: [] })
+    const journal = await readFile(journalFile, 'utf8')
+    await db.execute(sql`DELETE FROM notes WHERE vault_id IN (${rolledBack}, ${healthy}) AND path = 'docs/lost'`)
+    for (const dryRun of [true, false]) {
+      const report = await rowsFromFiles({ dryRun, vaultId: rolledBack })
+      expect(report.vaultsSkipped).toEqual([{ vaultId: rolledBack, reason: expect.stringContaining('No-clobber rollback') }])
+      expect(report.created).toEqual([])
+      expect(report.failed).toEqual([])
+    }
+    expect(await getLiveNote(rolledBack, 'docs/lost')).toBeNull()
+    expect(await readFile(journalFile, 'utf8')).toBe(journal)
+    expect(await readFile(join(vaultDir(rolledBack), 'assets/design.png'), 'utf8')).toBe('attachment bytes')
+    // The all-vault attachment migration before the drain passes the rolled-back vault by instead of refusing every vault.
+    const report = await rowsFromFiles({ vaultId: healthy })
+    expect(report.created).toEqual([{ vaultId: healthy, path: 'docs/lost' }])
+    expect((await getLiveNote(healthy, 'docs/lost'))!.body).toBe('Written before the rollback.\n')
+    expect(await readFile(journalFile, 'utf8')).toBe(journal)
+    expect(await getLiveNote(rolledBack, 'docs/lost')).toBeNull()
+  } finally {
+    await db.execute(sql`DELETE FROM vaults WHERE id IN (${rolledBack}, ${healthy})`)
+    for (const id of [rolledBack, healthy]) await rm(vaultDir(id), { recursive: true, force: true })
   }
 })

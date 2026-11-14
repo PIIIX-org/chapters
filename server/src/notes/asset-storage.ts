@@ -135,6 +135,11 @@ export async function isAssetStorageReady(id: string): Promise<boolean> {
   } finally { await handle.close() }
 }
 
+/** An operator rolled this vault's attachment storage back (`rollback`): this release never migrates it again. */
+export async function isAssetStorageRolledBack(id: string): Promise<boolean> {
+  return (await journal(id))?.state === 'rolled-back'
+}
+
 async function cleanupWork(id: string): Promise<void> {
   const dir = join(root(id), '.asset-migration-work')
   if (!(await realDirectory(dir))) return

@@ -3,7 +3,7 @@
 // empty instance, and the comparison covers every row of every backed-up table.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
 import * as OTPAuth from 'otpauth'
@@ -617,28 +617,34 @@ it.each([false, true])('full-instance root-collision restore prepares the namesp
   const owner = await createActiveUser()
   const [vault] = await db.insert(vaults).values({ name: 'Root collision restore', ownerId: owner.id }).returning()
   const id = vault!.id
-  await createNote(id, { path: 'assets/design', body: 'Authoritative design note.\n' })
-  await writeAsset(id, 'design.md', Buffer.from('Distinct archived attachment'))
-  await flushProjections()
-  const bytes = await buildInstanceBackup()
-  await wipeInstance()
-  if (keptVolume) {
-    await mkdir(join(vaultDir(id), 'assets'), { recursive: true })
-    await writeFile(join(vaultDir(id), 'assets/design.md'), 'Kept newer legacy attachment')
-    await writeFile(join(vaultDir(id), 'assets/extra.bin'), 'Kept unowned legacy bytes')
+  try {
+    await createNote(id, { path: 'assets/design', body: 'Authoritative design note.\n' })
+    await writeAsset(id, 'design.md', Buffer.from('Distinct archived attachment'))
+    await flushProjections()
+    const bytes = await buildInstanceBackup()
+    await wipeInstance()
+    if (keptVolume) {
+      await mkdir(join(vaultDir(id), 'assets'), { recursive: true })
+      await writeFile(join(vaultDir(id), 'assets/design.md'), 'Kept newer legacy attachment')
+      await writeFile(join(vaultDir(id), 'assets/extra.bin'), 'Kept unowned legacy bytes')
+    }
+    const plan = await restoreBackup(bytes)
+    expect((await readNote(id, 'assets/design'))!.body).toBe('Authoritative design note.\n')
+    expect(await readFile(noteFile(id, 'assets/design'), 'utf8')).toContain('Authoritative design note.')
+    const attachment = keptVolume ? 'Kept newer legacy attachment' : 'Distinct archived attachment'
+    expect((await readAsset(id, 'design.md'))!.buffer.toString()).toBe(attachment)
+    if (keptVolume) {
+      expect(plan.warnings).toContainEqual(expect.stringContaining('attachment(s) already on disk differ'))
+      expect((await readAsset(id, 'extra.bin'))!.buffer.toString()).toBe('Kept unowned legacy bytes')
+    }
+    const [startup] = await runAssetStorage('migrate', id)
+    expect(startup).toMatchObject({ state: 'complete', ready: true })
+    expect((await restoreBackup(bytes)).alreadyRestored).toEqual(expect.any(String))
+    expect((await readNote(id, 'assets/design'))!.body).toBe('Authoritative design note.\n')
+    expect((await readAsset(id, 'design.md'))!.buffer.toString()).toBe(attachment)
+  } finally {
+    // Its deliberate note/attachment collision would make a later file's instance-wide attachment rollback report a conflict.
+    await db.delete(vaults).where(eq(vaults.id, id))
+    await rm(vaultDir(id), { recursive: true, force: true })
   }
-  const plan = await restoreBackup(bytes)
-  expect((await readNote(id, 'assets/design'))!.body).toBe('Authoritative design note.\n')
-  expect(await readFile(noteFile(id, 'assets/design'), 'utf8')).toContain('Authoritative design note.')
-  const attachment = keptVolume ? 'Kept newer legacy attachment' : 'Distinct archived attachment'
-  expect((await readAsset(id, 'design.md'))!.buffer.toString()).toBe(attachment)
-  if (keptVolume) {
-    expect(plan.warnings).toContainEqual(expect.stringContaining('attachment(s) already on disk differ'))
-    expect((await readAsset(id, 'extra.bin'))!.buffer.toString()).toBe('Kept unowned legacy bytes')
-  }
-  const [startup] = await runAssetStorage('migrate', id)
-  expect(startup).toMatchObject({ state: 'complete', ready: true })
-  expect((await restoreBackup(bytes)).alreadyRestored).toEqual(expect.any(String))
-  expect((await readNote(id, 'assets/design'))!.body).toBe('Authoritative design note.\n')
-  expect((await readAsset(id, 'design.md'))!.buffer.toString()).toBe(attachment)
 })
