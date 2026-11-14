@@ -108,7 +108,7 @@ import { emitPermissionChange } from '../sync/permission-events.js'
 import { NoteEditConflictError, requestedEdit, writeThroughCollab, type EditBase, type WriteReport } from './crdt-write.js'
 import { NO_NOTE, WRITE_RESULT_SCHEMA, diffStats, runWrite, writeAnswer, writeResult, type KeyedAnswer } from './write-result.js'
 import {
-  AUDIT_RESULT_SCHEMA, GRAPH_PREFERENCE_RESULT_SCHEMA, HISTORY_RESULT_SCHEMA,
+  AUDIT_RESULT_SCHEMA, GRAPH_PREFERENCE_RESULT_SCHEMA, CONTINUATION_RESULT_SCHEMA,
   NOTE_EXPORT_RESULT_SCHEMA, READ_FILE_RESULT_SCHEMA, READ_NOTE_RESULT_SCHEMA,
   REPOSITORY_STATUS_RESULT_SCHEMA, REVISION_RESULT_SCHEMA, USAGE_RESULT_SCHEMA, USER_RESULT_SCHEMA,
   VAULT_EXPORT_RESULT_SCHEMA, VAULT_PREFERENCES_RESULT_SCHEMA,
@@ -2063,7 +2063,7 @@ function buildServer(auth: McpAuth, toolDiscovery = false): { server: McpServer;
     {
       scope: 'vault',
       capability: 'read',
-      outputSchema: HISTORY_RESULT_SCHEMA,
+      outputSchema: CONTINUATION_RESULT_SCHEMA,
       pinPermission: 'edit',
       description: 'List the trashed notes of a vault as `{notes}`, most recently deleted first.',
       inputSchema: {
@@ -2142,7 +2142,7 @@ function buildServer(auth: McpAuth, toolDiscovery = false): { server: McpServer;
       scope: 'vault',
       capability: 'read',
       pinPermission: 'edit',
-      outputSchema: HISTORY_RESULT_SCHEMA,
+      outputSchema: CONTINUATION_RESULT_SCHEMA,
       description:
         'A note\'s revisions as `{revisions}`, newest first, metadata only (id, action, actor, createdAt, bodyBytes); requires edit access. Read one with get_revision; revert_note to a `restore_point` undoes a connection\'s session (manual: elara://manual/notes).',
       inputSchema: {
