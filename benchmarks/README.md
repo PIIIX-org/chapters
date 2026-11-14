@@ -522,8 +522,8 @@ cost), 8,192 output tokens per turn, 100,000 characters per tool result,
   or sends nothing: T5's Elara answer in run 42395876734 was empty after 30
   calls) is asked again, up to 3 times, in plain words; each ask counts as a
   turn, the ignored tool calls leave the history, and after the third the
-  episode ends with an empty answer and an `error` saying why. **`HARNESS_VERSION`
-  is 3** for this change: results of v2 and v3 are never compared.
+  episode ends with an empty answer and an `error` saying why. This change
+  bumped `HARNESS_VERSION` to 3: results of v2 and v3 are never compared.
 - **Time.** Tools stop at 15 minutes minus a reserve for the final answer
   (a fifth of the cap, at most 3 minutes); every model request carries an
   abort signal for the time left, retries included; a tool turn cut off at
