@@ -16,6 +16,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { buildApp } from '../src/app.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
+import { CONTINUATION_RESULT_SCHEMA } from '../src/mcp/read-result.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 type Args = Record<string, unknown>
@@ -116,7 +117,7 @@ describe('tools/list budget per profile (#429)', () => {
     // The bounded list can be a full row, a location, counts, or a session
     // reference. Its cursor contract survives all those modes without a fake
     // empty object schema or an unnecessarily exhaustive item union.
-    const continuation = z.looseObject({ truncated: z.union([z.literal(false), z.looseObject({ cursor: z.string().nullable() })]) })
+    const continuation = CONTINUATION_RESULT_SCHEMA
     const candidates = {
       browse_vault: z.looseObject({ directory: z.string() }),
       browse_repository: continuation, search: continuation,

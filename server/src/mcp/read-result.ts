@@ -6,9 +6,11 @@ import { z } from 'zod'
 export const READ_NOTE_RESULT_SCHEMA = z.looseObject({ rev: z.number() })
 export const READ_FILE_RESULT_SCHEMA = z.looseObject({ hash: z.string() })
 
-// History's budget ladder can replace revision rows with locations or counts;
-// the continuation contract remains the same at every level.
-export const HISTORY_RESULT_SCHEMA = z.looseObject({
+// Bounded lists (history, trash, and the excluded reader reads measured by
+// mcp-tool-budget.test.ts) can replace rows with locations or counts as the
+// budget ladder drops levels; the continuation contract is the same at every
+// level.
+export const CONTINUATION_RESULT_SCHEMA = z.looseObject({
   truncated: z.union([z.literal(false), z.looseObject({ cursor: z.string().nullable() })]),
 })
 export const REVISION_RESULT_SCHEMA = z.looseObject({ id: z.string(), body: z.string() })

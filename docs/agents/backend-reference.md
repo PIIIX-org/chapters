@@ -2406,9 +2406,6 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   writer **4,500 tokens** (tools/list + instructions; prompts reported
   separately), and admin tools/list **less than 43,000 characters**.
   The 2,000/4,000 profile bounds in the original #957 text are obsolete.
-  Native SDK measurement on the `be1581c5` control: reader 9,332 +
-  311 = 9,643 chars / 2,411 tokens; writer 15,813 + 443 = 16,256
-  chars / 4,064 tokens; admin tools/list 40,876 chars (63 tools).
   No provider-cache hit is inferred from these byte counts.
 
   | Tool(s) | Meaningful schema | Listing cost, characters |
@@ -2432,8 +2429,10 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   **9,960 chars / 2,490 tokens**; writer 16,130 + 443 =
   **16,573 chars / 4,144 tokens** (prompts 10,042 chars, reported
   separately); admin tools/list **42,979 chars**.
-  Compared with that dependency alone, read schemas add 236 reader
-  characters and all declared read schemas add 2,073 admin characters.
+  Compared with the #1132 control alone (`95e02f8a`: reader 2,431
+  tokens, writer 4,085 tokens, admin tools/list 40,957 characters), read
+  schemas add 236 reader characters and all declared read schemas add
+  2,073 admin characters.
   Admin would have been 43,030: a meaning-preserving 51-character trim
   of `repository_status`'s description retains sync state/time, queued
   or running extraction, exhausted retries/errors and the freshness
@@ -2447,11 +2446,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   structured-content, tool-budget and tool-schema; new read regressions
   cover targets, outlines, grep, unchanged/session answers and invalid
   typed identities. No provider model trial was run for this schema
-  change; fresh controls and independent CI/lab review remain gates.
-  The source stack now normally merges repaired cache head `72961238`.
-  Its earlier `95e02f8a` restore-point/collaboration failures are not
-  covered by the 17 schema checks above; fresh integration checks and
-  new-harness controls must use the repaired combined source.
+  change.
   Bare-array read answers (`list_vaults`, `list_repositories`,
   `list_vault_shares`, `list_repository_shares`, `list_teams`,
   `list_team_members`, `list_notifications`, `list_graph_perspectives`)
@@ -2459,8 +2454,7 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   and object structuredContent. Wrapping them to claim coverage would
   break the accepted wire contract. Errors remain text-only `isError`,
   not a successful result union. No default response size or budget is
-  raised. #433 waits for #957's per-tool disposition and independent
-  review/gates; these measurements do not close either issue.
+  raised.
 - **Instructions** (#435): `instructionsFor(profile)` in
   `mcp/instructions.ts` is the `initialize` result's `instructions`
   (`new McpServer(info, {instructions})` in `buildServer`): one constant
