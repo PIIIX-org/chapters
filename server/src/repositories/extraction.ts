@@ -45,8 +45,10 @@ const require = createRequire(import.meta.url)
  * 8: call, reference, import and test sites, stored as `code_edges` (#469,
  * code-edge-rules.ts, code-edges.ts). No block text changes, so no vector is
  * embedded again: the bump only fills the new table.
+ * 9: Swift symbols and imports from the official source-built grammar (#988).
+ * Unchanged file blocks keep their vectors; the new symbols are embedded.
  */
-export const EXTRACTOR_VERSION = 8
+export const EXTRACTOR_VERSION = 9
 
 /**
  * What a symbol declares (#450; the contract more languages, #464, and the
@@ -102,7 +104,7 @@ const wasmPath = (pkg: string, file: string): string =>
   join(dirname(require.resolve(`${pkg}/package.json`)), file)
 
 interface GrammarConfig {
-  wasm: string
+  wasm: string | URL
   /** `@src` captures; none: the language's imports name no file (C# `using`). */
   importQuery?: string
   /** The specifiers of an `@src` node whose text is not just one (a Rust `use` tree, a Java `import`); none: not an import of a file. */
@@ -226,7 +228,7 @@ const GRAMMARS: Record<Grammar, GrammarConfig> = {
   },
   // #464's grammars, each loaded the first time a file of its language is extracted.
   ...(Object.fromEntries(
-    Object.entries(LANGUAGE_GRAMMARS).map(([language, { wasm, ...grammar }]) => [language, { ...grammar, wasm: wasmPath(...wasm) }]),
+    Object.entries(LANGUAGE_GRAMMARS).map(([language, { wasm, ...grammar }]) => [language, { ...grammar, wasm: Array.isArray(wasm) ? wasmPath(...wasm) : wasm }]),
   ) as Record<NewLanguage, GrammarConfig>),
 }
 

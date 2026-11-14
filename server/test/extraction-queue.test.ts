@@ -192,13 +192,42 @@ describe('extraction queue', () => {
 
   it('embeds an unsupported-language file without producing import/symbol rows', async () => {
     const repo = await makeRepo()
-    await syncRepositoryFiles(repo.id, [{ path: 'Sources/main.swift', content: 'func main() {}' }], ['Sources/main.swift'])
+    await syncRepositoryFiles(repo.id, [{ path: 'Sources/main.txt', content: 'plain text' }], ['Sources/main.txt'])
     await flushExtraction()
 
-    const file = await fileByPath(repo.id, 'Sources/main.swift')
+    const file = await fileByPath(repo.id, 'Sources/main.txt')
     expect(await fileEmbedding(file.id)).not.toBeNull()
     const symbols = await symbolBlocks(file.id)
     expect(symbols).toHaveLength(0)
+  })
+
+  it('persists Swift methods with their parent and imports, and embeds their real source (#988)', async () => {
+    const repo = await makeRepo()
+    const content =
+      'import Foundation\npublic struct Store {\n    func load() -> String { "value" }\n}\nextension Store {\n    func save() {}\n}'
+    await syncRepositoryFiles(
+      repo.id,
+      [{ path: 'Sources/Store.swift', content }],
+      ['Sources/Store.swift'],
+    )
+    await flushExtraction()
+
+    const file = await fileByPath(repo.id, 'Sources/Store.swift')
+    expect(file.language).toBe('swift')
+    expect(file.extractorVersion).toBe(EXTRACTOR_VERSION)
+    expect(await fileEmbedding(file.id)).not.toBeNull()
+    const symbols = await symbolBlocks(file.id)
+    expect(symbols.map((s) => [s.name, s.kind, s.parent])).toEqual([
+      ['Store', 'class', null],
+      ['load', 'method', 'Store'],
+      ['save', 'method', 'Store'],
+    ])
+    expect(symbols.every((s) => s.embedding !== null)).toBe(true)
+    const imports = await db
+      .select()
+      .from(repositoryFileImports)
+      .where(eq(repositoryFileImports.sourceFileId, file.id))
+    expect(imports.map((i) => i.targetPath)).toEqual(['Foundation'])
   })
 
   it('does not re-trigger extraction for an unchanged resync', async () => {

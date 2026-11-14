@@ -1,10 +1,12 @@
-// #464: structure for Rust, Java, C, C++, C#, Kotlin, Ruby and PHP, on the
+// #464 and #988: structure for Rust, Java, C, C++, C#, Kotlin, Ruby, PHP and Swift, on the
 // #450 contract: module-level declarations, the methods (and public or
 // static fields) of module-level classes with their class in `parent`,
 // namespace members with their namespace; nothing nested in a body. Each
 // fixture under fixtures/languages is a small real-code file.
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { Language, Parser, LANGUAGE_VERSION, MIN_COMPATIBLE_VERSION } from 'web-tree-sitter'
 import { extractStructure, isSupportedLanguage, type ExtractedSymbol } from '../src/repositories/extraction.js'
 import { detectLanguage } from '../src/repositories/language.js'
 
@@ -25,15 +27,70 @@ async function extract(name: string) {
 describe('labels (#464)', () => {
   it('labels the new languages by extension, and Markdown and HTML', () => {
     expect(
-      ['a.rs', 'A.java', 'a.c', 'a.h', 'a.cpp', 'a.cc', 'a.cxx', 'a.hpp', 'a.hh', 'A.cs', 'A.kt', 'a.kts', 'a.rb', 'a.php', 'README.md', 'a.markdown', 'a.html', 'a.htm'].map(
+      ['a.rs', 'A.java', 'a.c', 'a.h', 'a.cpp', 'a.cc', 'a.cxx', 'a.hpp', 'a.hh', 'A.cs', 'A.kt', 'a.kts', 'a.rb', 'a.php', 'Store.swift', 'README.md', 'a.markdown', 'a.html', 'a.htm'].map(
         detectLanguage,
       ),
-    ).toEqual(['rust', 'java', 'c', 'c', 'cpp', 'cpp', 'cpp', 'cpp', 'cpp', 'csharp', 'kotlin', 'kotlin', 'ruby', 'php', 'markdown', 'markdown', 'html', 'html'])
+    ).toEqual(['rust', 'java', 'c', 'c', 'cpp', 'cpp', 'cpp', 'cpp', 'cpp', 'csharp', 'kotlin', 'kotlin', 'ruby', 'php', 'swift', 'markdown', 'markdown', 'html', 'html'])
   })
 
-  it('parses the new languages; Swift, Markdown and HTML get no symbols', () => {
-    for (const language of ['rust', 'java', 'c', 'cpp', 'csharp', 'kotlin', 'ruby', 'php']) expect(isSupportedLanguage(language)).toBe(true)
-    for (const language of ['swift', 'markdown', 'html']) expect(isSupportedLanguage(language)).toBe(false)
+  it('parses the code languages; Markdown and HTML use heading outlines', () => {
+    for (const language of ['rust', 'java', 'c', 'cpp', 'csharp', 'kotlin', 'ruby', 'php', 'swift']) expect(isSupportedLanguage(language)).toBe(true)
+    for (const language of ['markdown', 'html']) expect(isSupportedLanguage(language)).toBe(false)
+  })
+})
+
+describe('Swift (#988)', () => {
+  it('loads the recorded source-built bytes at a supported ABI and parses the complete fixture without errors', async () => {
+    const provenance = JSON.parse(
+      readFileSync(new URL('../grammars/swift.json', import.meta.url), 'utf8'),
+    )
+    const bytes = readFileSync(
+      new URL('../grammars/tree-sitter-swift.wasm', import.meta.url),
+    )
+    expect(bytes.byteLength).toBe(provenance.bytes)
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+      provenance.sha256,
+    )
+    await Parser.init()
+    const language = await Language.load(bytes)
+    expect(language.abiVersion).toBe(provenance.abi)
+    expect(language.abiVersion).toBeGreaterThanOrEqual(MIN_COMPATIBLE_VERSION)
+    expect(language.abiVersion).toBeLessThanOrEqual(LANGUAGE_VERSION)
+    const parser = new Parser().setLanguage(language)
+    const tree = parser.parse(fixture('Store.swift'))
+    try {
+      expect(tree).not.toBeNull()
+      expect(tree!.rootNode.hasError).toBe(false)
+    } finally {
+      tree?.delete()
+      parser.delete()
+    }
+  })
+
+  it('extracts functions, nominal types, protocol requirements and extension methods on the #450 parent contract', async () => {
+    const { symbols, imports } = await extract('Store.swift')
+    expect(symbols).toEqual([
+      '5-8 function openStore (exported)',
+      '10-21 class Store (exported)',
+      '11-14 method Store.load',
+      '16-16 method Store.create',
+      '23-25 class Entry',
+      '24-24 method Entry.key',
+      '27-30 enum Event (exported)',
+      '29-29 method Event.label',
+      '32-35 interface Backend (exported)',
+      '33-33 method Backend.load',
+      '34-34 method Backend.create',
+      '38-41 method Store.save',
+      '45-45 method Backend.close',
+      '49-49 method Entry.normalized',
+      '53-53 method Array.keys',
+      '56-56 function helper',
+      '57-59 class DiskStore (exported)',
+      '58-58 method DiskStore.read',
+      '61-65 function localTypes',
+    ])
+    expect(imports).toEqual(['1 Foundation', '2 Models', '3 Storage'])
   })
 })
 
