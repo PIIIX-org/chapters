@@ -16,7 +16,7 @@ import { bootStore } from '../src/notes/store-reconcile.js'
 import { setStoreMigrationPending } from '../src/notes/store-tx.js'
 import { MaintenanceInProgressError, holdInstanceLock } from '../src/notes/maintenance-lock.js'
 import { BackfillPendingError, exportLegacyFiles } from '../src/notes/store-export.js'
-import { createActiveUser, loginCookie } from './helpers.js'
+import { createActiveUser, loginCookie, wipeInstance } from './helpers.js'
 
 /** The `backfill` marker rows of the vault's notes: never a projection, never reset or rendered. */
 async function backfillMarkers(vault: string): Promise<string> {
@@ -52,6 +52,12 @@ afterEach(async () => {
 
 afterAll(async () => {
   await other.end()
+  // The store-export-legacy CLI test rolls back every vault's attachment storage (#1139). Remove this
+  // file's (last) vault so its rolled-back journal does not reach a later file's all-vault migration or backup.
+  if (vaultId) {
+    await db.execute(sql`DELETE FROM vaults WHERE id = ${vaultId}`)
+    await rm(join(config.dataDir, 'vaults', vaultId), { recursive: true, force: true })
+  }
   await app.close()
 })
 
@@ -155,25 +161,28 @@ describe('boot clears the claims a killed process left (§7)', { timeout: 60_000
 })
 
 describe('boot step 9: orphan sweep (§7)', { timeout: 60_000 }, () => {
-  it('moves only *.md files without an owner to .orphans/, outside assets/ and dot-directories', async () => {
+  it('moves only unowned note files, including assets/ notes, while preserving .assets attachments and dot-directories', async () => {
     await createNote(vaultId, { type: 'docs', name: 'owned', body: 'mine' })
+    await createNote(vaultId, { path: 'assets/owned', body: 'a valid owned assets/ note' })
     await flushProjections()
     // Owned by the live note even without a projected_files row (e.g. written by old code).
     await db.execute(sql`DELETE FROM projected_files WHERE vault_id = ${vaultId} AND path = 'docs/owned.md'`)
     await mkdir(file('stray'), { recursive: true })
-    await mkdir(file('assets'), { recursive: true })
+    await mkdir(file('.assets'), { recursive: true })
     await mkdir(file('.conflicts'), { recursive: true })
     await writeFile(file('stray.md'), 'no owner\n')
     await writeFile(file('stray/deep.md'), 'no owner either\n')
     await writeFile(file('stray/notes.txt'), 'not markdown\n')
-    await writeFile(file('assets/readme.md'), 'an attachment\n')
+    await writeFile(file('.assets/readme.md'), 'an attachment\n')
+    await writeFile(file('assets/unowned.md'), 'an unowned modern note\n')
     await writeFile(file('.conflicts/kept.md'), 'a conflict copy\n')
     const moved = (await sweepOrphanFiles()).filter((o) => o.vaultId === vaultId)
-    expect(moved.map((o) => o.path).sort()).toEqual(['stray.md', 'stray/deep.md'])
+    expect(moved.map((o) => o.path).sort()).toEqual(['assets/unowned.md', 'stray.md', 'stray/deep.md'])
     expect(await readFile(file('.orphans/stray.md'), 'utf8')).toBe('no owner\n')
     expect(await readFile(file('.orphans/stray/deep.md'), 'utf8')).toBe('no owner either\n')
+    expect(await readFile(file('.orphans/assets/unowned.md'), 'utf8')).toBe('an unowned modern note\n')
     expect(await exists(file('stray.md'))).toBe(false)
-    for (const kept of ['docs/owned.md', 'docs/index.md', 'stray/notes.txt', 'assets/readme.md', '.conflicts/kept.md']) {
+    for (const kept of ['docs/owned.md', 'docs/index.md', 'assets/owned.md', 'stray/notes.txt', '.assets/readme.md', '.conflicts/kept.md']) {
       expect(await exists(file(kept)), kept).toBe(true)
     }
     // A second sweep finds nothing new and never re-sweeps .orphans/.
@@ -241,6 +250,13 @@ describe('store-export-legacy (§9)', { timeout: 60_000 }, () => {
   })
 
   it('runs a pending rename refactor as the CLI, in a process that never loaded the note store', async () => {
+    // The CLI rolls back EVERY vault's attachment storage (#1139), a one-way state the fixed release then refuses
+    // to migrate or back up: start from an empty instance, as the backup/restore tests do, so no other file's vault is rolled back.
+    await wipeInstance()
+    const owner = await createActiveUser()
+    const [vault] = (await db.execute(sql`
+      INSERT INTO vaults (name, owner_id) VALUES ('S2a-2 CLI export vault', ${owner.id}) RETURNING id`)) as unknown as Array<{ id: string }>
+    vaultId = vault!.id
     const target = await createNote(vaultId, { type: 'docs', name: 'cli-target', body: 'target' })
     const referrer = await createNote(vaultId, { type: 'docs', name: 'cli-ref', body: 'see [[docs/cli-target]]' })
     // The rename committed and its refactor job is left for later (the renaming process died), leased as a rename leases it.
@@ -253,8 +269,10 @@ describe('store-export-legacy (§9)', { timeout: 60_000 }, () => {
     // Only the CLI may run the job: this test process's projector (woken by the creates above) must be idle
     // first, or it can claim the job once the export clears its lease, and fail it (it holds no instance lock).
     await flushProjections()
-    // The export refuses to run before the backfill finished; this file may run alone (the marker is set by boot).
-    await db.execute(sql`UPDATE instance_state SET store_migrated_at = coalesce(store_migrated_at, now()) WHERE id = 'singleton'`)
+    // The export refuses to run before the backfill finished, and the wipe cleared the marker boot sets.
+    await db.execute(sql`
+      INSERT INTO instance_state (id, store_migrated_at) VALUES ('singleton', now())
+      ON CONFLICT (id) DO UPDATE SET store_migrated_at = coalesce(instance_state.store_migrated_at, now())`)
     const run = await promisify(execFile)(process.execPath, ['--import', 'tsx', 'src/scripts/store-export-legacy.ts'], {
       cwd: join(import.meta.dirname, '..'),
       env: process.env,

@@ -8,6 +8,7 @@ import { createNote, isSafeAssetName, softDeleteNote, writeAsset, type Actor } f
 import { revisionBody } from '../notes/store-tx.js'
 import { resolveNotePath } from '../notes/okf/paths.js'
 import { parseNote, OkfValidationError } from '../notes/okf.js'
+import { ASSET_DIRECTORY } from '../notes/asset-storage.js'
 
 /**
  * A vault export's history (#499): one `.elara/history/<noteId>.json` per note,
@@ -121,6 +122,24 @@ export function readArchiveHistory(zip: AdmZip): ArchiveHistory {
   }
   return { live, trash, skipped }
 }
+
+/** Run before vault creation: reject duplicate/aliased paths and legacy files claimed as BOTH a note and attachment. */
+export function validateVaultArchive(zip: AdmZip, version: number, history: ArchiveHistory): void {
+  const seen = new Set<string>()
+  const prefix = version >= 2 ? `${ASSET_DIRECTORY}/` : 'assets/'
+  for (const entry of zip.getEntries()) {
+    const name = entry.entryName
+    const parts = (entry.isDirectory ? name.replace(/\/$/, '') : name).split('/')
+    if (!name || name.includes('\\') || parts.some(part => !part || part === '.' || part === '..') || seen.has(name)) throw new ArchiveFormatError(`duplicate or unsafe archive path: ${name}`)
+    seen.add(name)
+    if (version < 2 && name.startsWith(`${ASSET_DIRECTORY}/`)) throw new ArchiveFormatError('legacy archive contains a v2 attachment namespace')
+    if (entry.isDirectory || !name.startsWith(prefix)) continue
+    const asset = name.slice(prefix.length)
+    if (!isSafeAssetName(asset)) throw new ArchiveFormatError(`unsafe attachment name: ${name}`)
+    if (version < 2 && name.endsWith('.md') && history.live.has(name.slice(0, -3))) throw new ArchiveFormatError(`ambiguous legacy note/attachment: ${name}`)
+  }
+}
+
 
 /** Adds every note's history (live and trashed) of a vault to an export zip. */
 export async function addHistoryToZip(zip: AdmZip, vaultId: string, prefix = ''): Promise<void> {
@@ -236,14 +255,16 @@ export async function importVaultContent(
   sourceVaultId: string | undefined,
   importer: Importer,
   archiveHistory: ArchiveHistory,
+  formatVersion: number,
 ): Promise<ImportedVaultContent> {
   const actor: Actor = { type: 'user', id: importer.id }
   const skipped = [...archiveHistory.skipped]
+  const assetPrefix = formatVersion >= 2 ? `${ASSET_DIRECTORY}/` : 'assets/'
 
   const assetNames = new Set<string>()
   for (const entry of zip.getEntries()) {
-    if (entry.isDirectory || !entry.entryName.startsWith('assets/')) continue
-    const assetName = entry.entryName.slice('assets/'.length)
+    if (entry.isDirectory || !entry.entryName.startsWith(assetPrefix)) continue
+    const assetName = entry.entryName.slice(assetPrefix.length)
     if (!isSafeAssetName(assetName)) continue
     await writeAsset(vaultId, assetName, entry.getData())
     assetNames.add(assetName)
@@ -371,7 +392,7 @@ export async function importVaultContent(
   for (const entry of zip.getEntries()) {
     if (entry.isDirectory || !entry.entryName.endsWith('.md')) continue
     // Attachments (an uploaded `readme.md` stays a file) and archive metadata are never notes.
-    if (entry.entryName.startsWith('assets/') || entry.entryName.startsWith('.elara/')) continue
+    if (entry.entryName.startsWith(assetPrefix) || entry.entryName.startsWith('.elara/')) continue
     const path = entry.entryName.replace(/\.md$/, '')
     if (path === 'index' || path.endsWith('/index')) continue
     try {

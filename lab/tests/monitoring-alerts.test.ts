@@ -163,11 +163,11 @@ const test: LabTest = {
         severity: 'high',
       })
 
-      // Injected server error: an attachment upload into a read-only `assets`
+      // Injected server error: an attachment upload into the read-only physical `.assets`
       // directory. Attachments are not projections: the upload writes the file
       // on the request path, so EACCES answers 500.
       const first = await postFile(ctx.baseUrl, `/api/vaults/${vault.id}/assets`, admin.cookie, 'first.txt', new TextEncoder().encode('x'), 'text/plain')
-      assetsDir = `/data/elara/vaults/${vault.id}/assets`
+      assetsDir = `/data/elara/vaults/${vault.id}/.assets`
       const lock = await ctx.docker.appExec(['chmod', '0555', assetsDir])
       if (lock.code !== 0) throw new Error(`chmod failed: ${lock.stderr}`)
       const upload = await postFile(
