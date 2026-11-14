@@ -1,4 +1,5 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { open, readdir, stat } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -9,6 +10,8 @@ import { mcpConnections, noteLinks, noteRevisions, notes } from '../db/schema.js
 import { recordJob } from '../monitoring/metrics.js'
 import { INSTANCE_LOCK_KEY, writesPaused } from './maintenance-lock.js'
 import { config } from '../config.js'
+import { assetDirectory, initializeAssetStorage, storedAssetFile } from './asset-storage.js'
+import { atomicWrite } from './atomic-write.js'
 import { embeddingJobKey, kickEmbeddings } from '../search/embedding-queue.js'
 import { kickSemanticEdges, queueSemanticEdgeRestore, removeSemanticNodes } from '../search/semantic-edges.js'
 import {
@@ -608,6 +611,7 @@ export async function createNote(
   options: Pick<WriteOptions, 'recordKey'> & { asImported?: boolean } = {},
 ): Promise<WrittenNote> {
   const { resolved, frontmatter, body } = newNoteState(input, options.asImported)
+  await initializeAssetStorage(vaultId)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const id = randomUUID()
     let row: WrittenNote
@@ -2181,7 +2185,7 @@ export function sanitizeAssetFilename(originalFilename: string): string {
 }
 
 export function assetFile(vaultId: string, filename: string): string {
-  return join(vaultDir(vaultId), 'assets', filename)
+  return storedAssetFile(vaultId, filename)
 }
 
 export async function saveAsset(
@@ -2202,15 +2206,15 @@ export async function writeAsset(
   fileName: string,
   buffer: Buffer,
 ): Promise<{ fileName: string; size: number; mimeType: string }> {
-  const targetDir = join(vaultDir(vaultId), 'assets')
-  await mkdir(targetDir, { recursive: true })
-  await writeFile(join(targetDir, fileName), buffer)
+  if (!isSafeAssetName(fileName)) throw new OkfValidationError('unsafe asset filename')
+  await initializeAssetStorage(vaultId)
+  await withKeyLock(`asset:${vaultId}/${fileName}`, () => atomicWrite(assetFile(vaultId, fileName), buffer, { mode: 0o600, durable: true }))
   const ext = extname(fileName).toLowerCase()
   const mimeType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream'
   return { fileName, size: buffer.length, mimeType }
 }
 
-/** A bare file name inside a vault's `assets/` directory: no path parts, no traversal, not the directory itself. */
+/** A logical attachment name (HTTP remains assets/); physical attachment bytes live in .assets/. */
 export function isSafeAssetName(filename: string): boolean {
   return Boolean(filename) && filename !== '.' && !filename.includes('..') && /^[a-zA-Z0-9._-]+$/.test(filename)
 }
@@ -2220,12 +2224,14 @@ export async function readAsset(
   filename: string,
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
   if (!isSafeAssetName(filename)) return null
+  await initializeAssetStorage(vaultId)
   const filePath = assetFile(vaultId, filename)
   try {
-    const buffer = await readFile(filePath)
-    const ext = extname(filename).toLowerCase()
-    const mimeType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream'
-    return { buffer, mimeType }
+    const handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try {
+      if (!(await handle.stat()).isFile()) return null
+      return { buffer: await handle.readFile(), mimeType: ASSET_MIME_TYPES[extname(filename).toLowerCase()] ?? 'application/octet-stream' }
+    } finally { await handle.close() }
   } catch {
     return null
   }
@@ -2234,12 +2240,13 @@ export async function readAsset(
 export async function listAssets(
   vaultId: string,
 ): Promise<{ fileName: string; size: number; modifiedAt: string }[]> {
-  const targetDir = join(vaultDir(vaultId), 'assets')
+  await initializeAssetStorage(vaultId)
+  const targetDir = assetDirectory(vaultId)
   try {
     const entries = await readdir(targetDir, { withFileTypes: true })
     const results: { fileName: string; size: number; modifiedAt: string }[] = []
     for (const entry of entries) {
-      if (!entry.isFile() || entry.name.startsWith('.')) continue
+      if (!entry.isFile()) continue
       const stats = await stat(join(targetDir, entry.name)).catch(() => null)
       if (stats) {
         results.push({

@@ -13,7 +13,7 @@ import { readFile } from 'node:fs/promises'
 import { DrizzleQueryError } from 'drizzle-orm/errors'
 import { runMigrations } from '../db/migrate.js'
 import { sql } from '../db/client.js'
-import { holdSharedLockOrExit } from '../notes/maintenance-lock.js'
+import { holdInstanceLock, MaintenanceInProgressError, type InstanceLock } from '../notes/maintenance-lock.js'
 import {
   BackupInvalidError,
   RestoreRefusedError,
@@ -53,12 +53,14 @@ function describeError(err: unknown): string {
   return err instanceof Error && !(err instanceof DrizzleQueryError) ? err.message : 'a database query failed'
 }
 
-// A writing CLI holds the shared instance lock (ADR-003 §5.1): refused while store-export-legacy runs.
-const instanceLock = await holdSharedLockOrExit()
-await runMigrations()
+// Namespace preparation and note publication form one offline restore operation.
+// Dry runs remain read-only and may share the existing maintenance fence.
+let instanceLock: InstanceLock | undefined
 
 let exitCode = 0
 try {
+  instanceLock = await holdInstanceLock(dryRun ? 'shared' : 'exclusive')
+  await runMigrations()
   const plan = await restoreBackup(await readFile(path), { dryRun })
   if (plan.alreadyRestored) {
     console.log(`Archive: format ${plan.format}, sha256 ${plan.archive}`)
@@ -82,9 +84,9 @@ try {
   } else {
     console.error(`Restore failed: ${describeError(err)}`)
   }
-  exitCode = 1
+  exitCode = err instanceof MaintenanceInProgressError ? 2 : 1
 }
 
-await instanceLock.release()
+await instanceLock?.release()
 await sql.end()
 process.exit(exitCode)
