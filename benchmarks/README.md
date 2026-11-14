@@ -129,9 +129,7 @@ Every bench run is **three instances** (three `bench` jobs, three lab
 instances of the same build); `bench-gate` takes the per-metric median of
 the three and compares it with [`baseline.json`](baseline.json)
 (`.github/scripts/bench-gate.mjs`), and prints the delta table in the job
-summary: per suite the paired Elara ÷ grep token ratio and the questions that are not exact (id, outcome, tokens, first returned location). Gated: the Elara agent's `hit5`, `exact1`, `goldReachedRate` and `tokensToGold`, per suite,
-plus `goldReached` as a floor when every suite runs for a search, MCP or
-benchmark change (below).
+summary: per suite the paired Elara ÷ grep token ratio and the questions that are not exact (id, outcome, tokens, first returned location). Gated: the Elara agent's `hit5`, `exact1`, `goldReachedRate`, `tokensToGold` and `goldReached`, per suite.
 
 - **Regression** (red): `hit5`, `exact1` or `goldReachedRate` drops by more than
   1 question of the suite, or `tokensToGold` rises by more than 10 %. On a pull request the reference
@@ -152,17 +150,20 @@ benchmark change (below).
 - **Stale baseline** (red): the run differs from the PR's `baseline.json`
   by more than the tolerance in either direction (an improvement must be
   recorded in the same PR), or its fingerprint or index outcome differs.
-- **Golds lost** (red, `--require-golds`; the workflow passes it on PRs to
-  `dev` that touch `server/src/search/**`, `server/src/mcp/{response,read-targets,session-reads}.ts`, the
-  extraction path or the benchmark's premise inputs, where every suite
-  runs): a suite's `goldReached` is below the
-  base baseline's. No tolerance: a question whose gold stops being reached
-  is a lost answer, whatever hit@5 does. There is no override; the only
-  way past is a change of the suite fingerprint (questions, keywords,
-  config or harness), accepted with the `bench-suite-change` label, which
-  sets a new reference. All-suite instances take 80 to 175 minutes (two
-  timed out at the old 180-minute budget), hence the 225/240-minute
-  budgets.
+- **Golds lost** (red on every path, #1138): `goldReached` drops by any
+  amount, or a previously reached question becomes a miss or disappears,
+  even when the suite's aggregate improves. The gate checks actual combined
+  results against the base (the committed baseline without a PR base), and
+  **every changed baseline entry** against the base, including suites not
+  selected in this run. Fingerprint/harness changes and `GOLDS=false` do not
+  reset this evidence. Missing evidence or a count drop whose lost IDs cannot
+  be identified fails closed.
+  An owner exception uses `bench-baseline-lowered` plus a
+  `Bench-baseline-lowered: <reason>` naming **every exact qualified ID**,
+  for example `` `rea/Q18`, `vectorcraft/Q07`, `vectorcraft/Q08` ``.
+  Generic suite reasons, bare IDs and partial lists do not approve a loss.
+  Other metric guards still apply, and held-out ranking losses have no waiver.
+  `--require-golds` additionally requires every base suite to appear in the run.
 - **Missing instance** (red, at once): a `bench-results-<n>` artifact has
   no `results.json` (that instance failed, timed out or was cancelled). The
   gate stops before evaluating anything and names the artifact; the
@@ -176,6 +177,15 @@ suite.
 A reference recorded before a metric existed (`exact1`, `goldReachedRate`,
 #1058) does not judge it; the PR that first runs it records it, and from then on
 it is gated.
+
+The [#1138 audit](https://github.com/PIIIX-org/chapters/issues/1138) found
+[18430794](https://github.com/PIIIX-org/chapters/commit/18430794fde6837324924e4d075aaefd9bd31b09)
+recorded lost golds on rea/Q18 and vectorcraft/Q07/Q08, and
+[d409c47f](https://github.com/PIIIX-org/chapters/commit/d409c47f78b3b6f8eac855f4d44a12266d0a2307)
+lost context-mode/W3 despite a net gold gain. The historical cost approval
+did not name those losses. The owner's later Before/Now recheck must inspect
+those questions and retain all three instances and raw traces; this gate
+fix does not run or replace that measurement.
 
 ### The held-out suite and ranking changes (#1059)
 
@@ -203,6 +213,20 @@ would notice a change that memorises the other five. So:
 - **Rotation.** When `holdout` has been in use for three months it joins the
   tuned set and a new held-out corpus is added, so the held-out set stays unseen.
   `holdout` was added in November 2026; the next rotation is due in February 2027.
+
+For [#1127](https://github.com/PIIIX-org/chapters/issues/1127), the held-out
+reference comes from the existing unchanged-dev
+[run 42629452299](https://github.com/PIIIX-org/chapters/actions/runs/42629452299)
+at `12f4db3b4cfecf761930a229b6362ea41d63b612`, median of three instances.
+The paired [head run 42631905536](https://github.com/PIIIX-org/chapters/actions/runs/42631905536)
+has the same held-out accuracy: 20/20 golds, exact@1 0.35, hit@5 0.95.
+Both used harness `e64a4937640aabc8`, holdout fingerprint
+`403184d375ae50bf` and question/repository fingerprint `f170a3448a6cf5a4`;
+the refresh changes no harness or questions. The recorded commit and run
+remain those measured, not the baseline-update PR's head. The holdout mean
+tokens-to-gold changes from 4,136 to the measured 4,170; exact@1 rises from
+0.30 to 0.35 and golds stay at 20. The separate baseline refresh preserves
+the other five references and does not rerun either completed benchmark.
 
 ### Phase-3 exit criteria
 

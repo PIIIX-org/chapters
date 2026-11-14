@@ -659,9 +659,15 @@ six suites also run nightly, on every PR to `prod` and by hand
 (`.github/scripts/bench-gate.mjs`, base copy on PRs) fails when Elara's
 hit@5, exact@1 or gold-reached rate drops by more than one question of a
 suite (#1058) or its mean tokens-to-gold rises by more than 10 % against the **base** commit's
-`benchmarks/baseline.json`; with `--require-golds` (the all-suites path
-rule) when any suite's `goldReached` is below the base baseline's, with no
-tolerance; when the suite changed (questions, keywords, policy config or
+`benchmarks/baseline.json`; on **every path**, including `GOLDS=false` and
+harness changes, when `goldReached` drops or any previously reached question
+becomes a miss or disappears, both in combined results and any changed
+baseline entry (even outside the selected suites). Missing gold evidence
+fails closed. An owner exception needs `bench-baseline-lowered` and a
+`Bench-baseline-lowered: <reason>` naming every exact qualified
+`suite/question` ID; it cannot waive held-out ranking losses or other metric
+guards. `--require-golds` additionally requires every base suite to run.
+The gate also fails when the suite changed (questions, keywords, policy config or
 harness source) unless the PR has the label `bench-suite-change` and a
 `Bench-suite-change: <why>` line; when the PR's baseline is worse than
 the base's unless it has `bench-baseline-lowered` and a

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { Worker } from 'node:worker_threads'
 import { config } from '../config.js'
-import { recordJob } from '../monitoring/metrics.js'
+import { recordCacheLookup, recordJob } from '../monitoring/metrics.js'
 import type { EmbedBatchRequest, EmbedBatchResponse } from './embedding-worker.js'
 
 export const EMBEDDING_DIM = 384
@@ -233,6 +233,7 @@ export class QueryEmbeddingCache {
     const text = normalizeQueryText(query)
     const key = createHash('sha256').update(`${this.embedderId()}\n${accountId}\n${text}`).digest('hex')
     const hit = this.entries.get(key)
+    recordCacheLookup('query_embedding', hit !== undefined)
     if (hit) {
       // Most recently used last: Map iteration order is insertion order.
       this.entries.delete(key)
