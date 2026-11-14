@@ -241,9 +241,11 @@ async function processNote(noteId: string, jobSeq: number | undefined): Promise<
   // the block set so a refresh that fails after the commit runs again.
   const changed = toEmbed.length > 0 || [...kept.keys()].some((k) => !keys.includes(k))
   const newKeys = toEmbed.map((i) => keys[i]!)
+  // Exclude edits/deletes without blocking note_updates' foreign-key KEY SHARE lock (S3, #1126).
+  // This transaction changes only embedding metadata, never the note's key.
   const refreshJob = await db.transaction(async (tx) => {
     const [current] = (await tx.execute(sql`
-      SELECT seq FROM notes WHERE id = ${noteId} AND deleted_at IS NULL FOR UPDATE`)) as unknown as Array<{ seq: string }>
+      SELECT seq FROM notes WHERE id = ${noteId} AND deleted_at IS NULL FOR NO KEY UPDATE`)) as unknown as Array<{ seq: string }>
     if (!current || String(current.seq) !== String(row.seq)) return null
     await replaceBlockSet(tx, 'note', noteId, rows)
     // Only when they differ: an UPDATE of the row recomputes its generated `fts`.

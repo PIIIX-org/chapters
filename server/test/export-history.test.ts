@@ -238,9 +238,9 @@ describe('vault export/import keeps history (#499)', () => {
 
   it('an attachment named *.md stays an attachment, never a note', async () => {
     const zip = new AdmZip(await exportVault())
-    // `saveAsset` keeps any extension, so an uploaded readme.md travels as assets/readme-<ms>-<id>.md.
-    zip.addFile('assets/readme-1-abc123.md', Buffer.from('plain text, no frontmatter\n', 'utf8'))
-    zip.addFile('assets/typed-1-def456.md', Buffer.from('---\ntitle: looks like a note\n---\nbody\n', 'utf8'))
+    // Uploaded Markdown stays an attachment in the disjoint v2 archive namespace.
+    zip.addFile('.assets/readme-1-abc123.md', Buffer.from('plain text, no frontmatter\n', 'utf8'))
+    zip.addFile('.assets/typed-1-def456.md', Buffer.from('---\ntitle: looks like a note\n---\nbody\n', 'utf8'))
     const result = await importArchive(zip.toBuffer(), ownerCookie)
     expect(result.skipped).toEqual([])
     expect(result.imported).toBe(2)
@@ -268,21 +268,22 @@ describe('vault export/import keeps history (#499)', () => {
     expect(await ownedVaultCount()).toBe(vaultsBefore)
   })
 
-  it('an asset named "." is dropped instead of failing the import', async () => {
+  it('an asset named "." refuses the archive before creating a vault', async () => {
     const zip = new AdmZip(await exportVault())
-    // adm-zip normalizes `assets/.` away, so write a same-length name and patch its bytes.
-    zip.addFile('assets/~', Buffer.from('not a directory', 'utf8'))
-    const crafted = Buffer.from(zip.toBuffer().toString('latin1').replaceAll('assets/~', 'assets/.'), 'latin1')
-    expect(new AdmZip(crafted).getEntries().some((e) => e.entryName === 'assets/.')).toBe(true)
-    const result = await importArchive(crafted, ownerCookie)
-    expect(result.imported).toBe(2)
+    zip.addFile('.assets/~', Buffer.from('not a directory', 'utf8'))
+    const crafted = Buffer.from(zip.toBuffer().toString('latin1').replaceAll('.assets/~', '.assets/.'), 'latin1')
+    expect(new AdmZip(crafted).getEntries().some((e) => e.entryName === '.assets/.')).toBe(true)
+    const before = await ownedVaultCount()
+    const result = await postArchive(crafted, ownerCookie)
+    expect(result.statusCode, result.body).toBe(400)
+    expect(await ownedVaultCount()).toBe(before)
   })
 
   it('the manifest carries a format version and a newer one is refused', async () => {
     const zip = new AdmZip(await exportVault())
     const manifest: Record<string, unknown> = JSON.parse(zip.getEntry('manifest.json')!.getData().toString('utf8'))
-    expect(manifest.formatVersion).toBe(1)
-    zip.updateFile('manifest.json', Buffer.from(JSON.stringify({ ...manifest, formatVersion: 2 }), 'utf8'))
+    expect(manifest.formatVersion).toBe(2)
+    zip.updateFile('manifest.json', Buffer.from(JSON.stringify({ ...manifest, formatVersion: 3 }), 'utf8'))
     const vaultsBefore = await ownedVaultCount()
     const res = await postArchive(zip.toBuffer(), ownerCookie)
     expect(res.statusCode).toBe(400)
