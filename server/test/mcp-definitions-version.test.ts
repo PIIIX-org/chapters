@@ -67,4 +67,17 @@ describe('definitions version (#681)', () => {
     const after = await versions()
     for (const profile of ['reader', 'writer', 'admin'] as const) expect(after[profile], profile).not.toBe(before[profile])
   })
+
+  it('versions the full eligible discovery registry, including a long-tail tool absent from bootstrap tools/list', async () => {
+    // Static imports cannot exercise a changed registration in a fresh module.
+    vi.resetModules()
+    const beforeModule = await import('../src/mcp/server.js')
+    const before = await beforeModule.definitionsVersion('admin', true)
+    editDescription('registerTool', 'purge_note')
+    vi.resetModules()
+    const afterModule = await import('../src/mcp/server.js')
+    const after = await afterModule.definitionsVersion('admin', true)
+    expect(after).not.toBe(before)
+    expect(after).not.toBe(await afterModule.definitionsVersion('admin'))
+  })
 })

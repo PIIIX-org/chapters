@@ -2455,6 +2455,89 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   break the accepted wire contract. Errors remain text-only `isError`,
   not a successful result union. No default response size or budget is
   raised.
+- **Opt-in long-tail discovery (#431, ADR-004 D14 revisit).** The
+  measured control has 63 admin tools versus 15 writer tools; the 48
+  long-tail entries cost 25,063 characters on `be1581c5`, or 26,849
+  after #1132/#1135 schemas. These are definition bytes, not evidence of
+  provider cache hits or of how often an agent uses a tool. D14's
+  conditional deferral did not authorize breaking clients that load
+  callable functions only from `tools/list`.
+
+  A supporting custom loader opts in with **both** the version-1
+  experimental initialize capability `elara/tool-discovery` and
+  `Elara-Tool-Discovery: 1` on every HTTP POST. `routes.ts` builds a fresh
+  server per request; `server.ts` keeps no mutable token negotiation.
+  A second client using the same token without that header retains the
+  legacy catalog. Invalid header versions and a header-only initialize
+  fail. Reader/writer profiles and explicit allow-lists ignore discovery
+  and retain their exact tools; the nine-tool study allow-list stays
+  `search`, `find_symbols`, `read_file`, `browse_repository`,
+  `repository_status`, `graph`, `find_graph_path`, `grep`, `orient`.
+
+  Eligible opt-in admin connections list their reader/writer core plus
+  `tool_search`. It lexically returns bounded actual SDK descriptors
+  from the same registry, filtered by `listedTools` (capability, profile,
+  scope/allow-list and live pin permissions). A client installs those
+  returned schemas in its model's callable tool list. The subsequent
+  call uses standard `tools/call(originalName, arguments)` and the same
+  registry validation and handler, including output validation and error
+  envelopes. Discovery neither executes a generic payload nor widens a
+  token. The new `connection` scope covers registry metadata only.
+  Default clients still register the original catalog; the optional
+  metadata tool is absent unless negotiated.
+
+  The discovery definitions version hashes the full eligible registry,
+  including undisplayed long-tail descriptors, plus prompts/instructions.
+  Changing a long-tail schema must invalidate the negotiated catalog
+  fingerprint even when its bootstrap list does not mention that tool.
+  Both manual copies explain the loader requirement. SDK consumer
+  regressions cover shared-token/default isolation, strict discovered
+  calls, profiles/allow-lists, live pin permissions and bad negotiation.
+  Arbitrary LLM clients still need a descriptor loader; successful SDK
+  calls alone do not establish automatic model availability. The native
+  custom-loader proof below exercises that missing consumer step in a
+  separate fixture, outside the unchanged study allow-list. Independent
+  GPT review, fresh CI/lab and fingerprinted controls remain closure gates.
+  Actual HTTP SDK measurement on the repaired #1132/#1135 stack:
+  legacy admin **42,979 chars / 63 tools**, opted-in admin
+  **16,997 chars / 16 tools**, the same 443-character instructions.
+  The bootstrap descriptor costs 867 characters against the 26,849
+  long-tail bytes removed, for **25,982 fewer tools/list characters**
+  (about 6,496 tokens by the budget's estimate). This is a definition
+  payload comparison, not measured provider cache reuse.
+  Five new SDK cases plus the hidden-long-tail definition-version case
+  passed across scoped runs. The first pinned-fixture run assumed HTTP
+  201 for an API that returns 200; correcting that fixture expectation
+  allowed the live permission checks to execute and pass. No production
+  refusal or permission condition was relaxed, and no passing full batch
+  was rerun to print green.
+
+  **One actual native consumer proof (2026-11-13).** Combined source
+  `d5c1a125` (repaired cache `72961238`, #1135, #1136 and discovery)
+  used frozen native adapter `043123fe`, coordinator-declared harness
+  `9d8ab373f94362d3`, and recorded hashes of the actual imported files.
+  `openai-codex/gpt-6.1-sol` over ChatGPT/omp RPC completed one episode:
+  **answered, 5 turns, 5 actual MCP calls, 24,767 input / 415 output
+  tokens, tokensEstimated=false**. Its calls were `tool_search`,
+  `tool_search`, `note_history`, `tool_search`, `get_revision`; the
+  model returned the unpredictable code from the earliest revision,
+  absent from the current note and the prompt. The loader appended
+  actual returned Tool descriptors to the same mutable model toolset
+  and dispatched each original name through the same SDK client.
+  No commentary JSON was extracted for execution and no result was
+  fabricated. Raw phases/events, actual MCP requests/results, fixture
+  source, schemas, source hashes, provider provenance and original usage
+  remain in `.proof/431-native-discovery/f40a1621-d0d8-4871-9f33-561a8b0f341b/`.
+  Reported cache-read/write counters were zero in all turns; no cache-hit
+  inference follows. The observed calls left 46 long-tail descriptors unused (24,842
+  serialized definition characters); this is inventory cost relative
+  to that task, not a separately run legacy-provider comparison.
+  The combined SDK inventories measured 42,997 legacy / 17,015
+  opt-in characters (the same 25,982-character reduction). This single
+  feature-mechanics episode does not substitute for the five-run
+  baseline, pool with parent T1, or close phase-3/issue gates.
+  The owned fixture DB, server, temporary test and test cache were
+  removed; raw evidence stays for independent review.
 - **Instructions** (#435): `instructionsFor(profile)` in
   `mcp/instructions.ts` is the `initialize` result's `instructions`
   (`new McpServer(info, {instructions})` in `buildServer`): one constant

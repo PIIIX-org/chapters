@@ -143,6 +143,7 @@ import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
 import { cacheCaller, cacheKey, readEpochs, type CacheResources } from '../cache/key.js'
 import { cachedSearch } from '../cache/search.js'
+import { TOOL_DISCOVERY_CAPABILITY, TOOL_DISCOVERY_VERSION, TOOL_SEARCH_RESULT_SCHEMA, discoverTools } from './tool-discovery.js'
 import { RESULT_GREP_ARG, RESULT_TOOLS, resultHandle } from './result-handle.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
@@ -222,6 +223,7 @@ type ResourceSet = { vaultIds: string[]; repositoryIds: string[] }
  * registration, and `tool()` resolves it before the handler runs, so a
  * handler never sees an id outside the pin. What the handler receives:
  * - `account`: account-scoped connections only.
+ * - `connection`: metadata about this connection's eligible tool registry; no resource id.
  * - `vault` / `repository`: the vault (repository) the call addresses, under
  *   `vaultFor` (`repositoryFor`): a pinned connection gets its pin, another
  *   id is refused, an account-scoped connection must name one.
@@ -234,6 +236,7 @@ type ResourceSet = { vaultIds: string[]; repositoryIds: string[] }
  */
 interface ScopeTargets {
   account: Record<string, never>
+  connection: Record<string, never>
   vault: { vaultId: string }
   'vault-or-account': { vaultId: string | null }
   repository: { repositoryId: string }
@@ -264,14 +267,15 @@ export const ACCESS_RANK: Record<ToolCapability, number> = { read: 0, write: 1, 
 const REACHABLE_SCOPES: Record<McpAuth['connection']['scope'], Partial<Record<ToolScope, true>>> = {
   account: {
     account: true,
+    connection: true,
     vault: true,
     'vault-or-account': true,
     repository: true,
     'repository-or-account': true,
     'vault-or-repo': true,
   },
-  vault: { vault: true, 'vault-or-account': true, 'vault-or-repo': true },
-  repository: { repository: true, 'repository-or-account': true, 'vault-or-repo': true },
+  vault: { connection: true, vault: true, 'vault-or-account': true, 'vault-or-repo': true },
+  repository: { connection: true, repository: true, 'repository-or-account': true, 'vault-or-repo': true },
 }
 
 /**
@@ -430,8 +434,8 @@ const BACKLINK_LADDER: Ladder<Backlink> = {
  * MCP clients must treat it as untrusted per the spec's prompt-injection
  * stance; the server does not sanitize it.
  */
-export function buildMcpServer(auth: McpAuth): McpServer {
-  return buildServer(auth).server
+export function buildMcpServer(auth: McpAuth, toolDiscovery = false): McpServer {
+  return buildServer(auth, toolDiscovery).server
 }
 
 // Building the server reads only these fields and touches no database.
@@ -448,7 +452,7 @@ export function listMcpTools(): readonly McpToolInfo[] {
 }
 
 const SERVER_VERSION = '0.2.0'
-const definitionsVersions = new Map<ToolProfile, Promise<string>>()
+const definitionsVersions = new Map<string, Promise<string>>()
 
 /**
  * A profile's definitions version (#681): `0.2.0+` and the first 16 hex of
@@ -458,17 +462,18 @@ const definitionsVersions = new Map<ToolProfile, Promise<string>>()
  * answers it as `serverInfo.version`, which no list or instruction text
  * carries, so it costs the reader budget nothing.
  */
-export function definitionsVersion(profile: ToolProfile): Promise<string> {
-  let version = definitionsVersions.get(profile)
+export function definitionsVersion(profile: ToolProfile, toolDiscovery = false): Promise<string> {
+  const key = `${profile}:${toolDiscovery ? 'discovery-v1' : 'full'}`
+  let version = definitionsVersions.get(key)
   if (!version) {
-    version = hashDefinitions(profile)
-    definitionsVersions.set(profile, version)
+    version = hashDefinitions(profile, toolDiscovery)
+    definitionsVersions.set(key, version)
   }
   return version
 }
 
-async function hashDefinitions(profile: ToolProfile): Promise<string> {
-  const { server } = buildServer({ ...CATALOG_AUTH, connection: { ...CATALOG_AUTH.connection, profile } })
+async function hashDefinitions(profile: ToolProfile, toolDiscovery: boolean): Promise<string> {
+  const { server, registeredTools } = buildServer({ ...CATALOG_AUTH, connection: { ...CATALOG_AUTH.connection, profile } }, toolDiscovery)
   // The list handlers as a request calls them (`_requestHandlers` is private in the SDK's types).
   const handlers: Map<string, (request: unknown, extra: unknown) => Promise<unknown>> = server.server['_requestHandlers']
   const listed = async (method: string): Promise<string> => {
@@ -476,7 +481,7 @@ async function hashDefinitions(profile: ToolProfile): Promise<string> {
     return handler ? JSON.stringify(await handler({ method, params: {} }, {})) : ''
   }
   const hash = createHash('sha256')
-    .update(await listed('tools/list'))
+    .update(toolDiscovery ? JSON.stringify({ tools: await registeredTools() }) : await listed('tools/list'))
     .update('\0')
     .update(await listed('prompts/list'))
     .update('\0')
@@ -485,10 +490,14 @@ async function hashDefinitions(profile: ToolProfile): Promise<string> {
   return `${SERVER_VERSION}+${hash.slice(0, 16)}`
 }
 
-function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] } {
+function buildServer(auth: McpAuth, toolDiscovery = false): { server: McpServer; tools: McpToolInfo[]; registeredTools: () => Promise<Tool[]> } {
   const serverInfo = { name: 'elara', version: SERVER_VERSION }
   const server = new McpServer(serverInfo, { instructions: instructionsFor(auth.connection.profile) })
   const actor: Actor = { type: 'mcp', id: auth.connection.id }
+  // Stateless HTTP negotiates this per request. Never mutate token/client state.
+  // Explicit allow-lists and legacy profiles keep their original inventory.
+  const discovery = toolDiscovery && auth.connection.profile === 'admin' && auth.connection.allowedTools === null
+  if (discovery) server.server.registerCapabilities({ experimental: { [TOOL_DISCOVERY_CAPABILITY]: { version: 1 } } })
   // Who editors see in "In this note now" (#481): the connection's label only.
   const presence = { key: auth.connection.id, name: auth.connection.name }
   const tools: McpToolInfo[] = []
@@ -518,6 +527,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   // says why. resources/list advertises the manuals of those tools. The SDK
   // sets its list handlers on the first registration, through here.
   const hiddenTools = new Set<string>()
+  const bootstrapTools = new Set<string>()
+  let registryTools: () => Promise<Tool[]>
   const pinPermissionOf = new Map<string, PinPermission>()
   const manualOf = new Map<string, ToolManual>()
   /** Each tool's strict input schema, to read the issues of arguments the SDK refused. */
@@ -534,17 +545,21 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   // own handler reads `serverInfo` when it answers (`_oninitialize` is
   // private in its types).
   setRequestHandler(InitializeRequestSchema, async (request: InitializeRequest) => {
-    serverInfo.version = await definitionsVersion(auth.connection.profile)
+    if (discovery && !TOOL_DISCOVERY_VERSION.safeParse(request.params.capabilities.experimental?.[TOOL_DISCOVERY_CAPABILITY]).success) {
+      throw new McpError(ErrorCode.InvalidParams, 'Elara-Tool-Discovery: 1 requires initialize capability elara/tool-discovery version 1 and a descriptor-loading client')
+    }
+    serverInfo.version = await definitionsVersion(auth.connection.profile, discovery)
     return server.server['_oninitialize'](request)
   })
   server.server.setRequestHandler = (schema: unknown, handler: (...args: never[]) => unknown): void => {
     if (schema === ListToolsRequestSchema) {
       // This is the SDK's own tools/list handler: it lists every registered, enabled tool.
       const listAll = handler as (...args: unknown[]) => ListToolsResult | Promise<ListToolsResult>
+      registryTools = async () => (await listAll()).tools.map(withoutDefaults)
       return setRequestHandler(schema, async (...args: unknown[]) => {
         const listed = await listAll(...args)
         const names = await listedTools()
-        return { ...listed, tools: listed.tools.filter((t) => names.has(t.name)).map(withoutDefaults) }
+        return { ...listed, tools: listed.tools.filter((t) => names.has(t.name) && (!discovery || bootstrapTools.has(t.name))).map(withoutDefaults) }
       })
     }
     if (schema === ListResourcesRequestSchema) {
@@ -785,6 +800,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
   }
 
   const scopeResolvers: ScopeResolvers = {
+    connection: async () => ({}),
     account: async (name) => {
       requireAccountScope(name)
       return {}
@@ -906,6 +922,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     })
     const pinPermission = def.pinPermission ?? 'read'
     const profile = def.profile ?? 'admin'
+    if (profile !== 'admin' || name === 'tool_search') bootstrapTools.add(name)
     const annotations = toolAnnotations(name, def)
     tools.push({ name, scope: def.scope, capability: def.capability, pinPermission, profile, annotations })
     if (!callable(name, def.scope, def.capability, profile)) hiddenTools.add(name)
@@ -3594,6 +3611,27 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
     },
   )
 
+  if (discovery) {
+    tool(
+      'tool_search',
+      {
+        scope: 'connection',
+        capability: 'read',
+        description: 'Find eligible long-tail tool schemas; install returned descriptors, then call their original names. Requires negotiated descriptor loading.',
+        inputSchema: {
+          query: z.string().refine((value) => value.trim().length > 0 && value.length <= 200, { error: 'query is 1 to 200 characters' }).describe('Tool name or operation words'),
+          limit: intRange('limit', 1, 5).optional().describe('Max descriptors; default 3'),
+        },
+        outputSchema: TOOL_SEARCH_RESULT_SCHEMA,
+      },
+      async ({ query, limit = 3 }: { query: string; limit?: number }) => {
+        const eligible = await listedTools()
+        const descriptors = (await registryTools()).filter((entry) => eligible.has(entry.name) && !bootstrapTools.has(entry.name))
+        return discoverTools(descriptors, query, limit)
+      },
+    )
+  }
+
   // The tool manuals (#429): the conventions, and one per tool family with
   // the entries of the tools this connection lists (`manualText`, built only
   // when read). A manual without one of its tools is neither listed nor
@@ -3635,5 +3673,12 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       (['tools', 'resources', 'prompts'] as const).filter((key) => registered[key]).map((key) => [key, { listChanged: false }]),
     ),
   )
-  return { server, tools }
+  return {
+    server,
+    tools,
+    registeredTools: async () => {
+      const eligible = await listedTools()
+      return (await registryTools()).filter((entry) => eligible.has(entry.name))
+    },
+  }
 }
