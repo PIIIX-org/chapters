@@ -18,7 +18,7 @@ import {
   type VaultManifest,
 } from './archive.js'
 import { executeBackup, getBackupStatus } from './backup-service.js'
-import { ArchiveFormatError, importVaultContent, readArchiveHistory, type ArchiveHistory } from './vault-history.js'
+import { ArchiveFormatError, importVaultContent, readArchiveHistory, validateVaultArchive, type ArchiveHistory } from './vault-history.js'
 
 const LINK_TTL_MS = Number(process.env.EXPORT_LINK_TTL_HOURS ?? 24) * 60 * 60 * 1000
 
@@ -277,6 +277,7 @@ export function exportRoutes(app: FastifyInstance) {
         let zip: AdmZip
         try {
           zip = new AdmZip(buffer)
+          zip.getEntries() // adm-zip validates duplicate central-directory names lazily.
         } catch {
           return reply.code(400).send({ error: 'not a valid zip archive' })
         }
@@ -285,7 +286,7 @@ export function exportRoutes(app: FastifyInstance) {
         const manifest = JSON.parse(manifestEntry.getData().toString('utf8')) as Partial<VaultManifest>
         if (
           manifest.formatVersion !== undefined &&
-          !(Number.isInteger(manifest.formatVersion) && manifest.formatVersion <= VAULT_ARCHIVE_FORMAT_VERSION)
+          !(Number.isInteger(manifest.formatVersion) && manifest.formatVersion >= 0 && manifest.formatVersion <= VAULT_ARCHIVE_FORMAT_VERSION)
         ) {
           return reply.code(400).send({
             error: `unsupported archive format version ${JSON.stringify(manifest.formatVersion)} (this server reads up to ${VAULT_ARCHIVE_FORMAT_VERSION})`,
@@ -295,6 +296,7 @@ export function exportRoutes(app: FastifyInstance) {
         let history: ArchiveHistory
         try {
           history = readArchiveHistory(zip)
+          validateVaultArchive(zip, manifest.formatVersion ?? 0, history)
         } catch (err) {
           if (err instanceof ArchiveFormatError) return reply.code(400).send({ error: err.message })
           throw err
@@ -316,6 +318,7 @@ export function exportRoutes(app: FastifyInstance) {
           typeof manifest.vaultId === 'string' ? manifest.vaultId : undefined,
           { id: req.user!.id, email: req.user!.email },
           history,
+          manifest.formatVersion ?? 0,
         )
 
         const shares = await importManifestShares(
