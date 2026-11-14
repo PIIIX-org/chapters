@@ -18,7 +18,7 @@ export function searchRoutes(app: FastifyInstance) {
         req.query.q,
         req.query.limit,
         parseSearchFilters(req.query),
-        { includeSymbols: req.query.symbols, accountId: req.user!.id },
+        { includeSymbols: req.query.symbols, accountId: req.user!.id, route: req.query.route },
       )
     },
   )
@@ -44,7 +44,7 @@ export function searchRoutes(app: FastifyInstance) {
         req.query.q,
         req.query.limit,
         parseSearchFilters(req.query),
-        { includeSymbols: req.query.symbols, accountId: req.user!.id },
+        { includeSymbols: req.query.symbols, accountId: req.user!.id, route: req.query.route },
       )
     },
   )

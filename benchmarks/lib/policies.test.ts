@@ -366,3 +366,18 @@ test('elara: a routed answer that lists several exact answers abstains from nami
   assert.equal(run.abstained, true)
   assert.equal(run.route, 'identifier')
 })
+
+test('elara records structural answers and conceptual fallbacks without relabelling a miss', async () => {
+  for (const head of [{ route: 'structural' }, { route: 'conceptual', attempted_route: 'identifier', retrieval_mode: 'fallback' }]) {
+    const tools: ElaraTools = {
+      ...fakeElara([], []),
+      async search() {
+        return { text: JSON.stringify({ status: 'no_match', ...head, results: [] }), ms: 1, ok: true }
+      },
+    }
+    const run = await runElara('q', [{ path: 'a', start: 1, end: 1 }], tools)
+    assert.equal(run.route, head.route)
+    assert.equal(run.attemptedRoute, Reflect.get(head, 'attempted_route'))
+    assert.equal(run.abstained, true)
+  }
+})

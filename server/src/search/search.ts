@@ -1,5 +1,6 @@
 import { locateHits } from './locate.js'
-import { routeQuery } from './router.js'
+import { classifyQuery, routeQuery, type SearchRoute } from './router.js'
+import type { StructuralSite } from './structural.js'
 import { sql, type SQL } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { config } from '../config.js'
@@ -289,7 +290,7 @@ function commonClauses(filters: SearchFilters, updatedAt: SQL, path: SQL): SQL[]
 type LegFilter = SQL[] | null
 
 /** Over `notes`. */
-function noteFilter(filters: SearchFilters): LegFilter {
+export function noteFilter(filters: SearchFilters): LegFilter {
   if (given(filters.languages) || given(filters.kinds)) return null
   const clauses: SQL[] = []
   if (given(filters.types)) clauses.push(sql`AND notes.type = ANY(${textArray(filters.types)})`)
@@ -301,7 +302,7 @@ function noteFilter(filters: SearchFilters): LegFilter {
 }
 
 /** Over repository file `f`. */
-function fileFilter(filters: SearchFilters): LegFilter {
+export function fileFilter(filters: SearchFilters): LegFilter {
   if (given(filters.tags) || given(filters.kinds)) return null
   const clauses: SQL[] = []
   if (given(filters.types)) clauses.push(sql`AND f.language = ANY(${textArray(filters.types)})`)
@@ -310,7 +311,7 @@ function fileFilter(filters: SearchFilters): LegFilter {
 }
 
 /** Over symbol block `b` of repository file `f`. */
-function symbolFilter(filters: SearchFilters): LegFilter {
+export function symbolFilter(filters: SearchFilters): LegFilter {
   if (given(filters.tags)) return null
   const clauses: SQL[] = []
   if (given(filters.types)) clauses.push(sql`AND b.symbol_kind = ANY(${textArray(filters.types)})`)
@@ -329,6 +330,13 @@ export type ResourceType = 'note' | 'code' | 'symbol'
 export interface SearchResourceSet {
   vaultIds: string[]
   repositoryIds: string[]
+}
+
+export interface SearchOutlineEntry {
+  name: string
+  kind: string
+  startLine: number
+  endLine: number
 }
 
 export interface SearchResult {
@@ -358,6 +366,8 @@ export interface SearchResult {
   score: number
   /** The UTC day (`YYYY-MM-DD`) of the last change: the note's, the code file's (its last sync that changed it), a symbol's file's (#446). */
   updated: string
+  outline?: { truncated: boolean } & ({ symbols: SearchOutlineEntry[] } | { headings: SearchOutlineEntry[] })
+  edge?: { kind: string; confidence: 'resolved'; symbol: string | null; col: number }
 }
 
 export interface SymbolSearchResult {
@@ -379,8 +389,8 @@ export interface SearchNotesOptions {
   includeSymbols?: boolean
   /** The asking account: its repeated queries come from the query-embedding cache (#684). Without it nothing is cached. */
   accountId?: string
-  /** False: take the hybrid path whatever the query is (#1060). The tests of the legs use it; MCP and REST do not offer it yet. */
-  route?: boolean
+  /** Optional deterministic route; conceptual bypasses lookup. False is internal hybrid-only retrieval. */
+  route?: SearchRoute | false
 }
 
 /**
@@ -407,7 +417,7 @@ export interface SearchNotesOptions {
  */
 export type SearchStatus = 'ok' | 'no_match' | 'index_building' | 'unavailable'
 /** `exact`: a routed query answered by lookup, no channel ran (#1060). */
-export type RetrievalMode = 'hybrid' | 'keyword_only' | 'vector_only' | 'none' | 'exact'
+export type RetrievalMode = 'hybrid' | 'keyword_only' | 'vector_only' | 'none' | 'exact' | 'fallback'
 export type Degraded = false | { reason: 'embedder_failed' | 'vector_leg_failed' | 'keyword_leg_failed' }
 export interface IndexState {
   pending_notes: number
@@ -420,8 +430,12 @@ export interface SearchResponse<H> {
   retrieval_mode: RetrievalMode
   degraded: Degraded
   index?: IndexState
-  /** Present only when the query was routed (#1060): `identifier` or `path`; a conceptual query names none. */
-  route?: 'identifier' | 'path'
+  /** Actual route; a missed lookup is conceptual with an explicit attempted route. */
+  route?: SearchRoute
+  attempted_route?: Exclude<SearchRoute, 'conceptual'>
+  underlying_retrieval_mode?: Exclude<RetrievalMode, 'fallback'>
+  textual?: StructuralSite[]
+  partial?: true
   /** 1: the routed lookup found one exact answer. */
   confidence?: 1
   /** The routed lookup found several exact answers, all listed. */
@@ -1162,21 +1176,26 @@ export async function searchNotes(
   options: SearchNotesOptions = {},
 ): Promise<SearchResponse<SearchResult>> {
   const { vaultIds, repositoryIds } = resources
-  if ((vaultIds.length === 0 && repositoryIds.length === 0) || query.trim() === '') return { ...NOTHING, results: [] }
+  const filtered = Object.values(filters).some((value) => Array.isArray(value) ? value.length > 0 : value !== undefined && value !== '')
+  const automatic = classifyQuery(query)
+  const route = options.route === false ? 'conceptual' : options.route ?? (filtered || (automatic === 'identifier' && (!options.includeSymbols || repositoryIds.length === 0)) ? 'conceptual' : automatic)
+  if ((vaultIds.length === 0 && repositoryIds.length === 0) || query.trim() === '') return { ...NOTHING, route: 'conceptual', ...(route !== 'conceptual' ? { attempted_route: route } : {}), results: [] }
 
   const includeSymbols = options.includeSymbols ?? false
   const symbolRepos = includeSymbols ? repositoryIds : []
   const state = indexState(vaultIds, repositoryIds)
   const [notes, files, symbols] = [noteFilter(filters), fileFilter(filters), symbolFilter(filters)]
-  // An identifier or a path asked for by itself is answered by lookup (#1060); a filter would narrow a list the lookup does not have.
-  if (options.route !== false && notes?.length === 0 && files?.length === 0 && symbols?.length === 0) {
-    const routed = await routeQuery(resources, query, includeSymbols)
-    if (routed) {
+  let fallback: Exclude<SearchRoute, 'conceptual'> | undefined
+  if (route !== 'conceptual') {
+    const routed = await routeQuery(resources, query, includeSymbols, route, filters, options.route === undefined)
+    if (routed && 'fallback' in routed) fallback = routed.route
+    else if (routed) {
       const { results, ...answer } = routed
       // A symbol in a file still awaiting extraction is reported with the index block, as any answer is.
-      const index = (await state)?.index
+      const indexed = await state
+      const index = indexed?.index
       const pending = index ? index.pending_notes + index.pending_files + index.pending_repositories : 0
-      return { status: 'ok', retrieval_mode: 'exact', degraded: false, ...(index && (pending > 0 || index.failed > 0) ? { index } : {}), ...answer, results: results.slice(0, limit) }
+      return { status: results.length > 0 ? 'ok' : pending > 0 ? 'index_building' : index && index.failed > 0 && index.failed === indexed?.items ? 'unavailable' : 'no_match', retrieval_mode: 'exact', degraded: false, ...(index && (pending > 0 || index.failed > 0) ? { index } : {}), ...answer, ...(results.length > limit ? { partial: true } : {}), results: results.slice(0, limit) }
     }
   }
   const vec = await queryVector(query, options.accountId)
@@ -1290,5 +1309,6 @@ export async function searchNotes(
   const results = [...groups.values()].flat().slice(0, limit)
   observeSearchLeg('fusion', performance.now() - fusionStarted)
   await locateHits(results, query, vectorBlocks, vec ?? undefined)
-  return respond(results, vec !== null, keyword, vector, await state)
+  const response = respond(results, vec !== null, keyword, vector, await state)
+  return { ...response, route: 'conceptual', ...(fallback !== undefined ? { attempted_route: fallback, retrieval_mode: 'fallback', underlying_retrieval_mode: response.retrieval_mode as Exclude<RetrievalMode, 'fallback'> } : {}) }
 }

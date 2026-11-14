@@ -1,6 +1,8 @@
 import { apiFetch } from '../lib/api.js'
 import type { GraphFilters } from '../api/graph.js'
 
+export type SearchRoute = 'identifier' | 'path' | 'structural' | 'conceptual'
+
 export interface SearchResult {
   resourceType: 'note' | 'code' | 'symbol'
   id: string
@@ -16,6 +18,8 @@ export interface SearchResult {
   block?: string
   snippet: string
   score: number
+  outline?: { truncated: boolean } & ({ symbols: Array<{ name: string; kind: string; startLine: number; endLine: number }> } | { headings: Array<{ name: string; kind: string; startLine: number; endLine: number }> })
+  edge?: { kind: string; confidence: 'resolved'; symbol: string | null; col: number }
 }
 
 /**
@@ -27,9 +31,13 @@ export interface SearchResult {
  */
 export interface SearchResponse {
   status: 'ok' | 'no_match' | 'index_building' | 'unavailable'
-  retrieval_mode: 'hybrid' | 'keyword_only' | 'vector_only' | 'none' | 'exact'
-  /** Present when the query was answered by lookup (#1060): an identifier or a path. */
-  route?: 'identifier' | 'path'
+  retrieval_mode: 'hybrid' | 'keyword_only' | 'vector_only' | 'none' | 'exact' | 'fallback'
+  /** Actual route; a missed lookup stays conceptual. */
+  route?: SearchRoute
+  attempted_route?: Exclude<SearchRoute, 'conceptual'>
+  underlying_retrieval_mode?: 'hybrid' | 'keyword_only' | 'vector_only' | 'none'
+  textual?: Array<{ repositoryId: string; path: string; line: number | null; col: number; kind: string; confidence: 'textual'; symbol: string | null; context: string }>
+  partial?: true
   confidence?: 1
   ambiguous?: true
   degraded: false | { reason: 'embedder_failed' | 'vector_leg_failed' | 'keyword_leg_failed' }
@@ -39,13 +47,14 @@ export interface SearchResponse {
 
 export function search(
   query: string,
-  opts?: { limit?: number; vaultId?: string | null; filters?: GraphFilters; symbols?: boolean },
+  opts?: { limit?: number; vaultId?: string | null; filters?: GraphFilters; symbols?: boolean; route?: SearchRoute },
 ): Promise<SearchResponse> {
   const path = opts?.vaultId ? `/vaults/${opts.vaultId}/search` : '/search'
   const filters = opts?.filters
 
   const parts = [`q=${encodeURIComponent(query)}`, `limit=${opts?.limit ?? 20}`]
   if (opts?.symbols) parts.push('symbols=true')
+  if (opts?.route) parts.push(`route=${opts.route}`)
   if (filters?.types?.length) parts.push(`types=${filters.types.join(',')}`)
   if (filters?.tags?.length) parts.push(`tags=${filters.tags.join(',')}`)
   if (filters?.since) parts.push(`since=${filters.since}`)

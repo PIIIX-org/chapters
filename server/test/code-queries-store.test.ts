@@ -7,7 +7,7 @@ import { db } from '../src/db/client.js'
 import { repositories } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { codeSites, findDefinitions, impact, SITE_KINDS, symbolAt, IMPACT_LEVEL_ROWS, type Definition } from '../src/repositories/code-queries.js'
+import { codeSites, findDefinitions, impact, SITE_KINDS, symbolAt, IMPACT_LEVEL_ROWS, type Definition, type CodeSite } from '../src/repositories/code-queries.js'
 import { createActiveUser } from './helpers.js'
 import { FIXTURE } from './code-queries-fixture.js'
 
@@ -30,7 +30,7 @@ const one = async (name: string, path?: string): Promise<Definition> => {
   expect(found, `${name} names one definition`).toHaveLength(1)
   return found[0]!
 }
-const shown = (sites: Array<{ path: string; line: number; symbol: string | null; kind: string; confidence: string }>) =>
+const shown = (sites: Array<Pick<CodeSite, 'path' | 'line' | 'symbol' | 'kind' | 'confidence'>>) =>
   sites.map((s) => `${s.path}:${s.line} ${s.symbol ?? '-'} ${s.kind} ${s.confidence}`)
 
 describe('definitions (#470)', () => {

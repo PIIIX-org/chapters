@@ -1573,18 +1573,23 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **No frontmatter in MCP hits** (#419): the MCP `search` handler drops `frontmatter` from every hit (it was
     42 % of a typical note hit's characters, measured in `mcp-search-hits.test.ts`: 665 to 387); `searchNotes` and
     the REST routes still return it, the client's search overlay shows its tags.
-  - **Query router** (#1060, `router.ts`): before the legs run, `searchNotes` asks `routeQuery` whether the query is
-    one identifier or one path (only without filters, with symbols for an identifier, at most 6 words). The term is
-    the one backticked token, or the one word left once the filler (`where is the ... defined`) is dropped. A path
-    term (a `/` or a file extension) finds repository files by path or file name and notes by path (with or
-    without `.md`); otherwise the symbol blocks whose bare name or `Class.name` equals the term in any spelling
-    `identifiers.ts` knows. Found: `route`, `retrieval_mode: "exact"`, hits (a symbol's lines, a file with
-    lines 1..end), `confidence: 1` for one, `ambiguous: true` for
-    several (at most 10), nothing fuzzy. Not found, or not routable: the hybrid path, byte-identical to before,
-    and no `route` in the answer. The issue's `retrieval_mode: "fallback"` is not used: it would lose which
-    channels answered; an unrouted answer says nothing instead. The structural route (callers, references) and
-    the MCP `route` override argument are not built: the first needs #1055, the second has no room in the reader
-    budget. `SearchNotesOptions.route: false` takes the hybrid path in tests.
+  - **Query router** (#1060, `router.ts`, `structural.ts`): deterministic exact names/paths and anchored
+    `who calls`, `callers of`, `what imports`, `references to`, `tests for`, `defined in` questions run before
+    retrieval. REST and MCP accept `route: identifier|path|structural|conceptual`; omitted means automatic.
+    `conceptual` bypasses lookup and preserves hybrid results and channel/degraded/index metadata. Automatic
+    filtered searches stay conceptual; explicit routes apply the same filters within the authorized scope.
+    Identifier lookup returns one span with `confidence: 1`, or exact candidates labelled by file/kind with
+    `ambiguous: true`, no fuzzy hits. Paths return the file/note with a bounded outline and its truncation.
+    Automatic dotted shapes try indexed paths before exact symbols; explicit overrides never switch routes.
+    Structural answers use existing code queries; resolved sites alone enter `results`, textual sites are
+    separate `textual` rows. Whole-file imports include modules without symbols. Ambiguous targets are shown
+    rather than guessed. Work and responses are bounded; `partial` reports omitted sites/results.
+    Every search names its actual `route`. Bare words/typos without an exact indexed symbol stay conceptual,
+    preserving the original retrieval mode; probing them does not itself classify them as identifiers.
+    Definition/backtick, path/structural, and forced-route misses, plus over-cap lookups, use `route: conceptual`, `attempted_route`,
+    `retrieval_mode: fallback`, and `underlying_retrieval_mode` retaining actual channels. No miss counts as an
+    exact success. Benchmarks count all four routes
+    and attempted-route fallbacks separately. No server LLM or ranking/confidence expansion is involved.
   - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
     merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a
     fixed window of `CANDIDATES = 30` rows per leg (the population the
