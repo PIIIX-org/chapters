@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises'
-import v8 from 'node:v8'
+import { extractInChild } from './extraction-child.js'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { Parser, Language, Query, Tree, type Node, type QueryMatch } from 'web-tree-sitter'
@@ -91,6 +91,8 @@ export interface ExtractionResult {
   symbols: ExtractedSymbol[]
   /** Calls, references and imported names (#469), in no particular order. */
   sites: ExtractedSite[]
+  /** Why the file got no symbols or imports although its language is parsed (the Swift child timed out or died); unset otherwise. Not a result to cache. */
+  skipped?: string
 }
 
 type SupportedLanguage = 'typescript' | 'javascript' | 'python' | 'go' | NewLanguage
@@ -106,8 +108,8 @@ const wasmPath = (pkg: string, file: string): string =>
 
 interface GrammarConfig {
   wasm: string | URL
-  /** Compile the grammar once, without V8's optimising tier (see `loadBaselineWasm`): for a grammar whose large functions cost gigabytes of RSS under TurboFan. */
-  baselineWasm?: boolean
+  /** Parsed in a child process started with fixed V8 flags, under a deadline (extraction-child.ts): for a grammar too costly in memory to load in the server process. */
+  isolated?: boolean
   /** `@src` captures; none: the language's imports name no file (C# `using`). */
   importQuery?: string
   /** The specifiers of an `@src` node whose text is not just one (a Rust `use` tree, a Java `import`); none: not an import of a file. */
@@ -361,7 +363,7 @@ function symbolOf(match: QueryMatch, config: GrammarConfig): ExtractedSymbol | n
 }
 
 let initPromise: Promise<void> | null = null
-const languageCache = new Map<Grammar, Promise<Language>>()
+const languageCache = new Map<Grammar, Language>()
 /** Each grammar's one query, compiled the first time a file needs it. */
 const queryCache = new Map<Grammar, Query>()
 
@@ -376,46 +378,28 @@ function grammarQuery(lang: Language, grammar: Grammar): Query {
   return query
 }
 
-/**
- * V8 compiles a Wasm module with its Liftoff baseline compiler and later re-compiles hot
- * functions with TurboFan. The Swift grammar's lexer is one 340 KB function, and that tier-up
- * took 1.3 to 1.9 GB of resident memory in the server process (macOS arm64, Node 24) against
- * 80 to 220 MB for the same parses on Liftoff alone, a 1 MB file included, at the same speed
- * (#988). A grammar with `baselineWasm` therefore loads and parses with both tier-up flags off.
- * V8 reads them when it compiles and when it tiers up, so they are switched off around the
- * `Language.load` and each `parse` of that grammar only, and back on after, leaving other
- * Wasm at V8's defaults. NODE_OPTIONS does not accept these flags, so the process cannot be
- * started with them without also applying them to every other module.
- */
-let baselineDepth = 0
-function enterBaseline(): void {
-  if (baselineDepth++ > 0) return
-  v8.setFlagsFromString('--no-wasm-tier-up')
-  v8.setFlagsFromString('--no-wasm-dynamic-tiering')
-}
-function leaveBaseline(): void {
-  if (--baselineDepth > 0) return
-  v8.setFlagsFromString('--wasm-tier-up')
-  v8.setFlagsFromString('--wasm-dynamic-tiering')
-}
-
-function loadBaselineWasm(wasm: Uint8Array): Promise<Language> {
-  enterBaseline()
-  return Language.load(wasm).finally(leaveBaseline)
-}
-
-/** Loads a grammar's `.wasm` the first time a file needs it; files extracted meanwhile wait for that one load. */
+/** Loads a grammar's `.wasm` the first time a file needs it. */
 async function loadLanguage(grammar: Grammar): Promise<Language> {
   initPromise ??= Parser.init()
   await initPromise
-  let loading = languageCache.get(grammar)
-  if (!loading) {
-    const { wasm, baselineWasm } = GRAMMARS[grammar]
-    loading = readFile(wasm).then((bytes) => (baselineWasm ? loadBaselineWasm(bytes) : Language.load(bytes)))
-    languageCache.set(grammar, loading)
-    loading.catch(() => languageCache.delete(grammar))
+  let lang = languageCache.get(grammar)
+  if (!lang) {
+    const wasmBytes = await readFile(GRAMMARS[grammar].wasm)
+    lang = await Language.load(wasmBytes)
+    languageCache.set(grammar, lang)
   }
-  return loading
+  return lang
+}
+
+/**
+ * The grammar comes from the extension, not the label: a `.tsx` file is
+ * labelled `typescript` (language.ts) but JSX only parses with TSX, and TSX
+ * cannot parse the `<T>value` casts `.ts/.mts/.cts` allow. A `.h` header is
+ * labelled `c` but may be C++ (most C++ projects name headers `.h`): the C++
+ * grammar reads C declarations alike and also C++ classes and namespaces.
+ */
+function grammarFor(language: SupportedLanguage, path: string): Grammar {
+  return language === 'typescript' && /\.tsx$/i.test(path) ? 'tsx' : language === 'c' && /\.h$/i.test(path) ? 'cpp' : language
 }
 
 /**
@@ -423,18 +407,25 @@ async function loadLanguage(grammar: Grammar): Promise<Language> {
  * "contains" symbols, those at module level and the methods of module-level
  * classes (#450), by line. `path` picks the grammar where a language has several. `edges: false` skips the code
  * edge sites (`sites` is empty): the overlay of `find_symbols` (#676) wants symbols only.
+ * A grammar marked `isolated` (Swift) is parsed in a child process (extraction-child.ts), under a deadline; a file
+ * it cannot parse in time comes back with no symbols and `skipped` saying why.
  */
 export async function extractStructure(language: string, content: string, path: string, options: { edges?: boolean } = {}): Promise<ExtractionResult> {
   if (!isSupportedLanguage(language)) {
     throw new Error(`unsupported language for extraction: ${language}`)
   }
-  // The grammar comes from the extension, not the label: a `.tsx` file is
-  // labelled `typescript` (language.ts) but JSX only parses with TSX, and TSX
-  // cannot parse the `<T>value` casts `.ts/.mts/.cts` allow. A `.h` header is
-  // labelled `c` but may be C++ (most C++ projects name headers `.h`): the C++
-  // grammar reads C declarations alike and also C++ classes and namespaces.
-  const grammar: Grammar =
-    language === 'typescript' && /\.tsx$/i.test(path) ? 'tsx' : language === 'c' && /\.h$/i.test(path) ? 'cpp' : language
+  if (GRAMMARS[grammarFor(language, path)].isolated) return extractInChild(language, content, path, options)
+  return extractHere(language, content, path, options)
+}
+
+/** `extractStructure` in this process. `deadline` (a `Date.now()` time) cancels a parse still running then: the child's own limit. */
+export async function extractHere(
+  language: SupportedLanguage,
+  content: string,
+  path: string,
+  options: { edges?: boolean; deadline?: number } = {},
+): Promise<ExtractionResult> {
+  const grammar = grammarFor(language, path)
   const config = GRAMMARS[grammar]
   const lang = await loadLanguage(grammar)
   const parser = new Parser()
@@ -442,13 +433,9 @@ export async function extractStructure(language: string, content: string, path: 
 
   let tree: Tree | null = null
   try {
-    if (config.baselineWasm) enterBaseline()
-    try {
-      tree = parser.parse(content)
-    } finally {
-      if (config.baselineWasm) leaveBaseline()
-    }
-    if (!tree) return { imports: [], symbols: [], sites: [] }
+    const { deadline } = options
+    tree = parser.parse(content, null, deadline === undefined ? undefined : { progressCallback: () => Date.now() > deadline })
+    if (!tree) return { imports: [], symbols: [], sites: [], ...(deadline !== undefined && Date.now() > deadline ? { skipped: 'parse deadline exceeded' } : {}) }
 
     // Told apart by their captures: `@src` (imports), `@decl.*` (symbols), the others code edges'.
     const imports: ExtractedImport[] = []

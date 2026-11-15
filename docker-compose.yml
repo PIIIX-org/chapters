@@ -109,6 +109,9 @@ services:
       - ELARA_NOTE_MAX_BYTES
       # Symbols per repository file that get an embedding (default 256).
       - ELARA_EMBED_MAX_SYMBOLS_PER_FILE
+      # Milliseconds the Swift parser process may take for one file before it is killed
+      # and the file is indexed without symbols (default 10000).
+      - ELARA_ISOLATED_PARSE_TIMEOUT_MS
     volumes:
       # THE NOTES LIVE HERE. Vault content is markdown FILES ON DISK
       # (plus local-path repository clones), not rows in Postgres — a

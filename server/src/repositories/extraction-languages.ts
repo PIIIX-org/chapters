@@ -221,8 +221,8 @@ export function jvmImportTarget(node: Node): string[] {
 export interface LanguageGrammar {
   /** The `.wasm` file in its npm package, or a source-built grammar shipped with the server. */
   wasm: [pkg: string, file: string] | URL
-  /** Load without V8's Wasm optimising tier; see `loadBaselineWasm` (extraction.ts). */
-  baselineWasm?: boolean
+  /** Parsed in a child process, not the server's: see `extractStructure` (extraction.ts). */
+  isolated?: boolean
   /** `@src`: the import's node; `importTarget` turns it into the specifiers when it is not the specifier's text. None: C#, whose `using` names namespaces, not files. */
   importQuery?: string
   importTarget?: (node: Node) => string[]
@@ -276,7 +276,7 @@ export type NewLanguage = 'rust' | 'java' | 'c' | 'cpp' | 'csharp' | 'kotlin' | 
 export const LANGUAGE_GRAMMARS: Record<NewLanguage, LanguageGrammar> = {
   swift: {
     wasm: new URL('../../grammars/tree-sitter-swift.wasm', import.meta.url),
-    baselineWasm: true,
+    isolated: true,
     importQuery: '(import_declaration (identifier) @src)',
     // A scoped import (`import func Module.member`) still imports from Module.
     importTarget: (node) => [node.namedChildren[0]?.text ?? node.text],

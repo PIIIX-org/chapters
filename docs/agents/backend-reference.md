@@ -3487,23 +3487,46 @@ A declaration whose name tree-sitter had to invent while recovering from
 half-typed code (`func ( ) {}`, which `find_symbols` overlays can see
 mid-edit) is skipped, for every language's scoped query.
 
-Memory (#988): V8 tiers hot Wasm functions up with TurboFan, and the Swift
-lexer is one 340 KB function. Left alone, that took 1.3 to 1.9 GB of
-resident memory in the server process after a few hundred 1 KB parses (macOS
-arm64, Node 24: 1.8 GB at 300 parses, 1.9 GB at 3,000; Kotlin 0.64 GB, the
-next largest), where the other grammars stay under 0.4 GB. A grammar marked
-`baselineWasm` (`extraction-languages.ts`; only Swift) is therefore loaded
-and parsed with `--no-wasm-tier-up --no-wasm-dynamic-tiering`, set with
-`v8.setFlagsFromString` around each `Language.load` and `parse` and turned
-back on after (`extraction.ts`), so every other grammar keeps V8's defaults.
-The flags have to be live while the code runs, so they cannot be set once;
-NODE_OPTIONS does not accept them and a process flag would also change every
-other Wasm module. With it: 114 MB peak at 300 parses, 130 MB at 3,000, 231
-MB for one 1 MB file (`MAX_FILE_BYTES`) of 16,910 symbols, at the same parse
-speed. Measured on macOS arm64 only: the Linux production image is
-unmeasured, so check `repository_status` and the RSS alert on the first
-large Swift repository, and `extraction-languages.test.ts` fails a peak over
-500 MB after 300 parses.
+Swift runs in a child process (#988, `extraction-child.ts`,
+`extraction-worker.ts`). V8 tiers hot Wasm functions up with TurboFan, and
+the Swift lexer is one 340 KB function: in the server process that took 1.3
+to 1.9 GB of resident memory after a few hundred 1 KB parses (macOS arm64,
+Node 24: 1.8 GB at 300 parses, 1.9 GB at 3,000; Kotlin 0.64 GB, the next
+largest, the others under 0.4 GB). The flags that stop it,
+`--no-wasm-tier-up --no-wasm-dynamic-tiering`, are V8 start-up flags:
+`NODE_OPTIONS` does not accept them, and switching them with
+`v8.setFlagsFromString` in a running server is process-global and unsafe, so
+nothing does. A grammar marked `isolated` (`extraction-languages.ts`; only
+Swift) is parsed by a long-lived child started lazily on the first Swift
+file with those flags and `--max-old-space-size=512` on its command line
+(through the same `tsx` loader as the server, from the same source, with
+only `PATH`, `HOME`, `TMPDIR` and `NODE_ENV` of the server's environment).
+The server never loads the Swift grammar. Requests go one at a time over the
+IPC channel as JSON (content in, symbols, imports and sites out), and the
+parent enforces a deadline per request, `ELARA_ISOLATED_PARSE_TIMEOUT_MS`
+(default 10,000 ms; a 1 MB file of 17,000 symbols takes 0.7 s, a cold start
+0.3 s). Past it, or when the child dies (an OOM kill, a crash), the child
+is killed and the next request starts a new one. That file gets its file
+block and no symbols or imports; its `embeddingNote`, as `read_file`
+reports it, says why (`swift symbols not extracted: no result within
+10000 ms ...`), the server logs it, and nothing is thrown, so a sync never
+fails for it. The result is not cached, so the same content is parsed again
+on a later extraction (a new extractor version or a re-sync of changed
+content), not retried by itself. The child exits when the server does
+(a closed channel, or the server's exit hook), also when the server is
+killed during a parse. The child also stops a parse past the deadline
+itself. The `find_symbols` overlay takes the same route. The other grammars
+still parse in the server with no deadline (#1146).
+
+Measured on macOS arm64 (Node 24): server process peak RSS 84 to 101 MB
+(its size without Swift) at 300 and 3,000 parses; the child 109 MB at both
+and 220 MB after a 1 MB file (`MAX_FILE_BYTES`) of 16,910 symbols, parsed in
+0.65 s; 1.6 ms per small file through IPC. The Linux production image is
+unmeasured, and so is a real Swift repository there. The child's memory is
+not in the container's RSS alert of the server process, only in the
+container's total. `extraction-languages.test.ts` fails a server over 300 MB
+or a child over 500 MB after 300 parses, `extraction-child.test.ts` the
+deadline, crash and respawn, and `extraction-queue.test.ts` the stored note.
 
 All grammars are MIT and load in `web-tree-sitter` 0.27 (ABI 14
 and 15). The npm grammars' native build never runs (`allowBuilds: false` in
@@ -5158,7 +5181,8 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     reports and metrics, above), `ELARA_NOTE_MAX_BYTES` (note body size
     cap, §5.3; a reverse proxy must pass bodies up to 6 × it + 64 KiB),
     `ELARA_EMBED_MAX_SYMBOLS_PER_FILE` (per-file symbol embedding budget,
-    default 256, §5.10 extraction queue).
+    default 256, §5.10 extraction queue), `ELARA_ISOLATED_PARSE_TIMEOUT_MS`
+    (milliseconds the Swift parser process gets per file, default 10000).
 - **Migrations**: `drizzle-kit generate` produces SQL under
   `server/drizzle/`; a few migrations were hand-edited afterward for
   things Drizzle can't express directly (pgvector extension + HNSW

@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Language, Parser, LANGUAGE_VERSION, MIN_COMPATIBLE_VERSION } from 'web-tree-sitter'
 import { extractStructure, isSupportedLanguage, type ExtractedSymbol } from '../src/repositories/extraction.js'
 import { detectLanguage } from '../src/repositories/language.js'
@@ -103,18 +103,27 @@ describe('Swift (#988)', () => {
   })
 
   // V8 re-compiles the grammar's 340 KB lexer function with TurboFan while parsing: 1.3 to 1.9 GB
-  // resident after a few hundred parses on macOS arm64 (110 MB once tier-up is off around load and parse).
-  // A child process, because RSS peaks are per process and the tier-up depends on a fresh V8.
-  it('parses hundreds of files without the Wasm tier-up memory peak', () => {
+  // resident after a few hundred parses on macOS arm64 (110 to 130 MB with tier-up off). Swift is parsed in a
+  // child process started with tier-up off (extraction-child.ts), so the server process stays small and the
+  // child gives up with it. Run in a process of its own: RSS peaks are per process.
+  it('parses hundreds of files with the server process, and the child, far under the Wasm tier-up peak', async () => {
     const script = `
+      import { execFileSync } from 'node:child_process'
       import { readFileSync } from 'node:fs'
       import { extractStructure } from ${JSON.stringify(new URL('../src/repositories/extraction.ts', import.meta.url).href)}
+      import { isolatedChildPid } from ${JSON.stringify(new URL('../src/repositories/extraction-child.ts', import.meta.url).href)}
       const source = readFileSync(new URL(${JSON.stringify(new URL('./fixtures/languages/Store.swift', import.meta.url).href)}), 'utf8')
       for (let i = 0; i < 300; i++) await extractStructure('swift', source + '// ' + i, 'Store.swift')
-      console.log(process.resourceUsage().maxRSS)
+      const pid = isolatedChildPid()
+      const childRssKb = Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }))
+      console.log(JSON.stringify({ pid, parentKb: process.resourceUsage().maxRSS, childKb: childRssKb }))
     `
-    const maxRssKb = Number(execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 60_000 }).trim())
-    expect(maxRssKb / 1024).toBeLessThan(500)
+    const out = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 90_000 })
+    const { pid, parentKb, childKb } = JSON.parse(out.trim().split('\n').at(-1)!) as { pid: number; parentKb: number; childKb: number }
+    expect(parentKb / 1024).toBeLessThan(300)
+    expect(childKb / 1024).toBeLessThan(500)
+    // The server exited: its child went with it.
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 })
   })
 })
 

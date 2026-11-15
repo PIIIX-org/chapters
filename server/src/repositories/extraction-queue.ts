@@ -563,7 +563,7 @@ async function processFile(fileId: string): Promise<void> {
   const language = detectLanguage(row.path)
   const structured = !looksMinified(row.content)
   // An unsupported or minified file gets its file block only, and still loses the imports/symbols an earlier content left.
-  const { imports, symbols, sites }: ExtractionResult =
+  const { imports, symbols, sites, skipped }: ExtractionResult =
     structured && isSupportedLanguage(language) ? await parsed(language, row.content, row.path, row.contentHash) : { imports: [], symbols: [], sites: [] }
   // The minified rule is about code: a Markdown file with one long line (a table, a paragraph) keeps its outline.
   const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, row.content) : []
@@ -607,7 +607,8 @@ async function processFile(fileId: string): Promise<void> {
     .flatMap((b, i) => (b.budgetTier === null ? [] : [{ i, tier: b.budgetTier }]))
     .sort((a, b) => a.tier - b.tier)
   const budgeted = new Set(symbolOrder.slice(0, budget).map(({ i }) => i))
-  let embeddingNote: string | null = null
+  // Shown by `read_file` as `embeddingNote`: why the file has no symbols (a Swift parse over its deadline), or that they are only partly embedded.
+  let embeddingNote: string | null = skipped ?? null
   if (symbolOrder.length > budget) {
     embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolOrder.length} symbols embedded, the rest are keyword-searchable only`
     console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${embeddingNote}`)

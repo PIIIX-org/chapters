@@ -230,6 +230,32 @@ describe('extraction queue', () => {
     expect(imports.map((i) => i.targetPath)).toEqual(['Foundation'])
   })
 
+  it('keeps a Swift file whose parse runs past the deadline as a file block with a note, and extracts it once it is fixed (#988)', async () => {
+    vi.stubEnv('ELARA_ISOLATED_PARSE_TIMEOUT_MS', '300')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = await makeRepo()
+    // Declarations that share their names: a parse of this takes seconds.
+    const unit = 'struct Store { func load() {} func save() {} }\nenum Event { case a, b }\n'
+    const slow = Array.from({ length: 6_000 }, () => unit).join('')
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'Sources/Huge.swift', content: slow }], ['Sources/Huge.swift'])
+      await flushExtraction()
+    } finally {
+      warnSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+    const file = await fileByPath(repo.id, 'Sources/Huge.swift')
+    expect(file.extractorVersion).toBe(EXTRACTOR_VERSION)
+    expect(await fileEmbedding(file.id)).not.toBeNull()
+    expect(await symbolBlocks(file.id)).toHaveLength(0)
+    expect(file.embeddingNote).toMatch(/^swift symbols not extracted: no result within 300 ms/)
+
+    await syncRepositoryFiles(repo.id, [{ path: 'Sources/Huge.swift', content: 'struct Store { func load() {} }' }], ['Sources/Huge.swift'])
+    await flushExtraction()
+    expect((await fileByPath(repo.id, 'Sources/Huge.swift')).embeddingNote).toBeNull()
+    expect((await symbolBlocks(file.id)).map((s) => s.name).sort()).toEqual(['Store', 'load'])
+  })
+
   it('does not re-trigger extraction for an unchanged resync', async () => {
     const repo = await makeRepo()
     await syncRepositoryFiles(repo.id, [{ path: 'x.ts', content: 'export const x = 1' }], ['x.ts'])
