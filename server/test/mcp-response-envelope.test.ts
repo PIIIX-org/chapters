@@ -51,6 +51,8 @@ let repoId: string
 let graphVaultId: string
 /** Four chained notes and a matching pair `zz1/x -> zz2/y`: the graph grep + limit fixture (#423). */
 let filterGraphVaultId: string
+/** A hub linked to four notes (two of them linked together): the neighborsOf grep + limit fixture (#423). */
+let hubGraphVaultId: string
 let agent: Client
 let agentConnectionId: string
 let ownerId: string
@@ -161,6 +163,7 @@ beforeAll(async () => {
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope vault' } })).json<{ id: string }>().id
   graphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph' } })).json<{ id: string }>().id
   filterGraphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph filter' } })).json<{ id: string }>().id
+  hubGraphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph hub' } })).json<{ id: string }>().id
   repoId = (
     await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'envelope-repo', ingestionMethod: 'agent_push' } })
   ).json<{ id: string }>().id
@@ -542,6 +545,37 @@ describe('stateless result handles: literal grep before paging (#423)', () => {
     expect(ids([one], 'nodes')).toHaveLength(1)
     expect(one.edges).toEqual([])
     expect(one.filter).toMatchObject({ sections: { nodes: { scanned: 6, matched: 2, more: false }, edges: { scanned: 0, matched: 0, more: false } } })
+  })
+
+  it('graph neighborsOf with grep and limit shows only nodes its edges cover; the lookahead node is a signal, a non-matching centre is dropped', async () => {
+    // A hub linking four notes, two of which (`zzp/x -> zzq/y`) also link each other. Seeded here, not in beforeAll: its
+    // background indexing would move the index epochs the cursor walks of the tests above bind.
+    const hubNotes: Array<[string, string]> = [['hub/n', '[[m1/a]] [[m2/b]] [[zzp/x]] [[zzq/y]]'], ['m1/a', ''], ['m2/b', ''], ['zzp/x', '[[zzq/y]]'], ['zzq/y', '']]
+    const hubWords = ['pewter', 'saffron', 'obsidian', 'juniper', 'tundra']
+    for (const [i, [path, link]] of hubNotes.entries()) await createNote(hubGraphVaultId, { path, body: `${`${hubWords[i]} `.repeat(40)}${link}` })
+    await flushEmbeddings()
+    for (const edgeTypes of [undefined, ['extracted']]) {
+      const args = { vaultId: hubGraphVaultId, neighborsOf: 'hub/n', grep: 'zz', ...(edgeTypes ? { edgeTypes } : {}), budget_tokens: 25_000 }
+      // hub + 4 neighbours = 5 nodes: nothing lies beyond `limit: 5`. The hub does not match, so it is dropped.
+      const full = await page('graph', { ...args, limit: 5 })
+      expect(ids([full], 'nodes', (n) => n.path as string).sort()).toEqual(['zzp/x', 'zzq/y'])
+      expect(ids([full], 'edges', edge)).toEqual(['zzp/x -> zzq/y'])
+      expect(full.filter).toMatchObject({ sections: { nodes: { scanned: 5, matched: 2, more: false }, edges: { scanned: 1, matched: 1, more: false } } })
+      // `limit: 4`: the fifth node (fetched only to say that more exist) is neither searched nor shown.
+      const cut = await page('graph', { ...args, limit: 4 })
+      const shown = ids([cut], 'nodes', (n) => n.path as string)
+      expect(shown.every((path) => ['zzp/x', 'zzq/y'].includes(path))).toBe(true)
+      expect(shown.length).toBeLessThan(2)
+      expect(cut.filter).toMatchObject({ sections: { nodes: { scanned: 4, more: true } } })
+      expect(cut.truncated).not.toBe(false)
+      // Whatever is shown, an edge between two shown nodes is listed, and edge coverage counts exactly the listed edges.
+      const listed = ids([cut], 'edges', edge)
+      for (const e of ids([full], 'edges', edge)) {
+        const [from, , to] = e.split(' ')
+        if (shown.includes(from!) && shown.includes(to!)) expect(listed).toContain(e)
+      }
+      expect(cut.filter).toMatchObject({ sections: { edges: { scanned: listed.length, matched: listed.length } } })
+    }
   })
 
   it('does not call an unmatched bounded candidate set complete, or pretend to scan beyond limit', async () => {

@@ -44,9 +44,11 @@ export function resultHandle(answer: Budgeted, snapshot: string, pattern?: strin
       coverage[section.name] = { scanned: section.items.length, matched: section.items.length, more: capped }
       return section
     }
-    const items = section.items.filter((item) => contains(item, pattern, fold))
+    // A signal item past `limit` is not a candidate: showing it would put a node on the page that the section's own rows (edges) never covered.
+    const candidates = section.kind === 'ranked' && section.signal && section.limit !== undefined ? section.items.slice(0, section.limit) : section.items
+    const items = candidates.filter((item) => contains(item, pattern, fold))
     const more = capped || (section.kind === 'keyset' ? section.more === true : !section.whole && section.items.length > (section.limit ?? Infinity))
-    coverage[section.name] = { scanned: section.items.length, matched: items.length, more }
+    coverage[section.name] = { scanned: candidates.length, matched: items.length, more }
     incomplete ||= more
     if (section.kind === 'keyset') {
       // A filtered handle replays the same bounded candidate set, never a
@@ -54,6 +56,10 @@ export function resultHandle(answer: Budgeted, snapshot: string, pattern?: strin
       const identities = new Map<unknown, string>()
       section.items.forEach((item, index) => identities.set(item, String(section.resume(item, index))))
       return { kind: 'ranked', name: section.name, items, limit: section.limit, ladder: section.ladder, id: (item) => identities.get(item)! }
+    }
+    if (section.signal && section.limit !== undefined && section.items.length > section.limit) {
+      // The signal stays behind the matches and the limit shrinks to them, so the page says `">n"` (more exist) and never shows it.
+      return { ...section, items: [...items, section.items[section.limit]!], limit: items.length }
     }
     return { ...section, items }
   })

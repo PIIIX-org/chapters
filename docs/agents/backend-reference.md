@@ -3064,25 +3064,30 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     most `limit` matching nodes, `derivedFrom: 'nodes'` in
     `response.ts`) and are not filtered a second time: no shown edge
     cites a node the filter dropped, and their coverage counts equal the
-    edges among those nodes. `grep` matches every string value of an
-    item, ids included, so a short hex-like literal can match unrelated
-    rows. `test/mcp-response-envelope.test.ts` covers filtered
-    next-page consumers, same-id edits, source-cap honesty, graph
-    grep with `limit` and filtered refs access.
+    edges among those nodes. In the community view `grep` matches the
+    community records (their own strings), not their members' paths.
+    With `neighborsOf` the walk fetches one node past `limit` only to
+    say that more exist (`signal: true` in `response.ts`): the filter
+    neither searches nor shows it, so the first `limit` nodes are the
+    candidates (`scanned` counts them, `more: true`), and a centre that
+    does not match is dropped like any other node, together with its
+    edges. `grep` matches every string value of an item, ids included,
+    so a short hex-like literal can match unrelated rows.
+    `test/mcp-response-envelope.test.ts` covers filtered next-page
+    consumers, same-id edits, source-cap honesty, graph grep with
+    `limit` (node list and `neighborsOf`, with and without `edgeTypes`)
+    and filtered refs access.
 
-    Descriptor cost against the pre-#423 definitions: three literal
-    arguments add 66 characters each; clearer descriptions save 32
-    (`read_note`), 31 (`find_symbols`), 50 (`graph`) and 67
-    (`find_graph_path`), a net **18 characters**. They retain
-    rev/edit-base, untrusted-content, declaration search/ranges/snippets,
-    graph modes/edge evidence, and ordered path/distance semantics; the
-    full tool manuals retain their per-tool detail and both reference
-    copies document literal filtering.
-    SDK measurement: reader tools 9,667 + instructions 311 =
-    **9,978 chars / 2,495 tokens**; writer 16,148 + 443 =
-    **16,591 chars / 4,148 tokens**; admin tools **42,997 chars**.
-    Budgets stay 2,500 / 4,500 / less than 43,000; prompt bytes stay
-    10,042 for writer/admin.
+    Descriptor cost: the three literal arguments are paid for by
+    shorter `read_note`, `find_symbols`, `graph` and `find_graph_path`
+    descriptions that keep rev/edit-base, untrusted-content, declaration
+    search/ranges/snippets, graph modes/edge evidence, and ordered
+    path/distance semantics; the full tool manuals retain their per-tool
+    detail and both reference copies document literal filtering. The
+    budgets (reader 2,500 and writer 4,500 tokens, admin tools/list
+    under 43,000 characters) and the current sizes are measured by
+    `test/mcp-tool-budget.test.ts` and `test/mcp-tool-schema.test.ts`,
+    not restated here.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.

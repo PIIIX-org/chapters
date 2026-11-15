@@ -3347,7 +3347,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           head: { center: { id: center.id, path: center.path }, depth, cappedGroups: local.cappedGroups },
           sections: [
             // Already ranked: nearest first, the centre at the top; `next` only says that more exist.
-            ranked({ name: 'nodes', items: local.next ? [...local.nodes, local.next] : local.nodes, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
+            ranked({ name: 'nodes', items: local.next ? [...local.nodes, local.next] : local.nodes, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER, signal: true }),
             ranked({ name: 'edges', items: await rowsAmong(local.edges, shownOf(local.nodes), resources), id: edgeRowKey, ladder: GRAPH_EDGE_LADDER, derivedFrom: 'nodes' }),
             ...(backlinks ? [ranked({ name: 'backlinks', items: backlinks, id: (b) => b.location, limit: BACKLINK_CAP, ladder: BACKLINK_LADDER })] : []),
           ],
