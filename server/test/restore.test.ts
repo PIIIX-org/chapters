@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import AdmZip from 'adm-zip'
 import { eq } from 'drizzle-orm'
+import { config } from '../src/config.js'
 import { db } from '../src/db/client.js'
 import {
   instanceState,
@@ -18,6 +21,7 @@ import {
   vaults,
 } from '../src/db/schema.js'
 import { buildInstanceBackup } from '../src/export/archive.js'
+import { BACKUP_FORMAT, BACKUP_TABLES, INSTANCE_STATE, partOf, tableEntry, type BackupPart } from '../src/export/backup-format.js'
 import { BackupInvalidError, restoreBackup } from '../src/export/restore.js'
 import { serializeNote } from '../src/notes/okf.js'
 import { assetFile, readNote } from '../src/notes/store.js'
@@ -276,4 +280,60 @@ describe('restoreBackup: validate and plan', () => {
     zip.addFile('manifest.json', Buffer.from('{}', 'utf8'))
     await expect(restoreBackup(zip.toBuffer())).rejects.toThrow(BackupInvalidError)
   })
+
+  it.each([1, 2].flatMap(format => [
+    { format, existing: true, id: '../../restore-escape' },
+    { format, existing: false, id: '../../restore-escape' },
+    { format, existing: false, id: '12345678-1234-4ABC-8DEF-1234567890AB' },
+  ]))(
+    'validates every empty-vault id before filesystem preparation (format $format, id $id, existing escape target $existing)',
+    async ({ format, existing, id }) => {
+      const outer = await mkdtemp(join(tmpdir(), 'restore-vault-id-'))
+      const originalDataDir = config.dataDir
+      config.dataDir = join(outer, 'data')
+      try {
+        await mkdir(config.dataDir)
+        const escaped = join(outer, 'restore-escape')
+        const witness = join(escaped, '.asset-migration-work', `${randomUUID()}.tmp`)
+        if (existing) {
+          await mkdir(join(escaped, '.asset-migration-work'), { recursive: true })
+          await writeFile(witness, 'Owned witness: must not be cleaned up.')
+        }
+        const owner = user(randomUUID())
+        // A valid row first ensures validation is a whole-archive prepass,
+        // not a check after preparing each preceding vault's filesystem.
+        const rows = [
+          { id: randomUUID(), ownerId: owner.id, name: 'Valid empty vault', mergeable: false, createdAt: now, deletedAt: null },
+          { id, ownerId: owner.id, name: 'Invalid empty vault', mergeable: false, createdAt: now, deletedAt: null },
+        ]
+        let archive: Buffer
+        if (format === 1) archive = legacyArchive({ users: [owner], vaults: rows })
+        else {
+          const zip = new AdmZip()
+          const counts: Record<string, number> = {}
+          const parts: Record<string, BackupPart> = {}
+          for (const spec of [...BACKUP_TABLES, INSTANCE_STATE]) {
+            const tableRows = spec.name === 'users' ? [owner] : spec.name === 'vaults' ? rows : []
+            const bytes = Buffer.from(tableRows.map(row => JSON.stringify(row)).join('\n'))
+            const name = tableEntry(spec.name)
+            zip.addFile(name, bytes)
+            counts[spec.name] = tableRows.length
+            parts[name] = partOf(bytes)
+          }
+          zip.addFile('backup.json', Buffer.from(JSON.stringify({ format: BACKUP_FORMAT, tables: counts, parts })))
+          archive = zip.toBuffer()
+        }
+        await expect(restoreBackup(archive)).rejects.toThrow(/vault id is not a canonical lowercase UUID/)
+        expect(await readdir(config.dataDir)).toEqual([])
+        if (existing) expect(await readFile(witness, 'utf8')).toBe('Owned witness: must not be cleaned up.')
+        else await expect(stat(escaped)).rejects.toMatchObject({ code: 'ENOENT' })
+        expect(await db.select().from(users)).toEqual([])
+        expect(await db.select().from(vaults)).toEqual([])
+        expect(await db.select().from(securityEvents)).toEqual([])
+      } finally {
+        config.dataDir = originalDataDir
+        await rm(outer, { recursive: true, force: true })
+      }
+    },
+  )
 })

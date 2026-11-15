@@ -17,6 +17,7 @@ import { bootStore } from './notes/store-reconcile.js'
 import { bootCollab } from './sync/collab-backfill.js'
 import { flushProjections, sweepOrphanFiles } from './notes/projector.js'
 import { holdSharedLockOrExit } from './notes/maintenance-lock.js'
+import { runAssetStorage } from './notes/asset-storage.js'
 import { LINK_ROWS_JOB, scheduleLinkCatchUp } from './notes/link-catch-up.js'
 import { SEMANTIC_EDGES_JOB } from './search/semantic-edges.js'
 import { scheduleRevisionCompaction } from './notes/revision-compaction.js'
@@ -25,13 +26,13 @@ import { COLLAB_PATH } from './sync/routes.js'
 import { bootLogLine, recordBoot, recordGracefulShutdown } from './lifecycle.js'
 import { pruneUsage } from './usage/recorder.js'
 
-// ADR-003 §5.1/§9: the shared instance lock on a reserved connection, held
-// from before migrations until exit. Refused (exit 2) while
-// store-export-legacy runs; a dropped connection pauses writes until it is
-// held again (maintenance-lock.ts). Taken before the boot is recorded: a
-// start refused here wrote nothing, so the marker keeps saying how the last
-// server that ran ended (a refused start is not an unclean shutdown).
-await holdSharedLockOrExit()
+// ADR-003 §5.1/§9: begin with the shared instance maintenance lock. After
+// schema migration, #1139 briefly takes its exclusive form for the quiesced
+// asset cutover, then the server holds the shared form until exit. Other
+// maintenance refuses the start; a lost shared lock pauses writes until
+// reacquired. The first lock precedes the boot record, so a refused start
+// does not change the last server's shutdown marker.
+const serverLock = await holdSharedLockOrExit()
 
 // Before anything else that can fail: a boot that dies in migrations still
 // marks this process `running`, so the next boot reports it as unclean
@@ -47,6 +48,12 @@ const app = await buildApp()
 
 try {
   await runMigrations()
+  // #1139 public-beta blocker: stop every old writer. The exclusive instance
+  // lock excludes other apps/CLIs while verified asset copies precede ANY projector drain.
+  await serverLock.release()
+  const assets = await runAssetStorage('migrate')
+  await holdSharedLockOrExit()
+  console.log(`asset storage: ${JSON.stringify(assets)}`)
   // ADR-003 S2a, before anything is served (§7 boot steps 2-8): stale
   // projection claims cleared, the one-time backfill (resumable), the
   // reconciliation of rows written around the store, after an unclean or

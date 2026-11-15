@@ -370,10 +370,10 @@ const test: LabTest = {
     )
     const liveUsersAfter = await ctx.docker.psql('select count(*) from users')
     checks.push({
-      name: 'documented `docker compose exec app pnpm restore-backup` refuses a non-empty instance',
-      expected: 'non-zero exit, "Refusing to restore", data untouched',
+      name: 'restore CLI excludes a running instance before considering its data',
+      expected: 'exit 2, "Restore failed: the instance is in use", data untouched',
       actual: `exit ${liveRestore.code}; ${(liveRestore.stderr + liveRestore.stdout).trim().slice(-200)}; users ${liveUsersAfter}`,
-      ok: liveRestore.code !== 0 && /Refusing to restore/.test(liveRestore.stderr + liveRestore.stdout) && Number(liveUsersAfter) === sourceTables.users.length,
+      ok: liveRestore.code === 2 && /Restore failed: the instance is in use:/.test(liveRestore.stderr) && Number(liveUsersAfter) === sourceTables.users.length,
       severity: 'high',
     })
 
@@ -528,6 +528,36 @@ const test: LabTest = {
       })
     }
 
+    if (restored?.code === 0 && !restored.timedOut) {
+      // Same rows and verified parts, a different archive identity: the original
+      // archive would exercise idempotent replay, not the non-empty-instance guard.
+      const probePath = '/data/backups-tampered/nonempty.zip'
+      const probe = await ctx.docker.exec([
+        ...ctx.docker.COMPOSE, 'exec', '-T', '-e', `SRC=${archive}`, '-e', `DST=${probePath}`, 'app', 'node', '-e',
+        `const fs = require('fs'); const z = new (require('adm-zip'))(process.env.SRC);
+         const name = z.getEntry('backup.json') ? 'backup.json' : 'account-dump.json';
+         const manifest = JSON.parse(z.readAsText(name)); manifest.restoreGuardProbe = true;
+         z.updateFile(name, Buffer.from(JSON.stringify(manifest)));
+         fs.mkdirSync(require('path').dirname(process.env.DST), {recursive:true}); z.writeZip(process.env.DST);`,
+      ])
+      const offlineRestore = await runWithDeadline(
+        ctx,
+        'lab-restore-nonempty',
+        [...ctx.docker.COMPOSE, 'run', '--rm', '--no-deps', '-T', '--name', 'lab-restore-nonempty',
+          '-e', `DATA_DIR=${RESTORE_DIR}`, '-e', `LOCAL_REPOS_ROOT=${RESTORE_DIR}/local-repos`, 'app', 'sh', '-c',
+          `export DATABASE_URL="\${DATABASE_URL%/*}/${RESTORE_DB}" COREPACK_ENABLE_DOWNLOAD_PROMPT=0; pnpm restore-backup ${probePath}`],
+        CLI_TIMEOUT_MS,
+      )
+      const usersAfter = await psqlDb(RESTORE_DB, 'select count(*) from users')
+      checks.push({
+        name: 'offline one-off restore still refuses an already populated instance',
+        expected: 'exit 1, "Refusing to restore: this instance already has", restored users untouched',
+        actual: `archive preparation ${probe.code}; exit ${offlineRestore.code}; ${offlineRestore.stderr.trim().slice(-200)}; users ${usersAfter}`,
+        ok: probe.code === 0 && offlineRestore.code === 1 && /Refusing to restore: this instance already has \d+ user\(s\)/.test(offlineRestore.stderr) && Number(usersAfter) === sourceTables.users.length,
+        severity: 'critical',
+      })
+    }
+
     // ------------------------------------------------------------ diff
     const diffTable: Array<Record<string, unknown>> = []
     let restoredNotes: NoteRow[] = []
@@ -591,11 +621,15 @@ const test: LabTest = {
       })
       diffTable.push({ table: 'note_links', source: srcNotes.reduce((n, r) => n + r.links.length, 0), restored: restoredNotes.reduce((n, r) => n + r.links.length, 0), missingOrChanged: 0, extra: 0 })
       const sumAssets = async (root: string) =>
-        (await appExec(ctx, `cd ${root} 2>/dev/null && find . -path '*/assets/*' -type f -exec sha256sum {} + 2>/dev/null | sort -k2; true`)).stdout
+        (await appExec(ctx, `cd ${root} 2>/dev/null && find . -path '*/.assets/*' -type f -exec sha256sum {} + 2>/dev/null | sort -k2; true`)).stdout
           .split('\n')
           .filter(Boolean)
       const srcAssetFiles = await sumAssets('/data/elara/vaults')
       const restoredAssetFiles = await sumAssets(`${RESTORE_DIR}/vaults`)
+      const seededAssetsPresent = [
+        `${sha256(pngBytes)}  ./${V}/.assets/${pngName}`,
+        `${sha256(pdfBytes)}  ./${V}/.assets/${pdfName}`,
+      ].every((expected) => srcAssetFiles.includes(expected))
       diffTable.push({
         table: 'attachments (files on disk)',
         source: srcAssetFiles.length,
@@ -636,7 +670,7 @@ const test: LabTest = {
       checks.push({ name: 'restored live notes: frontmatter + body identical', expected: `${row('notes (live)').source}`, actual: `${row('notes (live)').restored} restored, ${row('notes (live)').missingOrChanged} missing/changed`, ok: row('notes (live)').missingOrChanged === 0, severity: 'critical', detail: noteDiff })
       checks.push({ name: 'restored trash', expected: `${row('notes (trash)').source} trashed notes`, actual: `${row('notes (trash)').restored}`, ok: same('notes (trash)'), severity: 'medium' })
       checks.push({ name: 'restored revision history', expected: `${row('note_revisions').source} revisions`, actual: `${row('note_revisions').restored}`, ok: row('note_revisions').missingOrChanged === 0, severity: 'high' })
-      checks.push({ name: 'restored attachments', expected: `${srcAssetFiles.length} files`, actual: `${restoredAssetFiles.length} files`, ok: same('attachments (files on disk)'), severity: 'high' })
+      checks.push({ name: 'restored attachments', expected: `${srcAssetFiles.length} files, including both seeded PNG/PDF checksums`, actual: `${restoredAssetFiles.length} files; seeded source checksums present: ${seededAssetsPresent}`, ok: seededAssetsPresent && same('attachments (files on disk)'), severity: 'high' })
       checks.push({ name: 'restored repositories (repo: links, pinned tokens)', expected: `${row('repositories').source}`, actual: `${row('repositories').restored}`, ok: same('repositories'), severity: 'medium' })
       checks.push({ name: 'restored MFA state usable (secret + backup codes)', expected: 'mfa users keep a TOTP secret', actual: JSON.stringify({ src: row('mfa_backup_codes'), restored: restoredTables.mfa_backup_codes, dumpTotp: archiveSummary.mfaUserHasTotpInDump ? 'present' : 'missing (the backup strips totpSecret)' }), ok: archiveSummary.mfaUserHasTotpInDump && same('mfa_backup_codes'), severity: 'high' })
       // Every table's row count in the restored database against backup.json (#493). The restore

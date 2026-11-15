@@ -34,6 +34,7 @@ import { claimJob, completeJob, failJob, jobDrainer, type ClaimedJob } from '../
 import { recordConflictCopy, recordJob } from '../monitoring/metrics.js'
 import { failpoint } from '../failpoints.js'
 import { atomicWrite } from './atomic-write.js'
+import { isAssetStorageReady } from './asset-storage.js'
 import { withKeyLock } from './key-lock.js'
 import { parseNote, serializeNote, type Frontmatter } from './okf.js'
 import { resolveNotePath } from './okf/paths.js'
@@ -450,12 +451,41 @@ interface ClaimedProjection {
   attempts: number
 }
 
+/** Vaults this process's projector leaves alone (excludeVaultsFromProjector). */
+let excludedVaults: readonly string[] = []
+
+/** SQL condition on a `note_projections` row: its note is in none of `vaultIds`. */
+export function projectionOutside(vaultIds: readonly string[]) {
+  return vaultIds.length ? sql`note_id NOT IN (SELECT id FROM notes WHERE vault_id IN (${sql.join(vaultIds.map((id) => sql`${id}`), sql`, `)}))` : sql`true`
+}
+
+/** SQL condition on a store `jobs` row: its payload's vault is none of `vaultIds`. */
+export function storeJobOutside(vaultIds: readonly string[]) {
+  return vaultIds.length ? sql`coalesce(payload->>'vaultId', '') NOT IN (${sql.join(vaultIds.map((id) => sql`${id}`), sql`, `)})` : sql`true`
+}
+
+/**
+ * Keeps this process's projector off `vaultIds` (rows-from-files, #1139: vaults
+ * whose attachment storage was rolled back): their pending projections and store
+ * jobs stay queued as they are, never claimed, run or dropped. Call it before the
+ * first drain; the returned release waits for a running drain, then lifts it.
+ */
+export function excludeVaultsFromProjector(vaultIds: readonly string[]): () => Promise<void> {
+  const previous = excludedVaults
+  excludedVaults = [...previous, ...vaultIds]
+  return async () => {
+    await projector.flush()
+    excludedVaults = previous
+  }
+}
+
 async function claimProjections(): Promise<ClaimedProjection[]> {
   return (await db.execute(sql`
     UPDATE note_projections p SET lease_until = now() + ${LEASE_MS} * interval '1 millisecond', attempts = p.attempts + 1
     FROM (
       SELECT note_id, projection FROM note_projections
       WHERE applied_seq < target_seq AND projection IN ('file', 'dir_index') AND (lease_until IS NULL OR lease_until < now())
+        AND ${projectionOutside(excludedVaults)}
       ORDER BY updated_at LIMIT ${CLAIM_BATCH}
       FOR UPDATE SKIP LOCKED
     ) c
@@ -544,7 +574,7 @@ async function removeFiles(payload: { vaultId: string; ownerId: string; paths: s
 }
 
 async function runJob<P>(kind: string, run: (payload: P) => Promise<void>): Promise<boolean> {
-  const job: ClaimedJob<P> | null = await claimJob<P>(kind)
+  const job: ClaimedJob<P> | null = await claimJob<P>(kind, storeJobOutside(excludedVaults))
   if (!job) return false
   try {
     await run(job.payload)
@@ -640,8 +670,9 @@ async function hasOwner(tx: Tx, vaultId: string, rel: string): Promise<boolean> 
   return (rows as unknown as unknown[]).length > 0
 }
 
-/** Every `*.md` under a vault directory, outside `assets/` and every dot-directory, vault-relative. */
-async function sweepCandidates(root: string): Promise<string[]> {
+/** Every note `*.md`, including assets/ notes; hidden .assets attachments are never note projections. */
+async function sweepCandidates(root: string, vaultId: string): Promise<string[]> {
+  const migrated = await isAssetStorageReady(vaultId)
   const found: string[] = []
   async function visit(rel: string): Promise<void> {
     let entries
@@ -654,7 +685,7 @@ async function sweepCandidates(root: string): Promise<string[]> {
     for (const entry of entries) {
       const child = rel ? `${rel}/${entry.name}` : entry.name
       if (entry.isDirectory()) {
-        if (entry.name.startsWith('.') || child === 'assets') continue
+        if (entry.name.startsWith('.') || (!migrated && child === 'assets')) continue
         await visit(child)
       } else if (entry.isFile() && entry.name.endsWith('.md')) found.push(child)
     }
@@ -665,8 +696,8 @@ async function sweepCandidates(root: string): Promise<string[]> {
 
 /**
  * The orphan sweep (§7 boot step 9), after the projector's first drain:
- * a `*.md` file under `vaults/<id>/` (outside `assets/` and every
- * dot-directory: `.trash`, `.conflicts`, `.orphans`, `.migration`, `.crdt*`)
+ * a `*.md` file under `vaults/<id>/`, including assets/ notes but outside
+ * dot-directories (.assets, .trash, .conflicts, .orphans, .migration, .crdt*),
  * that has no `projected_files` row and no owner in the DB is moved to
  * `.orphans/<path>` and reported, never deleted. Each path is decided under
  * its path lock, so a file the projector is writing for a new note is kept.
@@ -684,7 +715,7 @@ export async function sweepOrphanFiles(): Promise<OrphanFile[]> {
   const moved: OrphanFile[] = []
   for (const vaultId of dirs) {
     const root = vaultRoot(vaultId)
-    for (const rel of await sweepCandidates(root)) {
+    for (const rel of await sweepCandidates(root, vaultId)) {
       const orphan = await withPathLock(vaultId, rel, async (tx) => {
         if (!(await vaultLive(tx, vaultId))) return null
         if (await projectedFile(tx, vaultId, rel)) return null

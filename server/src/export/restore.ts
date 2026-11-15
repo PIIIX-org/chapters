@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile, rm, stat } from 'node:fs/promises'
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
-import { instanceState, noteLinks, securityEvents, users } from '../db/schema.js'
+import { instanceState, noteLinks, securityEvents, users, vaults } from '../db/schema.js'
 import { atomicWrite } from '../notes/atomic-write.js'
 import {
   assetFile,
@@ -15,6 +15,8 @@ import {
 import { reconcileStore } from '../notes/store-reconcile.js'
 import { linkRows } from '../notes/store-tx.js'
 import { flushProjections, projectDirIndices } from '../notes/projector.js'
+import { discardEmptyRestoredAssetStorage, prepareRestoredAssetStorage } from '../notes/asset-storage.js'
+import { holdInstanceLock, holdsExclusiveLock } from '../notes/maintenance-lock.js'
 import {
   OkfValidationError,
   parseNote,
@@ -104,7 +106,8 @@ interface BackupContents {
   warnings: string[]
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// PostgreSQL exports lowercase UUIDs: paths must keep that exact identity.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const RESTORE_EVENT = 'instance_restored'
 
 const keyOf = (row: Row, keys: string[]): string => JSON.stringify(keys.map((k) => row[k] ?? null))
@@ -138,6 +141,11 @@ function toInsertable(spec: BackupTable, raw: unknown, where: string, strict: bo
   }
   for (const key of primaryKeyOf(spec.table)) {
     if (row[key] == null) throw new BackupInvalidError(`${where}: primary key "${key}" is missing`)
+  }
+  // Vault ids become filesystem roots, including empty vaults with no note
+  // entries. Validate every row while parsing, before planning or namespace prep.
+  if (spec.name === 'vaults' && (typeof row.id !== 'string' || !UUID.test(row.id))) {
+    throw new BackupInvalidError(`${where}: vault id is not a canonical lowercase UUID`)
   }
   for (const key of timestampKeysOf(spec.table)) {
     const value = row[key]
@@ -639,10 +647,41 @@ async function applyRestore(contents: BackupContents, { inserts, writes }: Prepa
  */
 export async function restoreBackup(buffer: Buffer, options: { dryRun?: boolean } = {}): Promise<RestorePlan> {
   const contents = readBackup(buffer)
-  const prepared = await planRestore(contents)
-  if (prepared.plan.conflicts.length > 0) throw new RestoreRefusedError(prepared.plan)
-  if (options.dryRun) return prepared.plan
-  if (prepared.plan.alreadyRestored) await projectRestored(contents)
-  else await applyRestore(contents, prepared)
-  return prepared.plan
+  // Restoring is offline. The CLI may already own this fence; direct callers
+  // must exclude all writers too while existing-volume bytes change namespaces.
+  const lock = options.dryRun || holdsExclusiveLock() ? null : await holdInstanceLock('exclusive')
+  const emptyNamespaces: string[] = []
+  try {
+    let prepared = await planRestore(contents)
+    if (prepared.plan.conflicts.length > 0) throw new RestoreRefusedError(prepared.plan)
+    if (options.dryRun) return prepared.plan
+    const paths = new Map<string, string[]>()
+    for (const note of contents.tables.get('notes')!) {
+      if (note.deletedAt != null) continue
+      const id = String(note.vaultId)
+      const entries = paths.get(id) ?? []
+      entries.push(`${String(note.path)}.md`)
+      paths.set(id, entries)
+    }
+    // Replaying a completed archive must not recreate a subsequently purged vault.
+    const liveVaults = prepared.plan.alreadyRestored ? new Set((await db.select({ id: vaults.id }).from(vaults)).map(vault => vault.id)) : null
+    for (const vault of contents.tables.get('vaults')!) {
+      const id = String(vault.id)
+      if (liveVaults && !liveVaults.has(id)) continue
+      if (await prepareRestoredAssetStorage(id, paths.get(id) ?? [])) emptyNamespaces.push(id)
+    }
+    // Namespace preparation can move kept legacy attachments to their real
+    // target. Replan before publishing any file so those bytes keep the existing
+    // restore contract: differing attachments are retained, not overwritten.
+    prepared = await planRestore(contents)
+    if (prepared.plan.conflicts.length > 0) throw new RestoreRefusedError(prepared.plan)
+    if (prepared.plan.alreadyRestored) await projectRestored(contents)
+    else await applyRestore(contents, prepared)
+    return prepared.plan
+  } catch (err) {
+    // Failed DB/file publication already removed its created data files. Undo
+    // only our freshly-created EMPTY markers, never a migrated/kept volume.
+    for (const id of emptyNamespaces) await discardEmptyRestoredAssetStorage(id)
+    throw err
+  } finally { await lock?.release() }
 }

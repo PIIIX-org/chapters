@@ -60,10 +60,12 @@ test('arms: both by default, unknown refused', () => {
 })
 
 test('system prompts: same rules for both arms, each names its only source', () => {
-  const elara = systemPrompt('elara', { maxToolCalls: 30, repositoryId: 'r-1' })
+  const elara = systemPrompt('elara', { maxToolCalls: 30 })
   const local = systemPrompt('local', { maxToolCalls: 30 })
   assert.match(elara, /Elara/)
-  assert.match(elara, /repositoryId r-1/)
+  assert.match(elara, /The connection is pinned to that repository; tools that take a repositoryId or vaultId default to it, so you may omit those ids\./)
+  assert.doesNotMatch(elara, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i)
+  assert.doesNotMatch(elara, /repositoryId (?!or vaultId)/)
   assert.match(local, /checkout/)
   for (const p of [elara, local]) {
     assert.match(p, /file:line evidence/)
@@ -129,9 +131,9 @@ test('judge: runs one tool-less turn and counts the facts judged stated', async 
 })
 
 test('the Elara prompt names grep and orient only when the arm has them', () => {
-  const plain = systemPrompt('elara', { maxToolCalls: 30, repositoryId: 'r-1' })
+  const plain = systemPrompt('elara', { maxToolCalls: 30 })
   assert.doesNotMatch(plain, /`grep`|`orient`/)
-  const both = systemPrompt('elara', { maxToolCalls: 30, repositoryId: 'r-1', tools: ['search', 'grep', 'orient'] })
+  const both = systemPrompt('elara', { maxToolCalls: 30, tools: ['search', 'grep', 'orient'] })
   assert.match(both, /`grep` searches the code by regular expression/)
   assert.match(both, /`orient` gives a map/)
   assert.doesNotMatch(systemPrompt('local', { maxToolCalls: 30, tools: ['grep', 'orient'] }), /`orient`/)

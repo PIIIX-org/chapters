@@ -18,14 +18,14 @@ export function parseArms(raw: string): Arm[] {
 }
 
 /** Bumped when the tools an arm gets or what it is told changes: results of different versions are not compared (`harness` is the hash of the files, this is the name a reader can say). */
-export const HARNESS_VERSION = 3
+export const HARNESS_VERSION = 5
 
-export function systemPrompt(arm: Arm, opts: { maxToolCalls: number; repositoryId?: string; tools?: readonly string[] }): string {
+export function systemPrompt(arm: Arm, opts: { maxToolCalls: number; tools?: readonly string[] }): string {
   const access =
     arm === 'elara'
       ? [
           'Your only access to the code is through the tools provided, which call Elara, a knowledge server that has indexed the repository.',
-          `The connection is pinned to that repository (repositoryId ${opts.repositoryId ?? 'unknown'}); tools that take a repositoryId accept it or default to it.`,
+          'The connection is pinned to that repository; tools that take a repositoryId or vaultId default to it, so you may omit those ids.',
           ...(opts.tools?.includes('grep') ? ['`grep` searches the code by regular expression (every line that matches, with its file and line); `search` ranks by meaning and names.'] : []),
           ...(opts.tools?.includes('orient') ? ['`orient` gives a map of the repository: use it first to see where things are.'] : []),
         ]

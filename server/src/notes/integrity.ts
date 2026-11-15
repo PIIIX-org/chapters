@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { parseNote, type OkfNote } from './okf.js'
 import { noteFile, vaultDir } from './store.js'
+import { isAssetStorageReady } from './asset-storage.js'
 
 export interface NoteFileProblem {
   vaultId: string
@@ -119,12 +120,13 @@ export async function checkNoteFiles(
 }
 
 /**
- * Every `*.md` file under a vault directory, vault-relative, outside
- * `assets/` and every dot-directory (`.trash`, `.conflicts`, `.orphans`,
- * `.migration`, `.crdt*`): the files the orphan sweep (§7 boot step 9) looks at.
+ * Every note `*.md` file under a vault directory, including valid assets/
+ * notes, outside dot-directories (.assets, .trash, .conflicts, .orphans,
+ * .migration, .crdt*): the orphan sweep's candidates.
  */
 export async function vaultMarkdownFiles(vaultId: string): Promise<string[]> {
   const root = vaultDir(vaultId)
+  const migrated = await isAssetStorageReady(vaultId)
   const found: string[] = []
   async function visit(rel: string): Promise<void> {
     let entries
@@ -137,7 +139,7 @@ export async function vaultMarkdownFiles(vaultId: string): Promise<string[]> {
     for (const entry of entries) {
       const child = rel ? `${rel}/${entry.name}` : entry.name
       if (entry.isDirectory()) {
-        if (entry.name.startsWith('.') || child === 'assets') continue
+        if (entry.name.startsWith('.') || (!migrated && child === 'assets')) continue
         await visit(child)
       } else if (entry.isFile() && entry.name.endsWith('.md')) found.push(child)
     }

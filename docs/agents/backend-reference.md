@@ -276,7 +276,7 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   (projection rows, raised targets, a revision at every `seq`; renderer
   version bumps) → the projector drains → `listen` → in the background,
   the **orphan sweep**: `*.md` under `vaults/<id>/`,
-  outside `assets/` and every dot-directory, with no `projected_files` row
+  outside dot-directories (including `.assets/`), with no `projected_files` row
   and no owner in the DB (a live note at the path, or the `dir_index` of a
   directory with live notes) is moved to `.orphans/<path>`, never deleted.
   Graceful shutdown: the relay flushes its stores, then the projector gets
@@ -988,7 +988,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   states fails CI. Tests that damage a note on purpose restore its file
   before they end, and tests that insert note rows without files delete
   their fixture vaults. It also reports
-  `orphan-file`: a `.md` file outside `assets/` and the dot-directories
+  `orphan-file`: a `.md` file outside dot-directories (legacy `assets/` is also excluded until its namespace migration completes)
   with no `projected_files` row, no live note at its path and (for an
   `index.md`) no live note under its directory, i.e. what the boot orphan
   sweep would move to `.orphans/` (#495). Shared helpers: `compareNoteFile`,
@@ -1063,8 +1063,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   (not in a dry run) it clears the leases of pending `file`/`dir_index`
   projections and store jobs and drains them, so a rename or trash move
   committed before the stop has moved its file. Then, for every vault
-  directory (or `--vault`), each `*.md` outside `assets/` and the
-  dot-directories: no live row → `createNote(…, { asImported: true })`
+  directory (or `--vault`), each `*.md` outside dot-directories:
+  valid `assets/` notes are included after attachment migration; no live row → `createNote(…, { asImported: true })`
   from the file (the frontmatter as given, no `timestamp` added; row,
   revision, links, projections, embedding job; the projector then adopts
   a file that already is a valid note as it is; one without `type`, which
@@ -1077,7 +1077,14 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `.crdt/<path>.bin` beside a created note is listed in `crdtBins` (the
   lost row's editor state; the doctor reports it if it differs). A
   directory with no vault row is skipped, or with `--owner <email>` gets
-  a vault row with that id (`Restored <id8>`). The real run holds the
+  a vault row with that id (`Restored <id8>`). Before the drain the real
+  run migrates every vault's attachment storage (#1139, as the boot
+  does); a vault whose `.asset-storage.json` is `rolled-back` is left as
+  it is: not migrated, not scanned, and kept out of the drain
+  (`excludeVaultsFromProjector`: its pending `file`/`dir_index`
+  projections and store jobs are neither lease-reset, claimed nor run, so
+  they stay queued). It is listed in `vaultsSkipped` (the dry run too),
+  so it never blocks the other vaults. The real run holds the
   exclusive instance maintenance lock (`holdInstanceLock('exclusive')`),
   so it refuses (exit 2) while a server or writing CLI is up; if the
   lock's connection drops it throws before the next create and after the
@@ -1793,7 +1800,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   job for a seq the note has moved past is skipped (every write that moves
   `seq` queues that seq's job); the blocks are computed and only the texts
   whose `embed_key` none of the note's blocks has are embedded, outside any
-  transaction; one short transaction then locks the row, drops the result if
+  transaction; one short transaction then locks the row `FOR NO KEY UPDATE`
+  (excluding edits/deletes but allowing collab appends' foreign-key checks,
+  #1126), drops the result if
   an edit moved `seq` meanwhile, replaces the whole block set (upsert by
   `block_id`, `search/block-rows.ts`, shared with extraction) and records
   `notes.embedder_id` and `notes.chunk_version`. A frontmatter-only edit
@@ -2374,22 +2383,83 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   answer. Bare-array answers (the unbudgeted list tools) carry
   none: MCP's `structuredContent` is an object, and wrapping the array
   would make it differ from the text. A tool may declare `outputSchema`
-  (a loose zod object, so other keys pass): today only the eight
-  `runWrite` tools, with `WRITE_RESULT_SCHEMA` (`write-result.ts`:
-  `rev` number or null, `status` enum, `indexed` boolean; about 250
-  characters per tool in `tools/list`). The SDK checks it on every
-  successful answer, after the write committed, and a mismatch would
-  turn the answer into an `Output validation error`; the schema is
-  therefore the fields every write answer has (applied, merged,
-  conflicted, retry, dry run, replay, delete). Errors are the error
-  envelope (#439, below) in `content[0].text` without `structuredContent`:
+  (a loose zod object, so other keys pass). The eight `runWrite` tools
+  use `WRITE_RESULT_SCHEMA` (`write-result.ts`: `rev` number or null,
+  `status` enum, `indexed` boolean; about 250 characters per tool).
+  Stable read contracts live in `read-result.ts` (#957): `read_note`
+  requires numeric `rev`, `read_file` requires string `hash`, including
+  targets, outlines, unchanged answers and session references.
+  History/trash validate `truncated: false | {cursor: string | null}`;
+  `get_revision` validates its string `id` and `body`. Administrative
+  object reads validate their stable typed result field. These are
+  intentionally small, meaningful contracts, not empty object schemas:
+  omitted or mistyped identities fail the SDK's check. Every other
+  answer field is retained unchanged. The SDK validates successful
+  results; for writes that is after commit, so every applied, merged,
+  conflicted, retry, dry-run, replay and delete answer must fit.
+  Errors are the error envelope (#439, below) in `content[0].text` without `structuredContent`:
   the SDK server does not check an `isError` answer, but the SDK client
   checks any `structuredContent` against the listed outputSchema, error
   or not, so `{error}` there would fail on a write tool.
-  Read tools get no output schema until their shapes settle (#957,
-  #432). `test/mcp-structured-content.test.ts` covers each tool
-  family through the real client (which validates against the listed
-  schema), every write answer shape and the errors.
+  `test/mcp-structured-content.test.ts` covers these contracts through
+  the real client, read variants, every write answer shape and errors.
+  `test/mcp-tool-budget.test.ts` measures both actual profile payloads
+  and the smallest meaningful excluded schema prototypes.
+
+  **Read schema disposition (#433/#957).** Budgets are the current
+  reader **2,500 tokens** (tools/list + instructions, no prompts),
+  writer **4,500 tokens** (tools/list + instructions; prompts reported
+  separately), and admin tools/list **less than 43,000 characters**.
+  The 2,000/4,000 profile bounds in the original #957 text are obsolete.
+  No provider-cache hit is inferred from these byte counts.
+
+  | Tool(s) | Meaningful schema | Listing cost, characters |
+  |---|---|---:|
+  | `read_note` | required numeric `rev` | 117, declared |
+  | `read_file` | required string `hash` | 119, declared |
+  | `note_history`, `list_trash` | required false-or-cursor continuation | 273 each, declared |
+  | `get_revision` | required string `id`, `body` | 147, declared |
+  | both `get_*_graph_preference` tools | required boolean `include` | 126 each, declared |
+  | `get_vault_preferences` | required string `storageMode` | 133, declared |
+  | `repository_status` | required string `syncStatus` | 131, declared |
+  | `export_vault`, `export_note` | required string `zipBase64` / `markdown` | 129 / 127, declared |
+  | `lookup_user`, `audit_okf_conformance` | required string `id` / numeric `totalNotes` | 115 / 131, declared |
+  | `browse_vault` | required string `directory` | 129, excluded |
+  | `grep` | required numeric `scanned` | 125, excluded |
+  | `browse_repository`, `search`, `find_symbols`, `orient`, `graph`, `find_graph_path` | required false-or-cursor continuation | 273 each, excluded |
+  | `usage_report` | required boolean `enabled` | 126, declared |
+
+  The final measurement includes #1132 (`95e02f8a`), not a mixed
+  historical harness: reader tools/list 9,649 + instructions 311 =
+  **9,960 chars / 2,490 tokens**; writer 16,130 + 443 =
+  **16,573 chars / 4,144 tokens** (prompts 10,042 chars, reported
+  separately); admin tools/list **42,979 chars**.
+  Compared with the #1132 control alone (`95e02f8a`: reader 2,431
+  tokens, writer 4,085 tokens, admin tools/list 40,957 characters), read
+  schemas add 236 reader characters and all declared read schemas add
+  2,073 admin characters.
+  Admin would have been 43,030: a meaning-preserving 51-character trim
+  of `repository_status`'s description retains sync state/time, queued
+  or running extraction, exhausted retries/errors and the freshness
+  warning. This brings it below 43,000 without changing any manual.
+  After these additions, `grep`'s minimal schema would cost the reader
+  2,522 tokens, `browse_vault` 2,523, and each continuation schema
+  2,559: every excluded object read is measured against the **current**
+  bound. The permanent budget regression recomputes these values from
+  the actual SDK listing, so newly available headroom requires revisiting
+  the disposition. Native SDK contract verification: 17 tests across
+  structured-content, tool-budget and tool-schema; new read regressions
+  cover targets, outlines, grep, unchanged/session answers and invalid
+  typed identities. No provider model trial was run for this schema
+  change.
+  Bare-array read answers (`list_vaults`, `list_repositories`,
+  `list_vault_shares`, `list_repository_shares`, `list_teams`,
+  `list_team_members`, `list_notifications`, `list_graph_perspectives`)
+  stay deliberately unschema'd: MCP requires an object output schema
+  and object structuredContent. Wrapping them to claim coverage would
+  break the accepted wire contract. Errors remain text-only `isError`,
+  not a successful result union. No default response size or budget is
+  raised.
 - **Instructions** (#435): `instructionsFor(profile)` in
   `mcp/instructions.ts` is the `initialize` result's `instructions`
   (`new McpServer(info, {instructions})` in `buildServer`): one constant
@@ -2985,8 +3055,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   access ("a copy outlives later revocation" — read access isn't
   enough). Sessionless, time-boxed **export links**
   (`EXPORT_LINK_TTL_HOURS`, default 24h) for sharing outside the app.
-  Entries: live notes as OKF `<path>.md`, `assets/<name>`,
-  `manifest.json` (`formatVersion` 1, `vaultId`, `name`, `mergeable`,
+  Entries: live notes as OKF `<path>.md`, `.assets/<name>` attachments,
+  `manifest.json` (`formatVersion` 2, `vaultId`, `name`, `mergeable`,
   `shares`) and, per
   note live or trashed, `.elara/history/<noteId>.json`
   (`vault-history.ts`, #499): `path`, `createdAt`/`updatedAt`/`deletedAt`
@@ -3001,10 +3071,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
   note is skipped and reported, not fatal). Refused with 400 before any
-  vault is created: a manifest `formatVersion` newer than the server's,
-  or a history file with a time that is not a real UTC instant. Assets
-  keep their archive file names (unsafe names, `.` and `..` are
-  dropped); `.md` files under `assets/` stay attachments, never notes. Trashed notes are recreated in
+  vault is created: an unsupported manifest version, duplicate/unsafe ZIP paths,
+  a legacy entry claimed as both note and attachment, or an invalid history time.
+  Attachments retain names; unsafe names are refused, never guessed or overwritten.
+  V2 `.assets/*.md` stay attachments; legacy unversioned/v1 reads `assets/`.
+  V2 `assets/design.md` is an ordinary valid note, disjoint from `.assets/design.md`. Trashed notes are recreated in
   the trash, then live notes; each note with a history file gets the
   archive's revisions (new ids, original order and times; a revert's
   `sourceRevisionId` is pointed at the new id of the archived revision
