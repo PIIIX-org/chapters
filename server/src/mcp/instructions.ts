@@ -16,7 +16,7 @@ import type { ToolProfile } from './server.js'
  * other writes refuse it).
  */
 const READ_RULES =
-  'Tools with `budget_tokens` (characters / 4) fit it and end with `truncated`; for more, repeat with its `cursor`. ' +
+  'Tools with `budget_tokens` (chars / 4) fit it and end with `truncated`; repeat with its `cursor` for more. ' +
   'read_note/read_file: `outline: true` maps a body; `targets` reads: {lines:"a-b"}, {heading:"A > B"}, {block}, {symbol} (files), {grep:"text"}. ' +
   'Manuals: elara://manual/conventions and one per family.'
 

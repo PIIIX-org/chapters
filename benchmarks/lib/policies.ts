@@ -111,8 +111,9 @@ export interface PolicyRun {
   hits: Array<LineRange | null>
   /** The search answered `no_match` or `ambiguous` instead of a first hit (#1058). */
   abstained: boolean
-  /** The route the search took: `identifier` or `path` (answered by lookup, #1060), else `conceptual`. */
-  route: 'identifier' | 'path' | 'conceptual'
+  /** The actual search route; a missed lookup stays conceptual. */
+  route: 'identifier' | 'path' | 'structural' | 'conceptual'
+  attemptedRoute?: 'identifier' | 'path' | 'structural'
   episode: Episode
 }
 
@@ -247,7 +248,8 @@ export async function runElara(question: string, gold: readonly LineRange[], too
   const located = hits.map(hitLocation)
   const status = searchStatus(parsed)
   const named = parsed && typeof parsed === 'object' ? Reflect.get(parsed, 'route') : undefined
-  const run = { ranking, hits: located, abstained: status === 'no_match' || status === 'ambiguous' || Reflect.get(parsed ?? {}, 'ambiguous') === true, route: named === 'identifier' || named === 'path' ? named : ('conceptual' as const), episode: ep }
+  const attempted = parsed && typeof parsed === 'object' ? Reflect.get(parsed, 'attempted_route') : undefined
+  const run = { ranking, hits: located, abstained: status === 'no_match' || status === 'ambiguous' || Reflect.get(parsed ?? {}, 'ambiguous') === true, route: named === 'identifier' || named === 'path' || named === 'structural' ? named : ('conceptual' as const), ...(attempted === 'identifier' || attempted === 'path' || attempted === 'structural' ? { attemptedRoute: attempted } : {}), episode: ep }
 
   // Each hit, best first, up to the file cap: the first hit, when it is located, is read as its span first; a file whose span shows no gold, and every other hit, is read page by page.
   const paged = new Set<string>()

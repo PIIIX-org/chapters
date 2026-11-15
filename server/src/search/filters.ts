@@ -1,4 +1,5 @@
 import type { SearchFilters } from './search.js'
+import { SEARCH_ROUTES, type SearchRoute } from './router.js'
 
 /** The query string of every search route: vault, everywhere (search/routes.ts) and repository (repositories/routes.ts). */
 export const searchQuerySchema = {
@@ -15,6 +16,7 @@ export const searchQuerySchema = {
     kinds: { type: 'string' },
     path: { type: 'string', minLength: 1, maxLength: 500 },
     symbols: { type: 'boolean' },
+    route: { type: 'string', enum: SEARCH_ROUTES },
   },
 } as const
 
@@ -29,6 +31,7 @@ export interface SearchQuery {
   kinds?: string
   path?: string
   symbols?: boolean
+  route?: SearchRoute
 }
 
 const list = (value: string | undefined) => (value ? value.split(',').filter(Boolean) : undefined)
