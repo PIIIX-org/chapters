@@ -31,11 +31,11 @@ export async function overlayHits(
   patches: readonly FilePatch[],
   query: string,
   base: readonly SymbolSearchResult[],
-  opts: { kind?: string; limit: number },
-): Promise<{ hits: OverlayResult[]; skipped: string[]; stale: string[] }> {
+  opts: { kind?: string; limit: number; caller?: string },
+): Promise<{ hits: OverlayResult[]; skipped: string[]; unparsed: Record<string, string>; stale: string[] }> {
   let found
   try {
-    found = await overlaySymbols(repositoryId, patches)
+    found = await overlaySymbols(repositoryId, patches, { caller: opts.caller })
   } catch (err) {
     if (err instanceof OverlayError) throw new McpToolError('INVALID_ARGUMENT', err.message, { field: 'overlay' })
     throw err
@@ -64,5 +64,5 @@ export async function overlayHits(
     }
     ;(s.name.toLowerCase() === wanted || inner.toLowerCase() === wanted ? exact : rest).push(hit)
   }
-  return { hits: [...exact, ...rest, ...base.filter((r) => !found.changed.has(r.path))].slice(0, opts.limit), skipped: found.skipped, stale: found.stale }
+  return { hits: [...exact, ...rest, ...base.filter((r) => !found.changed.has(r.path))].slice(0, opts.limit), skipped: found.skipped, unparsed: found.unparsed, stale: found.stale }
 }

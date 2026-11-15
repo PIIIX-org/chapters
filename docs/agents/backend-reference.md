@@ -3500,33 +3500,87 @@ nothing does. A grammar marked `isolated` (`extraction-languages.ts`; only
 Swift) is parsed by a long-lived child started lazily on the first Swift
 file with those flags and `--max-old-space-size=512` on its command line
 (through the same `tsx` loader as the server, from the same source, with
-only `PATH`, `HOME`, `TMPDIR` and `NODE_ENV` of the server's environment).
-The server never loads the Swift grammar. Requests go one at a time over the
-IPC channel as JSON (content in, symbols, imports and sites out), and the
-parent enforces a deadline per request, `ELARA_ISOLATED_PARSE_TIMEOUT_MS`
-(default 10,000 ms; a 1 MB file of 17,000 symbols takes 0.7 s, a cold start
-0.3 s). Past it, or when the child dies (an OOM kill, a crash), the child
-is killed and the next request starts a new one. That file gets its file
-block and no symbols or imports; its `embeddingNote`, as `read_file`
-reports it, says why (`swift symbols not extracted: no result within
-10000 ms ...`), the server logs it, and nothing is thrown, so a sync never
-fails for it. The result is not cached, so the same content is parsed again
-on a later extraction (a new extractor version or a re-sync of changed
-content), not retried by itself. The child exits when the server does
-(a closed channel, or the server's exit hook), also when the server is
-killed during a parse. The child also stops a parse past the deadline
-itself. The `find_symbols` overlay takes the same route. The other grammars
-still parse in the server with no deadline (#1146).
+only `PATH`, `HOME`, `TMPDIR`, `NODE_ENV` and the two child limits below of
+the server's environment). The server never loads the Swift grammar.
 
-Measured on macOS arm64 (Node 24): server process peak RSS 84 to 101 MB
-(its size without Swift) at 300 and 3,000 parses; the child 109 MB at both
-and 220 MB after a 1 MB file (`MAX_FILE_BYTES`) of 16,910 symbols, parsed in
-0.65 s; 1.6 ms per small file through IPC. The Linux production image is
-unmeasured, and so is a real Swift repository there. The child's memory is
-not in the container's RSS alert of the server process, only in the
-container's total. `extraction-languages.test.ts` fails a server over 300 MB
-or a child over 500 MB after 300 parses, `extraction-child.test.ts` the
-deadline, crash and respawn, and `extraction-queue.test.ts` the stored note.
+What a caller gets from `extractStructure` for Swift:
+
+- a result, possibly `truncated`: the child cuts every answer before it
+  sends it (names over 200 characters, more than 30,000 symbols or imports,
+  an answer over 8 MiB: a 200 KB source can name a class with 8,000
+  characters and give it 5,000 methods), and the server checks the size and
+  shape of what it receives before it reads it. A cut result stores what is
+  right and says in `embeddingNote` that some symbols are missing;
+- a result with `skipped`: the content itself cannot be read within the
+  limits (the child's own parse deadline, or an answer over the limits or
+  malformed). The file keeps its file block with no symbols; its
+  `embeddingNote`, as `read_file` reports it, says why; it is final for
+  that content, and not cached, so the same content is parsed again on a
+  later extraction;
+- a rejection, `IsolatedUnavailable`: the child exited, could not be
+  reached or started, stayed silent, is backing off after repeated failures,
+  or the queue is full. Nothing is known about the content, so nothing is
+  stored: the extraction job fails and is retried like any other failed
+  job (`MAX_JOB_ATTEMPTS`, its backoff, `extractionFailures`, and again at
+  boot), and the file keeps the rows it had. An overlay lists the file as
+  unparsed instead (below).
+
+The deadline, `ELARA_ISOLATED_PARSE_TIMEOUT_MS` (default 10,000 ms), is the
+child's: it counts on its own monotonic clock from when its grammar is
+loaded and cancels the parse and the query itself, so a stalled event loop
+in the server cannot skip a file the child answered. The server only runs a
+watchdog at 1.5 times the deadline plus 2 s, looks once more after the
+event loop's I/O before it acts, and then kills the child and counts a
+failure. After three failures in a row the child is started again only
+after 1, 2, 4 ... 30 s.
+
+Requests go one at a time over the IPC channel as JSON. The index lane (the
+extraction queue, itself one file at a time) is served before the overlay
+lane (`find_symbols` overlays), so a reader cannot starve indexing. The
+overlay lane holds at most 4 waiting requests, an account at most 2 in
+flight, and a request waits at most twice the deadline; past any of those
+the file is answered as unparsed with a reason that says to try again (not
+stored). A queued overlay request is not cancelled when its caller goes
+away: it costs one more parse at most.
+
+A tree-sitter Wasm heap slows down with use: the same 64 KB file parsed in
+37 ms in a new process and 362 ms after a hundred small files, 100 KB in 94
+and 850 ms, 400 KB in 250 ms and 13 s, and a second 1 MB file did not finish
+in 60 s (a new process parses it in 0.8 s). So a file over 16 KiB is parsed
+by a child that has parsed nothing before, and that exits after it
+(`FRESH_CHILD_CHARS`); a cold start costs about 0.3 s. The other grammars
+share the slowdown, and still parse in the server with no deadline (#1146).
+
+`--max-old-space-size` caps only the child's JS heap, not its Wasm memory,
+so the cap is best effort. After each answer the child retires itself when
+its RSS is over `ELARA_ISOLATED_CHILD_RSS_MB` (default 400; a 1 MB file
+peaks near 220) or it has parsed `ELARA_ISOLATED_CHILD_MAX_PARSES` files
+(default 2,000); its answer says so, and the next request starts a new
+child. It exits when the server does (a closed channel, or the server's exit
+hook), also when the server is killed during a parse. The `find_symbols`
+overlay takes the same route, with `lane: 'overlay'` and the account as its
+caller; a Swift file it could not parse is listed in the head's `skipped`
+with the reason in `skippedBecause`, and its indexed hits stay in the
+answer.
+
+Measured on macOS arm64 (Node 24): over 300 parses of the 1 KB fixture the
+server process stays at 83 MB (its size without Swift, growth 0) and the
+child at 90 to 109 MB; the child peaks at 220 MB for one 1 MB file
+(`MAX_FILE_BYTES`) of 16,910 symbols, parsed in about 0.8 s with its start;
+1.6 ms per small file through IPC. The first Linux numbers are from CI
+(`checks` job of run 43691927161, test `extraction-languages.test.ts`):
+server 389 MB after warm-up, growth 0, child 102 MB. [INFERENCE] The 389 MB
+is the test runner's inherited peak (Linux keeps the high-water mark across
+exec), not the server's own size, so on Linux the test sees growth only
+above that. The Linux production image, and a real Swift repository there,
+are unmeasured. The child's memory is not in the server's RSS alert, only
+in the container's total. `extraction-languages.test.ts` fails when the
+server grows by 150 MB or more over 300 parses, or the child is at 600 MB
+or more; `extraction-child.test.ts` covers the deadline, a stalled server,
+an unstartable, killed and stuck child, the backoff, the size limits, the
+lanes, retiring and the fresh child for large files; `extraction-queue.test.ts`
+the stored note and that an unreachable child leaves the file unextracted;
+`mcp-overlay.test.ts` the overlay's report.
 
 All grammars are MIT and load in `web-tree-sitter` 0.27 (ABI 14
 and 15). The npm grammars' native build never runs (`allowBuilds: false` in
@@ -5182,7 +5236,9 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     cap, §5.3; a reverse proxy must pass bodies up to 6 × it + 64 KiB),
     `ELARA_EMBED_MAX_SYMBOLS_PER_FILE` (per-file symbol embedding budget,
     default 256, §5.10 extraction queue), `ELARA_ISOLATED_PARSE_TIMEOUT_MS`
-    (milliseconds the Swift parser process gets per file, default 10000).
+    (milliseconds the Swift parser process gets per file, default 10000),
+    `ELARA_ISOLATED_CHILD_RSS_MB` and `ELARA_ISOLATED_CHILD_MAX_PARSES` (when
+    that process retires itself: default 400 MB of RSS, 2000 files).
 - **Migrations**: `drizzle-kit generate` produces SQL under
   `server/drizzle/`; a few migrations were hand-edited afterward for
   things Drizzle can't express directly (pgvector extension + HNSW

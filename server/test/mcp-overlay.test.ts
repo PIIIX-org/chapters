@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { eq } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -8,6 +8,7 @@ import { db } from '../src/db/client.js'
 import { blocks, repositoryFiles } from '../src/db/schema.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
+import { resetIsolatedChild } from '../src/repositories/extraction-child.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { createHash } from 'node:crypto'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -198,5 +199,44 @@ describe('find_symbols overlay', () => {
     const json = await find('cafeTwo', diff)
     expect(json.skipped).toBeUndefined()
     expect(json.results[0]).toMatchObject({ path: 'src/café.ts', name: 'cafeTwo', startLine: 4 })
+  })
+})
+
+// #988: a Swift file is parsed by a child process. When it cannot be, the file is reported, with why, and the indexed
+// symbols of the file stay in the answer: the agent is not told its symbol does not exist because a parse was missing.
+describe('find_symbols overlay of a Swift file (#988)', () => {
+  const realExecPath = process.execPath
+  const SWIFT = 'public func openThing() {}\n'
+  const SWIFT_OVERLAY = '--- a/Sources/Thing.swift\n+++ b/Sources/Thing.swift\n@@ -1,1 +1,2 @@\n public func openThing() {}\n+public func newThing() {}\n'
+  type SwiftAnswer = Answer & { skippedBecause?: Record<string, string> }
+  const findSwift = async (query: string, overlay: string) => JSON.parse((await ask(owner, { query, overlay })).text) as SwiftAnswer
+
+  beforeAll(async () => {
+    await syncRepositoryFiles(repoId, [{ path: 'Sources/Thing.swift', content: SWIFT }], ['Sources/Thing.swift'], { commit: COMMIT })
+    await flushExtraction()
+  }, 60_000)
+
+  afterEach(() => {
+    Object.defineProperty(process, 'execPath', { value: realExecPath })
+    resetIsolatedChild()
+    vi.restoreAllMocks()
+  })
+
+  it('finds the symbol the overlay adds to a Swift file, with no note', async () => {
+    const json = await findSwift('newThing', SWIFT_OVERLAY)
+    expect(json.results[0]).toMatchObject({ path: 'Sources/Thing.swift', name: 'newThing', startLine: 2 })
+    expect(json.skipped).toBeUndefined()
+    expect(json.skippedBecause).toBeUndefined()
+  })
+
+  it('lists a Swift file it could not parse in `skipped` with the reason, and keeps that file’s indexed symbols', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    resetIsolatedChild()
+    Object.defineProperty(process, 'execPath', { value: '/usr/bin/false' })
+    const json = await findSwift('openThing', SWIFT_OVERLAY)
+    expect(json.skipped).toEqual(['Sources/Thing.swift'])
+    expect(json.skippedBecause?.['Sources/Thing.swift']).toMatch(/Swift parser process exited/)
+    // The stored hit is still there: the overlay's own parse of this file is what is missing.
+    expect(json.results.map((r) => [r.path, r.name, r.id.startsWith('overlay:')])).toEqual([['Sources/Thing.swift', 'openThing', false]])
   })
 })
