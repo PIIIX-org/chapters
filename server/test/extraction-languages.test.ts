@@ -3,6 +3,7 @@
 // static fields) of module-level classes with their class in `parent`,
 // namespace members with their namespace; nothing nested in a body. Each
 // fixture under fixtures/languages is a small real-code file.
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
@@ -91,6 +92,29 @@ describe('Swift (#988)', () => {
       '61-65 function localTypes',
     ])
     expect(imports).toEqual(['1 Foundation', '2 Models', '3 Storage'])
+  })
+
+  it('gives no symbol a name tree-sitter made up while recovering from half-typed code', async () => {
+    const names = async (src: string) => brief((await extractStructure('swift', src, 'src/Draft.swift')).symbols)
+    expect(await names('func ( ) {}\nfunc ok() {}\n')).toEqual(['2-2 function ok'])
+    expect(await names('struct S { func () {} }\n')).toEqual(['1-1 class S'])
+    expect(await names('class { func ( ) }\n')).toEqual([])
+    expect(await names('protocol P { func () }\n')).toEqual(['1-1 interface P'])
+  })
+
+  // V8 re-compiles the grammar's 340 KB lexer function with TurboFan while parsing: 1.3 to 1.9 GB
+  // resident after a few hundred parses on macOS arm64 (110 MB once tier-up is off around load and parse).
+  // A child process, because RSS peaks are per process and the tier-up depends on a fresh V8.
+  it('parses hundreds of files without the Wasm tier-up memory peak', () => {
+    const script = `
+      import { readFileSync } from 'node:fs'
+      import { extractStructure } from ${JSON.stringify(new URL('../src/repositories/extraction.ts', import.meta.url).href)}
+      const source = readFileSync(new URL(${JSON.stringify(new URL('./fixtures/languages/Store.swift', import.meta.url).href)}), 'utf8')
+      for (let i = 0; i < 300; i++) await extractStructure('swift', source + '// ' + i, 'Store.swift')
+      console.log(process.resourceUsage().maxRSS)
+    `
+    const maxRssKb = Number(execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 60_000 }).trim())
+    expect(maxRssKb / 1024).toBeLessThan(500)
   })
 })
 
@@ -214,6 +238,24 @@ describe('C and C++ (#464)', () => {
     ].join('\n')
     const { symbols } = await extractStructure('cpp', src, 'src/store.cc')
     expect(brief(symbols)).toEqual(['1-6 namespace ns (exported)', '2-5 class ns.Store (exported)', '7-7 method Store.load', '8-8 method Inner.run'])
+  })
+
+  // The parent is the bare type name (#988), so a specialization's method defined out of line
+  // belongs to `Store` like the primary template's; it is not a second `Store<int>` parent.
+  it('gives a method of an explicit specialization the bare class name as parent', async () => {
+    const src = [
+      'template <typename T> class Store {',
+      ' public:',
+      '  void f();',
+      '};',
+      'template <> class Store<int> {',
+      ' public:',
+      '  void f();',
+      '};',
+      'void Store<int>::f() {}',
+    ].join('\n')
+    const { symbols } = await extractStructure('cpp', src, 'src/store.cc')
+    expect(brief(symbols)).toEqual(['1-4 class Store (exported)', '9-9 method Store.f'])
   })
 
   it('captures a C function returning a pointer to a pointer', async () => {

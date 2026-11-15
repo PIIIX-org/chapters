@@ -134,7 +134,8 @@ export function scopedSymbol(match: QueryMatch, rules: ScopeRules): ScopedSymbol
   // `CURL_EXTERN CURLcode f(...)` in a `.h` read by the C++ grammar: the macro makes `CURLcode f` a
   // qualified name with a MISSING `::`. It is the function `f`, not a method of `CURLcode`.
   if (nameNode?.type === 'qualified_identifier' && nameNode.children.some((c) => c?.isMissing)) nameNode = nameNode.childForFieldName('name') ?? nameNode
-  if (!decl || !nameNode) return null
+  // Error recovery can leave a zero-width MISSING name (`func ( ) {}`): half-typed code has no symbol to name.
+  if (!decl || !nameNode || nameNode.isMissing || nameNode.text === '') return null
   const node = decl.node
   const prototype = match.captures.some((c) => c.name === 'prototype')
   const place = placeOf(node, rules)
@@ -220,6 +221,8 @@ export function jvmImportTarget(node: Node): string[] {
 export interface LanguageGrammar {
   /** The `.wasm` file in its npm package, or a source-built grammar shipped with the server. */
   wasm: [pkg: string, file: string] | URL
+  /** Load without V8's Wasm optimising tier; see `loadBaselineWasm` (extraction.ts). */
+  baselineWasm?: boolean
   /** `@src`: the import's node; `importTarget` turns it into the specifiers when it is not the specifier's text. None: C#, whose `using` names namespaces, not files. */
   importQuery?: string
   importTarget?: (node: Node) => string[]
@@ -273,6 +276,7 @@ export type NewLanguage = 'rust' | 'java' | 'c' | 'cpp' | 'csharp' | 'kotlin' | 
 export const LANGUAGE_GRAMMARS: Record<NewLanguage, LanguageGrammar> = {
   swift: {
     wasm: new URL('../../grammars/tree-sitter-swift.wasm', import.meta.url),
+    baselineWasm: true,
     importQuery: '(import_declaration (identifier) @src)',
     // A scoped import (`import func Module.member`) still imports from Module.
     importTarget: (node) => [node.namedChildren[0]?.text ?? node.text],

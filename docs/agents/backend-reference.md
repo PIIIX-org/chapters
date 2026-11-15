@@ -3483,6 +3483,28 @@ excluded by the #450 scope contract. `public`/`open` top-level declarations
 are exported; methods never are. Imports record their module (`Models`
 for `import struct Models.Entry`), including attributed imports.
 
+A declaration whose name tree-sitter had to invent while recovering from
+half-typed code (`func ( ) {}`, which `find_symbols` overlays can see
+mid-edit) is skipped, for every language's scoped query.
+
+Memory (#988): V8 tiers hot Wasm functions up with TurboFan, and the Swift
+lexer is one 340 KB function. Left alone, that took 1.3 to 1.9 GB of
+resident memory in the server process after a few hundred 1 KB parses (macOS
+arm64, Node 24: 1.8 GB at 300 parses, 1.9 GB at 3,000; Kotlin 0.64 GB, the
+next largest), where the other grammars stay under 0.4 GB. A grammar marked
+`baselineWasm` (`extraction-languages.ts`; only Swift) is therefore loaded
+and parsed with `--no-wasm-tier-up --no-wasm-dynamic-tiering`, set with
+`v8.setFlagsFromString` around each `Language.load` and `parse` and turned
+back on after (`extraction.ts`), so every other grammar keeps V8's defaults.
+The flags have to be live while the code runs, so they cannot be set once;
+NODE_OPTIONS does not accept them and a process flag would also change every
+other Wasm module. With it: 114 MB peak at 300 parses, 130 MB at 3,000, 231
+MB for one 1 MB file (`MAX_FILE_BYTES`) of 16,910 symbols, at the same parse
+speed. Measured on macOS arm64 only: the Linux production image is
+unmeasured, so check `repository_status` and the RSS alert on the first
+large Swift repository, and `extraction-languages.test.ts` fails a peak over
+500 MB after 300 parses.
+
 All grammars are MIT and load in `web-tree-sitter` 0.27 (ABI 14
 and 15). The npm grammars' native build never runs (`allowBuilds: false` in
 `pnpm-workspace.yaml`), two dependencies only a native or grammar build
