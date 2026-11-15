@@ -187,8 +187,8 @@ const UUID_ARG = z
  */
 const ID_ARG = z.string().meta({ format: 'uuid' })
 /** The target vault (repository): a pinned connection may omit it, an account connection names it. */
-const VAULT_ID = ID_ARG.optional().describe('Vault id; omit when pinned')
-const REPOSITORY_ID = ID_ARG.optional().describe('Repository id; omit when pinned')
+const VAULT_ID = ID_ARG.optional().describe('Vault; omit when pinned')
+const REPOSITORY_ID = ID_ARG.optional().describe('Repository; omit when pinned')
 const NOTE_PATH = z.string().describe('Note path')
 
 /** One `edit_note` op (#408); each op object takes only its own keys. */
@@ -975,7 +975,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'List every vault this account can access.',
+        'List every vault you can access.',
       inputSchema: {},
     },
     async () => {
@@ -1013,8 +1013,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         'List a vault folder: one level, or its subtree with `recursive: true`.',
       inputSchema: {
         vaultId: VAULT_ID,
-        path: z.string().optional().describe('Folder; omit for the root'),
-        recursive: z.boolean().optional().describe('true: the whole subtree'),
+        path: z.string().optional().describe('Folder; default root'),
+        recursive: z.boolean().optional().describe('true: whole subtree'),
         // In allowlist order without repeats, so the cursor's fingerprint does not depend on how they were listed.
         fields: z
           .array(z.enum(BROWSE_FIELDS))
@@ -2231,7 +2231,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'List every repository this account can access.',
+        'List every repository you can access.',
       inputSchema: {},
     },
     async () => {
@@ -2310,7 +2310,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       inputSchema: {
         repositoryId: REPOSITORY_ID,
         path: z.string().optional().describe('Folder, e.g. `src/lib`'),
-        changed_since: z.string().optional().describe('Commit SHA or date: files changed since'),
+        changed_since: z.string().optional().describe('Since a commit SHA or date'),
       },
       budget: 'list',
     },
@@ -3048,7 +3048,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Search notes/code. Auto: exact names, paths, code-graph questions; conceptual: keyword+semantic.',
+        'Search notes/code: names, paths, code-graph questions by lookup (`route`); else keyword+semantic.',
       inputSchema: {
         query: z.string().describe('Text'),
         vaultId: ID_ARG.optional().describe('Vault'),
@@ -3056,8 +3056,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         everywhere: z.boolean().optional().describe('All accessible (account tokens)'),
         symbols: z.boolean().optional().describe('Include symbols'),
         limit: intRange('limit', 1, 100).optional().describe('Max results'),
-        route: z.enum(SEARCH_ROUTES).optional().describe('Override; auto if omitted'),
-        if_rev: z.string().optional().describe('Your search rev: unchanged if current'),
+        route: z.enum(SEARCH_ROUTES).optional().describe('Forces a route'),
+        if_rev: z.string().optional().describe('Your rev: unchanged if current'),
       },
       budget: 'list',
     },
@@ -3112,8 +3112,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       description: 'Regex over note and code lines: located hits in path order.',
       inputSchema: {
         ...GREP_INPUT,
-        vaultId: ID_ARG.optional().describe('Vault to search'),
-        repositoryId: ID_ARG.optional().describe('Repository to search'),
+        vaultId: ID_ARG.optional().describe('Vault'),
+        repositoryId: ID_ARG.optional().describe('Repository'),
         everywhere: z.boolean().optional().describe('All accessible (account tokens)'),
       },
       budget: 'list',
@@ -3129,17 +3129,17 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       profile: 'reader',
       // The kinds are the `kind` enum (#450): naming them again in the description would cost reader tokens twice.
       description:
-        'Search code symbols by meaning, signature or name: declarations with line ranges and snippets. `refs`: the sites of the symbol `query` names.',
+        'Code symbols by meaning, signature or name: declarations, line ranges, snippets. `refs`: sites of the symbol `query` names.',
       inputSchema: {
         query: z.string().describe('Name, signature or meaning'),
         kind: z.enum(SYMBOL_KINDS).optional().describe('Symbol kind'),
-        repositoryId: ID_ARG.optional().describe('Repository to search'),
-        everywhere: z.boolean().optional().describe('Every accessible repository (account tokens)'),
+        repositoryId: ID_ARG.optional().describe('Repository'),
+        everywhere: z.boolean().optional().describe('All accessible (account tokens)'),
         limit: intRange('limit', 1, 50).optional().describe('Max results'),
         refs: z.enum([...REFS, 'explain']).optional().describe('Sites of a symbol; at: `path:line`; explain: sites, notes'),
-        path: z.string().optional().describe('File of the definition'),
+        path: z.string().optional().describe("Definition's file"),
         depth: intRange('depth', 1, 3).optional().describe('impact levels; default 2'),
-        overlay: z.string().optional().describe('`git diff --no-renames` vs the indexed commit: searches your edits'),
+        overlay: z.string().optional().describe('`git diff --no-renames` vs indexed commit: searches your edits'),
       },
       budget: 'list',
     },
@@ -3247,15 +3247,15 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Query the knowledge graph of notes and code: one node per community by default, or nodes with `community`, `aggregate: "none"` or `neighborsOf`. Edges carry direction, relation, confidence and evidence (`path#La-Lb`).',
+        'Knowledge graph of notes and code: one node per community by default, or nodes with `community`, `aggregate: "none"` or `neighborsOf`. Edges carry direction, relation, confidence and evidence (`path#La-Lb`).',
       inputSchema: {
         vaultId: ID_ARG.optional().describe('Vault graph'),
         repositoryId: ID_ARG.optional().describe('Repository graph'),
         types: z.array(z.string()).optional().describe('Note types or code languages'),
         tags: z.array(z.string()).optional().describe('Only these tags'),
-        aggregate: z.enum(['community', 'none']).optional().describe('Default "community"'),
+        aggregate: z.enum(['community', 'none']).optional().describe('Default community'),
         // `.int()` would list JS's safe-integer bounds, 55 characters of the reader budget (as budgetArgs).
-        community: z.number().refine(Number.isInteger, { error: 'community is an integer' }).optional().describe('Only this community\'s members'),
+        community: z.number().refine(Number.isInteger, { error: 'community is an integer' }).optional().describe('This community only'),
         neighborsOf: z.string().min(1).optional().describe('Node id, path or name'),
         depth: intRange('depth', 1, 3).optional().describe('Edges from neighborsOf; default 1'),
         edgeTypes: z.array(z.enum(EDGE_KINDS)).min(1).optional().describe('Only these edge kinds'),
@@ -3367,7 +3367,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       capability: 'read',
       profile: 'reader',
       description:
-        'Find the shortest path between two notes, concepts or code files in the graph: `{found, distance}`, nodes in order, one edge row per step.',
+        'Shortest path between two notes, concepts or code files: `{found, distance}`, nodes in order, one edge row per step.',
       inputSchema: {
         source: z.string().describe('Node id, path or name'),
         target: z.string().describe('Node id, path or name'),
