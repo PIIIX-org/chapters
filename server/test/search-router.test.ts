@@ -12,7 +12,8 @@ import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { classifyQuery, routeTerm } from '../src/search/router.js'
-import { classifyStructural } from '../src/search/structural.js'
+import { classifyStructural, dispatchStructural } from '../src/search/structural.js'
+import type { codeSites as CodeSites, Target } from '../src/repositories/code-queries.js'
 import { searchNotes } from '../src/search/search.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
@@ -130,6 +131,7 @@ describe('identifier route (#1060)', () => {
     for (const query of ['where is parseFrontmatterX defined?', '`parseFrontmatterX`']) {
       const missed = await ask(query)
       expect(missed).toMatchObject({ route: 'conceptual', attempted_route: 'identifier', retrieval_mode: 'fallback', underlying_retrieval_mode: 'hybrid' })
+      expect(await ask('parseFrontmatter')).toMatchObject({ route: 'identifier' })
       expect(missed.confidence).toBeUndefined()
     }
     for (const query of ['how does the parser handle `parseFrontmatter` when the text has no fence', 'parseFrontmatter']) {
@@ -138,6 +140,9 @@ describe('identifier route (#1060)', () => {
       const automatic = await ask(query, false)
       expect(JSON.stringify(conceptual)).toBe(JSON.stringify(baseline))
       expect(JSON.stringify(automatic)).toBe(JSON.stringify(baseline))
+      // Absent means conceptual: the default path names no route and no attempt.
+      expect(automatic).not.toHaveProperty('route')
+      expect(automatic).not.toHaveProperty('attempted_route')
     }
   })
 })
@@ -204,12 +209,13 @@ describe('structural routes and public overrides', () => {
     expect(missing).toMatchObject({ route: 'conceptual', attempted_route: 'identifier', results: [] })
     const conceptual = await searchNotes(code, 'parseFrontmatter', 10, {}, { includeSymbols: true, route: 'conceptual' })
     const exact = await ask('parseFrontmatter')
-    expect(conceptual.route).toBe('conceptual')
+    expect(conceptual).not.toHaveProperty('route')
     expect(conceptual.results.length).toBeGreaterThan(exact.results.length)
     for (const route of ['identifier', 'path', 'structural'] as const) {
       const res = await searchNotes({ vaultIds: [], repositoryIds: [] }, 'parseFrontmatter', 10, {}, { ...options, route })
       expect(res.results).toEqual([])
-      expect(res.route).toBe('conceptual')
+      // Nothing to search: still a miss of the forced route, with the same fallback fields as any miss.
+      expect(res).toMatchObject({ route: 'conceptual', attempted_route: route, retrieval_mode: 'fallback', underlying_retrieval_mode: 'none' })
     }
   })
 
@@ -217,13 +223,14 @@ describe('structural routes and public overrides', () => {
     for (const [route, query] of [['identifier', 'parseFrontmatter'], ['path', 'src/store.ts'], ['structural', 'who calls parseFrontmatter'], ['conceptual', 'parseFrontmatter']] as const) {
       const rest = await app.inject({ method: 'GET', url: `/api/repositories/${repoId}/search?q=${encodeURIComponent(query)}&symbols=true&route=${route}`, headers: { cookie } })
       expect(rest.statusCode).toBe(200)
-      expect(rest.json().route).toBe(route)
+      // A plain conceptual answer names no route; every other override is named.
+      expect(rest.json().route).toBe(route === 'conceptual' ? undefined : route)
       resetRateLimits()
       const response = await agent.callTool({ name: 'search', arguments: { repositoryId: repoId, query, route, budget_tokens: 1500 } })
       expect(response.isError).not.toBe(true)
       const text = (response.content as Array<{ text: string }>)[0]!.text
       const parsed = JSON.parse(text)
-      expect(parsed.route).toBe(route)
+      expect(parsed.route).toBe(route === 'conceptual' ? undefined : route)
       expect(text.length).toBeLessThanOrEqual(6000)
       if (route === 'structural') {
         expect(parsed.results.every((r: { edge: { confidence: string } }) => r.edge.confidence === 'resolved')).toBe(true)
@@ -307,5 +314,25 @@ describe('limits of a routed answer (#1060 review)', () => {
     expect(res.index?.pending_files).toBeGreaterThan(0)
     await flushExtraction()
     expect((await ask('src/store.ts')).index).toBeUndefined()
+  })
+})
+
+describe('structural dispatch bound (#1060 review)', () => {
+  it('fetches one sentinel site across repositories to prove `partial`, and never returns it', async () => {
+    const site = (repo: string, i: number, confidence: 'resolved' | 'textual') => ({ path: `${repo}/f${String(i).padStart(2, '0')}.ts`, line: i + 1, col: 1, kind: 'call' as const, symbol: null, confidence, context: 'x()' })
+    const asked: number[] = []
+    const codeSites = (async (repositoryId: string, _t: unknown, _k: unknown, page: { limit: number }) => {
+      asked.push(page.limit)
+      return Array.from({ length: Math.min(page.limit, 7) }, (_, i) => site(repositoryId, i, i % 2 === 0 ? 'resolved' : 'textual'))
+    }) as unknown as typeof CodeSites
+    const target = { fileId: null, name: 'x', symbol: 'x' } as unknown as Target
+    const targets = ['a', 'b'].map((repositoryId) => ({ repositoryId, target }))
+    const capped = await dispatchStructural({ kind: 'callers', term: 'x' }, targets, 10, { codeSites })
+    expect(asked).toEqual([11, 4])
+    expect(capped.partial).toBe(true)
+    expect(capped.resolved.length + capped.textual.length).toBe(10)
+    const exact = await dispatchStructural({ kind: 'callers', term: 'x' }, targets.slice(0, 1), 7, { codeSites })
+    expect(exact.partial).toBe(false)
+    expect(exact.resolved.length + exact.textual.length).toBe(7)
   })
 })

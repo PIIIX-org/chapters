@@ -28,6 +28,8 @@ export async function dispatchStructural(
     sites.push(...rows.map((row) => ({ ...row, repositoryId })))
   }
   sites.sort((a, b) => Number(b.confidence === 'resolved') - Number(a.confidence === 'resolved') || compare(a.path, b.path) || (a.line ?? Number.MAX_SAFE_INTEGER) - (b.line ?? Number.MAX_SAFE_INTEGER) || a.col - b.col || compare(a.kind, b.kind) || compare(a.repositoryId, b.repositoryId))
-  return { resolved: sites.filter((s) => s.confidence === 'resolved'), textual: sites.filter((s) => s.confidence === 'textual'), partial: sites.length > limit }
+  // The sentinel (`limit + 1`-th site) only proves `partial`; it is never returned.
+  const kept = sites.slice(0, limit)
+  return { resolved: kept.filter((s) => s.confidence === 'resolved'), textual: kept.filter((s) => s.confidence === 'textual'), partial: sites.length > limit }
 }
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0

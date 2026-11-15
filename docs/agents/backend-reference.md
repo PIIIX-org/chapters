@@ -1590,13 +1590,16 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     Automatic dotted shapes try indexed paths before exact symbols; explicit overrides never switch routes.
     Structural answers use existing code queries; resolved sites alone enter `results`, textual sites are
     separate `textual` rows. Whole-file imports include modules without symbols. Ambiguous targets are shown
-    rather than guessed. Work and responses are bounded; `partial` reports omitted sites/results.
-    Every search names its actual `route`. Bare words/typos without an exact indexed symbol stay conceptual,
-    preserving the original retrieval mode; probing them does not itself classify them as identifiers.
+    rather than guessed. Work and responses are bounded; `partial` reports omitted sites/results (the sentinel
+    site that proves `partial` is never returned).
+    `route` is present when the answer did not take the default conceptual path; absent means conceptual (a plain
+    conceptual answer, automatic or the `conceptual` override, pays no tokens for it). Bare words/typos without an
+    exact indexed symbol stay conceptual, preserving the original retrieval mode; probing them does not itself
+    classify them as identifiers.
     Definition/backtick, path/structural, and forced-route misses, plus over-cap lookups, use `route: conceptual`, `attempted_route`,
-    `retrieval_mode: fallback`, and `underlying_retrieval_mode` retaining actual channels. No miss counts as an
-    exact success. Benchmarks count all four routes
-    and attempted-route fallbacks separately. No server LLM or ranking/confidence expansion is involved.
+    `retrieval_mode: fallback`, and `underlying_retrieval_mode` retaining actual channels (`none` when an empty scope or
+    query leaves nothing to search). No miss counts as an exact success. Benchmarks count all four routes (a missing
+    `route` counts as conceptual) and attempted-route fallbacks separately. No server LLM or ranking/confidence expansion is involved.
   - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
     merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a
     fixed window of `CANDIDATES = 30` rows per leg (the population the

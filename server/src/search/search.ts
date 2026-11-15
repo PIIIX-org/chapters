@@ -430,7 +430,7 @@ export interface SearchResponse<H> {
   retrieval_mode: RetrievalMode
   degraded: Degraded
   index?: IndexState
-  /** Actual route; a missed lookup is conceptual with an explicit attempted route. */
+  /** The route, present only when the answer did not take the default conceptual path (absent means conceptual); a missed lookup is `conceptual` with `attempted_route`. */
   route?: SearchRoute
   attempted_route?: Exclude<SearchRoute, 'conceptual'>
   underlying_retrieval_mode?: Exclude<RetrievalMode, 'fallback'>
@@ -1179,7 +1179,8 @@ export async function searchNotes(
   const filtered = Object.values(filters).some((value) => Array.isArray(value) ? value.length > 0 : value !== undefined && value !== '')
   const automatic = classifyQuery(query)
   const route = options.route === false ? 'conceptual' : options.route ?? (filtered || (automatic === 'identifier' && (!options.includeSymbols || repositoryIds.length === 0)) ? 'conceptual' : automatic)
-  if ((vaultIds.length === 0 && repositoryIds.length === 0) || query.trim() === '') return { ...NOTHING, route: 'conceptual', ...(route !== 'conceptual' ? { attempted_route: route } : {}), results: [] }
+  // Nothing to search: a non-conceptual route (forced or automatic) is a miss like any other, reported as a fallback over no channel.
+  if ((vaultIds.length === 0 && repositoryIds.length === 0) || query.trim() === '') return route === 'conceptual' ? { ...NOTHING, results: [] } : { ...NOTHING, route: 'conceptual', attempted_route: route, retrieval_mode: 'fallback', underlying_retrieval_mode: 'none', results: [] }
 
   const includeSymbols = options.includeSymbols ?? false
   const symbolRepos = includeSymbols ? repositoryIds : []
@@ -1310,5 +1311,6 @@ export async function searchNotes(
   observeSearchLeg('fusion', performance.now() - fusionStarted)
   await locateHits(results, query, vectorBlocks, vec ?? undefined)
   const response = respond(results, vec !== null, keyword, vector, await state)
-  return { ...response, route: 'conceptual', ...(fallback !== undefined ? { attempted_route: fallback, retrieval_mode: 'fallback', underlying_retrieval_mode: response.retrieval_mode as Exclude<RetrievalMode, 'fallback'> } : {}) }
+  // A plain conceptual answer names no route (#1060): the default path costs no tokens; a missed lookup says so.
+  return fallback === undefined ? response : { ...response, route: 'conceptual', attempted_route: fallback, retrieval_mode: 'fallback', underlying_retrieval_mode: response.retrieval_mode as Exclude<RetrievalMode, 'fallback'> }
 }
