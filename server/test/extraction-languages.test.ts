@@ -5,7 +5,7 @@
 // fixture under fixtures/languages is a small real-code file.
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { Language, Parser, LANGUAGE_VERSION, MIN_COMPATIBLE_VERSION } from 'web-tree-sitter'
 import { extractStructure, isSupportedLanguage, type ExtractedSymbol } from '../src/repositories/extraction.js'
@@ -104,26 +104,38 @@ describe('Swift (#988)', () => {
 
   // V8 re-compiles the grammar's 340 KB lexer function with TurboFan while parsing: 1.3 to 1.9 GB
   // resident after a few hundred parses on macOS arm64 (110 to 130 MB with tier-up off). Swift is parsed in a
-  // child process started with tier-up off (extraction-child.ts), so the server process stays small and the
-  // child gives up with it. Run in a process of its own: RSS peaks are per process.
-  it('parses hundreds of files with the server process, and the child, far under the Wasm tier-up peak', async () => {
+  // child process started with tier-up off (extraction-child.ts), so the server process does not grow and the
+  // child stays small. Run in a process of its own: RSS peaks are per process. The bounds are relative (growth
+  // after one warm-up parse, which loads the module graph and starts the child) because a tsx-loaded Node
+  // process starts larger on Linux than on macOS (457 MB peak on the CI runner against 100 MB); the absolute
+  // numbers are printed for the CI log. The grammar loaded in the server grows it by well over 1 GB.
+  it('parses hundreds of files without growing the server process, and with a small child', async ({ annotate }) => {
     const script = `
       import { execFileSync } from 'node:child_process'
       import { readFileSync } from 'node:fs'
       import { extractStructure } from ${JSON.stringify(new URL('../src/repositories/extraction.ts', import.meta.url).href)}
       import { isolatedChildPid } from ${JSON.stringify(new URL('../src/repositories/extraction-child.ts', import.meta.url).href)}
       const source = readFileSync(new URL(${JSON.stringify(new URL('./fixtures/languages/Store.swift', import.meta.url).href)}), 'utf8')
+      await extractStructure('swift', source, 'Store.swift')
+      const warmKb = process.resourceUsage().maxRSS
       for (let i = 0; i < 300; i++) await extractStructure('swift', source + '// ' + i, 'Store.swift')
       const pid = isolatedChildPid()
-      const childRssKb = Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }))
-      console.log(JSON.stringify({ pid, parentKb: process.resourceUsage().maxRSS, childKb: childRssKb }))
+      const childKb = pid === null ? -1 : Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }))
+      console.log(JSON.stringify({ pid, warmKb, peakKb: process.resourceUsage().maxRSS, childKb }))
     `
     const out = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 90_000 })
-    const { pid, parentKb, childKb } = JSON.parse(out.trim().split('\n').at(-1)!) as { pid: number; parentKb: number; childKb: number }
-    expect(parentKb / 1024).toBeLessThan(300)
-    expect(childKb / 1024).toBeLessThan(500)
+    const { pid, warmKb, peakKb, childKb } = JSON.parse(out.trim().split('\n').at(-1)!) as { pid: number | null; warmKb: number; peakKb: number; childKb: number }
+    const mb = (kb: number) => Math.round(kb / 1024)
+    const numbers = `Swift memory over 300 parses: server ${mb(warmKb)} MB after warm-up, ${mb(peakKb)} MB peak (growth ${mb(peakKb - warmKb)} MB); child ${mb(childKb)} MB`
+    console.info(numbers)
+    // The reporter hides a passing test's console output unless it is verbose; CI logs should keep the first Linux numbers.
+    writeSync(2, `${numbers}\n`)
+    await annotate(numbers)
+    expect(pid, 'the grammar must be parsed by a child process').not.toBeNull()
+    expect(mb(peakKb - warmKb), numbers).toBeLessThan(150)
+    expect(mb(childKb), numbers).toBeLessThan(600)
     // The server exited: its child went with it.
-    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 })
+    await vi.waitFor(() => expect(() => process.kill(pid!, 0)).toThrow(), { timeout: 5_000 })
   })
 })
 
