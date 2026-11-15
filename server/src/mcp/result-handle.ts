@@ -18,6 +18,12 @@ function contains(value: unknown, pattern: string, fold: boolean): boolean {
   return false
 }
 
+/** The filter's own predicate, for a handler that must build rows among the items the filter keeps. */
+export const literalMatcher = (pattern: string) => {
+  const fold = pattern === pattern.toLowerCase()
+  return (value: unknown) => contains(value, pattern, fold)
+}
+
 /** Filter the complete computed typed sections before the renderer pages them. */
 export function resultHandle(answer: Budgeted, snapshot: string, pattern?: string): Budgeted {
   answer.snapshot = snapshot
@@ -33,8 +39,13 @@ export function resultHandle(answer: Budgeted, snapshot: string, pattern?: strin
       incomplete ||= section.withheld === true
       return matched ? section : { ...section, text: '' }
     }
+    if (section.kind === 'ranked' && section.derivedFrom !== undefined) {
+      // Rows among the shown items of another section are already limited to them; filtering them again would drop edges whose own text lacks the literal.
+      coverage[section.name] = { scanned: section.items.length, matched: section.items.length, more: capped }
+      return section
+    }
     const items = section.items.filter((item) => contains(item, pattern, fold))
-    const more = capped || (section.kind === 'keyset' ? section.more === true : section.items.length > (section.limit ?? Infinity))
+    const more = capped || (section.kind === 'keyset' ? section.more === true : !section.whole && section.items.length > (section.limit ?? Infinity))
     coverage[section.name] = { scanned: section.items.length, matched: items.length, more }
     incomplete ||= more
     if (section.kind === 'keyset') {

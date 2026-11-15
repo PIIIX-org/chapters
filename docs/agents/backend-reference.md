@@ -3118,67 +3118,54 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     computation and return retryable `BUSY` for a new in-flight race.
     No default response shape, result budget or search-cache policy changes.
 
-    CI run `43426870109` exposed the original wrapper's broad `BUSY`
-    regression in 15 existing success/race/degraded consumer cases.
-    Their assertions remain intact. The shared wrapper now scopes that
-    refusal to the strict paths above and treats a missing pre-compute
-    snapshot as stale on continuations. New regressions distinguish
-    ordinary/filtered races and assert no result computation after
-    stale content, permission or absent-snapshot checks. Earlier local
-    passes below do not constitute verification of this repair.
-    The focused replay of those 15 failures plus four snapshot checks
-    passed 18/19. The remaining backlink pagination fixture seeded 40
-    notes then walked while derived indexing still changed its epochs.
-    That one unchanged-snapshot paging fixture now finishes embeddings
-    once after seeding, before its first page. Its success, count and
-    budget assertions remain intact; no per-page drain or retry was
-    added. Separate tests retain raced-first-page success, explicit
-    filter-race `BUSY`, and stale content/permission/absent-snapshot
-    refusal before the handler. No legacy no-snapshot bypass was added.
-    After the power outage, only the fixed pagination case was rerun:
-    **1/1 passed** on fresh private fixture setup. The terminal pre-outage
-    18/19 result remains the evidence for the other 18 cases; no passing
-    batch or native episode was rerun. No owned job was active during
-    the outage, no owned PID/git locks needed clearing, and no shared
-    container lifecycle action was taken. The owned DB and test/cache
-    files were removed after the run. Fresh CI and independent review
-    still gate acceptance of the normally merged repair.
+    The wrapper scopes `BUSY` to the strict paths above and treats a
+    missing pre-compute snapshot as stale on continuations; no legacy
+    no-snapshot cursor is accepted. `test/mcp-response-envelope.test.ts`
+    separates ordinary from filtered races and asserts that no result
+    computation follows a stale content, permission or absent-snapshot
+    check. The snapshot binds every index epoch in scope and the
+    instance-wide permission epoch, so a share or revoke, a collaborator
+    edit, or background embedding/extraction work invalidates open
+    result cursors (`CURSOR_STALE`: run the first page again). A paging
+    walk that must stay on one snapshot lets derived indexing finish
+    first (`test/note-link-context.test.ts` flushes embeddings once
+    after seeding, before its first page).
 
     A filtered reference-list cursor replays the first bounded source set
     and then pages its matches; it cannot claim matches below its source
-    cap. Graph sections likewise cover the graph computation's existing
-    caps and the edges it computed, not an unbounded database snapshot.
-    `find_symbols refs:explain` also keys the account's readable citing
-    vaults. Empty or overlong literal filters fail strict arguments.
-    Existing document/access/expiry tests remain the evidence for those
-    paths; new actual MCP-client regressions cover filtered next-page
-    consumers, same-id edits, source-cap honesty and filtered refs access.
-    Changed definitions/cursor guards require fresh control trials;
-    historical trial results do not prove this implementation. Independent
-    review, CI/lab and trial gates still decide issue closure.
-    Descriptor cost against #1135: three literal arguments add 66
-    characters each; clearer descriptions save 32 (`read_note`), 31
-    (`find_symbols`), 50 (`graph`) and 67 (`find_graph_path`), a net
-    **18 characters**. They retain rev/edit-base, untrusted-content,
-    declaration search/ranges/snippets, graph modes/edge evidence, and
-    ordered path/distance semantics; the full tool manuals retain their
-    per-tool detail and both reference copies document literal filtering.
-    Final SDK measurement: reader tools 9,667 + instructions 311 =
+    cap, and `find_symbols refs` scans only the first `limit` rows (at
+    most 50) of that set (`more: true` says so). Graph sections likewise
+    cover the graph computation's existing caps and the edges it
+    computed, not an unbounded database snapshot. `find_symbols
+    refs:explain` also keys the account's readable citing vaults. Empty
+    or overlong literal filters fail strict arguments.
+
+    `graph` with `grep` filters the whole computed node ranking before
+    `limit` bounds what is shown, so `filter.sections.nodes.scanned`
+    counts every computed node and `more` is true only for skipped
+    (capped) groups. Its edges are the edges among the shown nodes (at
+    most `limit` matching nodes, `derivedFrom: 'nodes'` in
+    `response.ts`) and are not filtered a second time: no shown edge
+    cites a node the filter dropped, and their coverage counts equal the
+    edges among those nodes. `grep` matches every string value of an
+    item, ids included, so a short hex-like literal can match unrelated
+    rows. `test/mcp-response-envelope.test.ts` covers filtered
+    next-page consumers, same-id edits, source-cap honesty, graph
+    grep with `limit` and filtered refs access.
+
+    Descriptor cost against the pre-#423 definitions: three literal
+    arguments add 66 characters each; clearer descriptions save 32
+    (`read_note`), 31 (`find_symbols`), 50 (`graph`) and 67
+    (`find_graph_path`), a net **18 characters**. They retain
+    rev/edit-base, untrusted-content, declaration search/ranges/snippets,
+    graph modes/edge evidence, and ordered path/distance semantics; the
+    full tool manuals retain their per-tool detail and both reference
+    copies document literal filtering.
+    SDK measurement: reader tools 9,667 + instructions 311 =
     **9,978 chars / 2,495 tokens**; writer 16,148 + 443 =
     **16,591 chars / 4,148 tokens**; admin tools **42,997 chars**.
     Budgets stay 2,500 / 4,500 / less than 43,000; prompt bytes stay
-    10,042 for writer/admin. No ambient tool was added to a trial.
-    Local runs: reference consumers 17 and manuals 7 passed; budgets and
-    schemas 8 passed after measured trims. The response suite's other
-    20 cases passed after the cursor decoder retained the snapshot field;
-    its same-id mutation case then passed on its own after draining
-    pending embedding work before each fixture read. The earlier
-    failed runs remain evidence, not a claimed clean all-suite run.
-    The original cache dependency `95e02f8a` had reported restore-point
-    and collaboration failures. This stack now normally merges its
-    repaired `72961238` head; its owner reports 21 focused checks passed.
-    Fresh affected integration gates and new-harness controls must still
-    cover this combined source before acceptance.
+    10,042 for writer/admin.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
