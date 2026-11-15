@@ -49,6 +49,8 @@ let vaultId: string
 let repoId: string
 /** A small graph: a chain of 10 notes, each its own type (no structural edges), linked in order. */
 let graphVaultId: string
+/** Four chained notes and a matching pair `zz1/x -> zz2/y`: the graph grep + limit fixture (#423). */
+let filterGraphVaultId: string
 let agent: Client
 let agentConnectionId: string
 let ownerId: string
@@ -158,6 +160,7 @@ beforeAll(async () => {
   const cookie = await loginCookie(app, owner.email)
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope vault' } })).json<{ id: string }>().id
   graphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph' } })).json<{ id: string }>().id
+  filterGraphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph filter' } })).json<{ id: string }>().id
   repoId = (
     await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'envelope-repo', ingestionMethod: 'agent_push' } })
   ).json<{ id: string }>().id
@@ -177,6 +180,10 @@ beforeAll(async () => {
   for (let i = 0; i < 10; i++) {
     await createNote(graphVaultId, { path: `c${i}/link`, body: `${`${words[i]} `.repeat(40)}${i < 9 ? `[[c${i + 1}/link]]` : ''}` })
   }
+  // A chain d0..d3 whose middle notes outrank the matching pair `zz1/x -> zz2/y` by degree (`graph` limit keeps the best connected).
+  const filterWords = ['sailor', 'granite', 'lantern', 'meadow', 'copper', 'willow']
+  const filterNotes: Array<[string, string]> = [['d0/n', '[[d1/n]]'], ['d1/n', '[[d2/n]]'], ['d2/n', '[[d3/n]]'], ['d3/n', ''], ['zz2/y', ''], ['zz1/x', '[[zz2/y]]']]
+  for (const [i, [path, link]] of filterNotes.entries()) await createNote(filterGraphVaultId, { path, body: `${`${filterWords[i]} `.repeat(40)}${link}` })
   for (let i = 0; i < 12; i++) {
     await createNote(vaultId, { path: `trash/gone-${i}`, body: `Gone ${i}.` })
     await softDeleteNote(vaultId, `trash/gone-${i}`)
@@ -513,6 +520,28 @@ describe('stateless result handles: literal grep before paging (#423)', () => {
         compute.mockRestore()
       }
     }
+  })
+
+  it('graph grep with limit lists edges among the shown matches and reports truthful coverage', async () => {
+    // zz1/x -> zz2/y are the only matching notes, but the better-connected chain d1/d2 would fill `limit: 2` before any filter.
+    const args = { vaultId: filterGraphVaultId, aggregate: 'none', grep: 'zz', budget_tokens: 25_000 }
+    const unlimited = await page('graph', args)
+    const limited = await page('graph', { ...args, limit: 2 })
+    expect(ids([limited], 'edges', edge)).toEqual(ids([unlimited], 'edges', edge))
+    expect(ids([limited], 'nodes')).toEqual(ids([unlimited], 'nodes'))
+    expect(limited.truncated).toBe(false)
+    expect(ids([limited], 'nodes', (n) => n.path as string).sort()).toEqual(['zz1/x', 'zz2/y'])
+    expect(ids([limited], 'edges', edge)).toEqual(['zz1/x -> zz2/y'])
+    // All 6 nodes were scanned (the limit only bounds what is shown), and the one edge is among the shown nodes.
+    expect(limited.filter).toMatchObject({
+      within: 'computed',
+      sections: { nodes: { scanned: 6, matched: 2, more: false }, edges: { scanned: 1, matched: 1, more: false } },
+    })
+    // One shown node has no edge among the shown nodes; the second match is a bounded-list continuation, not an unscanned candidate.
+    const one = await page('graph', { vaultId: filterGraphVaultId, aggregate: 'none', grep: 'zz', limit: 1, budget_tokens: 25_000 })
+    expect(ids([one], 'nodes')).toHaveLength(1)
+    expect(one.edges).toEqual([])
+    expect(one.filter).toMatchObject({ sections: { nodes: { scanned: 6, matched: 2, more: false }, edges: { scanned: 0, matched: 0, more: false } } })
   })
 
   it('does not call an unmatched bounded candidate set complete, or pretend to scan beyond limit', async () => {

@@ -143,7 +143,7 @@ import { totalLines } from '../text/lines.js'
 import { openSession } from '../cache/session.js'
 import { cacheCaller, cacheKey, readEpochs, type CacheResources } from '../cache/key.js'
 import { cachedSearch } from '../cache/search.js'
-import { RESULT_GREP_ARG, RESULT_TOOLS, resultHandle } from './result-handle.js'
+import { RESULT_GREP_ARG, RESULT_TOOLS, literalMatcher, resultHandle } from './result-handle.js'
 import { SESSION_ARG, inSession } from './session-reads.js'
 import { REFS, refsAnswer, refsArguments, type Refs } from './code-queries.js'
 import { noteDrift } from '../notes/staleness.js'
@@ -3299,6 +3299,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         depth?: number
         edgeTypes?: EdgeKind[]
         limit?: number
+        grep?: string
       },
       { resources },
     ) => {
@@ -3325,6 +3326,9 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
         const ids = new Set(nodes.map((n) => n.id))
         return edges.filter((e) => ids.has(e.source) && ids.has(e.target)).sort(byEdgeKey)
       }
+      // The nodes a literal `grep` keeps, at most `limit` (#423): edges are rows among these, so they never cite a node the filter dropped.
+      const matches = typeof args.grep === 'string' ? literalMatcher(args.grep) : null
+      const shownOf = <T>(items: readonly T[]): T[] => (matches ? items.filter(matches) : [...items]).slice(0, args.limit)
 
       if (args.neighborsOf !== undefined) {
         const found = await resolveNode(resources, args.neighborsOf)
@@ -3344,7 +3348,7 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           sections: [
             // Already ranked: nearest first, the centre at the top; `next` only says that more exist.
             ranked({ name: 'nodes', items: local.next ? [...local.nodes, local.next] : local.nodes, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
-            ranked({ name: 'edges', items: await rowsAmong(local.edges, local.nodes, resources), id: edgeRowKey, ladder: GRAPH_EDGE_LADDER }),
+            ranked({ name: 'edges', items: await rowsAmong(local.edges, shownOf(local.nodes), resources), id: edgeRowKey, ladder: GRAPH_EDGE_LADDER, derivedFrom: 'nodes' }),
             ...(backlinks ? [ranked({ name: 'backlinks', items: backlinks, id: (b) => b.location, limit: BACKLINK_CAP, ladder: BACKLINK_LADDER })] : []),
           ],
           narrow: [...(depth > 1 ? [`depth: ${depth - 1}`] : []), ...(args.edgeTypes ? [] : ['edgeTypes: ["extracted"]']), ...typeGroups(local.nodes.slice(1))],
@@ -3360,8 +3364,8 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
           // Its cappedGroups are the whole graph's: every node went into the communities.
           head,
           sections: [
-            ranked({ name: 'nodes', items: ranking, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
-            ranked({ name: 'edges', items: communityEdgesAmong(edges, ranking.slice(0, args.limit)), id: edgeKey, ladder: GRAPH_EDGE_LADDER }),
+            ranked({ name: 'nodes', items: ranking, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER, whole: true }),
+            ranked({ name: 'edges', items: communityEdgesAmong(edges, shownOf(ranking)), id: edgeKey, ladder: GRAPH_EDGE_LADDER, derivedFrom: 'nodes' }),
           ],
           narrow: ranking.slice(0, 3).map((c) => `community: ${c.community}`),
         }
@@ -3371,14 +3375,14 @@ function buildServer(auth: McpAuth): { server: McpServer; tools: McpToolInfo[] }
       const degree = new Map<string, number>()
       for (const e of edges) for (const id of [e.source, e.target]) degree.set(id, (degree.get(id) ?? 0) + 1)
       const ranking = [...nodes].sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0))
-      const kept = ranking.slice(0, args.limit)
+      const kept = shownOf(ranking)
       // As for `neighborsOf`: the skipped groups a listed node belongs to.
       const listedGroups = new Set(kept.flatMap(groupKeys))
       return {
         head: { cappedGroups: cappedGroups.filter((key) => listedGroups.has(key)), ...head },
         sections: [
-          ranked({ name: 'nodes', items: ranking, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER }),
-          ranked({ name: 'edges', items: await rowsAmong(edges, kept, resources), id: edgeRowKey, ladder: GRAPH_EDGE_LADDER }),
+          ranked({ name: 'nodes', items: ranking, id: (n) => n.id, limit: args.limit, ladder: GRAPH_NODE_LADDER, whole: true }),
+          ranked({ name: 'edges', items: await rowsAmong(edges, kept, resources), id: edgeRowKey, ladder: GRAPH_EDGE_LADDER, derivedFrom: 'nodes' }),
         ],
         // An id, not the path: a note and a file can share a path.
         narrow: [...(ranking[0] ? [`neighborsOf: ${JSON.stringify(ranking[0].id)}`] : []), ...typeGroups(ranking)],

@@ -156,6 +156,10 @@ export interface RankedSection<T> {
   omitEmpty?: boolean
   /** A session reference (#683): shown as the value of `name` in place of the items; see `TextSection.ref`. */
   ref?: Record<string, unknown>
+  /** `items` is the whole computed ranking: `limit` only bounds what is shown, so a literal filter has scanned all of it (#423). */
+  whole?: boolean
+  /** `items` derive from the shown items of the section of this name (edges among shown nodes): a literal filter keeps them unfiltered (#423). */
+  derivedFrom?: string
 }
 
 /**
