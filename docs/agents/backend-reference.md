@@ -2378,22 +2378,83 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   answer. Bare-array answers (the unbudgeted list tools) carry
   none: MCP's `structuredContent` is an object, and wrapping the array
   would make it differ from the text. A tool may declare `outputSchema`
-  (a loose zod object, so other keys pass): today only the eight
-  `runWrite` tools, with `WRITE_RESULT_SCHEMA` (`write-result.ts`:
-  `rev` number or null, `status` enum, `indexed` boolean; about 250
-  characters per tool in `tools/list`). The SDK checks it on every
-  successful answer, after the write committed, and a mismatch would
-  turn the answer into an `Output validation error`; the schema is
-  therefore the fields every write answer has (applied, merged,
-  conflicted, retry, dry run, replay, delete). Errors are the error
-  envelope (#439, below) in `content[0].text` without `structuredContent`:
+  (a loose zod object, so other keys pass). The eight `runWrite` tools
+  use `WRITE_RESULT_SCHEMA` (`write-result.ts`: `rev` number or null,
+  `status` enum, `indexed` boolean; about 250 characters per tool).
+  Stable read contracts live in `read-result.ts` (#957): `read_note`
+  requires numeric `rev`, `read_file` requires string `hash`, including
+  targets, outlines, unchanged answers and session references.
+  History/trash validate `truncated: false | {cursor: string | null}`;
+  `get_revision` validates its string `id` and `body`. Administrative
+  object reads validate their stable typed result field. These are
+  intentionally small, meaningful contracts, not empty object schemas:
+  omitted or mistyped identities fail the SDK's check. Every other
+  answer field is retained unchanged. The SDK validates successful
+  results; for writes that is after commit, so every applied, merged,
+  conflicted, retry, dry-run, replay and delete answer must fit.
+  Errors are the error envelope (#439, below) in `content[0].text` without `structuredContent`:
   the SDK server does not check an `isError` answer, but the SDK client
   checks any `structuredContent` against the listed outputSchema, error
   or not, so `{error}` there would fail on a write tool.
-  Read tools get no output schema until their shapes settle (#957,
-  #432). `test/mcp-structured-content.test.ts` covers each tool
-  family through the real client (which validates against the listed
-  schema), every write answer shape and the errors.
+  `test/mcp-structured-content.test.ts` covers these contracts through
+  the real client, read variants, every write answer shape and errors.
+  `test/mcp-tool-budget.test.ts` measures both actual profile payloads
+  and the smallest meaningful excluded schema prototypes.
+
+  **Read schema disposition (#433/#957).** Budgets are the current
+  reader **2,500 tokens** (tools/list + instructions, no prompts),
+  writer **4,500 tokens** (tools/list + instructions; prompts reported
+  separately), and admin tools/list **less than 43,000 characters**.
+  The 2,000/4,000 profile bounds in the original #957 text are obsolete.
+  No provider-cache hit is inferred from these byte counts.
+
+  | Tool(s) | Meaningful schema | Listing cost, characters |
+  |---|---|---:|
+  | `read_note` | required numeric `rev` | 117, declared |
+  | `read_file` | required string `hash` | 119, declared |
+  | `note_history`, `list_trash` | required false-or-cursor continuation | 273 each, declared |
+  | `get_revision` | required string `id`, `body` | 147, declared |
+  | both `get_*_graph_preference` tools | required boolean `include` | 126 each, declared |
+  | `get_vault_preferences` | required string `storageMode` | 133, declared |
+  | `repository_status` | required string `syncStatus` | 131, declared |
+  | `export_vault`, `export_note` | required string `zipBase64` / `markdown` | 129 / 127, declared |
+  | `lookup_user`, `audit_okf_conformance` | required string `id` / numeric `totalNotes` | 115 / 131, declared |
+  | `browse_vault` | required string `directory` | 129, excluded |
+  | `grep` | required numeric `scanned` | 125, excluded |
+  | `browse_repository`, `search`, `find_symbols`, `orient`, `graph`, `find_graph_path` | required false-or-cursor continuation | 273 each, excluded |
+  | `usage_report` | required boolean `enabled` | 126, declared |
+
+  The final measurement includes #1132 (`95e02f8a`), not a mixed
+  historical harness: reader tools/list 9,649 + instructions 311 =
+  **9,960 chars / 2,490 tokens**; writer 16,130 + 443 =
+  **16,573 chars / 4,144 tokens** (prompts 10,042 chars, reported
+  separately); admin tools/list **42,979 chars**.
+  Compared with the #1132 control alone (`95e02f8a`: reader 2,431
+  tokens, writer 4,085 tokens, admin tools/list 40,957 characters), read
+  schemas add 236 reader characters and all declared read schemas add
+  2,073 admin characters.
+  Admin would have been 43,030: a meaning-preserving 51-character trim
+  of `repository_status`'s description retains sync state/time, queued
+  or running extraction, exhausted retries/errors and the freshness
+  warning. This brings it below 43,000 without changing any manual.
+  After these additions, `grep`'s minimal schema would cost the reader
+  2,522 tokens, `browse_vault` 2,523, and each continuation schema
+  2,559: every excluded object read is measured against the **current**
+  bound. The permanent budget regression recomputes these values from
+  the actual SDK listing, so newly available headroom requires revisiting
+  the disposition. Native SDK contract verification: 17 tests across
+  structured-content, tool-budget and tool-schema; new read regressions
+  cover targets, outlines, grep, unchanged/session answers and invalid
+  typed identities. No provider model trial was run for this schema
+  change.
+  Bare-array read answers (`list_vaults`, `list_repositories`,
+  `list_vault_shares`, `list_repository_shares`, `list_teams`,
+  `list_team_members`, `list_notifications`, `list_graph_perspectives`)
+  stay deliberately unschema'd: MCP requires an object output schema
+  and object structuredContent. Wrapping them to claim coverage would
+  break the accepted wire contract. Errors remain text-only `isError`,
+  not a successful result union. No default response size or budget is
+  raised.
 - **Instructions** (#435): `instructionsFor(profile)` in
   `mcp/instructions.ts` is the `initialize` result's `instructions`
   (`new McpServer(info, {instructions})` in `buildServer`): one constant
