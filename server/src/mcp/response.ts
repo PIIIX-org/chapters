@@ -160,6 +160,8 @@ export interface RankedSection<T> {
   whole?: boolean
   /** `items` derive from the shown items of the section of this name (edges among shown nodes): a literal filter keeps them unfiltered (#423). */
   derivedFrom?: string
+  /** The item past `limit` only signals that more exist (a limit + 1 fetch): a literal filter never matches or shows it (#423). */
+  signal?: boolean
 }
 
 /**
