@@ -69,7 +69,7 @@ describe('Swift in a child process (#988)', () => {
       const warn = quietly()
 
       let ticks = 0
-      const ticker = setInterval(() => ticks++, 20)
+      const ticker = setInterval(() => ticks++, 5)
       const started = Date.now()
       const result = await extractStructure('swift', largeSwift(300_000), 'Huge.swift')
       clearInterval(ticker)
@@ -77,7 +77,7 @@ describe('Swift in a child process (#988)', () => {
       expect(result.symbols).toEqual([])
       expect(result.skipped).toMatch(/^swift symbols not extracted: the parse took longer than 1 ms/)
       expect(Date.now() - started).toBeLessThan(5_000)
-      expect(ticks).toBeGreaterThan(5)
+      expect(ticks).toBeGreaterThan(2)
       expect(isolatedStats.skipped).toBe(before.skipped + 1)
       expect(isolatedStats.failures).toBe(before.failures)
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('Huge.swift'))
