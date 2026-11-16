@@ -160,8 +160,11 @@ export interface QuestionOutcome {
   gold: readonly LineRange[]
   /** The search answered `no_match` or `ambiguous` instead of a first hit (#1058). */
   abstained: boolean
-  /** The route the search took (#1060): `identifier` or `path` by lookup, else `conceptual`. */
-  route: 'identifier' | 'path' | 'conceptual'
+  /** Actual route; fallback answers count as conceptual, never as exact lookup successes. */
+  route: 'identifier' | 'path' | 'structural' | 'conceptual'
+  attemptedRoute?: 'identifier' | 'path' | 'structural'
+  /** Independently authored suite label, never inferred from the router's answer. */
+  category?: string
   /** Tokens / calls spent when the first gold range was fully seen; null = never. */
   tokensToGold: number | null
   callsToGold: number | null
@@ -189,9 +192,36 @@ export interface Aggregate {
   goldReached: number
   /** `goldReached / questions`: the phase-3 exit criterion is 0.99 (#1058). */
   goldReachedRate: number
-  /** The fraction of questions the router answered by lookup (#1060), and `exact1` over those alone (0 when none). */
+  /** Fraction of queries taking a nonconceptual route, and exact1 there (including no-match/ambiguous zeroes). */
   routed: number
   exact1Routed: number
+  identifierQuestions: number
+  identifierAttempts: number
+  identifierExact1: number
+  identifierExact1Attempts: number
+  identifierHit1: number
+  identifierFallbacks: number
+  pathQuestions: number
+  pathAttempts: number
+  pathExact1: number
+  pathExact1Attempts: number
+  pathHit1: number
+  pathFallbacks: number
+  structuralQuestions: number
+  structuralAttempts: number
+  structuralExact1: number
+  structuralExact1Attempts: number
+  structuralHit1: number
+  structuralFallbacks: number
+  conceptualQuestions: number
+  conceptualAttempts: number
+  conceptualExact1: number
+  conceptualExact1Attempts: number
+  conceptualHit1: number
+  conceptualFallbacks: number
+  /** Full independently labelled identifier cohort, regardless of actual route/fallback/ambiguity. */
+  identifierCohortQuestions: number
+  identifierCohortExact1: number
   /** Questions the search answered `no_match` or `ambiguous` instead of a first hit, as a fraction: not a pass, not a wrong answer either. */
   abstained: number
   /** Mean tokens to the first gold range; a miss counts as `missTokens`. */
@@ -233,8 +263,45 @@ export function round4(x: number): number {
  */
 export function aggregate(outcomes: readonly QuestionOutcome[], missTokens: number, missCalls: number): Aggregate {
   const toGold = outcomes.map((o) => o.tokensToGold ?? missTokens)
+  const routeStats = (route: QuestionOutcome['route']) => {
+    const rows = outcomes.filter((o) => o.route === route)
+    const fallbacks = outcomes.filter((o) => o.attemptedRoute === route).length
+    const exact = rows.reduce((n, o) => n + (o.abstained ? 0 : exactAtK(o.hits, o.gold, 1)), 0)
+    return { questions: rows.length, attempts: rows.length + fallbacks, exact1: rows.length === 0 ? 0 : round4(exact / rows.length), exact1Attempts: rows.length + fallbacks === 0 ? 0 : round4(exact / (rows.length + fallbacks)), hit1: round4(mean(rows.map((o) => hitAtK(o.ranking, o.judgments, 1)))), fallbacks }
+  }
+  const identifier = routeStats('identifier')
+  const path = routeStats('path')
+  const structural = routeStats('structural')
+  const conceptual = routeStats('conceptual')
+  const cohort = outcomes.filter((o) => o.category === 'identifier')
   return {
     questions: outcomes.length,
+    identifierQuestions: identifier.questions,
+    identifierAttempts: identifier.attempts,
+    identifierExact1: identifier.exact1,
+    identifierExact1Attempts: identifier.exact1Attempts,
+    identifierHit1: identifier.hit1,
+    identifierFallbacks: identifier.fallbacks,
+    pathQuestions: path.questions,
+    pathAttempts: path.attempts,
+    pathExact1: path.exact1,
+    pathExact1Attempts: path.exact1Attempts,
+    pathHit1: path.hit1,
+    pathFallbacks: path.fallbacks,
+    structuralQuestions: structural.questions,
+    structuralAttempts: structural.attempts,
+    structuralExact1: structural.exact1,
+    structuralExact1Attempts: structural.exact1Attempts,
+    structuralHit1: structural.hit1,
+    structuralFallbacks: structural.fallbacks,
+    conceptualQuestions: conceptual.questions,
+    conceptualAttempts: conceptual.attempts,
+    conceptualExact1: conceptual.exact1,
+    conceptualExact1Attempts: conceptual.exact1Attempts,
+    conceptualHit1: conceptual.hit1,
+    conceptualFallbacks: conceptual.fallbacks,
+    identifierCohortQuestions: cohort.length,
+    identifierCohortExact1: round4(mean(cohort.map((o) => o.abstained ? 0 : exactAtK(o.hits, o.gold, 1)))),
     hit1: round4(mean(outcomes.map((o) => hitAtK(o.ranking, o.judgments, 1)))),
     hit5: round4(mean(outcomes.map((o) => hitAtK(o.ranking, o.judgments, 5)))),
     hit10: round4(mean(outcomes.map((o) => hitAtK(o.ranking, o.judgments, 10)))),
