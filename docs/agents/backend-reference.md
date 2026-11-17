@@ -2905,8 +2905,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     text on either side is listed in `metadata` as `kind: unknown`,
     `reason: no_git_metadata`; no object id is invented for the side without one.
     Every view answer's head carries the view's `source`/`commit`/`tree`/
-    `overlay_hash`; that identity is already bound into ref cursors and is the
-    value a snapshot cursor would bind.
+    `overlay_hash`; that identity is bound into ref cursors (the argument
+    fingerprint) and, for `search`/`find_symbols`, into the result snapshot of
+    the `grep` filter and cursor handle (`viewSnapshotKey`). A cursor from one view
+    is refused on another view or on the live index; `grep` filters the view's
+    computed rows, never the live index.
     Binary, oversized, symlink and submodule changes are not silently
     deleted from the diff: a paged `metadata` list names actual before/after
     blob/commit ids and modes when text cannot be rendered. Invalid UTF-8
@@ -3058,6 +3061,88 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `truncated.narrow` (on an outline answer, the `grep` hint only); smaller documents answer as before, so the
     premise benchmark's reads do not change unless one of its files is
     that large. `test/mcp-read-targets.test.ts` covers it.
+  - **Result-handle acceptance audit (#423).** The accepted #1078 D5
+    amendment covers document reads; it left search/graph/symbol rankings
+    recomputed and non-greppable. `result-handle.ts` completes their
+    stateless counterpart: optional literal `grep` (smart case, 1-200
+    characters) filters typed string values before budget paging. It
+    never means the regex syntax of the separate `grep` tool. With no
+    filter the answer shape stays unchanged.
+
+    | Criterion | Document reads | Search / graph / find_symbols |
+    |---|---|---|
+    | Handle | original read arguments, `rev`/`hash`, `total_lines`, cursor | original query/scope/filter arguments and cursor |
+    | Grep | `targets: [{grep}]`, full document before paging | literal `grep`, complete bounded computed typed sections before paging |
+    | Access | live checks on each fetch; cursor grants none | same strict tool capability/profile/allow-list and resource checks on each fetch |
+    | Expiry / storage | none under accepted D5; no result store | none; recompute, no stored result or cross-account state |
+    | Snapshot | text hash guards document/target continuation | #680 cache key: resolved resources, content/index epochs, permission epoch, caller and derived versions; explicit filters/continuations reject concurrent mutation as `BUSY`; ordinary first pages retain uncached success without a bound snapshot; same-id text edits invalidate `CURSOR_STALE` |
+    | Budget / coverage | existing line-boundary renderer and ladder | same renderer; `filter.sections` reports scanned/matched/more per computed section; source-cap uncertainty forces non-false `truncated` with narrowing guidance |
+
+    Ordinary initial `search`, `graph` and `find_symbols` calls do not
+    acquire a new failure mode: an epoch race leaves their existing
+    successful uncached answer intact. Search still withholds `rev`
+    when its cache computation races or degrades, under #680/#682.
+    Only a stable computation stamps a snapshot-bound cursor. A
+    continuation with an old, missing or mismatched snapshot fails
+    `CURSOR_STALE` before the result handler runs; a legacy cursor
+    from an ordinary racing answer may therefore require restarting.
+    Explicit literal filters and continuations alone require a stable
+    computation and return retryable `BUSY` for a new in-flight race.
+    No default response shape, result budget or search-cache policy changes.
+
+    The wrapper scopes `BUSY` to the strict paths above and treats a
+    missing pre-compute snapshot as stale on continuations; no legacy
+    no-snapshot cursor is accepted. `test/mcp-response-envelope.test.ts`
+    separates ordinary from filtered races and asserts that no result
+    computation follows a stale content, permission or absent-snapshot
+    check. The snapshot binds every index epoch in scope and the
+    instance-wide permission epoch, so a share or revoke, a collaborator
+    edit, or background embedding/extraction work invalidates open
+    result cursors (`CURSOR_STALE`: run the first page again). A paging
+    walk that must stay on one snapshot lets derived indexing finish
+    first (`test/note-link-context.test.ts` flushes embeddings once
+    after seeding, before its first page).
+
+    A filtered reference-list cursor replays the first bounded source set
+    and then pages its matches; it cannot claim matches below its source
+    cap, and `find_symbols refs` scans only the first `limit` rows (at
+    most 50) of that set (`more: true` says so). Graph sections likewise
+    cover the graph computation's existing caps and the edges it
+    computed, not an unbounded database snapshot. `find_symbols
+    refs:explain` also keys the account's readable citing vaults. Empty
+    or overlong literal filters fail strict arguments.
+
+    `graph` with `grep` filters the whole computed node ranking before
+    `limit` bounds what is shown, so `filter.sections.nodes.scanned`
+    counts every computed node and `more` is true only for skipped
+    (capped) groups. Its edges are the edges among the shown nodes (at
+    most `limit` matching nodes, `derivedFrom: 'nodes'` in
+    `response.ts`) and are not filtered a second time: no shown edge
+    cites a node the filter dropped, and their coverage counts equal the
+    edges among those nodes. In the community view `grep` matches the
+    community records (their own strings), not their members' paths.
+    With `neighborsOf` the walk fetches one node past `limit` only to
+    say that more exist (`signal: true` in `response.ts`): the filter
+    neither searches nor shows it, so the first `limit` nodes are the
+    candidates (`scanned` counts them, `more: true`), and a centre that
+    does not match is dropped like any other node, together with its
+    edges. `grep` matches every string value of an item, ids included,
+    so a short hex-like literal can match unrelated rows.
+    `test/mcp-response-envelope.test.ts` covers filtered next-page
+    consumers, same-id edits, source-cap honesty, graph grep with
+    `limit` (node list and `neighborsOf`, with and without `edgeTypes`)
+    and filtered refs access.
+
+    Descriptor cost: the three literal arguments are paid for by
+    shorter `read_note`, `find_symbols`, `graph` and `find_graph_path`
+    descriptions that keep rev/edit-base, untrusted-content, declaration
+    search/ranges/snippets, graph modes/edge evidence, and ordered
+    path/distance semantics; the full tool manuals retain their per-tool
+    detail and both reference copies document literal filtering. The
+    budgets (reader 2,500 and writer 4,500 tokens, admin tools/list
+    under 43,000 characters) and the current sizes are measured by
+    `test/mcp-tool-budget.test.ts` and `test/mcp-tool-schema.test.ts`,
+    not restated here.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
@@ -3864,13 +3949,24 @@ crosses accounts (a 64-bit key is not where one account's rows stand in for
 another's), and another account's identical file is embedded again. A block's embedded text includes the file's path, so the same content at another path embeds again (sharing serves clones and forks, not moved files). The index is on `embed_key` alone: the account filter is a join, not an index column, so `(embed_key, container_id)` would not narrow it, and a text held by many repositories costs one row scan per holder, bounded by the repositories' count. A reused
 vector counts as new to the file for the semantic edge refresh (#1007), like
 an embedded one. `parsed()` keeps the symbols, imports and sites of a content
-in this process (2,000 entries, least recently used out), keyed by
+in this process, keyed by
 `EXTRACTOR_VERSION`, the language label, the grammar the extension selects
 and the content hash, so a second repository or branch with the same blob is
-not parsed again; `parseCacheStats` counts parses and reuses. A sync with no
+not parsed again. It is bounded by 2,000 entries and by bytes (#1148):
+`estimateExtractionBytes` sizes a result as two bytes per string character
+plus a fixed overhead per symbol, import and site (a cheap over-estimate, no
+serialization; a retained result's strings are first copied so they own their storage, because a name the parser cut from a 1 MiB file would otherwise keep the whole file alive, 0.75-0.9 MB per Python, Rust or Java result measured), and least recently used entries go until the total is within
+the budget, 64 MiB by default (`ELARA_PARSE_CACHE_MB`, a positive whole number
+of MiB, at most 1 TiB, read in `blob-cache.ts`; anything else warns at boot and uses the default). A result estimated
+over `PARSE_CACHE_ENTRY_BYTES` (4 MiB, or the budget when that is smaller) is
+returned to its caller and **not retained**, so the next call parses it again;
+it does not push out other entries. `parseCacheStats` counts parses, reuses,
+`skippedLarge` (results not retained) and the estimated `bytes` held;
+`elara_cache_lookups_total{cache="blob_parse"}` still counts a skipped result
+as a miss and its next lookup as another miss. A sync with no
 change parses and embeds nothing and a one-file change re-processes one
 file (#684 part A, `test/repository-git-mirror.test.ts`);
-`test/blob-sharing.test.ts` and `test/blob-parse-cache.test.ts` cover this part.
+`test/blob-sharing.test.ts` and `test/blob-parse-cache*.test.ts` cover this part.
 
 **Code edges** (`code-edge-rules.ts`, `code-edges.ts`, table `code_edges`,
 migration 0061, #469, ADR-004 §2.8): the symbol-level edges #470

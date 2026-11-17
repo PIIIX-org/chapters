@@ -104,6 +104,11 @@ export function resolveAdvertisedRef(listing: string, ref: string): string {
   if (commits.size > 1) throw new RefError('INVALID_ARGUMENT', `ambiguous ref: ${[...commits.values()].flat().sort().join(' and ')} name different commits; use refs/heads/ or refs/tags/`)
   return commits.keys().next().value!
 }
+/** A snapshot key made specific to the view (and diff base) it was computed on; unchanged for the live index. */
+export function viewSnapshotKey(key: string | null, view: RepositoryView | null, base: RepositoryView | null): string | null {
+  if (key === null || view === null) return key
+  return createHash('sha256').update(JSON.stringify([key, viewVersion(view), base ? viewVersion(base) : null])).digest('hex')
+}
 export function checkGitRef(ref: string): void {
   // Ref names and full object ids only, never rev expressions, options, refspecs or paths.
   if (ref.length > 240 || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(ref) || ref.includes('..') || ref.includes('//') || ref.endsWith('/') || ref.endsWith('.lock')) {

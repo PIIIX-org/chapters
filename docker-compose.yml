@@ -109,6 +109,8 @@ services:
       - ELARA_NOTE_MAX_BYTES
       # Symbols per repository file that get an embedding (default 256).
       - ELARA_EMBED_MAX_SYMBOLS_PER_FILE
+      # Byte budget of the in-process parse cache in MiB (default 64).
+      - ELARA_PARSE_CACHE_MB
     volumes:
       # THE NOTES LIVE HERE. Vault content is markdown FILES ON DISK
       # (plus local-path repository clones), not rows in Postgres — a

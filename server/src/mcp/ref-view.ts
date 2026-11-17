@@ -15,7 +15,7 @@ import { McpToolError } from './errors.js'
 
 // Two shared optional fields; no cross-tool stored overlay handle or implicit session overlay.
 export const REF_INPUT = {
-  ref: z.string().optional().describe('Git ref'),
+  ref: z.string().optional().describe('Ref'),
   overlay: z.string().optional().describe('Private diff'),
 }
 export async function readView(view: RepositoryView, args: { path: string; targets?: Target[]; outline?: boolean; if_rev?: string; session_id?: string }, page: Page, connectionId: string): Promise<Budgeted> {

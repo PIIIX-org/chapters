@@ -82,6 +82,14 @@ async function call(name: string, args: Record<string, unknown>, client = owner)
   const text = (result.content as Array<{ text?: string }>).map((p) => p.text ?? '').join('')
   return { error: result.isError === true, text, body: BODY.parse(JSON.parse(text)) }
 }
+/** The page as the server sent it: under a small budget the ranked rows are ladder strings, not objects. */
+async function rawPage(name: string, args: Record<string, unknown>) {
+  resetRateLimits()
+  const result = await owner.callTool({ name, arguments: { repositoryId: repoId, budget_tokens: 10_000, ...args } })
+  const text = (result.content as Array<{ text?: string }>).map((p) => p.text ?? '').join('')
+  expect(result.isError, text).not.toBe(true)
+  return JSON.parse(text) as { results?: unknown[]; truncated?: false | { cursor?: string | null } }
+}
 async function answer(name: string, args: Record<string, unknown>, client = owner) {
   const result = await call(name, args, client)
   expect(result.error, result.text).toBe(false)
@@ -419,6 +427,48 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     const changed = await call('read_file', { ...args, cursor: paged.truncated.cursor })
     expect(changed.error).toBe(true)
     expect(changed.text).toMatch(/cursor/i)
+  })
+
+  it('binds ranked result cursors to the view: another view, the live index or a moved branch refuse them', async () => {
+    const many = `diff --git a/src/many.ts b/src/many.ts\n--- /dev/null\n+++ b/src/many.ts\n@@ -0,0 +1,${60} @@\n${Array.from({ length: 60 }, (_, i) => `+export function viewCursor${String(i).padStart(2, '0')}() { return ${i} }`).join('\n')}\n`
+    for (const tool of ['search', 'find_symbols'] as const) {
+      const args = { query: 'viewCursor', ...(tool === 'search' ? { route: 'conceptual' } : {}), limit: 50, ref: second, overlay: many, budget_tokens: 1200 }
+      const paged = await rawPage(tool, args)
+      if (!paged.truncated || !paged.truncated.cursor) throw new Error(`expected a continuation from ${tool}`)
+      const cursor = paged.truncated.cursor
+      expect(((await rawPage(tool, { ...args, cursor })).results ?? []).length, tool).toBeGreaterThan(0)
+      // Another view (different ref, no overlay) and the live index are different arguments of the same tool.
+      for (const other of [{ ...args, ref: first }, { ...args, overlay: undefined }, { ...args, ref: undefined, overlay: undefined }]) {
+        const refused = await call(tool, { ...other, cursor })
+        expect(refused.error, `${tool} ${String(other.ref)} ${other.overlay === undefined}`).toBe(true)
+        expect(refused.text).toMatch(/CURSOR_INVALID.*issued for other arguments/s)
+      }
+      // The same arguments, a branch that moved: the resolved view is different, so is the snapshot.
+      await git().raw(['branch', '-f', 'cursor-moving', second])
+      const moving = { ...args, ref: 'cursor-moving' }
+      const movingPage = await rawPage(tool, moving)
+      if (!movingPage.truncated || !movingPage.truncated.cursor) throw new Error(`expected a continuation from ${tool}`)
+      await git().raw(['branch', '-f', 'cursor-moving', first])
+      const stale = await call(tool, { ...moving, cursor: movingPage.truncated.cursor })
+      expect(stale.error, tool).toBe(true)
+      expect(stale.text).toMatch(/CURSOR_INVALID.*issued for other arguments/s)
+    }
+    await git().raw(['branch', '-D', 'cursor-moving'])
+  })
+
+  it('runs a literal `grep` over the view result set only, never the live index', async () => {
+    const overlay = `diff --git a/src/grepped.ts b/src/grepped.ts\n--- /dev/null\n+++ b/src/grepped.ts\n@@ -0,0 +1,2 @@\n+export function grepOnlyHere() { return 1 }\n+export function grepSibling() { return 2 }\n`
+    const viewHits = await answer('find_symbols', { query: 'grepOnlyHere', ref: second, overlay, grep: 'grepOnlyHere' })
+    expect(viewHits.results.map((r) => r.symbolName ?? r.name)).toEqual(['grepOnlyHere'])
+    expect(await answer('find_symbols', { query: 'grepOnlyHere', ref: second, grep: 'grepOnlyHere' })).toMatchObject({ results: [] })
+    expect(await answer('find_symbols', { query: 'grepOnlyHere', grep: 'grepOnlyHere' })).toMatchObject({ results: [] })
+    const found = await answer('search', { query: 'grepOnlyHere', route: 'conceptual', ref: second, overlay, grep: 'grepOnlyHere' })
+    expect(found.results.some((r) => r.path === 'src/grepped.ts')).toBe(true)
+    expect(found.results.every((r) => JSON.stringify(r).includes('grepOnlyHere'))).toBe(true)
+    const live = await answer('search', { query: 'grepOnlyHere', route: 'conceptual', grep: 'grepOnlyHere' })
+    expect(live.results.some((r) => r.path === 'src/grepped.ts')).toBe(false)
+    // `graph` has no view arguments: it is never answered from a ref.
+    expect((await call('graph', { ref: second })).error).toBe(true)
   })
 
   it('returns an actual commit-to-commit patch and includes the selected overlay without newline corruption', async () => {
