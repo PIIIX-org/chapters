@@ -49,6 +49,17 @@ export const SMALL_FILE_MAX_LINES = 300
 export const SNIPPET_LINES = 30
 export const SNIPPET_CHARS = 1500
 
+/**
+ * Bounds for a file that is built per call (ref/overlay views, ref-index.ts) instead of stored once: a declaration's first
+ * line is cut to `lineChars` in a skeleton and a file's skeleton text stops at `skeletonChars`, so the generated text stays
+ * a small multiple of the source however many declarations it has. The live index passes none (its lines are bounded by
+ * the minified-file rule and its output is versioned by `CHUNK_VERSION`).
+ */
+export interface BlockBounds {
+  lineChars: number
+  skeletonChars: number
+}
+
 export interface CodeBlock {
   blockId: string
   kind: 'symbol' | 'section' | 'skeleton' | 'file'
@@ -81,15 +92,32 @@ export function codeBlocks(
   content: string,
   symbols: readonly ExtractedSymbol[],
   sections: readonly OutlineSection[] = [],
+  bounds?: BlockBounds,
 ): CodeBlock[] {
   const starts = lineStarts(content)
   const total = starts.length
   const small = total <= SMALL_FILE_MAX_LINES && content.length <= MAX_EMBED_CHARS
   const hash = (start: number, end: number) => createHash('sha256').update(sliceLines(content, start, end, starts)).digest('hex')
-  const firstLine = (line: number) => sliceLines(content, line, line, starts)
-  // Cut by code point, so an astral character is never split.
+  // Skeleton text left for this file (views only): lines are cut, then dropped, before they are joined.
+  let skeletonLeft = bounds === undefined ? Infinity : Math.min(bounds.skeletonChars, content.length)
+  const firstLine = (line: number) => {
+    const text = sliceLines(content, line, line, starts)
+    return bounds === undefined || text.length <= bounds.lineChars ? text : text.slice(0, bounds.lineChars)
+  }
+  const skeletonText = (head: string, lines: Iterable<number>) => {
+    const parts = [head]
+    for (const line of lines) {
+      const text = firstLine(line)
+      if (text.length + 1 > skeletonLeft) break
+      skeletonLeft -= text.length + 1
+      parts.push(text)
+    }
+    return parts.join('\n')
+  }
+  // Cut by code point, so an astral character is never split. A code point is at most two UTF-16 units: the cut text is
+  // taken first, so a single huge line is never spread into an array of all its characters.
   const snippetOf = (start: number, end: number) =>
-    [...sliceLines(content, start, Math.min(end, start + SNIPPET_LINES - 1), starts)].slice(0, SNIPPET_CHARS).join('')
+    [...sliceLines(content, start, Math.min(end, start + SNIPPET_LINES - 1), starts).slice(0, SNIPPET_CHARS * 2)].slice(0, SNIPPET_CHARS).join('')
   const methodsOf = new Map<string, ExtractedSymbol[]>()
   for (const m of small ? [] : symbols) {
     if (m.kind !== 'method' || !m.parent) continue
@@ -103,7 +131,7 @@ export function codeBlocks(
   drafts.push({ ...whole, kind: 'file', embedText: `${path}\n${content}` })
   const outlined = [...symbols, ...sections]
   if (!small && outlined.length > 0) {
-    drafts.push({ ...whole, kind: 'skeleton', embedText: [path, ...outlined.map((s) => firstLine(s.startLine))].join('\n') })
+    drafts.push({ ...whole, kind: 'skeleton', embedText: skeletonText(path, outlined.map((s) => s.startLine)) })
   }
 
   for (const s of symbols) {
@@ -128,7 +156,7 @@ export function codeBlocks(
         symbolKind: null,
         symbolParent: null,
         snippet: null,
-        embedText: [`${s.kind} ${innerPath} in ${path}`, firstLine(s.startLine), ...methods.map((m) => firstLine(m.startLine))].join('\n'),
+        embedText: skeletonText(`${s.kind} ${innerPath} in ${path}`, [s.startLine, ...methods.map((m) => m.startLine)]),
         budgetTier: null,
         outlineOf: at,
       })

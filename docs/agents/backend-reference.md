@@ -2883,7 +2883,22 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     weight, including metadata, blocks and vector capacity);
     same-tree commits retain their own commit identity. Indexing is bounded
     at 20,000 files/32 MiB source; an over-cap tree is refused rather than
-    answered partially. `refCacheStats`/`refSearchStats` count real work.
+    answered partially. View files follow the live index's minified-file rule
+    (`repositories/minified.ts`, one predicate: a line over 1,000 characters
+    leaves a file bytes-only, no symbols, imports or outline); a view file's
+    skeleton text cuts each declaration's first line to 240 characters and
+    stops at 32 KiB (`VIEW_BLOCK_BOUNDS`; the live index passes no bounds).
+    A view's call graph is refused, not truncated, past 250,000 edges or
+    20,000,000 candidate scans (`VIEW_GRAPH_LIMITS`); orient scores definitions
+    from one pass over the edges. A reader-chosen commit is fetched into the
+    query mirror only up to 256 MiB of growth (`fetchQueryCommit` watches the
+    pack as git writes it and kills git's process group; git has no fetch cap of
+    its own), the query mirror is dropped past 1 GiB, and a mirror that fetched a
+    commit it then rejected (transfer or tree budget) is removed and the
+    commit refused without another transfer. Not bounded: the bandwidth of one
+    attempt (up to the cap, before it is stopped) per distinct commit and the
+    remote's own `ls-remote` answer; the sync fetch of the indexed branch is a
+    writer's, unchanged. `refCacheStats`/`refSearchStats` count real work.
     Search keeps keyword+vector channels and existing per-file embedding
     budgets, reusing same-owner vectors by embed key.
     Exact routing uses the shared classifier, identifier-intent predicate and

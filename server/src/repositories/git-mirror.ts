@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { isUtf8 } from 'node:buffer'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, rm } from 'node:fs/promises'
+import { lstat, mkdir, readdir, rm } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { simpleGit } from 'simple-git'
@@ -192,6 +192,97 @@ export async function fetchIntoMirror(dir: string, url: string, branch: string |
     `+${source}:${HEAD_REF}`,
   ])
   return (await simpleGit(dir).raw(['rev-parse', '--verify', `${HEAD_REF}^{commit}`])).trim()
+}
+
+/**
+ * What a reader-chosen ref may cost the query mirror (ref-index.ts). `fetchBytes` bounds one fetch's growth of the mirror on
+ * disk (the pack as it arrives, checked while git runs); `mirrorBytes` is the most a repository's query mirror may hold
+ * before it is discarded and started again. It is a cache of reader-chosen commits: dropping it loses nothing but time.
+ */
+export const QUERY_MIRROR_LIMITS = { fetchBytes: 256 * 1024 * 1024, mirrorBytes: 1024 * 1024 * 1024, timeoutMs: 120_000 }
+
+/** Bytes of regular files under `dir` (links not followed); a vanishing file counts as 0. */
+export async function mirrorBytes(dir: string): Promise<number> {
+  let total = 0
+  const walk = async (path: string): Promise<void> => {
+    let names: string[]
+    try {
+      names = await readdir(path)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      const child = join(path, name)
+      try {
+        const info = await lstat(child)
+        if (info.isDirectory()) await walk(child)
+        else if (info.isFile()) total += info.size
+      } catch {
+        // Removed while counting.
+      }
+    }
+  }
+  await walk(dir)
+  return total
+}
+
+/** Removes a query mirror whose content was rejected or outgrew its quota; `openQueryMirror` starts it again. */
+export async function discardQueryMirror(dir: string): Promise<void> {
+  await rm(dir, { recursive: true, force: true })
+}
+
+/**
+ * `git fetch --depth=1` of one commit into the query mirror, killed (with its helpers) as soon as the mirror has grown by
+ * `limits.fetchBytes`, or after `limits.timeoutMs`. Git has no transfer cap of its own for fetch (`receive.maxInputSize`
+ * only guards pushes), and the whole commit tree crosses the wire before any tree limit can be read, so the pack is
+ * watched as it is written. Output is discarded: git's messages carry the remote URL and its credential. On any failure
+ * the caller discards the mirror, which removes the partial pack.
+ */
+export async function fetchQueryCommit(dir: string, url: string, commit: string, limits: { fetchBytes: number; timeoutMs: number } = QUERY_MIRROR_LIMITS): Promise<void> {
+  const before = await mirrorBytes(dir)
+  const child = spawn('git', ['fetch', '--quiet', '--depth=1', '--no-tags', '--no-write-fetch-head', url, `+${commit}:refs/elara/query`], {
+    cwd: dir,
+    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' },
+    stdio: 'ignore',
+    detached: true,
+  })
+  const stop = () => {
+    try {
+      if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL')
+    } catch {
+      child.kill('SIGKILL')
+    }
+  }
+  let over = false
+  let timedOut = false
+  let measuring = false
+  const watch = setInterval(() => {
+    if (measuring) return
+    measuring = true
+    void mirrorBytes(dir).then((size) => {
+      if (size - before > limits.fetchBytes) {
+        over = true
+        stop()
+      }
+    }).finally(() => { measuring = false })
+  }, 100)
+  const timer = setTimeout(() => { timedOut = true; stop() }, limits.timeoutMs)
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.on('error', reject)
+    child.on('close', (exit) => resolve(exit))
+  }).finally(() => {
+    clearInterval(watch)
+    clearTimeout(timer)
+  })
+  // The last chunk may land between two checks.
+  if (!over && code === 0 && await mirrorBytes(dir) - before > limits.fetchBytes) over = true
+  if (over) {
+    // A fetch that finished between two checks has already named the commit; do not leave the name behind.
+    await simpleGit(dir).raw(['update-ref', '-d', 'refs/elara/query']).catch(() => undefined)
+    throw new MirrorReadLimitError(`commit exceeds the ref transfer budget (${limits.fetchBytes / 1024 / 1024} MiB); nothing was kept`)
+  }
+  if (timedOut) throw new Error('git fetch timed out')
+  if (code !== 0) throw new Error(`git fetch exited with ${code}`)
 }
 
 /** Whether the mirror holds `commit` (with its tree): a diff base for the next sync. */

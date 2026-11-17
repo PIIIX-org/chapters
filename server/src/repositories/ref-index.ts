@@ -9,17 +9,20 @@ import { config } from '../config.js'
 import { resolveRepositoryAccess, isSafeGitUrl } from './permissions.js'
 import { authenticatedUrl } from './git-remote.js'
 import { decryptCredential } from './credentials.js'
-import { openQueryMirror, markMirrorSynced, scanMirrorTree, withMirrorLock, objectFormatOf, MirrorReadLimitError, type TreeEntry } from './git-mirror.js'
+import { openQueryMirror, markMirrorSynced, scanMirrorTree, withMirrorLock, objectFormatOf, MirrorReadLimitError, QUERY_MIRROR_LIMITS, mirrorBytes, discardQueryMirror, fetchQueryCommit, type TreeEntry } from './git-mirror.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
 import { parsed } from './blob-cache.js'
-import { codeBlocks, type CodeBlock } from './code-blocks.js'
-import { outlineSections } from './outline.js'
+import { codeBlocks, type BlockBounds, type CodeBlock } from './code-blocks.js'
+import { looksMinified } from './minified.js'
+import { hasOutline, outlineSections } from './outline.js'
 import { detectLanguage } from './language.js'
 import { applyHunks, parseOverlay, OverlayError, OVERLAY_MAX_PARSED } from './overlay.js'
 import { summarizeSkips, type SkippedFile } from './fs-scan.js'
 
 // A view is never installed in repository_files/blocks. Cache only committed, immutable trees;
 // an overlay and its parse results belong to the call, not to the tree or another session.
+/** A view's skeleton text per file: a declaration's first line cut to 240 characters, at most 32 KiB (and never more than the file). */
+export const VIEW_BLOCK_BOUNDS: BlockBounds = { lineChars: 240, skeletonChars: 32 * 1024 }
 export const REF_LIMITS = { files: 20_000, bytes: 32 * 1024 * 1024, cachedBytes: 64 * 1024 * 1024, trees: 8 }
 export class RefError extends Error {
   constructor(readonly code: 'INVALID_ARGUMENT' | 'NOT_FOUND' | 'BUSY', message: string, readonly field = 'ref') { super(message) }
@@ -46,9 +49,12 @@ export interface RepositoryView {
   bytes: number
 }
 const cache = new Map<string, RepositoryView>()
+/** Commits (by repository, source and id) whose fetch or tree went over a budget: refused without another transfer. */
+const rejectedCommits = new Set<string>()
 export const refCacheStats = { built: 0, reused: 0, blobsRead: 0, overlayParses: 0 }
 export function clearRefCache(): void {
   cache.clear()
+  rejectedCommits.clear()
   for (const key of Object.keys(refCacheStats) as Array<keyof typeof refCacheStats>) refCacheStats[key] = 0
 }
 export const contentHash = (text: string): string => createHash('sha256').update(text).digest('hex')
@@ -117,14 +123,18 @@ export function checkGitRef(ref: string): void {
 }
 async function fileIndex(repositoryId: string, path: string, content: string, overlay: boolean): Promise<ViewFile> {
   const hash = contentHash(content)
+  // The live index's rule, from the same predicate: a minified/generated file keeps its bytes and file block, no symbols,
+  // imports or outline (its declarations would all start on one huge line).
+  const structured = !looksMinified(content)
   // Id includes bytes, never a shared-index row id. It is stable for the same source and content.
   const id = viewId(`${repositoryId}\0${path}\0${hash}`)
   const language = detectLanguage(path)
-  const structure = isSupportedLanguage(language)
+  const structure = structured && isSupportedLanguage(language)
     ? overlay ? await extractStructure(language, content, path) : await parsed(language, content, path, hash)
     : { symbols: [], imports: [], sites: [] }
-  if (overlay && isSupportedLanguage(language)) refCacheStats.overlayParses++
-  return { id, path, content, contentHash: hash, language, size: Buffer.byteLength(content), structure, blocks: codeBlocks(id, path, content, structure.symbols, outlineSections(language, content)) }
+  if (overlay && structured && isSupportedLanguage(language)) refCacheStats.overlayParses++
+  const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, content) : []
+  return { id, path, content, contentHash: hash, language, size: Buffer.byteLength(content), structure, blocks: codeBlocks(id, path, content, structure.symbols, sections, VIEW_BLOCK_BOUNDS) }
 }
 async function buildView(repositoryId: string, source: string, tree: string, files: Array<{ path: string; content: string }>, skipped: RepositoryView['skipped'], commit?: string, entries?: readonly TreeEntry[]): Promise<RepositoryView> {
   const bytes = files.reduce((n, f) => n + Buffer.byteLength(f.content), 0)
@@ -219,14 +229,32 @@ export async function repositoryViewAt(userId: string, repositoryId: string, arg
       if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(ref)) {
         commit = resolveAdvertisedRef(await git.listRemote([url, ref, `refs/heads/${ref}`, `refs/tags/${ref}`, `refs/tags/${ref}^{}`]), ref)
       }
-      const dir = await openQueryMirror(repositoryId, source, objectFormatOf(commit))
-      try {
-        await simpleGit(dir).raw(['cat-file', '-e', `${commit}^{commit}`])
-      } catch {
-        await simpleGit(dir, { timeout: { block: 60_000 } }).raw(['fetch', '--quiet', '--depth=1', '--no-tags', '--no-write-fetch-head', url, `+${commit}:refs/elara/query`])
+      const format = objectFormatOf(commit)
+      let dir = await openQueryMirror(repositoryId, source, format)
+      // The query mirror is a cache of reader-chosen commits: past its quota it is dropped, never grown.
+      if (await mirrorBytes(dir) > QUERY_MIRROR_LIMITS.mirrorBytes) {
+        await discardQueryMirror(dir)
+        dir = await openQueryMirror(repositoryId, source, format)
       }
-      commit = (await simpleGit(dir).raw(['rev-parse', '--verify', `${commit}^{commit}`])).trim()
-      base = await treeView(repositoryId, source, dir, commit)
+      const rejectedKey = `${repositoryId}:${source}:${commit}`
+      if (rejectedCommits.has(rejectedKey)) throw new RefError('BUSY', 'ref was refused before: it exceeds the transfer or index budget')
+      try {
+        try {
+          await simpleGit(dir).raw(['cat-file', '-e', `${commit}^{commit}`])
+        } catch {
+          await fetchQueryCommit(dir, url, commit)
+        }
+        commit = (await simpleGit(dir).raw(['rev-parse', '--verify', `${commit}^{commit}`])).trim()
+        base = await treeView(repositoryId, source, dir, commit)
+      } catch (err) {
+        // Whatever this call brought in and could not serve is removed with the mirror, and not asked for again.
+        if (err instanceof MirrorReadLimitError || (err instanceof RefError && err.code === 'BUSY')) {
+          rejectedCommits.add(rejectedKey)
+          if (rejectedCommits.size > 256) rejectedCommits.delete(rejectedCommits.values().next().value!)
+        }
+        await discardQueryMirror(dir)
+        throw err
+      }
       await markMirrorSynced(dir, commit)
     } else if (repo.ingestionMethod === 'local_path' && repo.localPath && args.ref !== undefined) {
       // Only the registered source under LOCAL_REPOS_ROOT, never a caller-supplied directory.

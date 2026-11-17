@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { existsSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,11 +16,11 @@ import { db } from '../src/db/client.js'
 import { blocks, repositories, repositoryFiles, repositoryShares, teams, teamMemberships } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
-import { clearRefCache, REF_LIMITS, refCacheStats, repositoryViewAt } from '../src/repositories/ref-index.js'
-import { viewQueries, refQueryStats } from '../src/repositories/ref-queries.js'
+import { clearRefCache, REF_LIMITS, refCacheStats, repositoryViewAt, VIEW_BLOCK_BOUNDS } from '../src/repositories/ref-index.js'
+import { viewQueries, refQueryStats, VIEW_GRAPH_LIMITS } from '../src/repositories/ref-queries.js'
 import { refSearchStats } from '../src/repositories/ref-search.js'
 import { MAX_ROUTED } from '../src/search/router.js'
-import { gitMirrorDir, removeGitMirror, withMirrorLock } from '../src/repositories/git-mirror.js'
+import { gitMirrorDir, removeGitMirror, withMirrorLock, QUERY_MIRROR_LIMITS } from '../src/repositories/git-mirror.js'
 import { parseCacheStats } from '../src/repositories/blob-cache.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -622,5 +623,76 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
       await rm(otherRoot, { recursive: true, force: true })
     }
     expect(gitMirrorDir(repoId)).not.toContain(root)
+  })
+  it('refuses a ref whose fetch outgrows the transfer budget, leaves no objects behind and does not fetch it again', async () => {
+    await git().checkoutLocalBranch('huge')
+    await writeFile(join(root, 'huge.txt'), randomBytes(2 * 1024 * 1024))
+    await git().add('.')
+    await git().commit('huge')
+    const huge = (await git().revparse(['HEAD'])).trim()
+    await git().checkout('feature')
+    const limit = QUERY_MIRROR_LIMITS.fetchBytes
+    try {
+      QUERY_MIRROR_LIMITS.fetchBytes = 256 * 1024
+      clearRefCache()
+      const refused = await call('browse_repository', { ref: huge })
+      expect(refused.error).toBe(true)
+      expect(refused.text).toMatch(/transfer budget/)
+      expect(existsSync(join(gitMirrorDir(repoId), 'elara-query.git'))).toBe(false)
+      QUERY_MIRROR_LIMITS.fetchBytes = limit
+      const again = await call('browse_repository', { ref: huge })
+      expect(again.error).toBe(true)
+      expect(again.text).toMatch(/refused before/)
+      clearRefCache()
+      expect((await answer('browse_repository', { ref: huge })).commit).toBe(huge)
+    } finally {
+      QUERY_MIRROR_LIMITS.fetchBytes = limit
+      await git().raw(['branch', '-D', 'huge'])
+    }
+  })
+
+  it('drops the query mirror past its quota instead of growing it', async () => {
+    const quota = QUERY_MIRROR_LIMITS.mirrorBytes
+    try {
+      await answer('read_file', { ref: second, path: 'src/api.ts' })
+      QUERY_MIRROR_LIMITS.mirrorBytes = 1
+      clearRefCache()
+      expect((await answer('read_file', { ref: first, path: 'src/api.ts', outline: false })).commit).toBe(first)
+    } finally { QUERY_MIRROR_LIMITS.mirrorBytes = quota }
+  })
+
+  it('indexes a minified or declaration-dense overlay file within bounded generated text', async () => {
+    const [record] = await db.select().from(repositories).where(eq(repositories.id, repoId))
+    const owner = record!.ownerId
+    const diff = (path: string, line: string) => `diff --git a/${path} b/${path}\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,1 @@\n+${line}\n\\ No newline at end of file\n`
+    // ~150 KB on one line: 3,000 short declarations plus padding. The live rule keeps its bytes and gives it no symbols.
+    const minified = Array.from({ length: 3000 }, (_, i) => `function m${i}(){}`).join(';').padEnd(150_000, ' ')
+    const before = process.memoryUsage().heapUsed
+    const view = await repositoryViewAt(owner, repoId, { ref: second, overlay: diff('src/min.ts', minified) })
+    const file = view.files.get('src/min.ts')!
+    expect(file.structure.symbols).toEqual([])
+    expect(file.blocks.map((b) => b.kind)).toEqual(['file'])
+    expect(file.blocks.reduce((n, b) => n + b.embedText.length, 0)).toBeLessThan(minified.length + 64)
+    expect(process.memoryUsage().heapUsed - before).toBeLessThan(64 * 1024 * 1024)
+    // Lines under the minified threshold but dense: skeleton text is cut and capped, never 4,500 x 900 characters.
+    const dense = Array.from({ length: 150 }, (_, row) => Array.from({ length: 30 }, (_, k) => `function d${row}_${k}(){}`).join(';').padEnd(900, ' '))
+    const overlay = `diff --git a/src/dense.ts b/src/dense.ts\n--- /dev/null\n+++ b/src/dense.ts\n@@ -0,0 +1,${dense.length} @@\n${dense.map((l) => `+${l}`).join('\n')}\n`
+    const denseView = await repositoryViewAt(owner, repoId, { ref: second, overlay })
+    const blocks = denseView.files.get('src/dense.ts')!.blocks
+    expect(blocks.filter((b) => b.kind === 'symbol').length).toBeGreaterThan(1000)
+    expect(blocks.filter((b) => b.kind === 'skeleton').reduce((n, b) => n + b.embedText.length, 0)).toBeLessThanOrEqual(VIEW_BLOCK_BOUNDS.skeletonChars + 'src/dense.ts'.length + 1)
+  })
+
+  it('refuses, rather than half-answers, a view whose call graph is over its budget', async () => {
+    const edges = VIEW_GRAPH_LIMITS.edges
+    try {
+      VIEW_GRAPH_LIMITS.edges = 1
+      clearRefCache()
+      const refused = await call('orient', { ref: second })
+      expect(refused.error).toBe(true)
+      expect(refused.text).toMatch(/call-graph edges/)
+    } finally { VIEW_GRAPH_LIMITS.edges = edges }
+    clearRefCache()
+    expect(JSON.stringify(await answer('orient', { ref: second }))).toContain('retained')
   })
 })

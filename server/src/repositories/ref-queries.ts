@@ -23,6 +23,42 @@ const names = (edge: Edge, target: Target) => edge.target !== null
   ? edge.target.fileId === target.fileId && edge.target.blockIds.some((id) => target.blockIds.includes(id))
   : edge.name === target.name && (edge.qualified === null || edge.qualified === target.symbol)
 
+/** Call-graph work one view may cost: edges kept, and candidate definitions scanned while resolving them. A view over either is refused, never answered from part of its graph. */
+export const VIEW_GRAPH_LIMITS = { edges: 250_000, resolveWork: 20_000_000 }
+
+type ScoredEdge = Pick<Edge, 'path' | 'kind' | 'confidence' | 'member' | 'target'>
+
+/**
+ * Definitions with their orient score, best first. One pass over the edges aggregates, per target definition, the resolved
+ * and guessed uses from other non-test files and the resolved uses from `focus` files; ranking then reads the aggregates
+ * (not the edge list per definition: that was edges x definitions).
+ */
+export function scoreDefinitions(candidates: readonly Definition[], edges: readonly ScoredEdge[], focused: (path: string) => boolean, words: readonly string[]): Array<{ d: Definition; refs: number; guessed: number; score: number }> {
+  const wanted = new Set(candidates.map((d) => d.id))
+  const uses = new Map<string, { refs: number; guessed: number; focus: number }>()
+  const tests = new Map<string, boolean>()
+  const testPath = (path: string) => {
+    let known = tests.get(path)
+    if (known === undefined) tests.set(path, known = isTestPath(path))
+    return known
+  }
+  for (const e of edges) {
+    const target = e.target
+    if (target === null || !wanted.has(target.id) || e.path === target.path || e.kind === 'test' || (e.confidence !== 'resolved' && e.member) || testPath(e.path)) continue
+    const held = uses.get(target.id) ?? { refs: 0, guessed: 0, focus: 0 }
+    if (e.confidence === 'resolved') {
+      held.refs++
+      if (focused(e.path)) held.focus++
+    } else held.guessed++
+    uses.set(target.id, held)
+  }
+  return candidates.map((d) => {
+    const { refs, guessed, focus } = uses.get(d.id) ?? { refs: 0, guessed: 0, focus: 0 }
+    const score = refs + 0.5 * guessed + 5 * focus + (focused(d.path) ? 20 : 0) + (words.some((w) => d.symbol.toLowerCase().includes(w)) ? 10 : 0) + (words.some((w) => d.path.toLowerCase().includes(w)) ? 5 : 0)
+    return { d, refs, guessed, score }
+  }).sort((a, b) => b.score - a.score || compare(a.d.path, b.d.path) || a.d.line - b.d.line)
+}
+
 export interface ViewQueries extends CodeQueries {
   definitions: readonly Definition[]
   declarationOf: (id: string) => Promise<string | null>
@@ -49,8 +85,9 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
   const byName = new Map<string, Definition[]>()
   const byFile = new Map<string, Definition[]>()
   for (const f of view.files.values()) {
+    const declared = new Map(f.structure.symbols.map((s) => [`${s.startLine}\0${inner(s)}`, s]))
     for (const b of f.blocks.filter((b) => b.kind === 'symbol')) {
-      const symbol = f.structure.symbols.find((s) => s.startLine === b.startLine && inner(s) === b.innerPath)!
+      const symbol = declared.get(`${b.startLine}\0${b.innerPath}`)!
       const definition: Definition = { id: viewId(`${f.id}\0${b.blockId}`), fileId: f.id, blockIds: [b.blockId], path: f.path, name: symbol.name, symbol: b.innerPath, kind: b.symbolKind!, parent: b.symbolParent, line: b.startLine, endLine: b.endLine }
       definitions.push(definition)
       byBlock.set(b.blockId, definition)
@@ -67,6 +104,7 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
   const context = buildResolutionContext(view.files.values())
   const edges: Edge[] = []
   const moduleImports: Array<CodeSite & { targetFileId: string }> = []
+  let resolveWork = 0
   const single = (found: Definition[]) => found.length > 0 && found.every((d) => d.fileId === found[0]!.fileId && d.symbol === found[0]!.symbol) ? found[0]! : null
   for (const f of view.files.values()) {
     const imports = new Map(f.structure.imports.map((i) => [i.target, resolveImportPath(f.path, i.target, paths, context)]))
@@ -82,6 +120,8 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
     const resolveEdge = (draft: CodeEdgeDraft): { target: Definition | null; confidence: Edge['confidence'] } => {
       if (draft.local !== null) return { target: byBlock.get(draft.local) ?? null, confidence: 'resolved' }
       const named = byName.get(draft.name) ?? []
+      resolveWork += named.length + 1
+      if (resolveWork > VIEW_GRAPH_LIMITS.resolveWork) throw new RefError('BUSY', 'the view call graph is too large to resolve; no partial graph was served: narrow the repository or use a smaller ref')
       const scoped = (d: Definition) => d.fileId !== f.id && d.symbol === (draft.qualified ?? draft.name)
       let found: Definition | null = null
       if (!draft.member) {
@@ -93,6 +133,7 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
       found = (draft.qualified === null ? null : single(named.filter((d) => d.symbol === draft.qualified))) ?? single(named)
       return { target: found, confidence: 'textual' }
     }
+    if (edges.length + drafts.length > VIEW_GRAPH_LIMITS.edges) throw new RefError('BUSY', `the view has more than ${VIEW_GRAPH_LIMITS.edges} call-graph edges; no partial graph was served: narrow the repository or use a smaller ref`)
     for (const draft of drafts) {
       const resolved = resolveEdge(draft)
       const source = draft.sourceBlockId === null ? null : byBlock.get(draft.sourceBlockId) ?? null
@@ -170,13 +211,7 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
       const focus = opts.focus ?? []
       const focused = (path: string) => focus.some((f) => path === f || path.startsWith(`${f.replace(/\/$/, '')}/`))
       const words = (opts.query ?? '').toLowerCase().split(/[^\p{L}\p{N}_]+/u).filter(Boolean).slice(0, 8)
-      const scored = definitions.filter((d) => d.path.startsWith(prefix) && !isTestPath(d.path)).map((d) => {
-        const uses = edges.filter((e) => e.target?.id === d.id && e.path !== d.path && !isTestPath(e.path) && e.kind !== 'test' && (e.confidence === 'resolved' || !e.member))
-        const refs = uses.filter((e) => e.confidence === 'resolved').length
-        const guessed = uses.length - refs
-        const score = refs + 0.5 * guessed + 5 * uses.filter((e) => e.confidence === 'resolved' && focused(e.path)).length + (focused(d.path) ? 20 : 0) + (words.some((w) => d.symbol.toLowerCase().includes(w)) ? 10 : 0) + (words.some((w) => d.path.toLowerCase().includes(w)) ? 5 : 0)
-        return { d, refs, guessed, score }
-      }).sort((a, b) => b.score - a.score || compare(a.d.path, b.d.path) || a.d.line - b.d.line)
+      const scored = scoreDefinitions(definitions.filter((d) => d.path.startsWith(prefix) && !isTestPath(d.path)), edges, focused, words)
       const groups = new Map<string, { files: Set<string>; refs: number; score: number }>()
       for (const row of scored) {
         const suffix = row.d.path.slice(prefix.length)
