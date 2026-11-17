@@ -4,7 +4,7 @@
 // within it, and ends its answer with `truncated`: false, or what it showed,
 // the total from the page start (">n" when the fetch of limit+1 found more),
 // what it dropped, and a cursor that continues with the same arguments only.
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { and, eq } from 'drizzle-orm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
@@ -16,6 +16,9 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
+import * as graph from '../src/graph/assemble.js'
+import * as cache from '../src/cache/key.js'
 import { createActiveUser, loginCookie, toolText } from './helpers.js'
 
 type Args = Record<string, unknown>
@@ -46,6 +49,10 @@ let vaultId: string
 let repoId: string
 /** A small graph: a chain of 10 notes, each its own type (no structural edges), linked in order. */
 let graphVaultId: string
+/** Four chained notes and a matching pair `zz1/x -> zz2/y`: the graph grep + limit fixture (#423). */
+let filterGraphVaultId: string
+/** A hub linked to four notes (two of them linked together): the neighborsOf grep + limit fixture (#423). */
+let hubGraphVaultId: string
 let agent: Client
 let agentConnectionId: string
 let ownerId: string
@@ -155,6 +162,8 @@ beforeAll(async () => {
   const cookie = await loginCookie(app, owner.email)
   vaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope vault' } })).json<{ id: string }>().id
   graphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph' } })).json<{ id: string }>().id
+  filterGraphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph filter' } })).json<{ id: string }>().id
+  hubGraphVaultId = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'envelope graph hub' } })).json<{ id: string }>().id
   repoId = (
     await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'envelope-repo', ingestionMethod: 'agent_push' } })
   ).json<{ id: string }>().id
@@ -174,6 +183,10 @@ beforeAll(async () => {
   for (let i = 0; i < 10; i++) {
     await createNote(graphVaultId, { path: `c${i}/link`, body: `${`${words[i]} `.repeat(40)}${i < 9 ? `[[c${i + 1}/link]]` : ''}` })
   }
+  // A chain d0..d3 whose middle notes outrank the matching pair `zz1/x -> zz2/y` by degree (`graph` limit keeps the best connected).
+  const filterWords = ['sailor', 'granite', 'lantern', 'meadow', 'copper', 'willow']
+  const filterNotes: Array<[string, string]> = [['d0/n', '[[d1/n]]'], ['d1/n', '[[d2/n]]'], ['d2/n', '[[d3/n]]'], ['d3/n', ''], ['zz2/y', ''], ['zz1/x', '[[zz2/y]]']]
+  for (const [i, [path, link]] of filterNotes.entries()) await createNote(filterGraphVaultId, { path, body: `${`${filterWords[i]} `.repeat(40)}${link}` })
   for (let i = 0; i < 12; i++) {
     await createNote(vaultId, { path: `trash/gone-${i}`, body: `Gone ${i}.` })
     await softDeleteNote(vaultId, `trash/gone-${i}`)
@@ -472,6 +485,173 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     const walked = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 29, budget_tokens: LIST_PAGE })
     expect(walked.length).toBeGreaterThan(2)
     expect(ids(walked, 'results')).toEqual(ids([capped], 'results'))
+  })
+})
+
+describe('stateless result handles: literal grep before paging (#423)', () => {
+  it('a real SDK consumer follows filtered search, graph and symbol pages without losing matches', async () => {
+    for (const [tool, args, section] of [
+      ['search', { vaultId, query: 'Note', limit: 100, grep: 'note' }, 'results'],
+      ['graph', { vaultId: graphVaultId, aggregate: 'none', grep: 'link' }, 'nodes'],
+      ['find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 50, grep: 'handler' }, 'results'],
+    ] as const) {
+      const all = await page(tool, { ...args, budget_tokens: 25_000 })
+      expect(all.filter).toMatchObject({ within: 'computed' })
+      expect((all[section] as unknown[]).length).toBeGreaterThan(5)
+      const pages = await walk(tool, { ...args, budget_tokens: LIST_PAGE })
+      expect(pages.length, tool).toBeGreaterThan(1)
+      expect(ids(pages, section)).toEqual(ids([all], section))
+      expect(new Set(ids(pages, section)).size).toBe(ids([all], section).length)
+      await refused(tool, { ...args, grep: 'DIFFERENT', budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /CURSOR_INVALID/)
+    }
+  })
+
+  it('same-id changed note text invalidates both ordinary and filtered result snapshots', async () => {
+    for (const grep of [undefined, 'link']) {
+      await flushEmbeddings()
+      const args = { vaultId: graphVaultId, aggregate: 'none', ...(grep ? { grep } : {}), budget_tokens: LIST_PAGE }
+      const first = await page('graph', args)
+      const before = await db.select({ id: notes.id }).from(notes).where(and(eq(notes.vaultId, graphVaultId), eq(notes.path, 'c0/link')))
+      await updateNote(graphVaultId, 'c0/link', { body: `${'apple '.repeat(40)}[[c1/link]] changed text ${grep ?? 'ordinary'}` })
+      const after = await db.select({ id: notes.id }).from(notes).where(and(eq(notes.vaultId, graphVaultId), eq(notes.path, 'c0/link')))
+      expect(after).toEqual(before)
+      const compute = vi.spyOn(graph, 'buildGraph')
+      try {
+        await refused('graph', { ...args, cursor: cursorOf(first) }, /CURSOR_STALE/)
+        expect(compute).not.toHaveBeenCalled()
+      } finally {
+        compute.mockRestore()
+      }
+    }
+  })
+
+  it('graph grep with limit lists edges among the shown matches and reports truthful coverage', async () => {
+    // zz1/x -> zz2/y are the only matching notes, but the better-connected chain d1/d2 would fill `limit: 2` before any filter.
+    const args = { vaultId: filterGraphVaultId, aggregate: 'none', grep: 'zz', budget_tokens: 25_000 }
+    const unlimited = await page('graph', args)
+    const limited = await page('graph', { ...args, limit: 2 })
+    expect(ids([limited], 'edges', edge)).toEqual(ids([unlimited], 'edges', edge))
+    expect(ids([limited], 'nodes')).toEqual(ids([unlimited], 'nodes'))
+    expect(limited.truncated).toBe(false)
+    expect(ids([limited], 'nodes', (n) => n.path as string).sort()).toEqual(['zz1/x', 'zz2/y'])
+    expect(ids([limited], 'edges', edge)).toEqual(['zz1/x -> zz2/y'])
+    // All 6 nodes were scanned (the limit only bounds what is shown), and the one edge is among the shown nodes.
+    expect(limited.filter).toMatchObject({
+      within: 'computed',
+      sections: { nodes: { scanned: 6, matched: 2, more: false }, edges: { scanned: 1, matched: 1, more: false } },
+    })
+    // One shown node has no edge among the shown nodes; the second match is a bounded-list continuation, not an unscanned candidate.
+    const one = await page('graph', { vaultId: filterGraphVaultId, aggregate: 'none', grep: 'zz', limit: 1, budget_tokens: 25_000 })
+    expect(ids([one], 'nodes')).toHaveLength(1)
+    expect(one.edges).toEqual([])
+    expect(one.filter).toMatchObject({ sections: { nodes: { scanned: 6, matched: 2, more: false }, edges: { scanned: 0, matched: 0, more: false } } })
+  })
+
+  it('graph neighborsOf with grep and limit shows only nodes its edges cover; the lookahead node is a signal, a non-matching centre is dropped', async () => {
+    // A hub linking four notes, two of which (`zzp/x -> zzq/y`) also link each other. Seeded here, not in beforeAll: its
+    // background indexing would move the index epochs the cursor walks of the tests above bind.
+    const hubNotes: Array<[string, string]> = [['hub/n', '[[m1/a]] [[m2/b]] [[zzp/x]] [[zzq/y]]'], ['m1/a', ''], ['m2/b', ''], ['zzp/x', '[[zzq/y]]'], ['zzq/y', '']]
+    const hubWords = ['pewter', 'saffron', 'obsidian', 'juniper', 'tundra']
+    for (const [i, [path, link]] of hubNotes.entries()) await createNote(hubGraphVaultId, { path, body: `${`${hubWords[i]} `.repeat(40)}${link}` })
+    await flushEmbeddings()
+    for (const edgeTypes of [undefined, ['extracted']]) {
+      const args = { vaultId: hubGraphVaultId, neighborsOf: 'hub/n', grep: 'zz', ...(edgeTypes ? { edgeTypes } : {}), budget_tokens: 25_000 }
+      // hub + 4 neighbours = 5 nodes: nothing lies beyond `limit: 5`. The hub does not match, so it is dropped.
+      const full = await page('graph', { ...args, limit: 5 })
+      expect(ids([full], 'nodes', (n) => n.path as string).sort()).toEqual(['zzp/x', 'zzq/y'])
+      expect(ids([full], 'edges', edge)).toEqual(['zzp/x -> zzq/y'])
+      expect(full.filter).toMatchObject({ sections: { nodes: { scanned: 5, matched: 2, more: false }, edges: { scanned: 1, matched: 1, more: false } } })
+      // `limit: 4`: the fifth node (fetched only to say that more exist) is neither searched nor shown.
+      const cut = await page('graph', { ...args, limit: 4 })
+      const shown = ids([cut], 'nodes', (n) => n.path as string)
+      expect(shown.every((path) => ['zzp/x', 'zzq/y'].includes(path))).toBe(true)
+      expect(shown.length).toBeLessThan(2)
+      expect(cut.filter).toMatchObject({ sections: { nodes: { scanned: 4, more: true } } })
+      expect(cut.truncated).not.toBe(false)
+      // Whatever is shown, an edge between two shown nodes is listed, and edge coverage counts exactly the listed edges.
+      const listed = ids([cut], 'edges', edge)
+      for (const e of ids([full], 'edges', edge)) {
+        const [from, , to] = e.split(' ')
+        if (shown.includes(from!) && shown.includes(to!)) expect(listed).toContain(e)
+      }
+      expect(cut.filter).toMatchObject({ sections: { edges: { scanned: listed.length, matched: listed.length } } })
+    }
+  })
+
+  it('does not call an unmatched bounded candidate set complete, or pretend to scan beyond limit', async () => {
+    const result = await call('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 5, grep: 'NO_SUCH_LITERAL' })
+    expect(result.isError).toBe(false)
+    const json = JSON.parse(result.text) as Answer
+    expect(json.results).toEqual([])
+    expect(json.filter).toMatchObject({ within: 'computed', sections: { results: { scanned: 6, matched: 0, more: true } } })
+    expect(json.truncated).toMatchObject({ cursor: null, narrow: expect.arrayContaining([expect.stringContaining('computed candidates only')]) })
+    await refused('find_symbols', { repositoryId: repoId, query: 'alphaHandler', grep: '' }, /INVALID_ARGUMENT/)
+  })
+
+  it('keeps ordinary raced first pages successful without a snapshot, but rejects explicit filtered races', async () => {
+    const original = graph.buildGraph
+    for (const grep of [undefined, 'link']) {
+      await flushEmbeddings()
+      const compute = vi.spyOn(graph, 'buildGraph').mockImplementationOnce(async (...args) => {
+        const answer = await original(...args)
+        await updateNote(graphVaultId, 'c0/link', { body: `${'apple '.repeat(40)}[[c1/link]] raced ${grep ?? 'ordinary'}` })
+        return answer
+      })
+      try {
+        const args = { vaultId: graphVaultId, aggregate: 'none', ...(grep ? { grep } : {}), budget_tokens: LIST_PAGE }
+        if (grep) {
+          await refused('graph', args, /"code":"BUSY"/)
+        } else {
+          const raced = await page('graph', args)
+          const cursor = cursorOf(raced)
+          expect(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'))).not.toHaveProperty('h')
+          compute.mockClear()
+          await refused('graph', { ...args, cursor }, /CURSOR_STALE/)
+          expect(compute).not.toHaveBeenCalled()
+        }
+      } finally {
+        compute.mockRestore()
+      }
+    }
+  })
+
+  it('rejects a missing snapshot on a legacy continuation before computing results', async () => {
+    await flushEmbeddings()
+    const args = { vaultId: graphVaultId, aggregate: 'none', budget_tokens: LIST_PAGE }
+    const first = await page('graph', args)
+    const legacy: unknown = JSON.parse(Buffer.from(cursorOf(first), 'base64url').toString('utf8'))
+    if (legacy === null || typeof legacy !== 'object') throw new Error('expected an object cursor')
+    Reflect.deleteProperty(legacy, 'h')
+    const cursor = Buffer.from(JSON.stringify(legacy)).toString('base64url')
+    // Simulate a resource disappearing after its live access check, before
+    // the snapshot query, without substituting any MCP result.
+    const epochs = vi.spyOn(cache, 'readEpochs').mockResolvedValueOnce({ permission: '0', vaults: {}, repositories: {} })
+    const compute = vi.spyOn(graph, 'buildGraph')
+    try {
+      await refused('graph', { ...args, cursor }, /CURSOR_STALE/)
+      expect(compute).not.toHaveBeenCalled()
+    } finally {
+      epochs.mockRestore()
+      compute.mockRestore()
+    }
+  })
+
+  it('invalidates ordinary and filtered cursors after a live permission change before computing results', async () => {
+    const member = await createActiveUser()
+    for (const grep of [undefined, 'link']) {
+      await flushEmbeddings()
+      const args = { vaultId: graphVaultId, aggregate: 'none', ...(grep ? { grep } : {}), budget_tokens: LIST_PAGE }
+      const first = await page('graph', args)
+      const share = await call('share_vault', { vaultId: graphVaultId, granteeType: 'user', granteeId: member.id, permission: grep ? 'edit' : 'read' })
+      expect(share.isError, share.text).toBe(false)
+      const compute = vi.spyOn(graph, 'buildGraph')
+      try {
+        await refused('graph', { ...args, cursor: cursorOf(first) }, /CURSOR_STALE/)
+        expect(compute).not.toHaveBeenCalled()
+      } finally {
+        compute.mockRestore()
+      }
+    }
   })
 })
 

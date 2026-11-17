@@ -120,6 +120,17 @@ describe('find_symbols refs: callers, references, tests (#470)', () => {
     }
     expect(seen).toEqual(whole)
   })
+
+  it('literal filtering of refs replays one bounded computed set, rather than filtering successive SQL pages', async () => {
+    const r = await q('normalize', 'references', { grep: 'handler', limit: 2 })
+    expect(r.isError, r.text).toBe(false)
+    expect(rows(r.json.results)).toEqual(['src/handler.ts:1 - import resolved', 'src/handler.ts:6 handle call resolved'])
+    expect(r.json.filter).toMatchObject({ within: 'computed', sections: { results: { scanned: 2, matched: 2, more: true } } })
+    expect(r.json.truncated).toMatchObject({ cursor: null })
+    const denied = await ask(stranger, { repositoryId: repoId, query: 'normalize', refs: 'references', grep: 'handler' })
+    expect(denied.isError).toBe(true)
+    expect(denied.json.error.code).toBe('NOT_FOUND')
+  })
 })
 
 describe('find_symbols refs: at (#470)', () => {

@@ -18,6 +18,7 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { extractWikilinkLocations } from '../src/notes/okf.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { createNote, noteFile } from '../src/notes/store.js'
+import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
 
 type Args = Record<string, unknown>
@@ -203,6 +204,8 @@ describe('graph neighborsOf answers the backlinks of a note (#472)', () => {
   it('pages within the budget and counts what it left out', async () => {
     for (let i = 0; i < 40; i++) await createNote(vaultId, { path: `many/n${String(i).padStart(2, '0')}`, body: `Note ${i} links [[bl/popular]] with some words around it.\n` })
     await createNote(vaultId, { path: 'bl/popular', body: 'Popular.\n' })
+    // This walk proves paging under an unchanged snapshot, not an indexing race.
+    await flushEmbeddings()
     const seen: Backlink[] = []
     let cursor: string | null = null
     for (let n = 0; n < 50; n++) {
