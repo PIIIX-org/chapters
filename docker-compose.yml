@@ -115,6 +115,8 @@ services:
       - ELARA_ISOLATED_PARSE_TIMEOUT_MS
       - ELARA_ISOLATED_CHILD_RSS_MB
       - ELARA_ISOLATED_CHILD_MAX_PARSES
+      # Byte budget of the in-process parse cache in MiB (default 64).
+      - ELARA_PARSE_CACHE_MB
     volumes:
       # THE NOTES LIVE HERE. Vault content is markdown FILES ON DISK
       # (plus local-path repository clones), not rows in Postgres — a
