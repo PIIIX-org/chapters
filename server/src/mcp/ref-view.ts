@@ -139,25 +139,35 @@ export function diffView(base: RepositoryView, target: RepositoryView, path: str
   const paths = [...new Set([...base.files.keys(), ...target.files.keys(), ...(base.entries?.keys() ?? []), ...(target.entries?.keys() ?? [])])].filter((p) => !folder || p === folder || p.startsWith(`${folder}/`)).sort(compareCodeUnits)
   const chunks: string[] = []
   const metadata: Array<{ path: string; kind: string; reason: string; before?: { sha: string; mode: string }; after?: { sha: string; mode: string } }> = []
+  // Object ids and modes are comparable only when both sides come from Git trees. A registered local repository read
+  // without `ref` is the indexed file set, which carries no entries: there content is the only evidence, and no
+  // object id or mode is invented for the side that lacks one.
+  const git = base.entries !== undefined && target.entries !== undefined
   for (const p of paths) {
     const before = base.files.get(p)
     const after = target.files.get(p)
     const old = base.entries?.get(p)
     const next = target.entries?.get(p)
-    if (old || next) {
+    if (git) {
       if (old?.sha === next?.sha && old?.mode === next?.mode && old?.type === next?.type) continue
-    } else if (before?.contentHash === after?.contentHash) continue
-    if (old && !before || next && !after) {
+    } else if (before && after) {
+      if (before.contentHash === after.contentHash) continue
+    } else if (!before && !after) {
+      // Present only as a Git entry on one side, with no text on either: whether the other side has it is unknown.
+      metadata.push({ path: p, kind: 'unknown', reason: 'no_git_metadata', ...(old ? { before: { sha: old.sha, mode: old.mode } } : {}), ...(next ? { after: { sha: next.sha, mode: next.mode } } : {}) })
+      continue
+    }
+    if (git && (old && !before || next && !after)) {
       const entry = next ?? old!
       const reason = entry.type === 'commit' ? 'submodule' : entry.mode === '120000' ? 'symlink' : (target.skipped.find((f) => f.path === p) ?? base.skipped.find((f) => f.path === p))?.reason ?? 'unindexed_text'
       metadata.push({ path: p, kind: !old ? 'added' : !next ? 'deleted' : 'modified', reason, ...(old ? { before: { sha: old.sha, mode: old.mode } } : {}), ...(next ? { after: { sha: next.sha, mode: next.mode } } : {}) })
       continue
     }
     chunks.push(`diff --git ${quoteGitPath(`a/${p}`)} ${quoteGitPath(`b/${p}`)}`)
-    if (!before) chunks.push(`new file mode ${next?.mode ?? '100644'}`)
-    else if (!after) chunks.push(`deleted file mode ${old?.mode ?? '100644'}`)
+    if (!before) chunks.push(...next ? [`new file mode ${next.mode}`] : [])
+    else if (!after) chunks.push(...old ? [`deleted file mode ${old.mode}`] : [])
     else if (old && next && old.mode !== next.mode) chunks.push(`old mode ${old.mode}`, `new mode ${next.mode}`)
-    if (old || next) {
+    if (git) {
       const zeros = '0'.repeat((next ?? old)!.sha.length)
       chunks.push(`index ${old?.sha ?? zeros}..${next?.sha ?? zeros}${old?.mode === next?.mode ? ` ${old!.mode}` : ''}`)
     }

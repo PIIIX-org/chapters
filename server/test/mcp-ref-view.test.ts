@@ -437,6 +437,66 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     expect((await call('read_file', { ref: second, path: 'invalid.txt' })).text).toContain('no indexed UTF-8 text')
   })
 
+  it('reports a branch and an annotated tag of the same name instead of serving the tag', async () => {
+    await git().raw(['branch', 'release', first])
+    await git().raw(['tag', '-a', 'release', '-m', 'annotated', second])
+    try {
+      const both = await call('read_file', { ref: 'release', path: 'src/api.ts' })
+      expect(both.error).toBe(true)
+      expect(both.text).toMatch(/ambiguous/)
+      expect(both.text).toContain('refs/heads/release')
+      expect(both.text).toContain('refs/tags/release')
+      expect((await answer('read_file', { ref: 'refs/tags/release', path: 'src/api.ts', outline: false })).commit).toBe(second)
+      expect((await answer('read_file', { ref: 'refs/heads/release', path: 'src/api.ts', outline: false })).commit).toBe(first)
+      await git().raw(['branch', '-D', 'release'])
+      expect((await answer('read_file', { ref: 'release', path: 'src/api.ts', outline: false })).commit).toBe(second)
+    } finally {
+      await git().raw(['tag', '-d', 'release'])
+      await git().raw(['branch', '-D', 'release']).catch(() => undefined)
+    }
+  })
+
+  it('carries the mode an overlay states into the diff: new executable file, content with mode change, content-only edit, and refuses mode-only', async () => {
+    const added = `diff --git a/bin/run.sh b/bin/run.sh\nnew file mode 100755\nindex 0000000..1111111\n--- /dev/null\n+++ b/bin/run.sh\n@@ -0,0 +1,1 @@\n+echo run\n`
+    const created = await answer('browse_repository', { ref: first, diff: first, overlay: added })
+    expect(created.diff).toContain('diff --git "a/bin/run.sh" "b/bin/run.sh"\nnew file mode 100755\nindex ' + '0'.repeat(40) + '..')
+    expect(created.diff).not.toContain('100644')
+    const both = `diff --git a/src/entry.ts b/src/entry.ts\nold mode 100644\nnew mode 100755\n--- a/src/entry.ts\n+++ b/src/entry.ts\n@@ -2,1 +2,1 @@\n-export function entry() { return retained() }\n+export function entry() { return retained() + 1 }\n`
+    const changed = await answer('browse_repository', { ref: first, diff: first, overlay: both, path: 'src/entry.ts' })
+    expect(changed.diff).toContain('old mode 100644\nnew mode 100755\nindex ')
+    expect(changed.diff).toContain('+export function entry() { return retained() + 1 }')
+    const stale = await call('browse_repository', { ref: first, overlay: both.replace('old mode 100644', 'old mode 100755') })
+    expect(stale.error).toBe(true)
+    expect(stale.text).toMatch(/stale overlay mode/)
+    // mode.sh is executable at `second`; editing its text alone keeps the committed mode and states no mode change.
+    const edit = `diff --git a/mode.sh b/mode.sh\n--- a/mode.sh\n+++ b/mode.sh\n@@ -1,1 +1,1 @@\n-echo unchanged\n+echo edited\n`
+    const kept = await answer('browse_repository', { ref: second, diff: second, overlay: edit, path: 'mode.sh' })
+    expect(kept.diff).not.toMatch(/^(?:old|new) mode/m)
+    expect(kept.diff).toMatch(/^index [0-9a-f]{40}\.\.[0-9a-f]{40} 100755$/m)
+    const modeOnly = await call('browse_repository', { ref: first, diff: first, overlay: 'diff --git a/mode.sh b/mode.sh\nold mode 100644\nnew mode 100755\n' })
+    expect(modeOnly.error).toBe(true)
+    expect(modeOnly.text).toMatch(/mode-only/)
+  })
+
+  it('diffs a registered local repository read without ref by content, never inventing object ids or reporting unchanged files', async () => {
+    const changedPath = 'src/api.ts'
+    await syncRepositoryFiles(localId, [{ path: changedPath, content: BASE }, { path: 'src/entry.ts', content: CALLER }], [changedPath, 'src/entry.ts'], {})
+    const unchanged = await answer('browse_repository', { repositoryId: localId, diff: first, path: changedPath })
+    expect(unchanged.diff ?? '').toBe('')
+    await syncRepositoryFiles(localId, [{ path: changedPath, content: 'export function localEdit() { return 5 }\n' }], [changedPath, 'src/entry.ts'], {})
+    const edited = await answer('browse_repository', { repositoryId: localId, diff: first, path: changedPath })
+    expect(edited.diff).toContain('diff --git "a/src/api.ts" "b/src/api.ts"\n--- "a/src/api.ts"\n+++ "b/src/api.ts"')
+    expect(edited.diff).toContain('+export function localEdit() { return 5 }')
+    expect(edited.diff).not.toMatch(/^index /m)
+    expect(edited.diff).not.toContain('0'.repeat(40))
+    const absent = await answer('browse_repository', { repositoryId: localId, diff: first, path: 'deleted.txt' })
+    expect(absent.diff).toContain('diff --git "a/deleted.txt" "b/deleted.txt"\ndeleted file mode 100644\n--- "a/deleted.txt"\n+++ /dev/null')
+    expect(absent.diff).not.toMatch(/^index /m)
+    const binary = await answer('browse_repository', { repositoryId: localId, diff: first, path: 'binary.dat' })
+    expect(binary.diff ?? '').toBe('')
+    expect(binary.metadata).toEqual([expect.objectContaining({ path: 'binary.dat', kind: 'unknown', reason: 'no_git_metadata' })])
+  })
+
   it('uses only the registered local Git root, excludes its dirty worktree, and clearly refuses push-only refs', async () => {
     await writeFile(join(localRoot, 'src/api.ts'), 'export function uncommittedLeak() {}\n')
     await simpleGit(localRoot).raw(['replace', first, second])

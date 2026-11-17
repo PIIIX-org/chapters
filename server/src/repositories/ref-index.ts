@@ -76,6 +76,34 @@ export function viewVersion(view: RepositoryView): Record<string, unknown> {
   const skipped = summarizeSkips(view.skipped)
   return { source: view.source, ...(view.commit ? { commit: view.commit } : {}), tree: view.tree, ...(view.overlay ? { overlay: true, overlay_hash: view.overlay } : {}), ...(view.skipped.length ? { skipped: { binary: skipped.binary, too_large: skipped.too_large, ignored: skipped.ignored, over_file_cap: skipped.over_file_cap } } : {}) }
 }
+/**
+ * The one commit a branch/tag name names on the remote, from `ls-remote` rows for exactly `ref`, `refs/heads/ref` and `refs/tags/ref`.
+ * An annotated tag is peeled to its commit, but never in place of a same-named branch or tag: competing refs that
+ * end on different commits are an ambiguity the caller must settle with `refs/heads/` or `refs/tags/`.
+ */
+export function resolveAdvertisedRef(listing: string, ref: string): string {
+  const wanted = new Set([ref, `refs/heads/${ref}`, `refs/tags/${ref}`])
+  const named = new Map<string, { direct?: string; peeled?: string }>()
+  for (const line of listing.trim().split('\n')) {
+    const [sha, name] = line.split('\t')
+    if (!sha || !name || !/^[a-f0-9]{40,64}$/.test(sha)) continue
+    const peeled = name.endsWith('^{}')
+    const base = peeled ? name.slice(0, -3) : name
+    if (!wanted.has(base)) continue
+    const entry = named.get(base) ?? {}
+    if (peeled) entry.peeled = sha
+    else entry.direct = sha
+    named.set(base, entry)
+  }
+  const commits = new Map<string, string[]>()
+  for (const [name, { direct, peeled }] of named) {
+    const sha = peeled ?? direct
+    if (sha) commits.set(sha, [...commits.get(sha) ?? [], name])
+  }
+  if (commits.size === 0) throw new RefError('INVALID_ARGUMENT', 'ref is not advertised by this repository')
+  if (commits.size > 1) throw new RefError('INVALID_ARGUMENT', `ambiguous ref: ${[...commits.values()].flat().sort().join(' and ')} name different commits; use refs/heads/ or refs/tags/`)
+  return commits.keys().next().value!
+}
 export function checkGitRef(ref: string): void {
   // Ref names and full object ids only, never rev expressions, options, refspecs or paths.
   if (ref.length > 240 || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(ref) || ref.includes('..') || ref.includes('//') || ref.endsWith('/') || ref.endsWith('.lock')) {
@@ -157,7 +185,10 @@ async function overlayView(base: RepositoryView, diff: string): Promise<Reposito
       files.set(patch.path, await fileIndex(base.repositoryId, patch.path, changed, true))
       const algorithm = base.commit?.length === 64 ? 'sha256' : 'sha1'
       const size = Buffer.byteLength(changed)
-      if (entries) entries.set(patch.path, { path: patch.path, type: 'blob', mode: entries.get(patch.path)?.mode ?? '100644', size, sha: createHash(algorithm).update(`blob ${size}\0`).update(changed).digest('hex') })
+      const prior = entries?.get(patch.path)
+      if (patch.oldMode && prior && prior.mode !== patch.oldMode) throw new OverlayError(`stale overlay mode for ${patch.path}`)
+      // The diff's own mode wins; a content-only edit keeps the file's committed mode.
+      if (entries) entries.set(patch.path, { path: patch.path, type: 'blob', mode: patch.mode ?? prior?.mode ?? '100644', size, sha: createHash(algorithm).update(`blob ${size}\0`).update(changed).digest('hex') })
     }
   }
   return { ...base, files, ...(entries ? { entries } : {}), overlay: contentHash(diff) }
@@ -181,12 +212,7 @@ export async function repositoryViewAt(userId: string, repositoryId: string, arg
       const git = simpleGit({ timeout: { block: 30_000 } })
       let commit = ref
       if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(ref)) {
-        const out = await git.listRemote([url, ref, `refs/heads/${ref}`, `refs/tags/${ref}`, `refs/tags/${ref}^{}`])
-        const rows = out.trim().split('\n').map((line) => line.split('\t')).filter((r) => /^[a-f0-9]{40,64}$/.test(r[0] ?? ''))
-        const peeled = rows.find((r) => r[1] === `${ref}^{}` || r[1] === `refs/tags/${ref}^{}`)
-        const values = new Set((peeled ? [peeled] : rows).map((r) => r[0]!))
-        if (values.size !== 1) throw new RefError('INVALID_ARGUMENT', values.size ? 'ambiguous ref; use refs/heads/ or refs/tags/' : 'ref is not advertised by this repository')
-        commit = [...values][0]!
+        commit = resolveAdvertisedRef(await git.listRemote([url, ref, `refs/heads/${ref}`, `refs/tags/${ref}`, `refs/tags/${ref}^{}`]), ref)
       }
       const dir = await openQueryMirror(repositoryId, source, objectFormatOf(commit))
       try {

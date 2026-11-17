@@ -25,6 +25,10 @@ export interface FilePatch {
   path: string
   /** The abbreviated blob id of the old file from git's `index` line, when the diff has one. */
   oldBlob?: string
+  /** Mode the file has after the patch, from git's `new file mode`/`new mode` line; absent keeps the committed mode. */
+  mode?: '100644' | '100755'
+  /** Mode the diff says the file had before, from `old mode`; checked against the base. */
+  oldMode?: '100644' | '100755'
   status: 'added' | 'modified' | 'deleted'
   hunks: Hunk[]
 }
@@ -62,7 +66,7 @@ export function parseOverlay(diff: string): FilePatch[] {
   const lines = diff.split('\n')
   if (lines.at(-1) === '') lines.pop()
   const patches: FilePatch[] = []
-  let current: { from: string | null; to: string | null; patch: FilePatch | null; oldBlob?: string } | null = null
+  let current: { from: string | null; to: string | null; patch: FilePatch | null; oldBlob?: string; mode?: FilePatch['mode']; oldMode?: FilePatch['oldMode'] } | null = null
   const finish = () => {
     if (current?.patch) patches.push(current.patch)
     else if (current) throw new OverlayError('a file has no supported text patch (mode-only and empty-file metadata changes are not supported)')
@@ -83,6 +87,10 @@ export function parseOverlay(diff: string): FilePatch[] {
     } else if (line.startsWith('index ') && current) {
       const m = /^index ([0-9a-f]{7,64})\.\.[0-9a-f]+/.exec(line)
       if (m && !/^0+$/.test(m[1]!)) current.oldBlob = m[1]
+    } else if (current && /^(?:new file mode|new mode|old mode) 100(?:644|755)$/.test(line)) {
+      const mode = line.slice(-6) as '100644' | '100755'
+      if (line.startsWith('old mode')) current.oldMode = mode
+      else current.mode = mode
     } else if (/^(?:new file mode|deleted file mode|old mode|new mode) (?!100(?:644|755)$)\d+/.test(line)) {
       throw new OverlayError('symlink and submodule overlays are not supported')
     } else if (/^(rename|copy) (from|to) /.test(line) || /^similarity index /.test(line)) {
@@ -98,7 +106,7 @@ export function parseOverlay(diff: string): FilePatch[] {
       if (path === null) throw new OverlayError('a file header names no file')
       if (path.startsWith('/') || path.split('/').some((p) => p === '' || p === '.' || p === '..') || path.includes('\0')) throw new OverlayError('overlay paths must be repository-relative')
       if (current.from !== null && current.to !== null && current.from !== current.to) throw new OverlayError('renames are not supported: use git diff --no-renames')
-      current.patch = { path, ...(current.oldBlob ? { oldBlob: current.oldBlob } : {}), status: current.from === null ? 'added' : current.to === null ? 'deleted' : 'modified', hunks: [] }
+      current.patch = { path, ...(current.oldBlob ? { oldBlob: current.oldBlob } : {}), ...(current.mode ? { mode: current.mode } : {}), ...(current.oldMode ? { oldMode: current.oldMode } : {}), status: current.from === null ? 'added' : current.to === null ? 'deleted' : 'modified', hunks: [] }
       i++
     } else if (line.startsWith('@@')) {
       const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line)
