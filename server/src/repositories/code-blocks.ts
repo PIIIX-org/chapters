@@ -170,6 +170,25 @@ export function codeBlocks(
     if (list.length === 0) methodsOf.set(m.parent, list)
     list.push(m)
   }
+  // Views (bounds given): several classes may share a name, and each owns the methods written inside its own lines, found by
+  // binary search over the name's methods by start line; a single class of a name keeps them all (Go receivers sit outside the type).
+  // The stored live index passes no bounds and keeps its by-name grouping (its output is versioned by CHUNK_VERSION).
+  const classCount = new Map<string, number>()
+  if (bounds) for (const s of small ? [] : symbols) if (s.kind === 'class') classCount.set(s.name, (classCount.get(s.name) ?? 0) + 1)
+  if (bounds) for (const list of methodsOf.values()) list.sort((a, b) => a.startLine - b.startLine)
+  /** The method start lines of class `s`, lazily, and whether it has any. */
+  const methodLines = (s: ExtractedSymbol): { any: boolean; lines: () => Generator<number> } => {
+    const list = methodsOf.get(s.name) ?? []
+    if (!bounds || (classCount.get(s.name) ?? 0) <= 1) return { any: list.length > 0, lines: function* () { for (const m of list) yield m.startLine } }
+    let lo = 0
+    let hi = list.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (list[mid]!.startLine < s.startLine) lo = mid + 1
+      else hi = mid
+    }
+    return { any: lo < list.length && list[lo]!.startLine <= s.endLine, lines: function* () { for (let i = lo; i < list.length && list[i]!.startLine <= s.endLine; i++) yield list[i]!.startLine } }
+  }
 
   const drafts: Array<Omit<CodeBlock, 'blockId'>> = []
   const whole = { innerPath: '', symbolKind: null, symbolParent: null, snippet: null, startLine: 1, endLine: total, contentHash: hash(1, total), budgetTier: null }
@@ -193,15 +212,15 @@ export function codeBlocks(
         embedText: `${s.kind} ${innerPath} in ${path}:${s.startLine}\n${snippet}`,
         budgetTier: s.kind === 'method' ? 2 : s.exported ? 0 : 1,
       }) - 1
-    const methods = s.kind === 'class' ? (methodsOf.get(s.name) ?? []) : []
-    if (methods.length > 0) {
+    const methods = s.kind === 'class' ? methodLines(s) : null
+    if (methods?.any) {
       drafts.push({
         ...span,
         kind: 'skeleton',
         symbolKind: null,
         symbolParent: null,
         snippet: null,
-        embedText: skeletonText(`${s.kind} ${innerPath} in ${path}`, [s.startLine, ...methods.map((m) => m.startLine)]),
+        embedText: skeletonText(`${s.kind} ${innerPath} in ${path}`, (function* () { yield s.startLine; yield* methods.lines() })()),
         budgetTier: null,
         outlineOf: at,
       })

@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest'
-import { resolveRefListing, MirrorRefError as RefError } from '../src/repositories/git-mirror.js'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { resolveRefListing, resolveMirrorRef, MirrorRefError as RefError } from '../src/repositories/git-mirror.js'
+import { checkGitRef } from '../src/repositories/ref-index.js'
 
 // #676: `ref: "release"` names one commit or reports every competing ref, whatever kind each one is.
 
@@ -37,5 +42,44 @@ describe('resolveRefListing', () => {
 
   it('names nothing when the mirror holds no such ref', () => {
     expect(resolveRefListing('', 'release')).toBeNull()
+  })
+})
+
+describe('resolveMirrorRef against a real mirror', () => {
+  let root: string
+  let dir: string
+  let first: string
+  let second: string
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@b', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@b' } }).trim()
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), 'elara-mirror-ref-'))
+    dir = join(root, 'm.git')
+    execFileSync('git', ['init', '--bare', '--quiet', dir])
+    const tree = execFileSync('git', ['mktree'], { cwd: dir, input: '', encoding: 'utf8' }).trim()
+    first = git('commit-tree', '-m', 'one', tree)
+    second = git('commit-tree', '-m', 'two', '-p', first, tree)
+    git('update-ref', 'refs/elara/head', first)
+    git('update-ref', 'refs/tags/trunk', second)
+    git('config', 'elara.source', 'src-1')
+  })
+  afterAll(async () => { await rm(root, { recursive: true, force: true }) })
+
+  it('refuses a tag named like the default branch instead of letting it win over the fetched tip', async () => {
+    await expect(resolveMirrorRef(dir, 'src-1', 'trunk', null, 'trunk')).rejects.toMatchObject({ kind: 'ambiguous', message: expect.stringMatching(/refs\/heads\/trunk and refs\/tags\/trunk/) })
+    expect(await resolveMirrorRef(dir, 'src-1', 'refs/heads/trunk', null, 'trunk')).toBe(first)
+    expect(await resolveMirrorRef(dir, 'src-1', 'refs/tags/trunk', null, 'trunk')).toBe(second)
+    expect(await resolveMirrorRef(dir, 'src-1', 'HEAD', null, 'trunk')).toBe(first)
+  })
+
+  it('serves a full SHA in lowercase only, and only a held tip', async () => {
+    expect(await resolveMirrorRef(dir, 'src-1', first, null, null)).toBe(first)
+    await expect(resolveMirrorRef(dir, 'src-1', first.toUpperCase(), null, null)).rejects.toMatchObject({ kind: 'unsynced' })
+    expect(() => checkGitRef(first.toUpperCase())).toThrow(/lowercase/)
+    expect(() => checkGitRef(first)).not.toThrow()
+    expect(() => checkGitRef('Release-1')).not.toThrow()
+  })
+
+  it('refuses a mirror recorded for another source', async () => {
+    await expect(resolveMirrorRef(dir, 'src-2', 'refs/tags/trunk', null, null)).rejects.toMatchObject({ kind: 'unsynced' })
   })
 })

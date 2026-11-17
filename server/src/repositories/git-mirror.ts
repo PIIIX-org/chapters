@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readdir, rm } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
-import { simpleGit } from 'simple-git'
+import { simpleGit, type SimpleGit } from 'simple-git'
 import { eq } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
@@ -31,6 +31,18 @@ import { BINARY_EXTENSIONS, GIT_METADATA, MAX_FILE_BYTES, MAX_INDEXED_FILES, typ
  * removes the mirror; the boot sweep removes any left behind (a vault or
  * user delete cascading rows, a crash).
  */
+
+/**
+ * Environment of every git subprocess a reader tool starts: replacement refs off, and no lazy fetch. A promisor (partial-clone) repository
+ * would otherwise download a missing blob from its remote while `ls-tree`/`cat-file` read it; `GIT_NO_LAZY_FETCH` stops that in git itself
+ * (a missing object is then an error), and `ref-index.ts` additionally refuses a registered local source whose config names a promisor.
+ */
+export const READER_GIT_ENV = { GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' } as const
+
+/** simple-git over `dir` with `READER_GIT_ENV`. */
+export function readerGit(dir: string, timeoutMs?: number): SimpleGit {
+  return simpleGit(dir, { allowEnvironment: Object.keys(READER_GIT_ENV), ...(timeoutMs === undefined ? {} : { timeout: { block: timeoutMs } }) }).env('GIT_NO_REPLACE_OBJECTS', READER_GIT_ENV.GIT_NO_REPLACE_OBJECTS).env('GIT_NO_LAZY_FETCH', READER_GIT_ENV.GIT_NO_LAZY_FETCH)
+}
 
 const HEAD_REF = 'refs/elara/head'
 const SYNCED_REF = 'refs/elara/synced'
@@ -112,16 +124,20 @@ export function objectFormatOf(commit: string): ObjectFormat {
  * algorithms fails (`mismatched algorithms`), so a mirror is created in
  * `format`, the remote's, and re-created when the remote's changes; with
  * `format` null (the remote's is unknown: `ls-remote` failed) an existing
- * mirror is kept as it is and a new one is SHA-1, git's default.
+ * mirror is kept as it is and a new one is SHA-1, git's default. With `source` (the identity this sync will stamp) a mirror
+ * recorded for a different source is deleted and created again, so none of its refs survive.
  */
-export async function openMirror(repositoryId: string, format: ObjectFormat | null): Promise<string> {
+export async function openMirror(repositoryId: string, format: ObjectFormat | null, source?: string): Promise<string> {
   const dir = gitMirrorDir(repositoryId)
   if (existsSync(dir)) {
     try {
       const git = simpleGit(dir)
       if ((await git.raw(['rev-parse', '--is-bare-repository'])).trim() === 'true') {
         const current = (await git.raw(['rev-parse', '--show-object-format'])).trim()
-        if (format === null || current === format) return dir
+        // A mirror filled for another source (a replaced row, a changed URL) is never reused: its refs would stay resolvable
+        // next to the new source's marker. With no recorded source (a mirror from before sources were recorded) it is started again too.
+        const recorded = source === undefined ? source : await git.raw(['config', '--get', 'elara.source']).then((out) => out.trim(), () => null)
+        if ((format === null || current === format) && recorded === source) return dir
       }
     } catch {
       // Not a repository (an interrupted init): start it again.
@@ -222,7 +238,7 @@ export function resolveRefListing(listing: string, ref: string): string | null {
 export async function resolveMirrorRef(dir: string, source: string, ref: string | undefined, fallback: string | null, defaultBranch: string | null): Promise<string> {
   const unsynced = () => new MirrorRefError('unsynced', 'not available: not synced yet; retry after the next sync')
   if (!existsSync(dir)) throw unsynced()
-  const git = simpleGit(dir, { allowEnvironment: ['GIT_NO_REPLACE_OBJECTS'] }).env('GIT_NO_REPLACE_OBJECTS', '1')
+  const git = readerGit(dir)
   try {
     if ((await git.raw(['config', '--get', 'elara.source'])).trim() !== source) throw unsynced()
     const rows = (await git.raw(['for-each-ref', '--format=%(objectname)\t%(refname)\t%(*objectname)', 'refs/'])).trim().split('\n').filter(Boolean).map((line) => line.split('\t'))
@@ -231,12 +247,15 @@ export async function resolveMirrorRef(dir: string, source: string, ref: string 
     const synced = new Set(rows.flatMap(([sha, , peeled]) => [sha!, ...(peeled ? [peeled] : [])]))
     let commit: string | null | undefined
     if (ref === undefined) commit = fallback
-    else if (/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(ref)) commit = ref.toLowerCase()
+    else if (/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(ref)) commit = ref
     else if (ref === 'HEAD') commit = heads.get(HEAD_REF)
     else {
-      // The default branch's name is the row's; branches/tags are those the mirror holds (`refs/heads/*`, `refs/tags/*`).
-      const named = listing.filter((row) => /\trefs\/(?:heads|tags)\//.test(row)).join('\n')
-      commit = resolveRefListing(named, ref) ?? (ref === defaultBranch || ref === `refs/heads/${defaultBranch}` ? heads.get(HEAD_REF) : null)
+      // The default branch's name is the row's, standing for the fetched tip (`refs/elara/head`); it competes with a same-named tag
+      // like any other branch (an ambiguity, not a silent winner). Other names are the branches and tags the mirror holds.
+      const tip = heads.get(HEAD_REF)
+      const rowsOf = listing.filter((row) => /\trefs\/(?:heads|tags)\//.test(row))
+      if (defaultBranch && tip && !rowsOf.some((row) => row.endsWith(`\trefs/heads/${defaultBranch}`))) rowsOf.push(`${tip}\trefs/heads/${defaultBranch}`)
+      commit = resolveRefListing(rowsOf.join('\n'), ref)
     }
     if (!commit || !synced.has(commit)) throw unsynced()
     return (await git.raw(['rev-parse', '--verify', '--end-of-options', `${commit}^{commit}`])).trim()
@@ -286,14 +305,14 @@ async function listTree(dir: string, commit: string, maxBytes = Infinity): Promi
   let out: string
   if (Number.isFinite(maxBytes)) {
     try {
-      const raw = (await execGit('git', ['--no-replace-objects', 'ls-tree', '-r', '-l', '-z', '--full-tree', commit], { cwd: dir, maxBuffer: maxBytes, timeout: 30_000, encoding: null })).stdout
+      const raw = (await execGit('git', ['--no-replace-objects', 'ls-tree', '-r', '-l', '-z', '--full-tree', commit], { cwd: dir, env: { ...process.env, ...READER_GIT_ENV }, maxBuffer: maxBytes, timeout: 30_000, encoding: null })).stdout
       if (!isUtf8(raw)) throw new Error('Git ref contains non-UTF-8 paths')
       out = raw.toString('utf8')
     } catch (err) {
       if (typeof err === 'object' && err !== null && ('code' in err && err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || 'killed' in err && err.killed)) throw new MirrorReadLimitError('Git tree listing exceeded the ref byte/time budget')
       throw err
     }
-  } else out = await simpleGit(dir, { allowEnvironment: ['GIT_NO_REPLACE_OBJECTS'] }).env('GIT_NO_REPLACE_OBJECTS', '1').raw(['ls-tree', '-r', '-l', '-z', '--full-tree', commit])
+  } else out = await readerGit(dir).raw(['ls-tree', '-r', '-l', '-z', '--full-tree', commit])
   const entries: TreeEntry[] = []
   for (const record of out.split('\0')) {
     const m = /^(\d+) (\w+) ([0-9a-f]+) +(\S+)\t([\s\S]+)$/.exec(record)
@@ -308,7 +327,7 @@ function readBlobs(dir: string, shas: string[]): Promise<Map<string, Buffer>> {
   const blobs = new Map<string, Buffer>()
   if (shas.length === 0) return Promise.resolve(blobs)
   return new Promise((resolve, reject) => {
-    const child = spawn('git', ['cat-file', '--batch'], { cwd: dir, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1' }, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn('git', ['cat-file', '--batch'], { cwd: dir, env: { ...process.env, ...READER_GIT_ENV }, stdio: ['pipe', 'pipe', 'pipe'] })
     const chunks: Buffer[] = []
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))

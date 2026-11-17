@@ -1,14 +1,13 @@
 import { createHash } from 'node:crypto'
 import { readFile, realpath } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
-import { simpleGit } from 'simple-git'
 import { eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories, repositoryFiles } from '../db/schema.js'
 import { config } from '../config.js'
 import { resolveRepositoryAccess } from './permissions.js'
 import { contentHash, sourceIdentity } from './source-identity.js'
-import { scanMirrorTree, withMirrorLock, gitMirrorDir, resolveMirrorRef, MirrorRefError, MirrorReadLimitError, type TreeEntry } from './git-mirror.js'
+import { readerGit, scanMirrorTree, withMirrorLock, gitMirrorDir, resolveMirrorRef, MirrorRefError, MirrorReadLimitError, type TreeEntry } from './git-mirror.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractedSymbol, type ExtractionResult } from './extraction.js'
 import { parsed } from './blob-cache.js'
 import { BlockBudget, BlockBudgetError, codeBlocks, type BlockBounds, type CodeBlock } from './code-blocks.js'
@@ -100,6 +99,8 @@ export function viewSnapshotKey(key: string | null, view: RepositoryView | null,
   return createHash('sha256').update(JSON.stringify([key, viewVersion(view), base ? viewVersion(base) : null])).digest('hex')
 }
 export function checkGitRef(ref: string): void {
+  // A full object id is lowercase hex, as git prints it: another case is refused, not looked up as a name.
+  if (/^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/.test(ref) && ref !== ref.toLowerCase()) throw new RefError('INVALID_ARGUMENT', 'a commit SHA is lowercase hexadecimal')
   // Ref names and full object ids only, never rev expressions, options, refspecs or paths.
   if (ref.length > 240 || !/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(ref) || ref.includes('..') || ref.includes('//') || ref.endsWith('/') || ref.endsWith('.lock')) {
     throw new RefError('INVALID_ARGUMENT', 'ref must be a branch, tag, HEAD or full commit SHA')
@@ -149,7 +150,7 @@ function remember(key: string, view: RepositoryView): void {
   }
 }
 async function treeView(repositoryId: string, source: string, dir: string, commit: string): Promise<RepositoryView> {
-  const tree = (await simpleGit(dir, { allowEnvironment: ['GIT_NO_REPLACE_OBJECTS'] }).env('GIT_NO_REPLACE_OBJECTS', '1').raw(['rev-parse', '--verify', `${commit}^{tree}`])).trim()
+  const tree = (await readerGit(dir).raw(['rev-parse', '--verify', `${commit}^{tree}`])).trim()
   const key = `${EXTRACTOR_VERSION}:${repositoryId}:${source}:${tree}`
   const hit = cache.get(key)
   if (hit) {
@@ -228,7 +229,7 @@ export async function repositoryViewAt(userId: string, repositoryId: string, arg
       const root = await realpath(config.localReposRoot)
       const dir = await realpath(resolve(root, repo.localPath))
       if (dir !== root && !dir.startsWith(root + sep)) throw new RefError('INVALID_ARGUMENT', 'registered repository is outside the local repos root')
-      const git = simpleGit(dir, { timeout: { block: 30_000 }, allowEnvironment: ['GIT_NO_REPLACE_OBJECTS'] }).env('GIT_NO_REPLACE_OBJECTS', '1')
+      const git = readerGit(dir, 30_000)
       // Do not discover a parent repository outside the registered source.
       if (await realpath((await git.raw(['rev-parse', '--show-toplevel'])).trim()) !== dir) throw new RefError('INVALID_ARGUMENT', 'registered folder is not a Git work tree root')
       const common = await realpath(resolve(dir, (await git.raw(['rev-parse', '--git-common-dir'])).trim()))
@@ -239,6 +240,9 @@ export async function repositoryViewAt(userId: string, repositoryId: string, arg
       } catch (err) {
         if (!(typeof err === 'object' && err !== null && 'code' in err && err.code === 'ENOENT')) throw err
       }
+      // A partial clone would fetch missing objects over the network while a tree is read: refuse it (and GIT_NO_LAZY_FETCH stops it in git too).
+      const settings = await git.raw(['config', '--local', '--list'])
+      if (/^(?:remote\..*\.promisor=|remote\..*\.partialclonefilter=|extensions\.partialclone=)/im.test(settings)) throw new RefError('INVALID_ARGUMENT', 'a partial-clone (promisor) local repository is not supported for ref reads: its objects may not be local')
       const commit = (await git.raw(['rev-parse', '--verify', '--end-of-options', `${args.ref}^{commit}`])).trim()
       base = await treeView(repositoryId, sourceIdentity(repo), dir, commit)
     } else {

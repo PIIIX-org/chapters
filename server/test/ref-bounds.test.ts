@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { diffView } from '../src/mcp/ref-view.js'
 import { BlockBudget, BlockBudgetError, codeBlocks } from '../src/repositories/code-blocks.js'
-import { VIEW_BLOCK_BOUNDS, VIEW_OUTLINE_BOUNDS, declarationIndex, type ViewFile } from '../src/repositories/ref-index.js'
+import { VIEW_BLOCK_BOUNDS, VIEW_OUTLINE_BOUNDS, declarationIndex, type RepositoryView, type ViewFile } from '../src/repositories/ref-index.js'
 import { VIEW_GRAPH_LIMITS, scoreDefinitions, viewQueries } from '../src/repositories/ref-queries.js'
+import { noteBlocks } from '../src/notes/note-blocks.js'
 import { outlineSections } from '../src/repositories/outline.js'
 import { headings } from '../src/text/blocks.js'
 import { lineStarts } from '../src/text/lines.js'
@@ -242,5 +244,74 @@ describe('block estimator', () => {
     const budget = new BlockBudget({ bytes: 1e10, blocks: 1e6 })
     const blocks = codeBlocks('f', 'src/u.ts', content, symbols, [], { ...VIEW_BLOCK_BOUNDS, budget })
     expect(1e10 - budget.bytes).toBeGreaterThanOrEqual(blocks.reduce((n, b) => n + Buffer.byteLength(b.embedText) + Buffer.byteLength(b.innerPath) + Buffer.byteLength(b.snippet ?? ''), 0))
+  })
+})
+
+describe('methods of same-named classes', () => {
+  it('gives each of 9,000 `class C { m(){} }` its own method, in bounded time and memory', () => {
+    const lines = Array.from({ length: 9_000 }, (_, i) => `class C { m() { return ${i} } }`)
+    const content = lines.join('\n') + '\n'
+    const symbols: ExtractedSymbol[] = lines.flatMap((_, i) => [
+      { name: 'C', kind: 'class', startLine: i + 1, endLine: i + 1, exported: false } as ExtractedSymbol,
+      { name: 'm', parent: 'C', kind: 'method', startLine: i + 1, endLine: i + 1, exported: false } as ExtractedSymbol,
+    ])
+    const budget = new BlockBudget({ bytes: 1e10, blocks: 1e6 })
+    const heap = process.memoryUsage().heapUsed
+    const started = performance.now()
+    const blocks = codeBlocks('f', 'src/c.ts', content, symbols, [], { ...VIEW_BLOCK_BOUNDS, budget })
+    expect(performance.now() - started).toBeLessThan(5_000)
+    expect(process.memoryUsage().heapUsed - heap).toBeLessThan(256 * 1024 * 1024)
+    const classSkeletons = blocks.filter((b) => b.kind === 'skeleton' && b.outlineOf !== undefined)
+    expect(classSkeletons).toHaveLength(9_000)
+    // A class's skeleton holds its header and the lines inside its own range (shared skeleton allowance permitting), never every class's methods.
+    for (const b of classSkeletons.slice(0, 5)) expect(b.embedText.split('\n').length).toBeLessThanOrEqual(3)
+  })
+
+  it('keeps the by-name grouping of the live index when no bounds are given, and for one class of a name', () => {
+    const content = Array.from({ length: 400 }, (_, i) => `// ${i}`).join('\n') + '\n'
+    const symbols = [
+      { name: 'Repo', kind: 'class', startLine: 1, endLine: 2, exported: true },
+      { name: 'save', parent: 'Repo', kind: 'method', startLine: 350, endLine: 351, exported: false },
+    ] as ExtractedSymbol[]
+    for (const bounds of [undefined, { ...VIEW_BLOCK_BOUNDS, budget: new BlockBudget({ bytes: 1e9, blocks: 1e6 }) }]) {
+      const skeleton = codeBlocks('f', 'src/r.ts', content, symbols, [], bounds).find((b) => b.outlineOf !== undefined)
+      expect(skeleton?.embedText.split('\n')).toHaveLength(3)
+    }
+  })
+})
+
+describe('diff of many binary changes', () => {
+  it('looks skip reasons up in a map: 20,000 changed binary files diff in bounded time', () => {
+    const entry = (path: string, sha: string) => [path, { path, type: 'blob', mode: '100644', sha, size: 3 }] as const
+    const paths = Array.from({ length: 20_000 }, (_, i) => `bin/f${i}.dat`)
+    const side = (sha: string): RepositoryView => ({ repositoryId: 'r', source: 's', tree: sha, files: new Map(), entries: new Map(paths.map((p) => entry(p, sha.repeat(40)))), skipped: paths.map((path) => ({ path, reason: 'binary' as const })), bytes: 0 })
+    const started = performance.now()
+    const answer = diffView(side('a'), side('b'), undefined)
+    expect(performance.now() - started).toBeLessThan(5_000)
+    const metadata = answer.sections.find((s) => s.name === 'metadata')
+    expect(metadata && 'items' in metadata ? metadata.items : []).toHaveLength(20_000)
+  })
+})
+
+describe('note blocks (live path)', () => {
+  /** The section ends the forward `findIndex` scan produced, from the headings alone. */
+  function scannedEnds(content: string) {
+    const starts = lineStarts(content)
+    const found = headings(content).map((h) => ({ level: h.level, line: starts.findIndex((o) => o === h.start) + 1 }))
+    return found.map((h, i) => {
+      const next = found.findIndex((o, j) => j > i && o.level <= h.level)
+      return next === -1 ? starts.length : found[next]!.line - 1
+    })
+  }
+
+  it('ends each section at the next heading of its level or above, as the scan did, and in linear time', () => {
+    const levels = [1, 2, 3, 2, 2, 4, 1, 3, 3, 2, 6, 5, 1, 1, 2, 4, 4, 3, 1]
+    const content = levels.map((level, i) => `${'#'.repeat(level)} T${i}\ntext ${i}\n`).join('')
+    const sections = noteBlocks('n', 'a.md', content).filter((b) => b.kind === 'section')
+    expect(sections.map((b) => b.endLine)).toEqual(scannedEnds(content))
+    const flat = Array.from({ length: 40_000 }, (_, i) => `# h${i}`).join('\n') + '\n'
+    const started = performance.now()
+    noteBlocks('n', 'a.md', flat)
+    expect(performance.now() - started).toBeLessThan(10_000)
   })
 })

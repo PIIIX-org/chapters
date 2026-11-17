@@ -7,7 +7,8 @@ import { eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories } from '../src/db/schema.js'
 import { syncGitRepository } from '../src/repositories/git-sync.js'
-import { removeGitMirror } from '../src/repositories/git-mirror.js'
+import { gitMirrorDir, removeGitMirror, resolveMirrorRef } from '../src/repositories/git-mirror.js'
+import { sourceIdentity } from '../src/repositories/source-identity.js'
 import { repositoryViewAt } from '../src/repositories/ref-index.js'
 import { getRepositoryFile, listRepositoryFiles } from '../src/repositories/store.js'
 import { createActiveUser } from './helpers.js'
@@ -95,6 +96,27 @@ describe('git URL ingestion', () => {
       expect([...view.files.keys()].sort()).toEqual(['a.ts', 'c.ts'])
     }
     await expect(repositoryViewAt(synced!.ownerId, repo.id, { ref: 'elsewhere' })).rejects.toMatchObject({ code: 'NOT_SYNCED' })
+    await removeGitMirror(repo.id)
+  })
+
+  it('never lets a replaced source resolve the old source\'s commits, even when the new source fails to sync', async () => {
+    const { remoteUrl, bareDir, workDir, git } = await makeBareRemote()
+    await writeFile(join(workDir, 'a.ts'), 'export const a = 1')
+    await git.add('.')
+    await git.commit('initial')
+    await git.push('origin', 'HEAD:refs/heads/main')
+    await simpleGit(bareDir).raw(['symbolic-ref', 'HEAD', 'refs/heads/main'])
+    const repo = await makeRepo(remoteUrl)
+    await syncGitRepository(repo.id)
+    const [synced] = await db.select().from(repositories).where(eq(repositories.id, repo.id))
+    const old = synced!.lastSyncedCommit!
+    expect(await resolveMirrorRef(gitMirrorDir(repo.id), sourceIdentity(synced!), old, null, null)).toBe(old)
+    // The row now names another source (a different URL, so a different identity) that cannot be reached.
+    const [moved] = await db.update(repositories).set({ gitUrl: `file://${bareDir}-gone` }).where(eq(repositories.id, repo.id)).returning()
+    await expect(syncGitRepository(repo.id)).rejects.toThrow()
+    for (const source of [sourceIdentity(synced!), sourceIdentity(moved!)]) {
+      for (const ref of [old, 'main', 'HEAD', undefined]) await expect(resolveMirrorRef(gitMirrorDir(repo.id), source, ref, old, 'main'), `${source.slice(0, 6)} ${String(ref)}`).rejects.toMatchObject({ kind: 'unsynced' })
+    }
     await removeGitMirror(repo.id)
   })
 

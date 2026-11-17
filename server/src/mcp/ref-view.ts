@@ -1,14 +1,14 @@
 import { z } from 'zod'
 import { sql } from '../db/client.js'
 import { openSession } from '../cache/session.js'
-import { totalLines, sliceLines } from '../text/lines.js'
-import { viewId, viewVersion, type RepositoryView } from '../repositories/ref-index.js'
+import { totalLines, sliceLines, lineStarts } from '../text/lines.js'
+import { viewId, viewVersion, type RepositoryView, type ViewFile } from '../repositories/ref-index.js'
 import { searchRef } from '../repositories/ref-search.js'
 import { routeRef } from '../repositories/ref-router.js'
 import type { SearchRoute } from '../search/router.js'
 import { leanHit } from './search-hit.js'
 import { translatePattern, globToRegex, scanLimits, encodePosition, parsePosition, type GrepHit } from '../repositories/grep.js'
-import { checkReadArgs, codeParts, markdownParts, MARKDOWN_PATH, targetSections, outlineFirst, outlineSection, outlineNarrow, largeNarrow, unchanged, type Target } from './read-targets.js'
+import { checkReadArgs, codeParts, rangeTokens, MARKDOWN_PATH, targetSections, outlineFirst, outlineSection, outlineNarrow, largeNarrow, unchanged, type OutlineEntry, type Target } from './read-targets.js'
 import { inSession } from './session-reads.js'
 import { keyset, ranked, textSection, location, compareCodeUnits, type Budgeted, type Page } from './response.js'
 import { McpToolError } from './errors.js'
@@ -17,6 +17,15 @@ import { McpToolError } from './errors.js'
 export const REF_INPUT = {
   ref: z.string().optional().describe('Ref'),
   overlay: z.string().optional().describe('Private diff'),
+}
+/** A Markdown view file's heading sections and outline from the blocks `fileIndex` already built (paths cut, count capped, charged). */
+function sectionParts(file: ViewFile): { headings: Array<{ path: string; lines: [number, number] }>; outline: OutlineEntry[] } {
+  const starts = lineStarts(file.content)
+  const sections = file.blocks.filter((b) => b.kind === 'section' && b.endLine >= b.startLine)
+  return {
+    headings: sections.map((b) => ({ path: b.innerPath, lines: [b.startLine, b.endLine] })),
+    outline: sections.map((b) => ({ block: b.blockId, heading: b.innerPath, lines: [b.startLine, b.endLine], tokens: rangeTokens(file.content, starts, [b.startLine, b.endLine]) })),
+  }
 }
 export async function readView(view: RepositoryView, args: { path: string; targets?: Target[]; outline?: boolean; if_rev?: string; session_id?: string }, page: Page, connectionId: string): Promise<Budgeted> {
   checkReadArgs(args)
@@ -35,8 +44,9 @@ export async function readView(view: RepositoryView, args: { path: string; targe
   const wrap = (answer: Budgeted) => inSession(session, doc, answer, page.at)
   if (page.at === null && args.if_rev === hash) return wrap({ ...unchanged({ hash }), head: { ...head, unchanged: true } })
   const code = codeParts(file.blocks, file.content)
-  const markdown = MARKDOWN_PATH.test(path) ? markdownParts(file.id, path, file.content, file.content, 0) : null
-  const parts = { blocks: [...code.blocks, ...(markdown?.blocks ?? [])], symbols: code.symbols, headings: markdown?.headings ?? 'use symbol or lines', outline: code.outline.length || !markdown ? code.outline : markdown.outline }
+  // Markdown sections are the view's own bounded, request-charged outline blocks: the live note builders (`noteBlocks`, `headingSections`) are never run on view content.
+  const markdown = MARKDOWN_PATH.test(path) ? sectionParts(file) : null
+  const parts = { blocks: code.blocks, symbols: code.symbols, headings: markdown?.headings ?? 'use symbol or lines', outline: code.outline.length || !markdown ? code.outline : markdown.outline }
   const located = { ...head, total_lines: totalLines(file.content) }
   if (args.targets) return wrap({ head: located, sections: targetSections({ text: file.content, ...parts }, args.targets) })
   const outline = await outlineFirst(args.outline, page.at, () => parts.outline)
@@ -143,6 +153,10 @@ export function diffView(base: RepositoryView, target: RepositoryView, path: str
   // without `ref` is the indexed file set, which carries no entries: there content is the only evidence, and no
   // object id or mode is invented for the side that lacks one.
   const git = base.entries !== undefined && target.entries !== undefined
+  // Skip reasons by path, built once: a lookup per changed path was a scan of both skip lists each.
+  const skipReason = new Map<string, string>()
+  for (const f of base.skipped) skipReason.set(f.path, f.reason)
+  for (const f of target.skipped) skipReason.set(f.path, f.reason)
   for (const p of paths) {
     const before = base.files.get(p)
     const after = target.files.get(p)
@@ -159,7 +173,7 @@ export function diffView(base: RepositoryView, target: RepositoryView, path: str
     }
     if (git && (old && !before || next && !after)) {
       const entry = next ?? old!
-      const reason = entry.type === 'commit' ? 'submodule' : entry.mode === '120000' ? 'symlink' : (target.skipped.find((f) => f.path === p) ?? base.skipped.find((f) => f.path === p))?.reason ?? 'unindexed_text'
+      const reason = entry.type === 'commit' ? 'submodule' : entry.mode === '120000' ? 'symlink' : skipReason.get(p) ?? 'unindexed_text'
       metadata.push({ path: p, kind: !old ? 'added' : !next ? 'deleted' : 'modified', reason, ...(old ? { before: { sha: old.sha, mode: old.mode } } : {}), ...(next ? { after: { sha: next.sha, mode: next.mode } } : {}) })
       continue
     }

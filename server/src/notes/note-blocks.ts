@@ -93,11 +93,18 @@ export function noteBlocks(noteId: string, path: string, body: string): NoteBloc
   }
 
   const trail: Array<{ level: number; title: string }> = []
+  // The next heading of the same or a higher level, for each heading, in one pass (a heading waits until one of its level or above arrives).
+  const nextOf: number[] = new Array<number>(found.length).fill(-1)
+  const waiting: number[] = []
+  found.forEach((h, i) => {
+    while (waiting.length > 0 && found[waiting.at(-1)!]!.level >= h.level) nextOf[waiting.pop()!] = i
+    waiting.push(i)
+  })
   found.forEach((h, i) => {
     while (trail.length > 0 && trail.at(-1)!.level >= h.level) trail.pop()
     trail.push({ level: h.level, title: h.title })
     const ownEnd = i + 1 < found.length ? found[i + 1]!.lineNo - 1 : total
-    const next = found.findIndex((o, j) => j > i && o.level <= h.level)
+    const next = nextOf[i]!
     const end = next === -1 ? total : found[next]!.lineNo - 1
     pieces('section', trail.map((t) => t.title).join(' > '), h.lineNo, ownEnd, end)
   })

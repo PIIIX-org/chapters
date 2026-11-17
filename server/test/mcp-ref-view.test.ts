@@ -601,7 +601,7 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     expect(result.results.find((r) => r.path === 'empty.ts')).not.toHaveProperty('startLine')
   })
 
-  it('purges the owned query mirror and never reuses the old source identity after recreation at the same id', async () => {
+  it('purges the owned mirror and never reuses the old source identity after recreation at the same id', async () => {
     const [source] = await db.select().from(repositories).where(eq(repositories.id, repoId))
     const [temporary] = await db.insert(repositories).values({ name: 'ref-purge', ownerId: source!.ownerId, ingestionMethod: 'git', gitUrl: `file://${root}` }).returning()
     const id = temporary!.id
@@ -776,5 +776,35 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
       await simpleGit(dir).raw(['update-ref', '-d', 'refs/elara/head'])
       await db.update(repositories).set({ defaultBranch: null }).where(eq(repositories.id, repoId))
     }
+  })
+
+  it('reads and outlines Markdown overlays with huge titles or tens of thousands of headings through the bounded view sections only', async () => {
+    const add = (path: string, lines: string[]) => `diff --git a/${path} b/${path}\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${lines.map((l) => `+${l}`).join('\n')}\n`
+    const titled = add('docs/title.md', [`# ${'T'.repeat(100_000)}`, ...Array.from({ length: 8_000 }, (_, i) => `## s${i}`)])
+    const flat = add('docs/flat.md', Array.from({ length: 39_000 }, () => '# a'))
+    const heap = process.memoryUsage().heapUsed
+    const started = Date.now()
+    for (const outline of [true, false]) {
+      const read = await answer('read_file', { ref: second, overlay: titled, path: 'docs/title.md', outline, budget_tokens: 2_000 })
+      expect(read.commit).toBe(second)
+    }
+    const target = await answer('read_file', { ref: second, overlay: titled, path: 'docs/title.md', targets: [{ heading: 's7999' }], budget_tokens: 2_000 })
+    expect(JSON.stringify(target.targets)).toContain('## s7999')
+    for (const outline of [true, false]) expect((await answer('read_file', { ref: second, overlay: flat, path: 'docs/flat.md', outline, budget_tokens: 2_000 })).commit).toBe(second)
+    expect(Date.now() - started).toBeLessThan(60_000)
+    expect(process.memoryUsage().heapUsed - heap).toBeLessThan(256 * 1024 * 1024)
+  })
+
+  it('refuses a local Git source whose config says partial clone, rather than let git fetch over the network', async () => {
+    const local = simpleGit(localRoot)
+    for (const [key, value] of [['remote.origin.promisor', 'true'], ['extensions.partialclone', 'origin']] as const) {
+      await local.raw(['config', key, value])
+      try {
+        const refused = await call('read_file', { repositoryId: localId, ref: first, path: 'src/api.ts' })
+        expect(refused.error, key).toBe(true)
+        expect(refused.text).toContain('partial-clone')
+      } finally { await local.raw(['config', '--unset', key]) }
+    }
+    expect((await answer('read_file', { repositoryId: localId, ref: first, path: 'src/api.ts', outline: false })).commit).toBe(first)
   })
 })
