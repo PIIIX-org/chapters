@@ -65,6 +65,7 @@ export const PARSE_CACHE_ENTRY_BYTES = 4 * 1024 * 1024
  * its array slot and the headers of its strings (V8: a few dozen bytes each), rounded up. Nothing is serialized
  * or walked past the three arrays, so the cost is one pass over the items the parse just built. The budget is a
  * ceiling on this estimate, so the real footprint stays at or under it; exactness is not the point.
+ * Strings are charged by length because `detachStrings` gives the retained ones their own storage (see `detach`).
  */
 const RESULT_OVERHEAD_BYTES = 64
 const SYMBOL_OVERHEAD_BYTES = 128
@@ -84,6 +85,29 @@ export function estimateExtractionBytes(result: ExtractionResult): number {
     result.sites.length * SITE_OVERHEAD_BYTES +
     chars * 2
   )
+}
+
+/**
+ * A string that owns its storage. A string the parser cut out of the file (V8 keeps `slice`/`substring` results of
+ * a long text as a view into it) keeps the whole text alive: 2,000 retained one-line names of 1 MiB files would
+ * hold 2 GiB while the size estimate (string lengths) says a few hundred KiB. Measured on real extraction (#1148):
+ * Python, Rust and Java results kept ~0.75-0.9 MB each for a 0.9 MB source; copied, ~0. The round trip through a
+ * UTF-16 buffer always allocates a new string and is lossless for any code unit (UTF-8 is not, for a lone surrogate).
+ */
+const detach = (s: string): string => Buffer.from(s, 'utf16le').toString('utf16le')
+
+/** Gives every string of a result its own storage (in place, the values do not change) before the cache keeps it. */
+function detachStrings(result: ExtractionResult): void {
+  for (const s of result.symbols) {
+    s.name = detach(s.name)
+    if (s.parent !== undefined) s.parent = detach(s.parent)
+  }
+  for (const i of result.imports) i.target = detach(i.target)
+  for (const s of result.sites) {
+    s.name = detach(s.name)
+    if (s.qualified !== null) s.qualified = detach(s.qualified)
+    if (s.via !== null) s.via = detach(s.via)
+  }
 }
 
 interface ParseCacheEntry {
@@ -121,6 +145,7 @@ export async function parsed(language: string, content: string, path: string, co
     parseCacheStats.skippedLarge++
     return result
   }
+  detachStrings(result)
   // A concurrent parse of the same key may have stored it while this one ran: replace it, count it once.
   const replaced = parseCache.get(key)
   if (replaced) {

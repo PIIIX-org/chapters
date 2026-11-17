@@ -3825,7 +3825,7 @@ and the content hash, so a second repository or branch with the same blob is
 not parsed again. It is bounded by 2,000 entries and by bytes (#1148):
 `estimateExtractionBytes` sizes a result as two bytes per string character
 plus a fixed overhead per symbol, import and site (a cheap over-estimate, no
-serialization), and least recently used entries go until the total is within
+serialization; a retained result's strings are first copied so they own their storage, because a name the parser cut from a 1 MiB file would otherwise keep the whole file alive, 0.75-0.9 MB per Python, Rust or Java result measured), and least recently used entries go until the total is within
 the budget, 64 MiB by default (`ELARA_PARSE_CACHE_MB`, a positive whole number
 of MiB, at most 1 TiB, read in `blob-cache.ts`; anything else warns at boot and uses the default). A result estimated
 over `PARSE_CACHE_ENTRY_BYTES` (4 MiB, or the budget when that is smaller) is
@@ -3836,7 +3836,7 @@ it does not push out other entries. `parseCacheStats` counts parses, reuses,
 as a miss and its next lookup as another miss. A sync with no
 change parses and embeds nothing and a one-file change re-processes one
 file (#684 part A, `test/repository-git-mirror.test.ts`);
-`test/blob-sharing.test.ts` and `test/blob-parse-cache.test.ts` cover this part.
+`test/blob-sharing.test.ts` and `test/blob-parse-cache*.test.ts` cover this part.
 
 **Code edges** (`code-edge-rules.ts`, `code-edges.ts`, table `code_edges`,
 migration 0061, #469, ADR-004 §2.8): the symbol-level edges #470
