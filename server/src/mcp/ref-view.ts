@@ -143,6 +143,13 @@ function quoteGitPath(path: string): string {
   return `${quoted}"`
 }
 
+/**
+ * What building one diff may cost, admitted per file BEFORE its lines are split or any prefixed line string exists: `lines` (both sides'
+ * lines of every file that needs a body) and `bytes` (their text plus per-line prefixes). Over it the call is refused with `BUSY` naming the
+ * limit, never answered with part of the patch. The response budget only applies after the whole patch text exists.
+ */
+export const DIFF_LIMITS = { lines: 400_000, bytes: 16 * 1024 * 1024 }
+
 /** A valid full-file unified patch, without external diff tools, checkout, renames or text execution. */
 export function diffView(base: RepositoryView, target: RepositoryView, path: string | undefined): Budgeted {
   const folder = path?.split('/').filter((p) => p !== '' && p !== '.').join('/')
@@ -157,6 +164,7 @@ export function diffView(base: RepositoryView, target: RepositoryView, path: str
   const skipReason = new Map<string, string>()
   for (const f of base.skipped) skipReason.set(f.path, f.reason)
   for (const f of target.skipped) skipReason.set(f.path, f.reason)
+  const admitted = { lines: 0, bytes: 0 }
   for (const p of paths) {
     const before = base.files.get(p)
     const after = target.files.get(p)
@@ -186,6 +194,13 @@ export function diffView(base: RepositoryView, target: RepositoryView, path: str
       chunks.push(`index ${old?.sha ?? zeros}..${next?.sha ?? zeros}${old?.mode === next?.mode ? ` ${old!.mode}` : ''}`)
     }
     if (before && after && before.contentHash === after.contentHash) continue
+    // Counted by scanning for newlines, which allocates nothing; each line then costs its text, a prefix and a separator.
+    const sides = (before ? totalLines(before.content) : 0) + (after ? totalLines(after.content) : 0)
+    admitted.lines += sides
+    admitted.bytes += (before?.content.length ?? 0) + (after?.content.length ?? 0) + 2 * sides + 256 + 2 * p.length
+    if (admitted.lines > DIFF_LIMITS.lines || admitted.bytes > DIFF_LIMITS.bytes) {
+      throw new McpToolError('BUSY', `the diff is over ${DIFF_LIMITS.lines} lines or ${DIFF_LIMITS.bytes / 1024 / 1024} MiB of patch text; narrow it with \`path\``, { field: 'diff' })
+    }
     const oldLines = !before || before.content === '' ? [] : before.content.replace(/\n$/, '').split('\n')
     const newLines = !after || after.content === '' ? [] : after.content.replace(/\n$/, '').split('\n')
     if (oldLines.length === 0 && newLines.length === 0) continue

@@ -241,7 +241,8 @@ export async function repositoryViewAt(userId: string, repositoryId: string, arg
         if (!(typeof err === 'object' && err !== null && 'code' in err && err.code === 'ENOENT')) throw err
       }
       // A partial clone would fetch missing objects over the network while a tree is read: refuse it (and GIT_NO_LAZY_FETCH stops it in git too).
-      const settings = await git.raw(['config', '--local', '--list'])
+      // The effective configuration (system, global, repository, worktree, `include.path` files and GIT_CONFIG_* variables), not one file of it.
+      const settings = await git.raw(['config', '--list', '--includes'])
       if (/^(?:remote\..*\.promisor=|remote\..*\.partialclonefilter=|extensions\.partialclone=)/im.test(settings)) throw new RefError('INVALID_ARGUMENT', 'a partial-clone (promisor) local repository is not supported for ref reads: its objects may not be local')
       const commit = (await git.raw(['rev-parse', '--verify', '--end-of-options', `${args.ref}^{commit}`])).trim()
       base = await treeView(repositoryId, sourceIdentity(repo), dir, commit)

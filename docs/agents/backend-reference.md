@@ -3002,6 +3002,27 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     tip (`--depth 1 --no-tags`): other branches, tags and older commits become
     available when the sync records them (#1151). Annotated tags are peeled
     without hiding a same-named branch.
+    Source binding: a sync deletes and recreates a mirror recorded for a
+    different source (or none) before fetching into it, derives its URL and the
+    stamped identity from one row, and re-reads the row after the fetch: if the
+    source or credential changed meanwhile it stops before stamping the mirror
+    or indexing anything (a failed sync; the next one starts from the new row).
+    Full SHAs are lowercase hex only. The default branch's name competes with a
+    same-named tag as an ambiguity. Reader git subprocesses run with
+    `GIT_NO_REPLACE_OBJECTS=1` and `GIT_NO_LAZY_FETCH=1`, and a registered local
+    repository whose effective `git config --list --includes` (system, global,
+    repository, worktree, included files, `GIT_CONFIG_*`) names a promisor or
+    partial clone is refused.
+    A diff is admitted before it is built (`DIFF_LIMITS`: 400,000 lines and
+    16 MiB of patch text across both sides of every changed file, counted by
+    newline scan before any line is split): over it the call is `BUSY` naming
+    the limit. Other per-view loops are bounded the same way: keyword search
+    scans one lower-cased file at a time and builds a hit only for ranked
+    candidates; the call graph includes module-import rows in its edge budget and
+    takes import context from one line-offset table per file; the embedding work
+    limit is checked while texts are collected. `grep` still sends the view's
+    files to PostgreSQL as one JSON document, bounded by the tree's 32 MiB (plus
+    2 MiB of overlay) and the statement timeout, as the live scan is.
     `refCacheStats`/`refSearchStats` count real work.
     Search keeps keyword+vector channels and existing per-file embedding
     budgets, reusing same-owner vectors by embed key.

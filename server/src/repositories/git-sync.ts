@@ -128,7 +128,12 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       // A mirror recorded for another source is deleted before anything is fetched into it, so none of its refs stay resolvable.
       const dir = await openMirror(repositoryId, remote ? objectFormatOf(remote.commit) : null, source)
       const headCommit = await fetchIntoMirror(dir, cloneUrl, remote?.branch ?? null)
-      // Ref views serve this mirror only for the source that filled it: stamped once the fetch has succeeded.
+      // The fetch took time: the row is read again, and nothing is stamped (nor indexed) for a source that was replaced meanwhile.
+      const latest = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
+      if (!latest || sourceIdentity(latest) !== source || latest.gitCredentialEncrypted !== current.gitCredentialEncrypted) {
+        throw new Error('the repository source changed during this sync; it is synced again from the new source')
+      }
+      // Ref views serve this mirror only for the source that filled it: stamped once the fetch has succeeded and the source still stands.
       await recordMirrorSource(dir, source)
       // A row with no skip report predates #465 (see above): read every file once.
       const previous =

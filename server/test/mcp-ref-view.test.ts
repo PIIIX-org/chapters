@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
+import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -805,6 +806,16 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
         expect(refused.text).toContain('partial-clone')
       } finally { await local.raw(['config', '--unset', key]) }
     }
+    // The setting may come from an included file, which `git config --local --list` does not follow.
+    const included = join(root, 'promisor.inc')
+    await writeFile(included, '[remote "origin"]\n\tpromisor = true\n')
+    execFileSync('git', ['config', 'include.path', included], { cwd: localRoot })
+    try {
+      expect((await local.raw(['config', '--local', '--list'])).includes('remote.origin.promisor')).toBe(false)
+      const refused = await call('read_file', { repositoryId: localId, ref: first, path: 'src/api.ts' })
+      expect(refused.error).toBe(true)
+      expect(refused.text).toContain('partial-clone')
+    } finally { execFileSync('git', ['config', '--unset', 'include.path'], { cwd: localRoot }) }
     expect((await answer('read_file', { repositoryId: localId, ref: first, path: 'src/api.ts', outline: false })).commit).toBe(first)
   })
 })

@@ -43,6 +43,8 @@ async function viewVectors(view: RepositoryView): Promise<VectorMap> {
         const key = embedKey(block.embedText)
         keys.set(block.blockId, key)
         texts.set(key, block.embedText)
+        // Refused as soon as the work is over budget, not after every block of the tree has been hashed.
+        if (texts.size > 50_000) throw new RefError('BUSY', 'ref exceeds the bounded embedding work budget')
       }
       pending.set(file, keys)
     }
@@ -80,7 +82,7 @@ function cosine(a: readonly number[], b: readonly number[]): number {
   for (let i = 0; i < a.length; i++) { dot += a[i]! * b[i]!; aa += a[i]! * a[i]!; bb += b[i]! * b[i]! }
   return aa && bb ? dot / Math.sqrt(aa * bb) : 0
 }
-const compare = (a: Hit, b: Hit) => a.path < b.path ? -1 : a.path > b.path ? 1 : (a.startLine ?? 0) - (b.startLine ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+const compare = (a: { id: string; path: string; startLine?: number | undefined }, b: { id: string; path: string; startLine?: number | undefined }) => a.path < b.path ? -1 : a.path > b.path ? 1 : (a.startLine ?? 0) - (b.startLine ?? 0) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
 /** Both channels use the selected tree's bytes; nothing is searched in the default index as a substitute. */
 export async function searchRef(view: RepositoryView, accountId: string, args: { query: string; kind?: string; limit?: number; symbols?: boolean }, symbolsOnly: boolean): Promise<Hit[]> {
@@ -91,31 +93,37 @@ export async function searchRef(view: RepositoryView, accountId: string, args: {
   try { query = await embedQuery(args.query, accountId) } catch { throw new RefError('BUSY', 'query embedding is unavailable') }
   let embedded: VectorMap
   try { embedded = await viewVectors(view) } catch (err) { throw err instanceof RefError ? err : new RefError('BUSY', 'ref embedding is unavailable') }
-  const candidates = new Map<string, { hit: Hit; keyword: number; vector: number }>()
+  // One small record per matching block; the Hit (with its snippet) is built only for the few that reach the ranking, and each file's
+  // lower-cased text exists once at a time, not once per block.
+  interface Candidate { id: string; path: string; startLine: number | undefined; file: ViewFile; block: CodeBlock; name: string | undefined; keyword: number; vector: number }
+  const candidates = new Map<string, Candidate>()
+  const wantedPath = args.query.toLowerCase()
   for (const f of view.files.values()) {
     const selected = f.blocks.filter((b) => symbolsOnly ? b.kind === 'symbol' : b.kind === 'file' || b.kind === 'skeleton' || args.symbols !== false && b.kind === 'symbol')
+    let lowerContent: string | null = null
     for (const b of selected) {
       if (args.kind !== undefined && b.symbolKind !== args.kind) continue
-      const text = `${b.innerPath} ${f.path} ${b.snippet ?? f.content}`.toLowerCase()
-      const matched = words.every((w) => text.includes(w))
-      const keyword = matched ? (b.innerPath.toLowerCase() === args.query.toLowerCase() ? 100 : b.kind === 'symbol' ? 10 : 1) : 0
+      // The words hold no space, so a match of `${innerPath} ${path} ${text}` is a match of one of its parts.
+      const head = `${b.innerPath} ${f.path}`.toLowerCase()
+      const body = b.snippet !== null ? b.snippet.toLowerCase() : (lowerContent ??= f.content.toLowerCase())
+      const matched = words.every((w) => head.includes(w) || body.includes(w))
+      const keyword = matched ? (b.innerPath.toLowerCase() === wantedPath ? 100 : b.kind === 'symbol' ? 10 : 1) : 0
       const vector = embedded.get(b.blockId)
       const similarity = vector ? cosine(query, vector) : -1
       if (!keyword && 1 - similarity > config.searchMaxDistance) continue
-      const symbol = b.kind === 'symbol' ? declarationIndex(f).get(`${b.startLine}\0${b.innerPath}`) : null
-      const hit = hitOf(f, b, symbol?.name)
-      const candidate = { hit, keyword, vector: 1 - similarity <= config.searchMaxDistance ? similarity : -1 }
-      const previous = candidates.get(hit.id)
-      if (!previous) candidates.set(hit.id, candidate)
-      else candidates.set(hit.id, { hit: candidate.vector > previous.vector ? hit : previous.hit, keyword: Math.max(keyword, previous.keyword), vector: Math.max(candidate.vector, previous.vector) })
+      const name = b.kind === 'symbol' ? declarationIndex(f).get(`${b.startLine}\0${b.innerPath}`)?.name : undefined
+      const candidate: Candidate = { id: name ? b.blockId : f.id, path: f.path, startLine: b.endLine >= b.startLine ? b.startLine : undefined, file: f, block: b, name, keyword, vector: 1 - similarity <= config.searchMaxDistance ? similarity : -1 }
+      const previous = candidates.get(candidate.id)
+      if (!previous) candidates.set(candidate.id, candidate)
+      else candidates.set(candidate.id, { ...(candidate.vector > previous.vector ? candidate : previous), keyword: Math.max(keyword, previous.keyword), vector: Math.max(candidate.vector, previous.vector) })
     }
   }
   const ranked = [...candidates.values()]
   const scores = new Map<string, number>()
-  const lexical = ranked.filter((c) => c.keyword > 0).sort((a, b) => b.keyword - a.keyword || compare(a.hit, b.hit)).slice(0, 100)
-  const semantic = ranked.filter((c) => c.vector >= -0.000001).sort((a, b) => b.vector - a.vector || compare(a.hit, b.hit)).slice(0, 100)
-  for (const channel of [lexical, semantic]) channel.forEach((c, i) => scores.set(c.hit.id, (scores.get(c.hit.id) ?? 0) + 1 / (60 + i + 1)))
-  return ranked.filter((c) => scores.has(c.hit.id)).map((c) => ({ ...c.hit, score: scores.get(c.hit.id)! + (c.keyword === 100 ? 1 : 0) })).sort((a, b) => b.score - a.score || compare(a, b)).slice(0, (args.limit ?? 20) + 1)
+  const lexical = ranked.filter((c) => c.keyword > 0).sort((a, b) => b.keyword - a.keyword || compare(a, b)).slice(0, 100)
+  const semantic = ranked.filter((c) => c.vector >= -0.000001).sort((a, b) => b.vector - a.vector || compare(a, b)).slice(0, 100)
+  for (const channel of [lexical, semantic]) channel.forEach((c, i) => scores.set(c.id, (scores.get(c.id) ?? 0) + 1 / (60 + i + 1)))
+  return ranked.filter((c) => scores.has(c.id)).map((c) => ({ ...hitOf(c.file, c.block, c.name), score: scores.get(c.id)! + (c.keyword === 100 ? 1 : 0) })).sort((a, b) => b.score - a.score || compare(a, b)).slice(0, (args.limit ?? 20) + 1)
 }
 function hitOf(file: ViewFile, b: CodeBlock, name: string | undefined): Hit {
   return { id: name ? b.blockId : file.id, path: file.path, ...(name ? { name, kind: b.symbolKind!, ...(b.symbolParent ? { parent: b.symbolParent } : {}) } : {}), ...(b.endLine >= b.startLine ? { startLine: b.startLine, endLine: b.endLine } : {}), snippet: b.snippet ?? file.content.slice(0, 1500), score: 0 }

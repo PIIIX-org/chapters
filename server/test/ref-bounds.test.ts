@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { diffView } from '../src/mcp/ref-view.js'
+import { DIFF_LIMITS, diffView } from '../src/mcp/ref-view.js'
+import { McpToolError } from '../src/mcp/errors.js'
 import { BlockBudget, BlockBudgetError, codeBlocks } from '../src/repositories/code-blocks.js'
 import { VIEW_BLOCK_BOUNDS, VIEW_OUTLINE_BOUNDS, declarationIndex, type RepositoryView, type ViewFile } from '../src/repositories/ref-index.js'
 import { VIEW_GRAPH_LIMITS, scoreDefinitions, viewQueries } from '../src/repositories/ref-queries.js'
+import { contentHash as contentHashOf } from '../src/repositories/source-identity.js'
 import { noteBlocks } from '../src/notes/note-blocks.js'
 import { outlineSections } from '../src/repositories/outline.js'
 import { headings } from '../src/text/blocks.js'
@@ -313,5 +315,36 @@ describe('note blocks (live path)', () => {
     const started = performance.now()
     noteBlocks('n', 'a.md', flat)
     expect(performance.now() - started).toBeLessThan(10_000)
+  })
+})
+
+describe('diff construction budget', () => {
+  const file = (path: string, content: string) => [path, { id: path, path, content, contentHash: contentHashOf(content), language: null, size: content.length, structure: { symbols: [], imports: [], sites: [] }, blocks: [] } as unknown as ViewFile] as const
+  const side = (tag: string, count: number, make: (i: number) => string): RepositoryView => ({ repositoryId: 'r', source: 's', tree: tag, files: new Map(Array.from({ length: count }, (_, i) => file(`src/f${i}.txt`, make(i)))), skipped: [], bytes: 0 })
+
+  it('refuses two trees of 32 text files x 1 MiB of one-character lines before splitting any line', () => {
+    // 1,048,575 newlines and one more character; the last character differs between the trees.
+    const body = (last: string) => (i: number) => `${'\n'.repeat(1_048_575)}${last}${i % 10}`
+    const base = side('a', 32, body('x'))
+    const target = side('b', 32, body('y'))
+    const heap = process.memoryUsage().heapUsed
+    const started = performance.now()
+    let error: unknown
+    try { diffView(base, target, undefined) } catch (err) { error = err }
+    expect(error).toBeInstanceOf(McpToolError)
+    expect(error).toMatchObject({ code: 'BUSY' })
+    expect(String((error as Error).message)).toContain(`${DIFF_LIMITS.lines} lines`)
+    expect(performance.now() - started).toBeLessThan(5_000)
+    expect(process.memoryUsage().heapUsed - heap).toBeLessThan(64 * 1024 * 1024)
+  })
+
+  it('admits cumulative work across files and still diffs an ordinary change', () => {
+    const lines = DIFF_LIMITS.lines
+    try {
+      DIFF_LIMITS.lines = 1_000
+      const make = (tag: string) => (i: number) => `${'line\n'.repeat(120)}${tag}${i}\n`
+      expect(() => diffView(side('a', 10, make('x')), side('b', 10, make('y')), undefined)).toThrow(/BUSY|lines/)
+      expect(() => diffView(side('a', 3, make('x')), side('b', 3, make('y')), undefined)).not.toThrow()
+    } finally { DIFF_LIMITS.lines = lines }
   })
 })

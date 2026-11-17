@@ -3,6 +3,7 @@ import type { CodeQueries } from './code-refs.js'
 import { IMPACT_FRONTIER, IMPACT_LEVEL_ROWS, MAX_IMPACT_DEPTH, SITE_KINDS, type CodeSite, type Definition, type ImpactLevel, type Target } from './code-queries.js'
 import { codeEdgeDrafts, isTestPath, type CodeEdgeDraft } from './code-edges.js'
 import { buildResolutionContext, resolveImportPath } from './import-resolution.js'
+import { lineStarts, sliceLines } from '../text/lines.js'
 import { ORIENT_ENTRIES, type OrientOptions, type OrientOffsets, type OrientFolder, type OrientSymbol } from './orient.js'
 
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0
@@ -107,10 +108,13 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
   const single = (found: Definition[]) => found.length > 0 && found.every((d) => d.fileId === found[0]!.fileId && d.symbol === found[0]!.symbol) ? found[0]! : null
   for (const f of view.files.values()) {
     const imports = new Map(f.structure.imports.map((i) => [i.target, resolveImportPath(f.path, i.target, paths, context)]))
-    const lines = f.content.split('\n')
+    // Line offsets once per file and only when it imports something (a split of every file's text would be a string per line of the view).
+    const starts = f.structure.imports.length > 0 ? lineStarts(f.content) : []
     for (const imported of f.structure.imports) {
       const destination = view.files.get(imports.get(imported.target) ?? '')
-      if (destination) moduleImports.push({ path: f.path, line: imported.line, col: 1, kind: 'import', confidence: 'resolved', symbol: null, context: lines[imported.line - 1]!.trim().slice(0, 160), targetFileId: destination.id })
+      if (!destination) continue
+      if (edges.length + moduleImports.length >= VIEW_GRAPH_LIMITS.edges) throw new RefError('BUSY', `the view has more than ${VIEW_GRAPH_LIMITS.edges} call-graph edges; no partial graph was served: narrow the repository or use a smaller ref`)
+      moduleImports.push({ path: f.path, line: imported.line, col: 1, kind: 'import', confidence: 'resolved', symbol: null, context: sliceLines(f.content, imported.line, imported.line, starts).trim().slice(0, 160), targetFileId: destination.id })
     }
     const blocks = f.blocks.filter((b) => b.kind === 'symbol')
     const { drafts, note } = codeEdgeDrafts(f.path, f.content, blocks, f.structure.sites)
@@ -147,7 +151,7 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
       found = (draft.qualified === null ? null : single(named.filter((d) => d.symbol === draft.qualified))) ?? single(named)
       return { target: found, confidence: 'textual' }
     }
-    if (edges.length + drafts.length > VIEW_GRAPH_LIMITS.edges) throw new RefError('BUSY', `the view has more than ${VIEW_GRAPH_LIMITS.edges} call-graph edges; no partial graph was served: narrow the repository or use a smaller ref`)
+    if (edges.length + moduleImports.length + drafts.length > VIEW_GRAPH_LIMITS.edges) throw new RefError('BUSY', `the view has more than ${VIEW_GRAPH_LIMITS.edges} call-graph edges; no partial graph was served: narrow the repository or use a smaller ref`)
     for (const draft of drafts) {
       const resolved = resolveEdge(draft)
       const source = draft.sourceBlockId === null ? null : byBlock.get(draft.sourceBlockId) ?? null
@@ -217,7 +221,7 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
     definitions,
     async declarationOf(id) {
       const d = definitions.find((s) => s.id === id)
-      return d ? view.files.get(d.path)!.content.split('\n')[d.line - 1]!.trim() : null
+      return d ? sliceLines(view.files.get(d.path)!.content, d.line, d.line).trim() : null
     },
     async repositoryMap(repositoryId, opts, offsets = {}) {
       requireRepository(repositoryId)
@@ -238,7 +242,7 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
       }
       return {
         folders: [...groups].sort((a, b) => b[1].score - a[1].score || compare(a[0], b[0])).slice(0, ORIENT_ENTRIES + 1).map(([path, g]) => ({ path, files: g.files.size, refs: g.refs })),
-        symbols: scored.slice(offsets.symbols ?? 0, (offsets.symbols ?? 0) + ORIENT_ENTRIES + 1).map(({ d, refs, guessed }) => ({ at: `${d.path}:${d.line}`, kind: d.kind, symbol: d.symbol, sig: view.files.get(d.path)!.content.split('\n')[d.line - 1]!.trim(), refs, ...(guessed ? { guessed } : {}) })),
+        symbols: scored.slice(offsets.symbols ?? 0, (offsets.symbols ?? 0) + ORIENT_ENTRIES + 1).map(({ d, refs, guessed }) => ({ at: `${d.path}:${d.line}`, kind: d.kind, symbol: d.symbol, sig: sliceLines(view.files.get(d.path)!.content, d.line, d.line).trim(), refs, ...(guessed ? { guessed } : {}) })),
       }
     },
   }
