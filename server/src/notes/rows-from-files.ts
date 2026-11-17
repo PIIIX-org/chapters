@@ -6,7 +6,8 @@
  * are not in the files and are not recovered.
  *
  * For every vault directory under `DATA_DIR/vaults` (one vault with
- * `vaultId`), every `*.md` outside `assets/` and the dot-directories:
+ * `vaultId`), every `*.md` outside hidden attachment/metadata directories
+ * (and outside legacy assets/ until its namespace has been migrated):
  * - no live row at that path: the note is created through the store
  *   (`createNote`: row, revision, links, projections, embedding job), and the
  *   projector then adopts the file as it is when its content equals the row;
@@ -25,15 +26,21 @@
  * left beside a created note is listed (`crdtBins`): it holds the editor
  * state of the lost row; `pnpm doctor` compares it, delete it if it differs.
  * A vault directory without a vault row is skipped, or, with `ownerEmail`,
- * gets a vault row with that id owned by that user.
+ * gets a vault row with that id owned by that user. A vault whose attachment
+ * storage an operator rolled back (#1139: `asset-storage rollback`,
+ * `store-export-legacy`) is left as it is and reported: not migrated, not
+ * scanned, and its queued projections and store jobs are neither run nor
+ * reset; every other vault is still recovered.
  *
  * Unless `dryRun`, it holds the exclusive instance maintenance lock
  * (maintenance-lock.ts) for the whole run, so it refuses to run while a
  * server or writing CLI is up, and a server started meanwhile refuses to
  * start; if the lock's connection drops it stops before the next write.
- * Before the scan it drains every pending projection and store job (as
+ * Before the scan it migrates every vault's attachment storage (#1139, as
+ * the boot does) and drains every pending projection and store job (as
  * store-export-legacy does), so the files on disk match the rows that still
- * exist. The dry run reads only and takes no lock.
+ * exist; rolled-back vaults are left out of both. The dry run reads only and
+ * takes no lock.
  */
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -43,11 +50,15 @@ import { db } from '../db/client.js'
 import { compareNoteFile, vaultMarkdownFiles } from './integrity.js'
 import { holdInstanceLock } from './maintenance-lock.js'
 import { parseNote, type OkfNote } from './okf.js'
-import { STORE_JOBS, flushProjections } from './projector.js'
+import { STORE_JOBS, excludeVaultsFromProjector, flushProjections, projectionOutside, storeJobOutside } from './projector.js'
 import { createNote, getLiveNote, vaultDir } from './store.js'
 import { crdtFile } from '../sync/crdt-store.js'
+import { isAssetStorageRolledBack, runAssetStorage } from './asset-storage.js'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const ROLLED_BACK =
+  'its attachment storage was rolled back (asset-storage rollback or store-export-legacy): left as it is, never migrated again; ' +
+  'to return it to this release, restore a fresh current-state backup into a clean target (docs/self-hosting/migration.md, No-clobber rollback)'
 
 export interface RowsFromFilesReport {
   kind: 'elara-rows-from-files'
@@ -66,7 +77,7 @@ export interface RowsFromFilesReport {
   failed: Array<{ vaultId: string; path: string; error: string }>
   /** Vault rows created (or, in a dry run, that would be) for directories without one. */
   vaultsCreated: string[]
-  /** Vault directories without a live vault row that were skipped. */
+  /** Vault directories skipped: no live vault row, or attachment storage rolled back (#1139). */
   vaultsSkipped: Array<{ vaultId: string; reason: string }>
 }
 
@@ -98,13 +109,26 @@ export async function rowsFromFiles(options: { dryRun?: boolean; vaultId?: strin
   const stillHeld = (): void => {
     if (lost) throw new Error('the exclusive instance lock was lost (connection dropped): stopped; run rows-from-files again')
   }
+  let releaseProjector = async (): Promise<void> => {}
   try {
     if (!dryRun) {
+      // #1139, as at boot: attachments move to .assets/ before any projector drain.
+      // A vault an operator rolled back stays as it is: not migrated, and this run's
+      // projector leaves its queued projections and store jobs alone; the scan reports it.
+      const vaultRows = (await db.execute(sql`SELECT id FROM vaults ORDER BY id`)) as unknown as Array<{ id: string }>
+      const rolledBack: string[] = []
+      for (const { id } of vaultRows) {
+        if (await isAssetStorageRolledBack(id)) rolledBack.push(id)
+        else await runAssetStorage('migrate', id)
+      }
+      releaseProjector = excludeVaultsFromProjector(rolledBack)
       // A rename or trash move committed before the stop may not have moved its file yet: finish them first.
       await db.execute(sql`
         UPDATE note_projections SET lease_until = NULL, attempts = 0
-        WHERE applied_seq < target_seq AND projection IN ('file', 'dir_index')`)
-      await db.execute(sql`UPDATE jobs SET lease_until = NULL, attempts = 0 WHERE done_at IS NULL AND kind IN ${Object.values(STORE_JOBS)}`)
+        WHERE applied_seq < target_seq AND projection IN ('file', 'dir_index') AND ${projectionOutside(rolledBack)}`)
+      await db.execute(sql`
+        UPDATE jobs SET lease_until = NULL, attempts = 0
+        WHERE done_at IS NULL AND kind IN ${Object.values(STORE_JOBS)} AND ${storeJobOutside(rolledBack)}`)
       await flushProjections()
     }
     let ownerId: string | null = null
@@ -125,6 +149,10 @@ export async function rowsFromFiles(options: { dryRun?: boolean; vaultId?: strin
     if (options.vaultId) dirs = dirs.filter((id) => id === options.vaultId)
     for (const vaultId of dirs) {
       stillHeld()
+      if (await isAssetStorageRolledBack(vaultId)) {
+        report.vaultsSkipped.push({ vaultId, reason: ROLLED_BACK })
+        continue
+      }
       const [vault] = (await db.execute(sql`SELECT deleted_at FROM vaults WHERE id = ${vaultId}`)) as unknown as Array<{
         deleted_at: string | null
       }>
@@ -140,6 +168,10 @@ export async function rowsFromFiles(options: { dryRun?: boolean; vaultId?: strin
         report.vaultsCreated.push(vaultId)
         if (!dryRun) {
           await db.execute(sql`INSERT INTO vaults (id, name, owner_id) VALUES (${vaultId}, ${`Restored ${vaultId.slice(0, 8)}`}, ${ownerId})`)
+          // This vault did not exist when the initial all-vault migration ran.
+          // Migrate its legacy attachments under our still-held exclusive fence
+          // before the scanner can mistake them for notes or createNote refuses.
+          await runAssetStorage('migrate', vaultId)
         }
       }
       for (const rel of await vaultMarkdownFiles(vaultId)) {
@@ -191,6 +223,7 @@ export async function rowsFromFiles(options: { dryRun?: boolean; vaultId?: strin
     if (!dryRun && report.created.length > 0) await flushProjections()
     stillHeld()
   } finally {
+    await releaseProjector()
     await lock?.release()
   }
   report.finishedAt = new Date().toISOString()

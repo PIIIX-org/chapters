@@ -10,9 +10,9 @@ import {
 } from '../notes/store.js'
 import { NoteEditConflictError, writeThroughCollab, type EditBase } from '../sync/crdt-write.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
-import { GitPushError } from './pack.js'
-import { operationResults, recordOperation, type OperationResult } from './metadata.js'
-import { ASSET_PREFIX, type Manifest, type NoteBase, type TreeFile } from './tree.js'
+import { GitPushError, gitTimeLimit, PACK_LIMITS } from './pack.js'
+import { admitAssetProposals, admitImport, operationResults, recordOperation, type OperationResult } from './metadata.js'
+import { ASSET_PREFIX, assetNameFromGitPath, type Manifest, type NoteBase, type TreeFile } from './tree.js'
 
 async function baseRevision(vaultId: string, base: NoteBase): Promise<EditBase | null> {
   const [revision] = await db.select({ id: noteRevisions.id, body: revisionBody, frontmatter: noteRevisions.frontmatter })
@@ -32,32 +32,51 @@ export interface ImportResult { complete: boolean; error?: string; results: Arra
  * On conflict/failure the Git ref is NOT acknowledged; receipts expose partial effects and make retry idempotent.
  * No compensating rollback is attempted: that would overwrite typing after a successful operation.
  */
-export async function applyTree(vaultId: string, auth: McpAuth, commitId: string, manifest: Manifest, tree: Map<string, TreeFile>): Promise<ImportResult> {
+export async function applyTree(vaultId: string, auth: McpAuth, commitId: string, manifest: Manifest, tree: Map<string, TreeFile>, checkWrite: () => Promise<McpAuth>): Promise<ImportResult> {
   const connectionId = auth.connection.id
   const actor: Actor = { type: 'mcp', id: connectionId }
   const existing = await operationResults(vaultId, connectionId, commitId)
+  if (existing.some(entry => entry.result.purged)) {
+    return { complete: false, error: 'this import attempt was purged; it cannot be applied again', results: existing }
+  }
   const done = new Map(existing.map((entry) => [entry.path, entry.result]))
   const paths = [...new Set([...Object.keys(manifest.notes), ...Object.keys(manifest.assets), ...tree.keys()])].sort()
   const changed = paths.filter((path) => (manifest.notes[path]?.blob ?? manifest.assets[path]) !== tree.get(path)?.oid)
-  if (changed.length > 128) throw new GitPushError('at most 128 changed files per push are supported')
-  const deadline = performance.now() + 30_000
+  if (new Set([...changed, ...existing.map(entry => entry.path).filter(Boolean)]).size > 128) throw new GitPushError('at most 128 distinct file operations per import attempt are supported')
+  const deadline = performance.now() + gitTimeLimit(30_000)
   const bases = new Map<string, EditBase>()
+  const checkTool = (latest: McpAuth, path: string) => {
+    const base = manifest.notes[path]
+    const tool = path.startsWith(ASSET_PREFIX) ? 'edit_note' : base ? tree.has(path) ? 'edit_note' : 'delete_note' : 'create_note'
+    if (latest.connection.allowedTools && !latest.connection.allowedTools.includes(tool)) throw new GitPushError(`token does not allow ${tool}`)
+    if (tool === 'delete_note' && latest.connection.profile !== 'admin') throw new GitPushError('delete_note requires the admin profile')
+  }
   // Resolve every identity/revision and tool permission BEFORE the first mutation.
   for (const path of changed) {
     if (done.has(path)) continue
     const base = manifest.notes[path]
-    const tool = path.startsWith(ASSET_PREFIX) ? 'edit_note' : base ? tree.has(path) ? 'edit_note' : 'delete_note' : 'create_note'
-    if (auth.connection.allowedTools && !auth.connection.allowedTools.includes(tool)) throw new GitPushError(`token does not allow ${tool}`)
-    if (tool === 'delete_note' && auth.connection.profile !== 'admin') throw new GitPushError('delete_note requires the admin profile')
+    checkTool(auth, path)
     if (base) {
       const revision = await baseRevision(vaultId, base)
-      if (!revision) throw new GitPushError('a pushed base revision was purged or compacted; fetch and rebase before pushing')
+      if (!revision) throw new GitPushError('a pushed base revision was purged; fetch and rebase before pushing')
       bases.set(path, revision)
     }
   }
+  const pending = changed.filter(path => !done.has(path))
+  if (pending.length === 0) return { complete: existing.every(entry => entry.result.status === 'applied'), results: existing }
+  const notePaths = pending.filter(path => !path.startsWith(ASSET_PREFIX))
+  const proposalBytes = notePaths.reduce((total, path) => {
+    const proposed = tree.get(path)?.note
+    return total + Buffer.byteLength(proposed?.body ?? '') + Buffer.byteLength(JSON.stringify(proposed?.frontmatter ?? bases.get(path)?.frontmatter ?? {}))
+  }, 0)
+  await admitImport(vaultId, pending.length, proposalBytes, notePaths.length)
+  const assetCandidates = new Map(pending.filter(path => path.startsWith(ASSET_PREFIX) && tree.has(path))
+    .map(path => [assetNameFromGitPath(path), tree.get(path)!.data.length]))
+  if (assetCandidates.size > 0) await admitAssetProposals(vaultId, commitId, assetCandidates)
   for (const path of changed) {
     if (done.has(path)) continue
     if (performance.now() > deadline) return { complete: false, error: 'import time limit reached; retry resumes unapplied operations', results: await operationResults(vaultId, connectionId, commitId) }
+    checkTool(await checkWrite(), path)
     const proposed = tree.get(path)
     const base = manifest.notes[path]
     const revision = bases.get(path)
@@ -67,9 +86,9 @@ export async function applyTree(vaultId: string, auth: McpAuth, commitId: string
     }
     try {
       if (action === 'asset') {
-        const name = path.slice(ASSET_PREFIX.length)
-        const applied = await compareAndSetAsset(vaultId, name, manifest.assets[path] ?? null, proposed?.data ?? null)
-        if (!applied && proposed) await atomicWrite(assetProposalFile(vaultId, commitId, name), proposed.data, { mode: 0o600, durable: true })
+        const name = assetNameFromGitPath(path)
+        const applied = await compareAndSetAsset(vaultId, name, manifest.assets[path] ?? null, proposed?.data ?? null, PACK_LIMITS.object)
+        if (!applied && proposed) await atomicWrite(assetProposalFile(vaultId, commitId, name), proposed.data, { mode: 0o600, durable: true, shortTempName: true })
         await recordOperation(db, vaultId, connectionId, commitId, path, { action, status: applied ? 'applied' : 'conflicted', ...(!applied ? { error: proposed ? 'asset changed since base; proposed file is available from the push report API' : 'asset changed since base; deletion was not applied' } : {}) })
       } else if (!base) {
         // The unique path index decides creates. A concurrently created note becomes a reviewable proposal, never an upsert.
@@ -80,14 +99,14 @@ export async function applyTree(vaultId: string, auth: McpAuth, commitId: string
           if (!collision) throw err
           const collisionBase = await baseRevision(vaultId, { id: collision.row.id, rev: collision.row.seq, blob: '' })
           if (!collisionBase) throw err
-          const proposalId = await recordProposal(collision.row.id, proposed!.note!, actor, collisionBase.id)
+          const proposalId = await recordProposal(collision.row.id, proposed!.note!, actor, collisionBase.id, { kind: 'git_push', commit: commitId })
           await recordOperation(db, vaultId, connectionId, commitId, path, { action, status: 'conflicted', noteId: collision.row.id, proposalId, error: 'a live note already occupies the new path' })
         }
       } else {
         const live = await getLiveNote(vaultId, path.slice(0, -3))
         if (!live || live.id !== base.id) {
           // Identity is pinned to the served note, not the current occupant of its old path.
-          const proposalId = await recordProposal(base.id, proposed?.note ?? { frontmatter: revision!.frontmatter, body: '' }, actor, revision!.id)
+          const proposalId = await recordProposal(base.id, proposed?.note ?? { frontmatter: revision!.frontmatter, body: '' }, actor, revision!.id, { kind: 'git_push', commit: commitId })
           await recordOperation(db, vaultId, connectionId, commitId, path, { action, status: 'conflicted', noteId: base.id, proposalId, error: 'the served note was renamed or deleted; no replacement note was touched' })
         } else if (proposed) {
           const written = await writeThroughCollab(vaultId, live.path, { ...proposed.note!, frontmatterMode: 'replace', base: revision }, actor,
@@ -99,7 +118,7 @@ export async function applyTree(vaultId: string, auth: McpAuth, commitId: string
             if (!written) throw new GitPushError('the note moved during import; retry to create a proposal')
           } catch (err) {
             if (!(err instanceof NoteCompareError)) throw err
-            const proposalId = await recordProposal(base.id, { frontmatter: revision!.frontmatter, body: '' }, actor, revision!.id)
+            const proposalId = await recordProposal(base.id, { frontmatter: revision!.frontmatter, body: '' }, actor, revision!.id, { kind: 'git_push', commit: commitId })
             await recordOperation(db, vaultId, connectionId, commitId, path, { action, status: 'conflicted', noteId: base.id, proposalId, error: 'deletion conflicts with a changed note; review the delete intent in this push report' })
           }
         }

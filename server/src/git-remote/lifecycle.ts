@@ -5,6 +5,7 @@ import { config } from '../config.js'
 import { vaultGitSnapshots } from '../db/schema.js'
 import { withKeyLock } from '../notes/key-lock.js'
 import type { Tx } from '../notes/store-tx.js'
+import { purgePushReports, type GitPurgeScope } from './metadata.js'
 
 export const vaultRemotesRoot = (): string => join(config.dataDir, 'git-remotes')
 export const vaultRemoteDir = (vaultId: string): string => join(vaultRemotesRoot(), `${vaultId}.git`)
@@ -19,8 +20,10 @@ export function withVaultGit<T>(vaultId: string, fn: () => Promise<T>): Promise<
  * Remove the entire object database (reachable, unreachable and reflogs), not just the current ref.
  * A subsequent read rebuilds only current content. Existing external clones/exports cannot be erased by the server.
  */
-export async function invalidateVaultGit(vaultId: string, tx: Tx): Promise<void> {
+export async function invalidateVaultGit(vaultId: string, tx: Tx, scope: GitPurgeScope): Promise<void> {
   await rm(vaultRemoteDir(vaultId), { recursive: true, force: true })
+  if (scope === 'vault') await rm(join(config.dataDir, 'vaults', vaultId, '.git-proposals'), { recursive: true, force: true })
+  await purgePushReports(tx, vaultId, scope)
   await tx.delete(vaultGitSnapshots).where(eq(vaultGitSnapshots.vaultId, vaultId))
   // Runtime import avoids the store → search → repository-store initialization cycle.
   const { clearSearchCache } = await import('../cache/search.js')

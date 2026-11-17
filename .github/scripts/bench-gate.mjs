@@ -26,9 +26,10 @@
 //      tolerance in either direction (an improvement must be recorded in the
 //      same PR), the fingerprint or the index outcome differs, or a selected
 //      suite has no entry;
-//   6. golds lost, with --require-golds (the workflow passes it when the PR
-//      touches search, MCP or the benchmark and every suite runs): a suite
-//      reaches fewer golds (goldReached) than the reference. No tolerance.
+//   6. golds lost: fewer goldReached or a previously reached question
+//      missed/removed, in the run or any changed baseline entry, even across
+//      harness changes. Exceptions name every suite/question in the owner's
+//      bench-baseline-lowered reason; held-out ranking losses cannot be waived.
 // It writes a per-suite overview (tokens-to-gold, golds, hit@5, MRR) and the
 // delta tables to the job summary and to <out>/gate.md.
 //
@@ -59,7 +60,7 @@ import { pathToFileURL } from 'node:url'
 export const TOLERANCE = { hit5Questions: 1, tokensRelative: 0.1 }
 
 /** Metrics the gate acts on (Elara policy); the rest are reported only. */
-export const GATED = ['hit5', 'exact1', 'goldReachedRate', 'tokensToGold']
+export const GATED = ['hit5', 'exact1', 'goldReachedRate', 'tokensToGold', 'goldReached']
 
 /** Gated metrics that are a fraction of the suite's questions. */
 const FRACTION_METRICS = new Set(['hit5', 'exact1', 'goldReachedRate'])
@@ -207,6 +208,7 @@ export function toBaseline(combined, previous = { suites: {} }) {
  * (within tolerance). hit5 is a fraction of `questions`.
  */
 export function movement(metric, ref, cur, questions) {
+  if (metric === 'goldReached') return cur < ref ? 'worse' : cur > ref ? 'better' : 'same'
   if (FRACTION_METRICS.has(metric)) {
     // Aggregates are rounded to 4 decimals (round4 in benchmarks/lib/metrics.ts): allow that rounding.
     const tol = TOLERANCE.hit5Questions / questions + 1e-4
@@ -230,12 +232,49 @@ export function overrideReason(pr, override) {
   return null
 }
 
+/** Gold evidence survives a harness reset; never infer unknown question losses from a count. */
+function checkGolds(name, reference, current, source, locked, pr, failures, notes) {
+  if (!reference) return 'ok' // New suite/bootstrap: no prior gold evidence.
+  const was = reference.elara.goldReached
+  const cur = current?.aggregate ? current.aggregate.elara.goldReached : current?.elara?.goldReached
+  const before = reference.perQuestion
+  const after = Array.isArray(current?.perQuestion)
+    ? Object.fromEntries(current.perQuestion.map((q) => [q.id, { elara: [q.elara.rank, q.elara.tokensToGold] }]))
+    : current?.perQuestion
+  const lost = []
+  let unknown = !before || Object.keys(before).length !== reference.questions || (current && !after)
+  for (const [id, q] of Object.entries(before ?? {})) {
+    const tokens = q.elara?.[1]
+    if (tokens !== null && !Number.isFinite(tokens)) unknown = true
+    if (!Number.isFinite(tokens)) continue
+    const next = after?.[id]
+    if (!next || next.elara?.[1] === null) lost.push(`${name}/${id}`)
+    else if (!Number.isFinite(next.elara?.[1])) unknown = true
+  }
+  const countLost = was !== undefined && (!Number.isFinite(cur) || cur < was)
+  if (countLost && (!Number.isFinite(cur) || was - cur > lost.length)) unknown = true
+  if (unknown) {
+    failures.push(`${name}: gold evidence missing or incomplete (${source}); cannot identify every lost question or approve an unknown loss; known lost questions: ${lost.join(', ') || 'unknown'}`)
+    return 'regression'
+  }
+  if (!countLost && lost.length === 0) return 'ok'
+  const what = `golds lost, Elara goldReached ${was ?? '-'} -> ${cur ?? '-'} of ${reference.questions} (${source}); previously reached questions missed or removed: ${lost.join(', ') || 'unknown'}`
+  const reason = overrideReason(pr, OVERRIDES.baselineLowered)
+  const named = new Set(reason?.split(/[\s,;:()[\]{}'"`]+/) ?? [])
+  if (!locked && reason && lost.length > 0 && lost.every((id) => named.has(id))) {
+    notes.push(`${name}: ${what}; owner exception by label \`${OVERRIDES.baselineLowered.label}\`: "${reason}"`)
+    return 'approved'
+  }
+  failures.push(`${name}: ${what}. ${locked ? 'Held-out ranking losses cannot be waived.' : 'Owner approval needs bench-baseline-lowered and a Bench-baseline-lowered reason naming every exact suite/question ID.'}`)
+  return 'regression'
+}
+
 /**
  * The verdict. `results` = combined instances (combine()), `baseline` = the
  * PR's (or the branch's) baseline file, `baseBaseline` = the base commit's
  * on a pull request (null otherwise), `pr` = { labels, body } on a pull
- * request, `requireGolds` = every suite must reach at least the reference's
- * goldReached (no tolerance).
+ * request, `requireGolds` = require every base suite to run; gold count and
+ * per-question losses are protected on every path, independently of this flag.
  */
 export function evaluate({ results, baseline, baseBaseline = null, pr = null, requireGolds = false, changed = null }) {
   const rankingChange = changed !== null && changed.some((f) => RANKING_PATHS.some((re) => re.test(f)))
@@ -249,6 +288,14 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
       if (!results.selected.includes(name)) failures.push(`${name}: in the base baseline but not in this run (a suite deleted or renamed is not judged: the all-suites path runs every one)`)
     }
   }
+  // Check every re-record, including suites absent from this run, before fingerprint guards.
+  for (const [name, base] of Object.entries(baseBaseline?.suites ?? {})) {
+    const own = baseline?.suites?.[name]
+    if (JSON.stringify(own) === JSON.stringify(base)) continue
+    const locked = name === HOLDOUT && rankingChange
+    if (locked) failures.push(`${name}: benchmarks/baseline.json changes the held-out entry in a PR that touches search, MCP or the Elara policy. A ranking change never writes its own held-out baseline: record it in a separate \`bench:\` PR that only updates the baseline.`)
+    checkGolds(name, base, own, 'recorded baseline against base baseline', locked, pr, failures, notes)
+  }
   for (const name of results.selected) {
     const run = results.suites[name]
     if (!run) {
@@ -259,17 +306,19 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
     const base = baseBaseline?.suites?.[name]
     const row = { name, run, own, base, verdicts: {} }
     suites.push(row)
+    const locked = name === HOLDOUT && rankingChange && base !== undefined
+    row.verdicts.goldReached = checkGolds(name, base ?? own, run, base ? 'base baseline' : 'baseline', locked, pr, failures, notes)
+    if (base && own && JSON.stringify(own) !== JSON.stringify(base)) {
+      const ownGolds = checkGolds(name, own, run, 'recorded baseline', locked, pr, failures, notes)
+      if (ownGolds !== 'ok') row.verdicts.goldReached = ownGolds
+    }
     if (!own) {
       failures.push(`${name}: no entry in benchmarks/baseline.json; add it from this run (--write-baseline)`)
       continue
     }
     // The held-out baseline is frozen against a PR that changes ranking code (#1059): it may not be written or lowered, and the run
     // is judged by the base's entry whatever the harness fingerprint says, as long as the questions and the repository are the same.
-    const locked = name === HOLDOUT && rankingChange && base !== undefined
     if (locked) {
-      if (JSON.stringify(own) !== JSON.stringify(base)) {
-        failures.push(`${name}: benchmarks/baseline.json changes the held-out entry in a PR that touches search, MCP or the Elara policy. A ranking change never writes its own held-out baseline: record it in a separate \`bench:\` PR that only updates the baseline.`)
-      }
       if (base.suiteFingerprint === undefined || base.suiteFingerprint !== run.suiteFingerprint) {
         failures.push(`${name}: the held-out questions or repository differ from the base's (suite fingerprint ${base.suiteFingerprint ?? 'missing'} vs ${run.suiteFingerprint ?? 'missing'}), so the base cannot judge this run; change them in a PR that touches no ranking code`)
         continue
@@ -296,6 +345,7 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
     row.ref = ref
     row.refLabel = refLabel
     for (const metric of GATED) {
+      if (metric === 'goldReached') continue // Count and question evidence were checked before fingerprint guards.
       const cur = run.aggregate.elara[metric]
       // A baseline recorded before a metric existed (#1058) has no number to judge it by: the run is stale until it records one, a regression is not yet defined.
       const vsRef = cur === undefined || ref.elara[metric] === undefined ? 'same' : movement(metric, ref.elara[metric], cur, run.questions)
@@ -307,20 +357,9 @@ export function evaluate({ results, baseline, baseBaseline = null, pr = null, re
         failures.push(`${name}: stale baseline, Elara ${metric} is ${vsOwn} than benchmarks/baseline.json (${own.elara[metric]} -> ${cur}); record this run with --write-baseline in this PR`)
       }
     }
-    // Golds are a floor, not a tolerance: a suite that loses one fails (--require-golds).
-    if (requireGolds) {
-      const cur = run.aggregate.elara.goldReached
-      // A harness change makes the run's own baseline the reference (the suite-change label): that would compare the run with itself.
-      // The golds of the same questions on the base still count, whatever the harness did (#1058 review).
-      const floor = base && base.questions === run.questions ? base : ref
-      const was = floor.elara.goldReached
-      const lost = cur === null || cur === undefined || cur < was
-      row.verdicts.goldReached = lost ? 'regression' : 'ok'
-      if (lost) failures.push(`${name}: golds lost, Elara goldReached ${was} -> ${cur ?? '-'} of ${run.questions} (${floor === base ? 'base baseline' : refLabel}; every suite must reach at least as many golds as the reference)`)
-    }
     // The recorded bar may only go up unless an owner says otherwise.
     if (base && base.fingerprint === own.fingerprint) {
-      const lowered = GATED.filter((m) => base.elara[m] !== undefined && (LOWER_IS_BETTER.has(m) ? own.elara[m] > base.elara[m] : own.elara[m] < base.elara[m]))
+      const lowered = GATED.filter((m) => m !== 'goldReached' && base.elara[m] !== undefined && (LOWER_IS_BETTER.has(m) ? own.elara[m] > base.elara[m] : own.elara[m] < base.elara[m]))
       if (lowered.length > 0) {
         const what = `benchmarks/baseline.json lowers ${lowered.map((m) => `${m} ${base.elara[m]} -> ${own.elara[m]}`).join(', ')} against the base`
         const reason = overrideReason(pr, OVERRIDES.baselineLowered)
@@ -443,7 +482,7 @@ export function render(report, results) {
     if (changes.length) md.push(`<details><summary>${changes.length} questions changed (Elara)</summary>`, '', ...changes.map((c) => `- ${c}`), '', '</details>', '')
   }
   md.push(
-    `Gated: Elara ${GATED.join(', ')}, median of the instances. Tolerance: hit@5, exact@1 and gold-reached rate ${TOLERANCE.hit5Questions} questions per suite, tokens-to-gold ${TOLERANCE.tokensRelative * 100} %.${report.requireGolds ? ' Golds: every suite must reach at least the reference\u2019s goldReached (--require-golds).' : ''} A miss costs ${results?.missCost?.tokens ?? '?'} tokens and ${results?.missCost?.calls ?? '?'} calls. Method: benchmarks/README.md.`,
+    `Gated: Elara ${GATED.join(', ')}, median of the instances. Tolerance: hit@5, exact@1 and gold-reached rate ${TOLERANCE.hit5Questions} questions per suite, tokens-to-gold ${TOLERANCE.tokensRelative * 100} %. Golds: zero count loss and no previously reached question missed or removed, including every changed baseline entry; owner exceptions must name every exact suite/question ID and cannot waive held-out ranking losses.${report.requireGolds ? ' Every base suite must run (--require-golds).' : ''} A miss costs ${results?.missCost?.tokens ?? '?'} tokens and ${results?.missCost?.calls ?? '?'} calls. Method: benchmarks/README.md.`,
   )
   return md.join('\n')
 }

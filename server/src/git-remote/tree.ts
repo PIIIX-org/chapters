@@ -5,11 +5,63 @@ import { assertBodyFits, assertFrontmatterFits } from '../notes/size-cap.js'
 import { isSafeAssetName } from '../notes/store.js'
 import { boundedGit, GitPushError, PACK_LIMITS } from './pack.js'
 
-/** Git-only attachment namespace: dot segments cannot be valid note paths. Disk/API paths stay assets/. */
+/** Hidden attachment namespace shared with physical storage; HTTP attachment paths remain assets/. */
 export const ASSET_PREFIX = '.assets/'
 
+/** Bijective Git-only encoding; store/HTTP filename validation remains a separate boundary. */
+export function assetGitPath(name: string): string {
+  if (!name || name === '.' || name === '..' || /[\\/\0-\x1f\x7f]/.test(name)) throw new GitPushError('unsupported asset filename')
+  let encoded = ''
+  try {
+    for (const character of name) {
+      if (/^[a-z0-9._-]$/.test(character)) encoded += character
+      else if (character.charCodeAt(0) < 128) encoded += `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`
+      else encoded += encodeURIComponent(character)
+    }
+  } catch { throw new GitPushError('asset filename must be UTF-8') }
+  if (encoded.startsWith('.') || (!encoded.startsWith('%') && /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(name))) {
+    encoded = `%${name.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}${encoded.slice(1)}`
+  }
+  if (encoded.endsWith('.')) encoded = `${encoded.slice(0, -1)}%2E`
+  if (encoded.length <= 255) return `${ASSET_PREFIX}${encoded}`
+  // `%00` cannot encode a valid filename. Framing avoids both basename
+  // overflow after escaping and file/directory prefix collisions.
+  const chunks: string[] = []
+  let start = 0
+  for (let at = 0; at < encoded.length;) {
+    const width = encoded[at] === '%' ? 3 : 1
+    if (at - start + width > 200) {
+      chunks.push(`x${encoded.slice(start, at)}x`)
+      start = at
+    }
+    at += width
+  }
+  chunks.push(`x${encoded.slice(start)}x`)
+  return `${ASSET_PREFIX}%00/${chunks.join('/')}/%00`
+}
+
+export function assetNameFromGitPath(path: string): string {
+  let encoded = path.slice(ASSET_PREFIX.length)
+  if (encoded.startsWith('%00/')) {
+    const parts = encoded.split('/')
+    if (parts.at(-1) !== '%00' || parts.length < 3) throw new GitPushError('unsupported asset framing')
+    const chunks = parts.slice(1, -1)
+    if (chunks.some(part => !part.startsWith('x') || !part.endsWith('x') || part.length > 202)) throw new GitPushError('unsupported asset framing')
+    encoded = chunks.map(part => part.slice(1, -1)).join('')
+  }
+  let name: string
+  try { name = decodeURIComponent(encoded) } catch { throw new GitPushError('unsupported asset encoding') }
+  if (!path.startsWith(ASSET_PREFIX) || assetGitPath(name) !== path) throw new GitPushError('unsupported noncanonical asset path')
+  return name
+}
+
 export interface NoteBase { id: string; rev: number; blob: string }
-export interface Manifest { notes: Record<string, NoteBase>; assets: Record<string, string> }
+export interface Manifest {
+  notes: Record<string, NoteBase>
+  assets: Record<string, string>
+  /** Server-only export journal: rebuild the same child after losing its quarantine. */
+  prepared?: { parent: string; when: number }
+}
 export interface TreeFile { oid: string; data: Buffer; note?: OkfNote }
 const utf8 = new TextDecoder('utf-8', { fatal: true })
 
@@ -19,8 +71,11 @@ export async function validatedTree(dir: string, commit: string, deadline = perf
   if ((await boundedGit(['cat-file', '-t', commit], dir)).toString().trim() !== 'commit') throw new GitPushError('the new ref must name a commit')
   const listing = await boundedGit(['ls-tree', '-r', '-z', '--full-tree', commit], dir, undefined, 1024 * 1024)
   const files = new Map<string, TreeFile>()
+  const assetNames = new Set<string>()
   let bytes = 0
-  for (const raw of listing.toString('utf8').split('\0')) {
+  let paths: string
+  try { paths = utf8.decode(listing) } catch { throw new GitPushError('Git paths must be UTF-8') }
+  for (const raw of paths.split('\0')) {
     if (!raw) continue
     if (performance.now() > deadline) throw new GitPushError('tree validation time limit exceeded')
     if (files.size >= PACK_LIMITS.objects) throw new GitPushError('too many files')
@@ -28,10 +83,12 @@ export async function validatedTree(dir: string, commit: string, deadline = perf
     if (!entry) throw new GitPushError('only regular non-executable files are supported')
     const oid = entry[1]!
     const path = entry[2]!
+    if (Buffer.byteLength(path) > 1024) throw new GitPushError('Git paths are limited to 1024 UTF-8 bytes')
     const asset = path.startsWith(ASSET_PREFIX)
     if (asset) {
-      const name = path.slice(ASSET_PREFIX.length)
-      if (!isSafeAssetName(name) || name.startsWith('.')) throw new GitPushError('unsupported asset path')
+      const name = assetNameFromGitPath(path)
+      if (!isSafeAssetName(name) || assetNames.has(name)) throw new GitPushError('unsupported or duplicate decoded asset path')
+      assetNames.add(name)
     } else {
       if (!path.endsWith('.md') || resolveNotePath(path.slice(0, -3)).fullPath + '.md' !== path) throw new GitPushError('only canonical note paths and assets are supported')
     }

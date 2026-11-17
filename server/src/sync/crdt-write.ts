@@ -185,6 +185,7 @@ async function propose(
   conflicts: EditChanges,
   liveBody: string,
   dryRun: boolean,
+  actorDetail?: Record<string, unknown>,
 ): Promise<never> {
   const { base } = edit
   const ops = edit.ops ?? []
@@ -196,7 +197,7 @@ async function propose(
   // A proposal revision is stored whole: its frontmatter is bounded like the note's (#933).
   assertFrontmatterFits(proposal.frontmatter, note.frontmatter as Record<string, unknown>)
   if (dryRun) throw new NoteEditConflictError(note.path, null, conflicts)
-  throw new NoteEditConflictError(note.path, await recordProposal(note.id, proposal, actor, base.id), conflicts)
+  throw new NoteEditConflictError(note.path, await recordProposal(note.id, proposal, actor, base.id, actorDetail), conflicts)
 }
 
 /**
@@ -261,7 +262,7 @@ export async function writeThroughCollab(
     path,
     async (current, existing) => {
       const merged = based ? rebase(based, current, existing.type) : null
-      if (based && merged && 'conflicts' in merged) return propose(existing, based, actor, merged.conflicts, current.body, dryRun)
+      if (based && merged && 'conflicts' in merged) return propose(existing, based, actor, merged.conflicts, current.body, dryRun, options.actorDetail)
       const rebased = merged && !('conflicts' in merged) ? merged : null
       // An edit that leaves the body alone keeps what the editors see, unless
       // the relay would refuse to store it (a doubled document, #488/#492):

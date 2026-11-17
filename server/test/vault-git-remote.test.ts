@@ -1,7 +1,11 @@
 // #677/#1087: real Git smart-HTTP clone/edit/push, live collaborative edits, bounded failures and explicit purge.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { execFile, fork, type ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, readdir, rename as renameFile, rm, symlink, truncate, writeFile } from 'node:fs/promises'
+import { request as httpRequest, type ClientRequest } from 'node:http'
+import { once } from 'node:events'
+import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
@@ -11,10 +15,10 @@ import { HocuspocusProvider } from '@hocuspocus/provider'
 import * as Y from 'yjs'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
-import { eq } from 'drizzle-orm'
-import { existsSync } from 'node:fs'
+import { and, eq, sql } from 'drizzle-orm'
+import { existsSync, watch } from 'node:fs'
 import { db } from '../src/db/client.js'
-import { vaults } from '../src/db/schema.js'
+import { mcpConnections, noteRevisions, vaultGitPushOperations, vaultGitSnapshots, vaults } from '../src/db/schema.js'
 import { sweepVaultRemotes, vaultRemoteDir } from '../src/git-remote/vault-remote.js'
 import { assetFile, createNote, getBaseRevision, getLiveNote, purgeNote, purgeRevision, readAsset, readLiveNote, renameNote, softDeleteNote, updateNote, writeAsset } from '../src/notes/store.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
@@ -23,12 +27,37 @@ import { setFailpointHandler } from '../src/failpoints.js'
 import { purgeVaultRecord } from '../src/vaults/routes.js'
 import type * as FsPromises from 'node:fs/promises'
 import type * as GitMetadata from '../src/git-remote/metadata.js'
+import type * as NoteProjector from '../src/notes/projector.js'
+import { config } from '../src/config.js'
+import { assetBlobId } from '../src/notes/store.js'
+import { GIT_QUOTAS, loadManifest, operationResults } from '../src/git-remote/metadata.js'
+import { assetGitPath, assetNameFromGitPath, type Manifest } from '../src/git-remote/tree.js'
+import { boundedGit, PACK_LIMITS, withGitBudget } from '../src/git-remote/pack.js'
 
 // setup-jobs imports the projector/atomic-write before test mocks; reload those modules
 // so the instrumentation observes real filesystem calls in the actual store path.
 vi.hoisted(() => vi.resetModules())
 // Instrument the real filesystem and real database receipt, rather than substitute a successful mutation.
 const durability = vi.hoisted(() => ({ enabled: false, file: '', directory: '', vaultId: '', failDirectorySync: false, events: [] as string[] }))
+const boundary = vi.hoisted(() => ({
+  failReceipt: '',
+  mapVault: '',
+  afterMapped: null as null | (() => Promise<void>),
+  renameTarget: '',
+  beforeAssetRename: null as null | (() => Promise<void>),
+  countRenders: false,
+  renders: 0,
+}))
+vi.mock('../src/notes/projector.js', async (importOriginal) => {
+  const real = await importOriginal<typeof NoteProjector>()
+  return {
+    ...real,
+    renderNoteFile: (...args: Parameters<typeof real.renderNoteFile>) => {
+      if (boundary.countRenders) boundary.renders++
+      return real.renderNoteFile(...args)
+    },
+  }
+})
 vi.mock('node:fs/promises', async (importOriginal) => {
   const real = await importOriginal<typeof FsPromises>()
   return {
@@ -45,13 +74,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
               durability.failDirectorySync = false
               throw new Error('injected failure before durable directory sync')
             }
-          } else if (name === durability.file || name.startsWith(durability.file + '.')) durability.events.push('file-sync')
+          } else if (name === durability.file || name.startsWith(durability.file + '.') || name.startsWith(durability.directory + '/.atomic..')) durability.events.push('file-sync')
         }
         await sync()
       }
       return handle
     },
     rename: async (...args: Parameters<typeof real.rename>) => {
+      if (String(args[1]) === boundary.renameTarget) await boundary.beforeAssetRename?.()
       if (durability.enabled && String(args[1]) === durability.file) durability.events.push('rename')
       return real.rename(...args)
     },
@@ -65,7 +95,15 @@ vi.mock('../src/git-remote/metadata.js', async (importOriginal) => {
   const real = await importOriginal<typeof GitMetadata>()
   return {
     ...real,
+    saveManifest: async (...args: Parameters<typeof real.saveManifest>) => {
+      await real.saveManifest(...args)
+      if (args[0] === boundary.mapVault) await boundary.afterMapped?.()
+    },
     recordOperation: async (...args: Parameters<typeof real.recordOperation>) => {
+      if (boundary.failReceipt === `${args[1]}:${args[4]}`) {
+        boundary.failReceipt = ''
+        throw new Error('injected loss after proposal durability and before operation receipt')
+      }
       await real.recordOperation(...args)
       if (durability.enabled && args[1] === durability.vaultId && args[4] === '.assets/proof.txt' && args[5].status === 'applied') durability.events.push('receipt')
     },
@@ -85,6 +123,8 @@ let collab: CollabRelay
 let ownerToken: string
 const providers: HocuspocusProvider[] = []
 const gitErrors: string[] = []
+const bodySeen = new Set<string>()
+const bodyAborted = new Set<string>()
 
 async function mint(body: Record<string, unknown>): Promise<string> {
   const res = await app.inject({ method: 'POST', url: '/api/mcp-connections', headers: { cookie }, body })
@@ -112,6 +152,15 @@ async function clone(token: string, id = vaultId): Promise<{ dir: string; ok: bo
 
 beforeAll(async () => {
   app = await buildApp()
+  app.addHook('preParsing', async (req, _reply, payload) => {
+    const marker = req.headers['x-git-body-proof']
+    if (typeof marker === 'string') bodySeen.add(marker)
+    return payload
+  })
+  app.addHook('onRequestAbort', async req => {
+    const marker = req.headers['x-git-body-proof']
+    if (typeof marker === 'string') bodyAborted.add(marker)
+  })
   app.addHook('onSend', async (req, reply, payload) => {
     if (req.url.endsWith('/git-receive-pack') && reply.statusCode >= 400 && typeof payload === 'string') gitErrors.push(payload)
     return payload
@@ -131,7 +180,11 @@ beforeAll(async () => {
 }, 60_000)
 
 afterAll(async () => {
-  providers.forEach((provider) => provider.destroy())
+  providers.forEach((provider) => {
+    const document = provider.document
+    provider.destroy()
+    document.destroy()
+  })
   await collab?.destroy()
   await app?.close()
   for (const dir of dirs) await rm(dir, { recursive: true, force: true })
@@ -600,4 +653,722 @@ it('keeps a later human attachment version when retry resumes after an already d
   const retry = await git(['push', 'origin', 'HEAD:main'], f.dir)
   expect(retry.ok, retry.out).toBe(true)
   expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('Human version after the durable import.')
+}, 30_000)
+
+async function connectionFor(id: string): Promise<string> {
+  const [connection] = await db.select({ id: mcpConnections.id }).from(mcpConnections).where(eq(mcpConnections.vaultId, id)).limit(1)
+  if (!connection) throw new Error('missing real fixture connection')
+  return connection.id
+}
+
+async function preparedRecord(id: string, incoming: string) {
+  const [row] = await db.select().from(vaultGitSnapshots)
+    .where(and(eq(vaultGitSnapshots.vaultId, id), sql`${vaultGitSnapshots.manifest}->'prepared'->>'parent' = ${incoming}`)).limit(1)
+  if (!row) throw new Error('missing durable canonical export journal')
+  return { commitId: row.commitId, manifest: row.manifest as Manifest }
+}
+
+async function snapshotCount(id: string): Promise<number> {
+  const [row] = (await db.execute(sql`SELECT count(*)::int AS n FROM vault_git_snapshots WHERE vault_id = ${id}`)) as unknown as Array<{ n: number }>
+  return row!.n
+}
+
+async function mergedFixture() {
+  const f = await pushFixture()
+  const base = (await git(['rev-parse', 'HEAD'], f.dir)).out.trim()
+  await editFile(f.dir, 'docs/a.md', 'Middle line.', 'Agent middle.')
+  const incoming = await commit(f.dir)
+  await updateNote(f.id, 'docs/a', { body: 'Human leading.\nFirst line.\nMiddle line.\nLast line.\n' })
+  return { ...f, base, incoming }
+}
+
+describe('Git boundary regressions (#1087)', () => {
+  it('never trusts an incoming fingerprint/message to bind an unserved body to a live revision', async () => {
+    const f = await mergedFixture()
+    const current = (await readLiveNote(f.id, 'docs/a'))!
+    const expectedRev = current.row.seq + 1
+    const manifest = (await loadManifest(f.id, f.base))!
+    const future = Buffer.from((await readFile(join(f.dir, 'docs/a.md'), 'utf8')).replace('First line.\n', 'Human leading.\nFirst line.\n'))
+    manifest.notes['docs/a.md'] = { ...manifest.notes['docs/a.md']!, rev: expectedRev, blob: assetBlobId(future) }
+    const files = await Promise.all([...Object.keys(manifest.notes), ...Object.keys(manifest.assets)].sort().map(async path => ({
+      path, data: path === 'docs/a.md' ? future : await readFile(join(f.dir, path)),
+    })))
+    const forged = createHash('sha256').update(files.map(file => `${file.path}\0${assetBlobId(file.data)}\n`).join('')).update(JSON.stringify(manifest.notes)).digest('hex')
+    expect((await git(['commit', '--allow-empty', '-qm', `untrusted message\n\nelara-vault-fingerprint: ${forged}`], f.dir)).ok).toBe(true)
+    const incoming = (await git(['rev-parse', 'HEAD'], f.dir)).out.trim()
+    const pushed = await git(['push', 'origin', 'HEAD:main'], f.dir)
+    expect(pushed.ok, pushed.out).toBe(true)
+    expect((await readLiveNote(f.id, 'docs/a'))!.row.seq).toBe(expectedRev)
+    expect((await git(['pull', '--ff-only', 'origin', 'main'], f.dir)).ok).toBe(true)
+    const canonical = (await git(['rev-parse', 'HEAD'], f.dir)).out.trim()
+    expect(canonical).not.toBe(incoming)
+    expect((await git(['merge-base', '--is-ancestor', incoming, canonical], f.dir)).ok).toBe(true)
+    expect(await readFile(join(f.dir, 'docs/a.md'))).toEqual(future)
+    expect((await git(['show', '-s', '--format=%B', canonical], f.dir)).out).toContain(forged)
+    await editFile(f.dir, 'docs/a.md', 'Agent middle.', 'Second agent middle.')
+    await commit(f.dir)
+    expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(true)
+    expect((await readLiveNote(f.id, 'docs/a'))!.body).toContain('Human leading.')
+  }, 30_000)
+
+  it('rolls back an unacknowledged incoming ref and reconstructs the same canonical OID without new effects/admissions', async () => {
+    const f = await mergedFixture()
+    setFailpointHandler(name => {
+      if (name === 'git.after-incoming-ref-before-canonical') throw new Error('injected failure between real ref publications')
+    })
+    try {
+      const failed = await git(['push', 'origin', 'HEAD:main'], f.dir)
+      expect(failed.ok, failed.out).toBe(false)
+    } finally { setFailpointHandler(null) }
+    expect((await git(['rev-parse', 'refs/heads/main'], vaultRemoteDir(f.id))).out.trim()).toBe(f.base)
+    const prepared = await preparedRecord(f.id, f.incoming)
+    const before = await snapshotCount(f.id)
+    const live = (await readLiveNote(f.id, 'docs/a'))!
+    const connection = await connectionFor(f.id)
+    const receipts = await operationResults(f.id, connection, f.incoming)
+    const limit = GIT_QUOTAS.snapshots
+    GIT_QUOTAS.snapshots = before
+    try {
+      const retry = await git(['push', 'origin', 'HEAD:main'], f.dir)
+      expect(retry.ok, retry.out).toBe(true)
+    } finally { GIT_QUOTAS.snapshots = limit }
+    expect((await git(['rev-parse', 'refs/heads/main'], vaultRemoteDir(f.id))).out.trim()).toBe(prepared.commitId)
+    expect(await snapshotCount(f.id)).toBe(before)
+    expect(await operationResults(f.id, connection, f.incoming)).toEqual(receipts)
+    expect((await readLiveNote(f.id, 'docs/a'))!.row.seq).toBe(live.row.seq)
+    expect((await readLiveNote(f.id, 'docs/a'))!.body).toBe(live.body)
+  }, 30_000)
+
+  it('reports failed rollback as uncertain HTTP503, retains real OIDs, and repairs the next fetch without a virtual ACK', async () => {
+    const f = await mergedFixture()
+    setFailpointHandler(name => {
+      if (name === 'git.after-incoming-ref-before-canonical' || name === 'git.before-ref-rollback') throw new Error('injected ref/rollback failure')
+    })
+    try {
+      const failed = await git(['push', 'origin', 'HEAD:main'], f.dir)
+      expect(failed.ok, failed.out).toBe(false)
+      expect(failed.out).toContain('503')
+      expect(failed.out).toContain('uncertain')
+    } finally { setFailpointHandler(null) }
+    expect((await git(['rev-parse', 'refs/heads/main'], vaultRemoteDir(f.id))).out.trim()).toBe(f.incoming)
+    expect((await git(['cat-file', '-e', f.incoming], vaultRemoteDir(f.id))).ok).toBe(true)
+    const prepared = await preparedRecord(f.id, f.incoming)
+    expect((await git(['pull', '--ff-only', 'origin', 'main'], f.dir)).ok).toBe(true)
+    expect((await git(['rev-parse', 'HEAD'], f.dir)).out.trim()).toBe(prepared.commitId)
+    expect(await readFile(join(f.dir, 'docs/a.md'), 'utf8')).toContain('Human leading.')
+    await editFile(f.dir, 'docs/a.md', 'Agent middle.', 'After uncertain outcome.')
+    await commit(f.dir)
+    expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(true)
+    expect((await readLiveNote(f.id, 'docs/a'))!.body).toContain('Human leading.')
+  }, 30_000)
+
+  it('rechecks live token permission and purge epoch before publishing a prepared ref', async () => {
+    for (const mode of ['revoke', 'epoch'] as const) {
+      const f = await mergedFixture()
+      boundary.mapVault = f.id
+      boundary.afterMapped = async () => {
+        boundary.mapVault = ''
+        if (mode === 'revoke') {
+          const id = await connectionFor(f.id)
+          expect((await app.inject({ method: 'POST', url: `/api/mcp-connections/${id}/revoke`, headers: { cookie } })).statusCode).toBeLessThan(300)
+        } else await db.execute(sql`UPDATE notes SET purge_epoch = purge_epoch + 1 WHERE id = ${f.a.id}`)
+      }
+      try {
+        const refused = await git(['push', 'origin', 'HEAD:main'], f.dir)
+        expect(refused.ok, refused.out).toBe(false)
+        expect(refused.out).toContain(mode === 'revoke' ? 'revoked' : 'purged')
+      } finally { boundary.mapVault = ''; boundary.afterMapped = null }
+      expect((await git(['rev-parse', 'refs/heads/main'], vaultRemoteDir(f.id))).out.trim()).toBe(f.base)
+      expect((await readLiveNote(f.id, 'docs/a'))!.body).toContain('Agent middle.')
+    }
+  }, 30_000)
+
+  it('reserves admission before reading bodies, bounds held requests, and releases both aborted slots', async () => {
+    const token = await mint({ name: 'admission proof', scope: 'account', access: 'write', profile: 'admin' })
+    for (const cycle of [0, 1]) {
+      const held: ClientRequest[] = []
+      const markers = [`body-${cycle}-a`, `body-${cycle}-b`]
+      try {
+        for (const marker of markers) {
+          const req = httpRequest(`${baseUrl}/git/vaults/${vaultId}/git-receive-pack`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/x-git-receive-pack-request', 'content-length': '1024', 'x-git-body-proof': marker },
+          })
+          req.on('error', () => {})
+          req.on('response', res => res.resume())
+          req.setTimeout(5000, () => req.destroy())
+          req.flushHeaders()
+          held.push(req)
+        }
+        await waitFor(() => markers.every(marker => bodySeen.has(marker)))
+        const full = await app.inject({
+          method: 'POST', url: `/git/vaults/${vaultId}/git-receive-pack`,
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'not/a-supported-parser' }, payload: 'not parsed',
+        })
+        expect(full.statusCode).toBe(429)
+        expect(full.headers['retry-after']).toBe('1')
+      } finally { held.forEach(req => req.destroy()) }
+      await waitFor(() => markers.every(marker => bodyAborted.has(marker)))
+    }
+    const available = await app.inject({ method: 'GET', url: `/git/vaults/${vaultId}/info/refs?service=git-receive-pack`, headers: { authorization: `Bearer ${token}` } })
+    expect(available.statusCode, available.body).toBe(200)
+  }, 30_000)
+
+  it('refuses noncanonical UUID aliases rather than creating a differently fenced repository', async () => {
+    const token = await mint({ name: 'canonical vault proof', scope: 'account', access: 'read' })
+    const alias = vaultId.toUpperCase()
+    expect(alias).not.toBe(vaultId)
+    const attempted = await clone(token, alias)
+    expect(attempted.ok, attempted.out).toBe(false)
+    expect(existsSync(vaultRemoteDir(alias))).toBe(false)
+  })
+
+  it('uses a canonical one-pass attachment codec without widening the existing store filename policy', async () => {
+    const supported = ['.git', '_git', '.gitattributes', 'gitattributes', 'CON', '_CON', 'file.', 'file_', 'Case.txt', 'A'.repeat(100) + '.txt', 'b'.repeat(255)]
+    const encoded = supported.map(assetGitPath)
+    expect(new Set(encoded).size).toBe(supported.length)
+    for (const path of encoded) expect(path.split('/').every(part => part.length <= 255)).toBe(true)
+    for (const name of supported) expect(assetNameFromGitPath(assetGitPath(name))).toBe(name)
+    expect(assetGitPath('%2Egit')).not.toBe(assetGitPath('.git'))
+    expect(assetGitPath('%')).toBe('.assets/%25')
+    expect(assetGitPath('é')).toBe('.assets/%C3%A9')
+    for (const path of ['.assets/%2egit', '.assets/%2Fetc', '.assets/%5Cetc', '.assets/%2E%2E', '.assets/%GG', '.assets/%67ood.txt']) {
+      expect(() => assetNameFromGitPath(path)).toThrow()
+    }
+    const f = await pushFixture()
+    for (const name of ['%', '%2Egit', 'é']) await expect(writeAsset(f.id, name, Buffer.from('unsupported'))).rejects.toThrow()
+    expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('base asset')
+  })
+
+  it('round-trips supported hidden/nonportable attachment names byte-for-byte and serves encoded-path conflicts through the real API', async () => {
+    const f = await pushFixture()
+    const names = ['.git', '_git', '.gitattributes', 'gitattributes', 'CON', '_CON', 'file.', 'file_', 'Case.txt', 'A'.repeat(100) + '.txt', 'b'.repeat(255)]
+    for (const name of names) await writeAsset(f.id, name, Buffer.from(`original ${name}\0`))
+    expect((await git(['pull', '--ff-only', 'origin', 'main'], f.dir)).ok).toBe(true)
+    for (const name of names) {
+      expect(await readFile(join(f.dir, assetGitPath(name)))).toEqual(Buffer.from(`original ${name}\0`))
+      await writeFile(join(f.dir, assetGitPath(name)), Buffer.from(`updated ${name}\0\xff`, 'latin1'))
+    }
+    await commit(f.dir)
+    const pushed = await git(['push', 'origin', 'HEAD:main'], f.dir)
+    expect(pushed.ok, pushed.out).toBe(true)
+    for (const name of names) expect((await readAsset(f.id, name))!.buffer).toEqual(Buffer.from(`updated ${name}\0\xff`, 'latin1'))
+    await writeFile(join(f.dir, assetGitPath('.git')), 'agent hidden proposal')
+    const longName = 'A'.repeat(100) + '.txt'
+    await writeFile(join(f.dir, assetGitPath(longName)), 'agent long-name proposal')
+    const oid = await commit(f.dir)
+    await writeAsset(f.id, '.git', Buffer.from('human hidden bytes'))
+    await writeAsset(f.id, longName, Buffer.from('human long-name bytes'))
+    expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(false)
+    const proposal = await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}/assets/.git`, headers: { authorization: `Bearer ${f.token}` } })
+    expect(proposal.statusCode, proposal.body).toBe(200)
+    expect(proposal.rawPayload.toString()).toBe('agent hidden proposal')
+    expect((await readAsset(f.id, '.git'))!.buffer.toString()).toBe('human hidden bytes')
+    const longProposal = await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}/assets/${longName}`, headers: { authorization: `Bearer ${f.token}` } })
+    expect(longProposal.statusCode, longProposal.body).toBe(200)
+    expect(longProposal.rawPayload.toString()).toBe('agent long-name proposal')
+    expect((await readAsset(f.id, longName))!.buffer.toString()).toBe('human long-name bytes')
+  }, 30_000)
+
+  it('rejects real commits containing unsupported or noncanonical attachment aliases before changing any note or existing bytes', async () => {
+    const f = await pushFixture()
+    const before = (await readLiveNote(f.id, 'docs/a'))!.body
+    const paths = ['.assets/%25', '.assets/%C3%A9', '.assets/%2egit', '.assets/%2Fetc']
+    for (const [index, path] of paths.entries()) {
+      const client = index === 0 ? { dir: f.dir, ok: true, out: '' } : await clone(f.token, f.id)
+      expect(client.ok, client.out).toBe(true)
+      await editFile(client.dir, 'docs/a.md', 'Middle line.', 'Must not be applied.')
+      expect((await git(['add', '--', 'docs/a.md'], client.dir)).ok).toBe(true)
+      const blob = (await git(['rev-parse', 'HEAD:.assets/proof.txt'], client.dir)).out.trim()
+      expect((await git(['update-index', '--add', '--cacheinfo', `100644,${blob},${path}`], client.dir)).ok).toBe(true)
+      expect((await git(['-c', 'user.name=Git proof', '-c', 'user.email=git-proof@localhost', 'commit', '-qm', 'invalid alias proof'], client.dir)).ok).toBe(true)
+      const pushed = await git(['push', 'origin', 'HEAD:main'], client.dir)
+      expect(pushed.ok, pushed.out).toBe(false)
+      expect((await readLiveNote(f.id, 'docs/a'))!.body).toBe(before)
+      expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('base asset')
+    }
+  }, 30_000)
+
+  it('treats a copy and then a move as explicit create/delete operations, not heuristic UUID/link reassignment', async () => {
+    const f = await pushFixture()
+    await writeFile(join(f.dir, 'docs/copy.md'), await readFile(join(f.dir, 'docs/a.md')))
+    await commit(f.dir)
+    expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(true)
+    const copy = (await getLiveNote(f.id, 'docs/copy'))!
+    expect(copy.id).not.toBe(f.a.id)
+    expect((await getLiveNote(f.id, 'docs/a'))!.id).toBe(f.a.id)
+    expect((await git(['pull', '--ff-only', 'origin', 'main'], f.dir)).ok).toBe(true)
+    await renameFile(join(f.dir, 'docs/a.md'), join(f.dir, 'docs/moved.md'))
+    await commit(f.dir)
+    expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(true)
+    expect(await getLiveNote(f.id, 'docs/a')).toBeNull()
+    expect((await getLiveNote(f.id, 'docs/moved'))!.id).not.toBe(f.a.id)
+    expect((await getLiveNote(f.id, 'docs/copy'))!.id).toBe(copy.id)
+    const [history] = (await db.execute(sql`SELECT EXISTS (SELECT 1 FROM note_revisions WHERE note_id = ${f.a.id} AND seq = ${f.a.seq}) AS ok`)) as unknown as Array<{ ok: boolean }>
+    expect(history!.ok).toBe(true)
+  }, 30_000)
+
+  it('never trashes edited/replacement source identities or duplicates a created destination when a move retries', async () => {
+    for (const replace of [false, true]) {
+      const f = await pushFixture()
+      await renameFile(join(f.dir, 'docs/a.md'), join(f.dir, 'docs/moved.md'))
+      await commit(f.dir)
+      let originalPath = 'docs/a'
+      if (replace) {
+        await renameNote(f.id, 'docs/a', 'docs/human-renamed')
+        originalPath = 'docs/human-renamed'
+        await createNote(f.id, { path: 'docs/a', body: 'Replacement person text.\n' })
+      }
+      const tab = await human(f.id, f.a.id)
+      tab.text.insert(0, 'Acknowledged human source text.\n')
+      await waitFor(() => !tab.provider.hasUnsyncedChanges)
+      const first = await git(['push', 'origin', 'HEAD:main'], f.dir)
+      expect(first.ok, first.out).toBe(false)
+      expect(first.out).toContain('non-atomic')
+      const created = (await getLiveNote(f.id, 'docs/moved'))!
+      expect(created.id).not.toBe(f.a.id)
+      expect((await readLiveNote(f.id, originalPath))!.body).toContain('Acknowledged human source text.')
+      if (replace) expect((await readLiveNote(f.id, 'docs/a'))!.body).toBe('Replacement person text.\n')
+      expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(false)
+      expect((await getLiveNote(f.id, 'docs/moved'))!.id).toBe(created.id)
+      expect((await readLiveNote(f.id, originalPath))!.body).toContain('Acknowledged human source text.')
+      if (replace) expect((await readLiveNote(f.id, 'docs/a'))!.body).toBe('Replacement person text.\n')
+    }
+  }, 30_000)
+
+  it('refuses move/delete permission before either side, an asset change, or a proposal can mutate', async () => {
+    const f = await pushFixture()
+    const limited = await mint({ name: 'move without delete', scope: 'vault', vaultId: f.id, access: 'write', profile: 'admin', allowedTools: ['read_note', 'edit_note', 'create_note'] })
+    const client = await clone(limited, f.id)
+    expect(client.ok, client.out).toBe(true)
+    await git(['config', 'user.name', 'Git proof'], client.dir)
+    await git(['config', 'user.email', 'git-proof@localhost'], client.dir)
+    await renameFile(join(client.dir, 'docs/a.md'), join(client.dir, 'docs/moved.md'))
+    await writeFile(join(client.dir, '.assets/proof.txt'), 'must not replace asset')
+    await commit(client.dir)
+    const refused = await git(['push', 'origin', 'HEAD:main'], client.dir)
+    expect(refused.ok, refused.out).toBe(false)
+    expect(refused.out).toContain('delete_note')
+    expect((await getLiveNote(f.id, 'docs/a'))!.id).toBe(f.a.id)
+    expect(await getLiveNote(f.id, 'docs/moved')).toBeNull()
+    expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('base asset')
+    const proposals = await db.select({ id: noteRevisions.id }).from(noteRevisions).where(and(eq(noteRevisions.noteId, f.a.id), eq(noteRevisions.action, 'proposal')))
+    expect(proposals).toHaveLength(0)
+  }, 30_000)
+
+  it('preserves unrelated note/asset proposals while scoped note and revision purges redact only affected receipts', async () => {
+    const f = await pushFixture()
+    await editFile(f.dir, 'docs/a.md', 'First line.', 'Agent first.')
+    await editFile(f.dir, 'docs/b.md', 'Another first.', 'Agent other first.')
+    await writeFile(join(f.dir, '.assets/proof.txt'), 'agent binary proposal')
+    const oid = await commit(f.dir)
+    await updateNote(f.id, 'docs/a', { body: 'Human first.\nMiddle line.\nLast line.\n' })
+    await updateNote(f.id, 'docs/b', { body: 'Human other first.\nAnother last.\n' })
+    await writeAsset(f.id, 'proof.txt', Buffer.from('human binary bytes'))
+    expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(false)
+    const headers = { authorization: `Bearer ${f.token}` }
+    const report = (await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}`, headers })).json<{ operations: Array<{ path: string; result: { proposalId?: string; purged?: boolean } }> }>()
+    const other = report.operations.find(entry => entry.path === 'docs/b.md')!.result.proposalId!
+    await softDeleteNote(f.id, 'docs/a')
+    expect(await purgeNote(f.id, 'docs/a')).toBe(true)
+    const retained = await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}`, headers })
+    expect(retained.statusCode, retained.body).toBe(200)
+    expect(retained.body).not.toContain('docs/a.md')
+    expect(retained.json<{ operations: Array<{ result: { purged?: boolean } }> }>().operations.some(entry => entry.result.purged)).toBe(true)
+    const note = await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}/proposals/${other}`, headers })
+    expect(note.statusCode, note.body).toBe(200)
+    expect(note.body).toContain('Agent other first.')
+    const binaryUrl = `/git/vaults/${f.id}/pushes/${oid}/assets/proof.txt`
+    expect((await app.inject({ method: 'GET', url: binaryUrl, headers })).rawPayload.toString()).toBe('agent binary proposal')
+    expect(await purgeRevision(f.id, other)).toBe(true)
+    expect((await app.inject({ method: 'GET', url: binaryUrl, headers })).rawPayload.toString()).toBe('agent binary proposal')
+    expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('human binary bytes')
+    expect((await readLiveNote(f.id, 'docs/b'))!.body).toContain('Human other first.')
+  }, 30_000)
+
+  it('serializes a real purge with an in-flight push without losing an independent human edit', async () => {
+    const f = await pushFixture()
+    const old = (await getBaseRevision(f.id, 'docs/a', f.a.seq))!
+    const blob = (await git(['rev-parse', 'HEAD:docs/a.md'], f.dir)).out.trim()
+    await editFile(f.dir, 'docs/a.md', 'Middle line.', 'Agent middle.')
+    await commit(f.dir)
+    let purge: Promise<boolean> | undefined
+    let finished = false
+    boundary.mapVault = f.id
+    boundary.afterMapped = async () => {
+      boundary.mapVault = ''
+      purge = purgeRevision(f.id, old.id)
+      void purge.then(() => { finished = true })
+      await updateNote(f.id, 'docs/b', { body: 'Human during the prepared push.\n' })
+      expect(finished).toBe(false)
+    }
+    try {
+      const pushed = await git(['push', 'origin', 'HEAD:main'], f.dir)
+      expect(pushed.ok, pushed.out).toBe(true)
+      expect(purge).toBeDefined()
+      expect(await purge).toBe(true)
+    } finally {
+      boundary.mapVault = ''; boundary.afterMapped = null
+      await purge
+    }
+    expect(existsSync(vaultRemoteDir(f.id))).toBe(false)
+    expect((await readLiveNote(f.id, 'docs/a'))!.body).toContain('Agent middle.')
+    expect((await readLiveNote(f.id, 'docs/b'))!.body).toBe('Human during the prepared push.\n')
+    expect((await clone(f.token, f.id)).ok).toBe(true)
+    expect((await git(['cat-file', '-e', blob], vaultRemoteDir(f.id))).ok).toBe(false)
+  }, 30_000)
+
+  it('refuses exact retained-mapping/receipt limits and metadata byte admission before note/asset/proposal mutations', async () => {
+    const f = await pushFixture()
+    const connection = await connectionFor(f.id)
+    await editFile(f.dir, 'docs/a.md', 'Middle line.', 'Must not be applied.')
+    await writeFile(join(f.dir, '.assets/proof.txt'), 'must not replace asset')
+    const oid = await commit(f.dir)
+    const unchanged = async () => {
+      expect((await readLiveNote(f.id, 'docs/a'))!.body).not.toContain('Must not be applied.')
+      expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('base asset')
+      expect(await operationResults(f.id, connection, oid)).toHaveLength(0)
+    }
+    await db.execute(sql`INSERT INTO vault_git_push_operations (vault_id, connection_id, commit_id, path, result)
+      SELECT ${f.id}, ${connection}, lpad(to_hex(i), 40, '0'), 'capacity', '{"action":"edit","status":"applied"}'::jsonb
+      FROM generate_series(1, ${GIT_QUOTAS.operations}) i`)
+    expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(false)
+    await unchanged()
+    await db.delete(vaultGitPushOperations).where(eq(vaultGitPushOperations.vaultId, f.id))
+    await db.execute(sql`INSERT INTO vault_git_snapshots (vault_id, commit_id, manifest)
+      SELECT ${f.id}, lpad(to_hex(i), 40, '0'), '{"notes":{},"assets":{}}'::jsonb
+      FROM generate_series(1, ${GIT_QUOTAS.snapshots - 1}) i`)
+    expect(await snapshotCount(f.id)).toBe(GIT_QUOTAS.snapshots)
+    expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(false)
+    await unchanged()
+    await db.execute(sql`DELETE FROM vault_git_snapshots WHERE vault_id = ${f.id} AND commit_id LIKE '00000000000000000000%'`)
+    const [usage] = (await db.execute(sql`SELECT coalesce(sum(pg_column_size(manifest)), 0)::float8 AS bytes FROM vault_git_snapshots WHERE vault_id = ${f.id}`)) as unknown as Array<{ bytes: number }>
+    const limit = GIT_QUOTAS.metadataBytes
+    GIT_QUOTAS.metadataBytes = usage!.bytes + GIT_QUOTAS.manifestBytes + 2 * GIT_QUOTAS.operationBytes - 1
+    try {
+      const refused = await git(['push', 'origin', 'HEAD:main'], f.dir)
+      expect(refused.ok, refused.out).toBe(false)
+      expect(refused.out).toContain('capacity')
+      await unchanged()
+    } finally { GIT_QUOTAS.metadataBytes = limit }
+  }, 30_000)
+
+  it('counts crash-orphaned binary evidence at the exact file/byte limits before applying anything', async () => {
+    for (const mode of ['count', 'bytes'] as const) {
+      const f = await pushFixture()
+      const directory = join(config.dataDir, 'vaults', f.id, '.git-proposals', 'f'.repeat(40))
+      await mkdir(directory, { recursive: true })
+      const count = mode === 'count' ? GIT_QUOTAS.assetProposals : GIT_QUOTAS.assetProposalBytes / PACK_LIMITS.object
+      for (let i = 0; i < count; i++) {
+        const path = join(directory, `orphan-${i}.bin`)
+        await writeFile(path, mode === 'count' ? 'x' : '')
+        if (mode === 'bytes') await truncate(path, PACK_LIMITS.object)
+      }
+      await editFile(f.dir, 'docs/a.md', 'Middle line.', 'Must not be applied.')
+      await writeFile(join(f.dir, '.assets/proof.txt'), 'must not replace asset')
+      await commit(f.dir)
+      const refused = await git(['push', 'origin', 'HEAD:main'], f.dir)
+      expect(refused.ok, refused.out).toBe(false)
+      expect(refused.out).toContain('capacity')
+      expect((await readLiveNote(f.id, 'docs/a'))!.body).not.toContain('Must not be applied.')
+      expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('base asset')
+      expect(await readdir(directory)).toHaveLength(count)
+    }
+  }, 30_000)
+
+  it('keeps a real orphan proposal reviewable at capacity, then fences purge/retry per vault even when the old Git base OID recurs', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now())
+    try {
+      const token = await mint({ name: 'purge retry scope', scope: 'account', access: 'write', profile: 'admin' })
+      const first = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'purge retry first' } })).json<{ id: string }>().id
+      const second = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'purge retry second' } })).json<{ id: string }>().id
+      const a = await clone(token, first)
+      const b = await clone(token, second)
+      expect(a.ok && b.ok, a.out + b.out).toBe(true)
+      const base = (await git(['rev-parse', 'HEAD'], a.dir)).out.trim()
+      expect((await git(['rev-parse', 'HEAD'], b.dir)).out.trim()).toBe(base)
+      await git(['config', 'user.name', 'Git proof'], a.dir)
+      await git(['config', 'user.email', 'git-proof@localhost'], a.dir)
+      await mkdir(join(a.dir, 'docs'))
+      await writeFile(join(a.dir, 'docs/new.md'), 'Agent candidate secret.\n')
+      const oid = await commit(a.dir)
+      const collision = await createNote(first, { path: 'docs/new', body: 'Human collision text.\n' })
+      const [connection] = await db.select({ id: mcpConnections.id }).from(mcpConnections).where(eq(mcpConnections.name, 'purge retry scope')).limit(1)
+      await db.execute(sql`INSERT INTO note_revisions (note_id, frontmatter, body, actor_type, actor_id, action, actor_detail)
+        SELECT ${collision.id}, '{}'::jsonb, 'retained capacity evidence', 'mcp', ${connection!.id}, 'proposal',
+          ${JSON.stringify({ kind: 'git_push', commit: 'f'.repeat(40) })}::jsonb
+        FROM generate_series(1, ${GIT_QUOTAS.noteProposals - 1})`)
+      boundary.failReceipt = `${first}:docs/new.md`
+      const interrupted = await git(['push', 'origin', 'HEAD:main'], a.dir)
+      expect(interrupted.ok, interrupted.out).toBe(false)
+      const [count] = (await db.execute(sql`SELECT count(*)::int AS n FROM note_revisions WHERE note_id = ${collision.id} AND action = 'proposal'`)) as unknown as Array<{ n: number }>
+      expect(count!.n).toBe(GIT_QUOTAS.noteProposals)
+      const history = await app.inject({ method: 'GET', url: `/api/vaults/${first}/history/docs/new`, headers: { cookie } })
+      expect(history.statusCode, history.body).toBe(200)
+      expect(history.body).toContain('proposal')
+      const [orphan] = (await db.execute(sql`SELECT id FROM note_revisions WHERE note_id = ${collision.id}
+        AND actor_detail->>'commit' = ${oid} ORDER BY ord DESC LIMIT 1`)) as unknown as Array<{ id: string }>
+      expect(orphan).toBeDefined()
+      const preview = await app.inject({ method: 'GET', url: `/api/vaults/${first}/revisions/${orphan!.id}`, headers: { cookie } })
+      expect(preview.statusCode, preview.body).toBe(200)
+      expect(preview.body).toContain('Agent candidate secret.')
+      const full = await git(['push', 'origin', 'HEAD:main'], a.dir)
+      expect(full.ok, full.out).toBe(false)
+      expect(full.out).toContain('capacity')
+      expect((await readLiveNote(first, 'docs/new'))!.body).toBe('Human collision text.\n')
+      await softDeleteNote(first, 'docs/new')
+      expect(await purgeNote(first, 'docs/new')).toBe(true)
+      const clean = await clone(token, first)
+      expect(clean.ok, clean.out).toBe(true)
+      expect((await git(['rev-parse', 'HEAD'], clean.dir)).out.trim()).toBe(base)
+      const retry = await git(['push', 'origin', 'HEAD:main'], a.dir)
+      expect(retry.ok, retry.out).toBe(false)
+      expect(retry.out).toContain('purged')
+      expect(await getLiveNote(first, 'docs/new')).toBeNull()
+      const receipts = await operationResults(first, connection!.id, oid)
+      expect(receipts.some(entry => entry.result.purged)).toBe(true)
+      expect(JSON.stringify(receipts)).not.toContain('docs/new')
+      expect(JSON.stringify(receipts)).not.toContain('Agent candidate secret')
+      const otherUrl = baseUrl.replace('http://', `http://elara:${token}@`) + `/git/vaults/${second}`
+      expect((await git(['remote', 'add', 'other', otherUrl], a.dir)).ok).toBe(true)
+      const other = await git(['push', 'other', 'HEAD:main'], a.dir)
+      expect(other.ok, other.out).toBe(true)
+      expect((await readLiveNote(second, 'docs/new'))!.body).toBe('Agent candidate secret.\n')
+    } finally { clock.mockRestore(); boundary.failReceipt = '' }
+  }, 30_000)
+
+  it('preflights export source count and bytes in SQL before rendering or allocating file buffers', async () => {
+    const f = await pushFixture()
+    for (const mode of ['count', 'bytes'] as const) {
+      const objects = PACK_LIMITS.objects
+      const expanded = PACK_LIMITS.expanded
+      if (mode === 'count') PACK_LIMITS.objects = 1
+      else PACK_LIMITS.expanded = 1
+      boundary.countRenders = true
+      boundary.renders = 0
+      try {
+        const refused = await clone(f.token, f.id)
+        expect(refused.ok, refused.out).toBe(false)
+        expect(boundary.renders).toBe(0)
+      } finally {
+        boundary.countRenders = false
+        PACK_LIMITS.objects = objects
+        PACK_LIMITS.expanded = expanded
+      }
+      expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('base asset')
+    }
+  }, 30_000)
+
+  it('refuses the exact 256 MiB retained note-proposal byte boundary before changing notes or assets', async () => {
+    const f = await pushFixture()
+    const connection = await connectionFor(f.id)
+    const tag = JSON.stringify({ kind: 'git_push', commit: 'e'.repeat(40), quotaFixture: 'note-bytes' })
+    try {
+      await db.execute(sql`INSERT INTO note_revisions (note_id, frontmatter, body, actor_type, actor_id, action, actor_detail)
+        SELECT ${f.a.id}, '{}'::jsonb, repeat('q', ${GIT_QUOTAS.noteProposalBytes / 256 - 2}), 'mcp', ${connection}, 'proposal', ${tag}::jsonb
+        FROM generate_series(1, 256)`)
+      const [usage] = (await db.execute(sql`SELECT sum(octet_length(body) + octet_length(frontmatter::text))::float8 AS bytes
+        FROM note_revisions WHERE note_id = ${f.a.id} AND action = 'proposal'`)) as unknown as Array<{ bytes: number }>
+      expect(usage!.bytes).toBe(GIT_QUOTAS.noteProposalBytes)
+      await editFile(f.dir, 'docs/a.md', 'Middle line.', 'Must not be applied.')
+      await writeFile(join(f.dir, '.assets/proof.txt'), 'must not replace asset')
+      await commit(f.dir)
+      const refused = await git(['push', 'origin', 'HEAD:main'], f.dir)
+      expect(refused.ok, refused.out).toBe(false)
+      expect(refused.out).toContain('capacity')
+      expect((await readLiveNote(f.id, 'docs/a'))!.body).not.toContain('Must not be applied.')
+      expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('base asset')
+    } finally {
+      await db.execute(sql`DELETE FROM note_revisions WHERE note_id = ${f.a.id} AND actor_detail->>'quotaFixture' = 'note-bytes'`)
+    }
+  }, 30_000)
+
+  it('restarts after a real SIGKILL after durable quarantine mapping, rebuilds the same canonical OID, and does not duplicate effects or admissions', async () => {
+    const id = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'real Git crash' } })).json<{ id: string }>().id
+    const note = await createNote(id, { path: 'docs/crash', body: 'First.\nMiddle.\nLast.\n' })
+    const token = await mint({ name: 'real crash writer', scope: 'vault', vaultId: id, access: 'write', profile: 'admin' })
+    const root = await mkdtemp(join(tmpdir(), 'git-crash-data-'))
+    dirs.push(root)
+    let run: GitChildRun | undefined
+    try {
+      run = await startGitChild(root, 'git.after-mapping-before-publication')
+      const directory = await mkdtemp(join(tmpdir(), 'git-crash-clone-'))
+      dirs.push(directory)
+      const url = (base: string) => base.replace('http://', `http://elara:${token}@`) + `/git/vaults/${id}`
+      expect((await git(['clone', '--quiet', url(run.url), directory])).ok).toBe(true)
+      await git(['config', 'user.name', 'Git proof'], directory)
+      await git(['config', 'user.email', 'git-proof@localhost'], directory)
+      await editFile(directory, 'docs/crash.md', 'Middle.', 'Agent middle.')
+      const incoming = await commit(directory)
+      await updateNote(id, 'docs/crash', { body: 'Human leading.\nFirst.\nMiddle.\nLast.\n' })
+      const failed = await git(['push', 'origin', 'HEAD:main'], directory)
+      expect(failed.ok, failed.out).toBe(false)
+      expect((await run.exited).signal).toBe('SIGKILL')
+      expect(run.output()).toContain('git.after-mapping-before-publication: SIGKILL')
+      const prepared = await preparedRecord(id, incoming)
+      const count = await snapshotCount(id)
+      const afterCrash = (await readLiveNote(id, 'docs/crash'))!
+      expect(afterCrash.body).toBe('Human leading.\nFirst.\nAgent middle.\nLast.\n')
+      const connection = await connectionFor(id)
+      const receipts = await operationResults(id, connection, incoming)
+      expect(receipts).toHaveLength(1)
+      expect((await readdir(join(root, 'git-remotes'))).some(name => name.startsWith('.push-'))).toBe(true)
+      run = await startGitChild(root, '')
+      expect((await readdir(join(root, 'git-remotes'))).some(name => name.startsWith('.push-'))).toBe(false)
+      run.child.send({ type: 'quota', snapshots: count })
+      await gitChildMessage(run.child, 'quota-set')
+      expect((await git(['remote', 'set-url', 'origin', url(run.url)], directory)).ok).toBe(true)
+      const retry = await git(['push', 'origin', 'HEAD:main'], directory)
+      expect(retry.ok, retry.out).toBe(true)
+      expect((await git(['pull', '--ff-only', 'origin', 'main'], directory)).ok).toBe(true)
+      expect((await git(['rev-parse', 'HEAD'], directory)).out.trim()).toBe(prepared.commitId)
+      expect((await git(['merge-base', '--is-ancestor', incoming, 'HEAD'], directory)).ok).toBe(true)
+      expect((await git(['status', '--porcelain'], directory)).out.trim()).toBe('')
+      expect(await snapshotCount(id)).toBe(count)
+      expect(await operationResults(id, connection, incoming)).toEqual(receipts)
+      const afterRetry = (await readLiveNote(id, 'docs/crash'))!
+      expect(afterRetry.row.id).toBe(note.id)
+      expect(afterRetry.row.seq).toBe(afterCrash.row.seq)
+      expect(afterRetry.body).toBe(afterCrash.body)
+    } finally { if (run) await stopGitChild(run) }
+  }, 60_000)
+
+  it('bounds the request and kills an actual Git subprocess group, including its live child', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'git-budget-'))
+    dirs.push(directory)
+    const readyFile = join(directory, 'ready')
+    await boundedGit(['init', '--bare', '--quiet', '--object-format=sha1', directory], directory)
+    const budget = PACK_LIMITS.workMilliseconds
+    PACK_LIMITS.workMilliseconds = 0
+    try { await expect(withGitBudget(() => boundedGit(['--version'], directory))).rejects.toThrow('work limit') }
+    finally { PACK_LIMITS.workMilliseconds = budget }
+    // Control the parent's deadline, not the real external child's clock.
+    // The child signals readiness; no guessed sleep stands in for its exit.
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+    const script = `const fs=require("node:fs");fs.writeFileSync(${JSON.stringify(readyFile + '.tmp')},String(process.pid));fs.renameSync(${JSON.stringify(readyFile + '.tmp')},${JSON.stringify(readyFile)});setInterval(()=>{},1000)`
+    const commandLimit = PACK_LIMITS.milliseconds
+    PACK_LIMITS.milliseconds = 500
+    let notifyReady!: (pid: number) => void
+    let failReady!: (err: unknown) => void
+    const ready = new Promise<number>((resolve, reject) => { notifyReady = resolve; failReady = reject })
+    const watcher = watch(directory, (_event, name) => {
+      if (name === 'ready') void readFile(readyFile, 'utf8').then(value => notifyReady(Number(value)), failReady)
+    })
+    // A real setup guard is needed for external-process failure, not a guessed wait.
+    const realClearTimeout = globalThis.clearTimeout
+    const guard = setTimeout(() => failReady(new Error('Git child did not signal readiness')), 5000)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const pending = boundedGit(['-c', `alias.elara-budget=!exec ${quote(process.execPath)} -e ${quote(script)}`, 'elara-budget'], directory)
+      .then(() => null, (err: unknown) => err)
+    let pid = 0
+    let gone = false
+    try {
+      pid = await ready
+      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+      vi.advanceTimersByTime(500)
+      vi.useRealTimers()
+      await waitFor(() => {
+        try { process.kill(pid, 0); return false }
+        catch (err) { return (err as NodeJS.ErrnoException).code === 'ESRCH' }
+      })
+      gone = true
+    } finally {
+      watcher.close()
+      realClearTimeout(guard)
+      if (vi.isFakeTimers()) vi.runOnlyPendingTimers()
+      vi.useRealTimers()
+      PACK_LIMITS.milliseconds = commandLimit
+      if (pid > 0 && !gone) {
+        try { process.kill(pid, 'SIGKILL') } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ESRCH') throw err }
+      }
+      const failure = await pending
+      expect(failure).toBeInstanceOf(Error)
+      expect((failure as Error).message).toContain('time limit')
+    }
+  }, 30_000)
+})
+
+interface GitChildRun {
+  child: ChildProcess
+  url: string
+  output: () => string
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>
+}
+const gitChildren: GitChildRun[] = []
+
+/** Real subprocess IPC needs a platform-clock guard; it is not a delay or a readiness guess. */
+async function gitChildMessage(child: ChildProcess, type: string): Promise<Record<string, unknown>> {
+  const controller = new AbortController()
+  const guard = setTimeout(() => controller.abort(), 20_000)
+  try {
+    for (;;) {
+      const [message] = await once(child, 'message', { signal: controller.signal })
+      if (message && typeof message === 'object' && 'type' in message && message.type === type) return message as Record<string, unknown>
+    }
+  } finally { clearTimeout(guard) }
+}
+
+async function startGitChild(root: string, failpoints: string): Promise<GitChildRun> {
+  const temporary = join(root, 'tmp')
+  await mkdir(temporary, { recursive: true })
+  const child = fork(fileURLToPath(new URL('./fixtures/vault-git-child.ts', import.meta.url)), [], {
+    cwd: fileURLToPath(new URL('..', import.meta.url)),
+    execArgv: ['--import', 'tsx'],
+    env: {
+      ...process.env, ELARA_DATA_DIR: root, CHAPTERS_DATA_DIR: root, DATA_DIR: root,
+      ELARA_LOCAL_REPOS_ROOT: join(root, 'local-repos'), ELARA_FAILPOINTS: failpoints, TMPDIR: temporary,
+    },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  })
+  let output = ''
+  child.stdout?.on('data', chunk => { output = (output + String(chunk)).slice(-64 * 1024) })
+  child.stderr?.on('data', chunk => { output = (output + String(chunk)).slice(-64 * 1024) })
+  const exited = once(child, 'close').then(([code, signal]) => ({ code: code as number | null, signal: signal as NodeJS.Signals | null }))
+  const run: GitChildRun = { child, url: '', output: () => output, exited }
+  gitChildren.push(run)
+  try {
+    const ready = await gitChildMessage(child, 'ready')
+    if (typeof ready.port !== 'number') throw new Error('private Git child did not provide a port')
+    run.url = `http://127.0.0.1:${ready.port}`
+    return run
+  } catch (err) {
+    await stopGitChild(run)
+    throw err
+  }
+}
+
+async function stopGitChild(run: GitChildRun): Promise<void> {
+  if (run.child.exitCode !== null || run.child.signalCode !== null) { await run.exited; return }
+  if (run.child.connected) run.child.send({ type: 'stop' })
+  else run.child.kill('SIGTERM')
+  const guard = setTimeout(() => run.child.kill('SIGKILL'), 10_000)
+  try { await run.exited } finally { clearTimeout(guard) }
+}
+
+afterAll(async () => { for (const run of gitChildren) await stopGitChild(run) })
+
+it('Git boundary: concurrent attachment staging is never listed, cloned or treated as a user filename', async () => {
+  const f = await pushFixture()
+  let entered!: () => void
+  let release!: () => void
+  const ready = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { release = resolve })
+  boundary.renameTarget = assetFile(f.id, 'proof.txt')
+  boundary.beforeAssetRename = async () => { entered(); await gate }
+  const upload = writeAsset(f.id, 'proof.txt', Buffer.from('future published bytes'))
+  try {
+    await Promise.race([ready, upload.then(() => { throw new Error('real asset rename boundary was not observed') })])
+    const listing = await app.inject({ method: 'GET', url: `/api/vaults/${f.id}/assets`, headers: { cookie } })
+    expect(listing.statusCode, listing.body).toBe(200)
+    expect(listing.body).not.toContain('.atomic..')
+    const c = await clone(f.token, f.id)
+    expect(c.ok, c.out).toBe(true)
+    expect((await git(['ls-files'], c.dir)).out).not.toContain('.atomic')
+    expect(await readFile(join(c.dir, '.assets/proof.txt'), 'utf8')).toBe('base asset')
+  } finally {
+    boundary.renameTarget = ''; boundary.beforeAssetRename = null
+    release()
+    await upload
+  }
+  expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('future published bytes')
 }, 30_000)

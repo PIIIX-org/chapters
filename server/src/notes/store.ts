@@ -1,4 +1,4 @@
-import { lstat, open, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { open, readdir, rm, stat } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
@@ -10,6 +10,8 @@ import { mcpConnections, noteLinks, noteRevisions, notes } from '../db/schema.js
 import { recordJob } from '../monitoring/metrics.js'
 import { INSTANCE_LOCK_KEY, writesPaused } from './maintenance-lock.js'
 import { config } from '../config.js'
+import { assetDirectory, initializeAssetStorage, storedAssetFile } from './asset-storage.js'
+import { atomicWrite, isShortAtomicTempName, syncDirectory } from './atomic-write.js'
 import { embeddingJobKey, kickEmbeddings } from '../search/embedding-queue.js'
 import { kickSemanticEdges, queueSemanticEdgeRestore, removeSemanticNodes } from '../search/semantic-edges.js'
 import {
@@ -55,7 +57,6 @@ import {
   splitPath,
 } from './okf/paths.js'
 import { withKeyLock, withKeyLocks } from './key-lock.js'
-import { atomicWrite, ensureDirectory, syncDirectory } from './atomic-write.js'
 import { assertBodyFits, assertFrontmatterFits, NoteTooLargeError } from './size-cap.js'
 import { NoteWriteQuarantinedError, suspiciousWrite, type QuarantineRules } from './growth-guard.js'
 import { orderKeys, presentedFrontmatter, sameContent } from './frontmatter-order.js'
@@ -295,6 +296,7 @@ export async function recordProposal(
   proposal: { frontmatter: Record<string, unknown>; body: string },
   actor: Actor,
   baseRevisionId: string,
+  actorDetail?: Record<string, unknown>,
 ): Promise<string> {
   const frontmatter = JSON.parse(JSON.stringify(proposal.frontmatter)) as Record<string, unknown>
   const [latest] = await db
@@ -318,18 +320,11 @@ export async function recordProposal(
   if (latest?.sourceRevisionId === baseRevisionId && latest.body === proposal.body && isDeepStrictEqual(latest.frontmatter, frontmatter)) {
     return latest.id
   }
-  const [inserted] = await db
-    .insert(noteRevisions)
-    .values({
-      noteId,
-      actorType: actor.type,
-      actorId: actor.id,
-      action: PROPOSAL_ACTION,
-      frontmatter,
-      body: proposal.body,
-      sourceRevisionId: baseRevisionId,
-    })
-    .returning({ id: noteRevisions.id })
+  const [inserted] = (await db.execute(sql`
+    INSERT INTO note_revisions (note_id, actor_type, actor_id, action, frontmatter, body, source_revision_id, actor_detail)
+    VALUES (${noteId}, ${actor.type}, ${actor.id ?? null}, ${PROPOSAL_ACTION}, ${JSON.stringify(frontmatter)}::jsonb,
+      ${proposal.body}, ${baseRevisionId}, ${actorDetail ? JSON.stringify(actorDetail) : null}::jsonb)
+    RETURNING id`)) as unknown as Array<{ id: string }>
   return inserted!.id
 }
 
@@ -613,6 +608,7 @@ export async function createNote(
   options: Pick<WriteOptions, 'recordKey'> & { asImported?: boolean } = {},
 ): Promise<WrittenNote> {
   const { resolved, frontmatter, body } = newNoteState(input, options.asImported)
+  await initializeAssetStorage(vaultId)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
     const id = randomUUID()
     let row: WrittenNote
@@ -1878,14 +1874,14 @@ async function purgeRevisionOfLockedNote(vaultId: string, noteId: string, revisi
     const locked = await lockedNote(tx, noteId)
     if (!locked || locked.vaultId !== vaultId) return false
     const [found] = (await tx.execute(sql`
-      SELECT r.seq = n.seq AS current,
+      SELECT r.seq AS rev, r.seq = n.seq AS current,
         (c.folded_seq IS NOT NULL AND r.seq = c.folded_seq AND n.seq > c.folded_seq) AS base
       FROM note_revisions r JOIN notes n ON n.id = r.note_id LEFT JOIN note_crdt c ON c.note_id = n.id
-      WHERE r.id = ${revisionId} AND n.id = ${noteId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ current: boolean | null; base: boolean }>
+      WHERE r.id = ${revisionId} AND n.id = ${noteId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ rev: string; current: boolean | null; base: boolean }>
     if (!found) return false
     if (found.current) throw new OkfValidationError('this revision is the note as it is now; edit the note first, then purge the revision')
     if (found.base) throw new OkfValidationError('this revision is the base of a pending merge of the note; open or edit the note first, then purge the revision')
-    await invalidateVaultGit(vaultId, tx)
+    await invalidateVaultGit(vaultId, tx, { noteId, revision: { id: revisionId, rev: Number(found.rev) } })
     // Same database note mutex/transaction as delayed retention writers: seq stays, the purge generation changes.
     await clearNoteRetention(tx, [noteId])
     await expandDependents(tx, revisionId)
@@ -1914,7 +1910,7 @@ async function purgeNoteLocked(vaultId: string, noteId: string): Promise<boolean
     const done = await storeTransaction([row.id], async (tx) => {
       const locked = await lockedNote(tx, row.id)
       if (!locked || !locked.deletedAt) return false
-      await invalidateVaultGit(vaultId, tx)
+      await invalidateVaultGit(vaultId, tx, { noteId: row.id })
       await clearNoteRetention(tx, [row.id])
       await tx.delete(notes).where(eq(notes.id, row.id))
       // semanticEdges is polymorphic and has no FK (spec 9), so it does not
@@ -2236,7 +2232,7 @@ export function sanitizeAssetFilename(originalFilename: string): string {
 }
 
 export function assetFile(vaultId: string, filename: string): string {
-  return join(vaultDir(vaultId), 'assets', filename)
+  return storedAssetFile(vaultId, filename)
 }
 
 export async function saveAsset(
@@ -2257,15 +2253,15 @@ export async function writeAsset(
   fileName: string,
   buffer: Buffer,
 ): Promise<{ fileName: string; size: number; mimeType: string }> {
-  if (!isSafeAssetName(fileName) || fileName.startsWith('.')) throw new OkfValidationError('unsafe asset filename')
-  return withKeyLock(`asset:${vaultId}/${fileName}`, async () => {
-    await assetDirectory(vaultId)
-    await atomicWrite(assetFile(vaultId, fileName), buffer, { mode: 0o600 })
-    return { fileName, size: buffer.length, mimeType: ASSET_MIME_TYPES[extname(fileName).toLowerCase()] ?? 'application/octet-stream' }
-  })
+  if (!isSafeAssetName(fileName)) throw new OkfValidationError('unsafe asset filename')
+  await initializeAssetStorage(vaultId)
+  await withKeyLock(`asset:${vaultId}/${fileName}`, () => atomicWrite(assetFile(vaultId, fileName), buffer, { mode: 0o600, durable: true, shortTempName: true }))
+  const ext = extname(fileName).toLowerCase()
+  const mimeType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream'
+  return { fileName, size: buffer.length, mimeType }
 }
 
-/** A bare file name inside a vault's `assets/` directory: no path parts, no traversal, not the directory itself. */
+/** A logical attachment name (HTTP remains assets/); physical attachment bytes live in .assets/. */
 export function isSafeAssetName(filename: string): boolean {
   return Boolean(filename) && filename !== '.' && !filename.includes('..') && /^[a-zA-Z0-9._-]+$/.test(filename)
 }
@@ -2273,20 +2269,20 @@ export function isSafeAssetName(filename: string): boolean {
 export async function readAsset(
   vaultId: string,
   filename: string,
+  maxBytes = Infinity,
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
   if (!isSafeAssetName(filename)) return null
+  await initializeAssetStorage(vaultId)
   const filePath = assetFile(vaultId, filename)
   try {
-    if (!(await lstat(join(vaultDir(vaultId), 'assets'))).isDirectory()) return null
     const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
     try {
-      if (!(await handle.stat()).isFile()) return null
+      const info = await handle.stat()
+      if (!info.isFile() || info.size > maxBytes) return null
       const buffer = await handle.readFile()
-      const mimeType = ASSET_MIME_TYPES[extname(filename).toLowerCase()] ?? 'application/octet-stream'
-      return { buffer, mimeType }
-    } finally {
-      await handle.close()
-    }
+      if (buffer.length > maxBytes) return null
+      return { buffer, mimeType: ASSET_MIME_TYPES[extname(filename).toLowerCase()] ?? 'application/octet-stream' }
+    } finally { await handle.close() }
   } catch {
     return null
   }
@@ -2295,12 +2291,13 @@ export async function readAsset(
 export async function listAssets(
   vaultId: string,
 ): Promise<{ fileName: string; size: number; modifiedAt: string }[]> {
-  const targetDir = join(vaultDir(vaultId), 'assets')
+  await initializeAssetStorage(vaultId)
+  const targetDir = assetDirectory(vaultId)
   try {
     const entries = await readdir(targetDir, { withFileTypes: true })
     const results: { fileName: string; size: number; modifiedAt: string }[] = []
     for (const entry of entries) {
-      if (!entry.isFile() || entry.name.startsWith('.')) continue
+      if (!entry.isFile() || isShortAtomicTempName(entry.name)) continue
       const stats = await stat(join(targetDir, entry.name)).catch(() => null)
       if (stats) {
         results.push({
@@ -2321,43 +2318,46 @@ export function assetBlobId(buffer: Buffer): string {
   return createHash('sha1').update(`blob ${buffer.length}\0`).update(buffer).digest('hex')
 }
 
-async function assetDirectory(vaultId: string, durable = false): Promise<void> {
-  const dir = join(vaultDir(vaultId), 'assets')
-  await ensureDirectory(dir, durable)
-  if (!(await lstat(dir)).isDirectory()) throw new OkfValidationError('assets must be a real directory')
-}
-
 /** Shared with ordinary asset writes: compare under the same key lock, then atomically replace/remove, never truncate. */
 export async function compareAndSetAsset(
   vaultId: string,
   fileName: string,
   expected: string | null,
   proposed: Buffer | null,
+  maxReadBytes = Infinity,
 ): Promise<boolean> {
-  if (!isSafeAssetName(fileName) || fileName.startsWith('.')) throw new OkfValidationError('unsafe asset filename')
+  if (!isSafeAssetName(fileName)) throw new OkfValidationError('unsafe asset filename')
+  await initializeAssetStorage(vaultId)
   return withKeyLock(`asset:${vaultId}/${fileName}`, async () => {
-    await assetDirectory(vaultId, true)
     const file = assetFile(vaultId, fileName)
-    const stats = await lstat(file).catch((err: NodeJS.ErrnoException) => {
+    let current: string | null = null
+    const handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW).catch((err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') return null
       throw err
     })
-    if (stats && !stats.isFile()) throw new OkfValidationError('assets must be regular files')
-    const current = stats ? assetBlobId(await readFile(file)) : null
-    // A retry after mutation but before its receipt must finish durability, not merely match bytes.
-    if (current === (proposed ? assetBlobId(proposed) : null)) {
-      if (proposed) {
-        const handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
-        try { await handle.sync() } finally { await handle.close() }
-      }
-      await syncDirectory(join(vaultDir(vaultId), 'assets'))
+    const desired = proposed ? assetBlobId(proposed) : null
+    if (handle) {
+      try {
+        const stats = await handle.stat()
+        if (!stats.isFile()) throw new OkfValidationError('assets must be regular files')
+        if (stats.size > maxReadBytes) return false
+        const hash = createHash('sha1').update(`blob ${stats.size}\0`)
+        for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk)
+        current = hash.digest('hex')
+        // Retry after filesystem publication but before the DB receipt:
+        // verify the desired bytes and finish durability before acknowledging.
+        if (current === desired) await handle.sync()
+      } finally { await handle.close() }
+    }
+    if (current === desired) {
+      await syncDirectory(assetDirectory(vaultId))
       return true
     }
     if (current !== expected) return false
-    if (proposed) await atomicWrite(file, proposed, { mode: 0o600, durable: true })
+    if (proposed) await atomicWrite(file, proposed, { mode: 0o600, durable: true, shortTempName: true })
     else {
       await rm(file)
-      await syncDirectory(join(vaultDir(vaultId), 'assets'))
+      await syncDirectory(assetDirectory(vaultId))
     }
     return true
   })

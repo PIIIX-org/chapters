@@ -50,7 +50,7 @@ async function purgeVaultRecordLocked(vaultId: string): Promise<void> {
     const ids = (await tx.select({ id: notes.id }).from(notes).where(eq(notes.vaultId, vaultId))).map((n) => n.id).sort()
     for (const id of ids) await lockNote(tx, id)
     // Wait for admitted writers first, then scrub their results before FK SET NULL can unlink them.
-    await invalidateVaultGit(vaultId, tx)
+    await invalidateVaultGit(vaultId, tx, 'vault')
     await clearNoteRetention(tx, ids)
     await tx.delete(notifications).where(and(eq(notifications.entityType, 'vault'), eq(notifications.entityId, vaultId)))
     await tx.delete(vaults).where(eq(vaults.id, vaultId))

@@ -276,7 +276,7 @@ fields to responses; the store reads them with SQL (`store-tx.ts`
   (projection rows, raised targets, a revision at every `seq`; renderer
   version bumps) → the projector drains → `listen` → in the background,
   the **orphan sweep**: `*.md` under `vaults/<id>/`,
-  outside `assets/` and every dot-directory, with no `projected_files` row
+  outside dot-directories (including `.assets/`), with no `projected_files` row
   and no owner in the DB (a live note at the path, or the `dir_index` of a
   directory with live notes) is moved to `.orphans/<path>`, never deleted.
   Graceful shutdown: the relay flushes its stores, then the projector gets
@@ -988,7 +988,7 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   states fails CI. Tests that damage a note on purpose restore its file
   before they end, and tests that insert note rows without files delete
   their fixture vaults. It also reports
-  `orphan-file`: a `.md` file outside `assets/` and the dot-directories
+  `orphan-file`: a `.md` file outside dot-directories (legacy `assets/` is also excluded until its namespace migration completes)
   with no `projected_files` row, no live note at its path and (for an
   `index.md`) no live note under its directory, i.e. what the boot orphan
   sweep would move to `.orphans/` (#495). Shared helpers: `compareNoteFile`,
@@ -1063,8 +1063,8 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   (not in a dry run) it clears the leases of pending `file`/`dir_index`
   projections and store jobs and drains them, so a rename or trash move
   committed before the stop has moved its file. Then, for every vault
-  directory (or `--vault`), each `*.md` outside `assets/` and the
-  dot-directories: no live row → `createNote(…, { asImported: true })`
+  directory (or `--vault`), each `*.md` outside dot-directories:
+  valid `assets/` notes are included after attachment migration; no live row → `createNote(…, { asImported: true })`
   from the file (the frontmatter as given, no `timestamp` added; row,
   revision, links, projections, embedding job; the projector then adopts
   a file that already is a valid note as it is; one without `type`, which
@@ -1077,7 +1077,14 @@ Every share/membership mutation calls `emitPermissionChange()` (see
   `.crdt/<path>.bin` beside a created note is listed in `crdtBins` (the
   lost row's editor state; the doctor reports it if it differs). A
   directory with no vault row is skipped, or with `--owner <email>` gets
-  a vault row with that id (`Restored <id8>`). The real run holds the
+  a vault row with that id (`Restored <id8>`). Before the drain the real
+  run migrates every vault's attachment storage (#1139, as the boot
+  does); a vault whose `.asset-storage.json` is `rolled-back` is left as
+  it is: not migrated, not scanned, and kept out of the drain
+  (`excludeVaultsFromProjector`: its pending `file`/`dir_index`
+  projections and store jobs are neither lease-reset, claimed nor run, so
+  they stay queued). It is listed in `vaultsSkipped` (the dry run too),
+  so it never blocks the other vaults. The real run holds the
   exclusive instance maintenance lock (`holdInstanceLock('exclusive')`),
   so it refuses (exit 2) while a server or writing CLI is up; if the
   lock's connection drops it throws before the next create and after the
@@ -1573,18 +1580,26 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   - **No frontmatter in MCP hits** (#419): the MCP `search` handler drops `frontmatter` from every hit (it was
     42 % of a typical note hit's characters, measured in `mcp-search-hits.test.ts`: 665 to 387); `searchNotes` and
     the REST routes still return it, the client's search overlay shows its tags.
-  - **Query router** (#1060, `router.ts`): before the legs run, `searchNotes` asks `routeQuery` whether the query is
-    one identifier or one path (only without filters, with symbols for an identifier, at most 6 words). The term is
-    the one backticked token, or the one word left once the filler (`where is the ... defined`) is dropped. A path
-    term (a `/` or a file extension) finds repository files by path or file name and notes by path (with or
-    without `.md`); otherwise the symbol blocks whose bare name or `Class.name` equals the term in any spelling
-    `identifiers.ts` knows. Found: `route`, `retrieval_mode: "exact"`, hits (a symbol's lines, a file with
-    lines 1..end), `confidence: 1` for one, `ambiguous: true` for
-    several (at most 10), nothing fuzzy. Not found, or not routable: the hybrid path, byte-identical to before,
-    and no `route` in the answer. The issue's `retrieval_mode: "fallback"` is not used: it would lose which
-    channels answered; an unrouted answer says nothing instead. The structural route (callers, references) and
-    the MCP `route` override argument are not built: the first needs #1055, the second has no room in the reader
-    budget. `SearchNotesOptions.route: false` takes the hybrid path in tests.
+  - **Query router** (#1060, `router.ts`, `structural.ts`): deterministic exact names/paths and anchored
+    `who calls`, `callers of`, `what imports`, `references to`, `tests for`, `defined in` questions run before
+    retrieval. REST and MCP accept `route: identifier|path|structural|conceptual`; omitted means automatic.
+    `conceptual` bypasses lookup and preserves hybrid results and channel/degraded/index metadata. Automatic
+    filtered searches stay conceptual; explicit routes apply the same filters within the authorized scope.
+    Identifier lookup returns one span with `confidence: 1`, or exact candidates labelled by file/kind with
+    `ambiguous: true`, no fuzzy hits. Paths return the file/note with a bounded outline and its truncation.
+    Automatic dotted shapes try indexed paths before exact symbols; explicit overrides never switch routes.
+    Structural answers use existing code queries; resolved sites alone enter `results`, textual sites are
+    separate `textual` rows. Whole-file imports include modules without symbols. Ambiguous targets are shown
+    rather than guessed. Work and responses are bounded; `partial` reports omitted sites/results (the sentinel
+    site that proves `partial` is never returned).
+    `route` is present when the answer did not take the default conceptual path; absent means conceptual (a plain
+    conceptual answer, automatic or the `conceptual` override, pays no tokens for it). Bare words/typos without an
+    exact indexed symbol stay conceptual, preserving the original retrieval mode; probing them does not itself
+    classify them as identifiers.
+    Definition/backtick, path/structural, and forced-route misses, plus over-cap lookups, use `route: conceptual`, `attempted_route`,
+    `retrieval_mode: fallback`, and `underlying_retrieval_mode` retaining actual channels (`none` when an empty scope or
+    query leaves nothing to search). No miss counts as an exact success. Benchmarks count all four routes (a missing
+    `route` counts as conceptual) and attempted-route fallbacks separately. No server LLM or ranking/confidence expansion is involved.
   - **Fusion and exact matches** (#456): `searchNotes` and `findSymbols`
     merge candidate lists with Reciprocal Rank Fusion (`RRF_K = 60`) over a
     fixed window of `CANDIDATES = 30` rows per leg (the population the
@@ -1788,7 +1803,9 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   job for a seq the note has moved past is skipped (every write that moves
   `seq` queues that seq's job); the blocks are computed and only the texts
   whose `embed_key` none of the note's blocks has are embedded, outside any
-  transaction; one short transaction then locks the row, drops the result if
+  transaction; one short transaction then locks the row `FOR NO KEY UPDATE`
+  (excluding edits/deletes but allowing collab appends' foreign-key checks,
+  #1126), drops the result if
   an edit moved `seq` meanwhile, replaces the whole block set (upsert by
   `block_id`, `search/block-rows.ts`, shared with extraction) and records
   `notes.embedder_id` and `notes.chunk_version`. A frontmatter-only edit
@@ -2369,22 +2386,166 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   answer. Bare-array answers (the unbudgeted list tools) carry
   none: MCP's `structuredContent` is an object, and wrapping the array
   would make it differ from the text. A tool may declare `outputSchema`
-  (a loose zod object, so other keys pass): today only the eight
-  `runWrite` tools, with `WRITE_RESULT_SCHEMA` (`write-result.ts`:
-  `rev` number or null, `status` enum, `indexed` boolean; about 250
-  characters per tool in `tools/list`). The SDK checks it on every
-  successful answer, after the write committed, and a mismatch would
-  turn the answer into an `Output validation error`; the schema is
-  therefore the fields every write answer has (applied, merged,
-  conflicted, retry, dry run, replay, delete). Errors are the error
-  envelope (#439, below) in `content[0].text` without `structuredContent`:
+  (a loose zod object, so other keys pass). The eight `runWrite` tools
+  use `WRITE_RESULT_SCHEMA` (`write-result.ts`: `rev` number or null,
+  `status` enum, `indexed` boolean; about 250 characters per tool).
+  Stable read contracts live in `read-result.ts` (#957): `read_note`
+  requires numeric `rev`, `read_file` requires string `hash`, including
+  targets, outlines, unchanged answers and session references.
+  History/trash validate `truncated: false | {cursor: string | null}`;
+  `get_revision` validates its string `id` and `body`. Administrative
+  object reads validate their stable typed result field. These are
+  intentionally small, meaningful contracts, not empty object schemas:
+  omitted or mistyped identities fail the SDK's check. Every other
+  answer field is retained unchanged. The SDK validates successful
+  results; for writes that is after commit, so every applied, merged,
+  conflicted, retry, dry-run, replay and delete answer must fit.
+  Errors are the error envelope (#439, below) in `content[0].text` without `structuredContent`:
   the SDK server does not check an `isError` answer, but the SDK client
   checks any `structuredContent` against the listed outputSchema, error
   or not, so `{error}` there would fail on a write tool.
-  Read tools get no output schema until their shapes settle (#957,
-  #432). `test/mcp-structured-content.test.ts` covers each tool
-  family through the real client (which validates against the listed
-  schema), every write answer shape and the errors.
+  `test/mcp-structured-content.test.ts` covers these contracts through
+  the real client, read variants, every write answer shape and errors.
+  `test/mcp-tool-budget.test.ts` measures both actual profile payloads
+  and the smallest meaningful excluded schema prototypes.
+
+  **Read schema disposition (#433/#957).** Budgets are the current
+  reader **2,500 tokens** (tools/list + instructions, no prompts),
+  writer **4,500 tokens** (tools/list + instructions; prompts reported
+  separately), and admin tools/list **less than 43,000 characters**.
+  The 2,000/4,000 profile bounds in the original #957 text are obsolete.
+  No provider-cache hit is inferred from these byte counts.
+
+  | Tool(s) | Meaningful schema | Listing cost, characters |
+  |---|---|---:|
+  | `read_note` | required numeric `rev` | 117, declared |
+  | `read_file` | required string `hash` | 119, declared |
+  | `note_history`, `list_trash` | required false-or-cursor continuation | 273 each, declared |
+  | `get_revision` | required string `id`, `body` | 147, declared |
+  | both `get_*_graph_preference` tools | required boolean `include` | 126 each, declared |
+  | `get_vault_preferences` | required string `storageMode` | 133, declared |
+  | `repository_status` | required string `syncStatus` | 131, declared |
+  | `export_vault`, `export_note` | required string `zipBase64` / `markdown` | 129 / 127, declared |
+  | `lookup_user`, `audit_okf_conformance` | required string `id` / numeric `totalNotes` | 115 / 131, declared |
+  | `browse_vault` | required string `directory` | 129, excluded |
+  | `grep` | required numeric `scanned` | 125, excluded |
+  | `browse_repository`, `search`, `find_symbols`, `orient`, `graph`, `find_graph_path` | required false-or-cursor continuation | 273 each, excluded |
+  | `usage_report` | required boolean `enabled` | 126, declared |
+
+  The final measurement includes #1132 (`95e02f8a`), not a mixed
+  historical harness: reader tools/list 9,649 + instructions 311 =
+  **9,960 chars / 2,490 tokens**; writer 16,130 + 443 =
+  **16,573 chars / 4,144 tokens** (prompts 10,042 chars, reported
+  separately); admin tools/list **42,979 chars**.
+  Compared with the #1132 control alone (`95e02f8a`: reader 2,431
+  tokens, writer 4,085 tokens, admin tools/list 40,957 characters), read
+  schemas add 236 reader characters and all declared read schemas add
+  2,073 admin characters.
+  Admin would have been 43,030: a meaning-preserving 51-character trim
+  of `repository_status`'s description retains sync state/time, queued
+  or running extraction, exhausted retries/errors and the freshness
+  warning. This brings it below 43,000 without changing any manual.
+  After these additions, `grep`'s minimal schema would cost the reader
+  2,522 tokens, `browse_vault` 2,523, and each continuation schema
+  2,559: every excluded object read is measured against the **current**
+  bound. The permanent budget regression recomputes these values from
+  the actual SDK listing, so newly available headroom requires revisiting
+  the disposition. Native SDK contract verification: 17 tests across
+  structured-content, tool-budget and tool-schema; new read regressions
+  cover targets, outlines, grep, unchanged/session answers and invalid
+  typed identities. No provider model trial was run for this schema
+  change.
+  Bare-array read answers (`list_vaults`, `list_repositories`,
+  `list_vault_shares`, `list_repository_shares`, `list_teams`,
+  `list_team_members`, `list_notifications`, `list_graph_perspectives`)
+  stay deliberately unschema'd: MCP requires an object output schema
+  and object structuredContent. Wrapping them to claim coverage would
+  break the accepted wire contract. Errors remain text-only `isError`,
+  not a successful result union. No default response size or budget is
+  raised.
+- **Opt-in long-tail discovery (#431, ADR-004 D14 revisit).** The
+  measured control has 63 admin tools versus 15 writer tools; the 48
+  long-tail entries cost 25,063 characters on `be1581c5`, or 26,849
+  after #1132/#1135 schemas. These are definition bytes, not evidence of
+  provider cache hits or of how often an agent uses a tool. D14's
+  conditional deferral did not authorize breaking clients that load
+  callable functions only from `tools/list`.
+
+  A supporting custom loader opts in with **both** the version-1
+  experimental initialize capability `elara/tool-discovery` and
+  `Elara-Tool-Discovery: 1` on every HTTP POST. `routes.ts` builds a fresh
+  server per request; `server.ts` keeps no mutable token negotiation.
+  A second client using the same token without that header retains the
+  legacy catalog. Invalid header versions and a header-only initialize
+  fail. Reader/writer profiles and explicit allow-lists ignore discovery
+  and retain their exact tools; the nine-tool study allow-list stays
+  `search`, `find_symbols`, `read_file`, `browse_repository`,
+  `repository_status`, `graph`, `find_graph_path`, `grep`, `orient`.
+
+  Eligible opt-in admin connections list their reader/writer core plus
+  `tool_search`. It lexically returns bounded actual SDK descriptors
+  from the same registry, filtered by `listedTools` (capability, profile,
+  scope/allow-list and live pin permissions). A client installs those
+  returned schemas in its model's callable tool list. The subsequent
+  call uses standard `tools/call(originalName, arguments)` and the same
+  registry validation and handler, including output validation and error
+  envelopes. Discovery neither executes a generic payload nor widens a
+  token. The new `connection` scope covers registry metadata only.
+  Default clients still register the original catalog; the optional
+  metadata tool is absent unless negotiated.
+
+  The discovery definitions version hashes the full eligible registry,
+  including undisplayed long-tail descriptors, plus prompts/instructions.
+  Changing a long-tail schema must invalidate the negotiated catalog
+  fingerprint even when its bootstrap list does not mention that tool.
+  Both manual copies explain the loader requirement. SDK consumer
+  regressions cover shared-token/default isolation, strict discovered
+  calls, profiles/allow-lists, live pin permissions and bad negotiation.
+  Arbitrary LLM clients still need a descriptor loader; successful SDK
+  calls alone do not establish automatic model availability. The native
+  custom-loader proof below exercises that missing consumer step in a
+  separate fixture, outside the unchanged study allow-list. Independent
+  GPT review, fresh CI/lab and fingerprinted controls remain closure gates.
+  Actual HTTP SDK measurement on the repaired #1132/#1135 stack:
+  legacy admin **42,979 chars / 63 tools**, opted-in admin
+  **16,997 chars / 16 tools**, the same 443-character instructions.
+  The bootstrap descriptor costs 867 characters against the 26,849
+  long-tail bytes removed, for **25,982 fewer tools/list characters**
+  (about 6,496 tokens by the budget's estimate). This is a definition
+  payload comparison, not measured provider cache reuse.
+  Five new SDK cases plus the hidden-long-tail definition-version case
+  passed across scoped runs. The first pinned-fixture run assumed HTTP
+  201 for an API that returns 200; correcting that fixture expectation
+  allowed the live permission checks to execute and pass. No production
+  refusal or permission condition was relaxed, and no passing full batch
+  was rerun to print green.
+
+  **One actual native consumer proof (2026-11-13).** Combined source
+  `d5c1a125` (repaired cache `72961238`, #1135, #1136 and discovery)
+  used frozen native adapter `043123fe`, coordinator-declared harness
+  `9d8ab373f94362d3`, and recorded hashes of the actual imported files.
+  `openai-codex/gpt-6.1-sol` over ChatGPT/omp RPC completed one episode:
+  **answered, 5 turns, 5 actual MCP calls, 24,767 input / 415 output
+  tokens, tokensEstimated=false**. Its calls were `tool_search`,
+  `tool_search`, `note_history`, `tool_search`, `get_revision`; the
+  model returned the unpredictable code from the earliest revision,
+  absent from the current note and the prompt. The loader appended
+  actual returned Tool descriptors to the same mutable model toolset
+  and dispatched each original name through the same SDK client.
+  No commentary JSON was extracted for execution and no result was
+  fabricated. Raw phases/events, actual MCP requests/results, fixture
+  source, schemas, source hashes, provider provenance and original usage
+  remain in `.proof/431-native-discovery/f40a1621-d0d8-4871-9f33-561a8b0f341b/`.
+  Reported cache-read/write counters were zero in all turns; no cache-hit
+  inference follows. The observed calls left 46 long-tail descriptors unused (24,842
+  serialized definition characters); this is inventory cost relative
+  to that task, not a separately run legacy-provider comparison.
+  The combined SDK inventories measured 42,997 legacy / 17,015
+  opt-in characters (the same 25,982-character reduction). This single
+  feature-mechanics episode does not substitute for the five-run
+  baseline, pool with parent T1, or close phase-3/issue gates.
+  The owned fixture DB, server, temporary test and test cache were
+  removed; raw evidence stays for independent review.
 - **Instructions** (#435): `instructionsFor(profile)` in
   `mcp/instructions.ts` is the `initialize` result's `instructions`
   (`new McpServer(info, {instructions})` in `buildServer`): one constant
@@ -2936,6 +3097,88 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `truncated.narrow` (on an outline answer, the `grep` hint only); smaller documents answer as before, so the
     premise benchmark's reads do not change unless one of its files is
     that large. `test/mcp-read-targets.test.ts` covers it.
+  - **Result-handle acceptance audit (#423).** The accepted #1078 D5
+    amendment covers document reads; it left search/graph/symbol rankings
+    recomputed and non-greppable. `result-handle.ts` completes their
+    stateless counterpart: optional literal `grep` (smart case, 1-200
+    characters) filters typed string values before budget paging. It
+    never means the regex syntax of the separate `grep` tool. With no
+    filter the answer shape stays unchanged.
+
+    | Criterion | Document reads | Search / graph / find_symbols |
+    |---|---|---|
+    | Handle | original read arguments, `rev`/`hash`, `total_lines`, cursor | original query/scope/filter arguments and cursor |
+    | Grep | `targets: [{grep}]`, full document before paging | literal `grep`, complete bounded computed typed sections before paging |
+    | Access | live checks on each fetch; cursor grants none | same strict tool capability/profile/allow-list and resource checks on each fetch |
+    | Expiry / storage | none under accepted D5; no result store | none; recompute, no stored result or cross-account state |
+    | Snapshot | text hash guards document/target continuation | #680 cache key: resolved resources, content/index epochs, permission epoch, caller and derived versions; explicit filters/continuations reject concurrent mutation as `BUSY`; ordinary first pages retain uncached success without a bound snapshot; same-id text edits invalidate `CURSOR_STALE` |
+    | Budget / coverage | existing line-boundary renderer and ladder | same renderer; `filter.sections` reports scanned/matched/more per computed section; source-cap uncertainty forces non-false `truncated` with narrowing guidance |
+
+    Ordinary initial `search`, `graph` and `find_symbols` calls do not
+    acquire a new failure mode: an epoch race leaves their existing
+    successful uncached answer intact. Search still withholds `rev`
+    when its cache computation races or degrades, under #680/#682.
+    Only a stable computation stamps a snapshot-bound cursor. A
+    continuation with an old, missing or mismatched snapshot fails
+    `CURSOR_STALE` before the result handler runs; a legacy cursor
+    from an ordinary racing answer may therefore require restarting.
+    Explicit literal filters and continuations alone require a stable
+    computation and return retryable `BUSY` for a new in-flight race.
+    No default response shape, result budget or search-cache policy changes.
+
+    The wrapper scopes `BUSY` to the strict paths above and treats a
+    missing pre-compute snapshot as stale on continuations; no legacy
+    no-snapshot cursor is accepted. `test/mcp-response-envelope.test.ts`
+    separates ordinary from filtered races and asserts that no result
+    computation follows a stale content, permission or absent-snapshot
+    check. The snapshot binds every index epoch in scope and the
+    instance-wide permission epoch, so a share or revoke, a collaborator
+    edit, or background embedding/extraction work invalidates open
+    result cursors (`CURSOR_STALE`: run the first page again). A paging
+    walk that must stay on one snapshot lets derived indexing finish
+    first (`test/note-link-context.test.ts` flushes embeddings once
+    after seeding, before its first page).
+
+    A filtered reference-list cursor replays the first bounded source set
+    and then pages its matches; it cannot claim matches below its source
+    cap, and `find_symbols refs` scans only the first `limit` rows (at
+    most 50) of that set (`more: true` says so). Graph sections likewise
+    cover the graph computation's existing caps and the edges it
+    computed, not an unbounded database snapshot. `find_symbols
+    refs:explain` also keys the account's readable citing vaults. Empty
+    or overlong literal filters fail strict arguments.
+
+    `graph` with `grep` filters the whole computed node ranking before
+    `limit` bounds what is shown, so `filter.sections.nodes.scanned`
+    counts every computed node and `more` is true only for skipped
+    (capped) groups. Its edges are the edges among the shown nodes (at
+    most `limit` matching nodes, `derivedFrom: 'nodes'` in
+    `response.ts`) and are not filtered a second time: no shown edge
+    cites a node the filter dropped, and their coverage counts equal the
+    edges among those nodes. In the community view `grep` matches the
+    community records (their own strings), not their members' paths.
+    With `neighborsOf` the walk fetches one node past `limit` only to
+    say that more exist (`signal: true` in `response.ts`): the filter
+    neither searches nor shows it, so the first `limit` nodes are the
+    candidates (`scanned` counts them, `more: true`), and a centre that
+    does not match is dropped like any other node, together with its
+    edges. `grep` matches every string value of an item, ids included,
+    so a short hex-like literal can match unrelated rows.
+    `test/mcp-response-envelope.test.ts` covers filtered next-page
+    consumers, same-id edits, source-cap honesty, graph grep with
+    `limit` (node list and `neighborsOf`, with and without `edgeTypes`)
+    and filtered refs access.
+
+    Descriptor cost: the three literal arguments are paid for by
+    shorter `read_note`, `find_symbols`, `graph` and `find_graph_path`
+    descriptions that keep rev/edit-base, untrusted-content, declaration
+    search/ranges/snippets, graph modes/edge evidence, and ordered
+    path/distance semantics; the full tool manuals retain their per-tool
+    detail and both reference copies document literal filtering. The
+    budgets (reader 2,500 and writer 4,500 tokens, admin tools/list
+    under 43,000 characters) and the current sizes are measured by
+    `test/mcp-tool-budget.test.ts` and `test/mcp-tool-schema.test.ts`,
+    not restated here.
   `search` and `graph` call
   the exact same `searchNotes()`/`buildGraph()` functions the REST
   routes use — one implementation, not a parallel MCP-specific path.
@@ -2980,8 +3223,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   access ("a copy outlives later revocation" — read access isn't
   enough). Sessionless, time-boxed **export links**
   (`EXPORT_LINK_TTL_HOURS`, default 24h) for sharing outside the app.
-  Entries: live notes as OKF `<path>.md`, `assets/<name>`,
-  `manifest.json` (`formatVersion` 1, `vaultId`, `name`, `mergeable`,
+  Entries: live notes as OKF `<path>.md`, `.assets/<name>` attachments,
+  `manifest.json` (`formatVersion` 2, `vaultId`, `name`, `mergeable`,
   `shares`) and, per
   note live or trashed, `.elara/history/<noteId>.json`
   (`vault-history.ts`, #499): `path`, `createdAt`/`updatedAt`/`deletedAt`
@@ -2996,10 +3239,11 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   vault with a **new** owner and new IDs, re-validates every note
   through the normal OKF write path, best-effort per note (an invalid
   note is skipped and reported, not fatal). Refused with 400 before any
-  vault is created: a manifest `formatVersion` newer than the server's,
-  or a history file with a time that is not a real UTC instant. Assets
-  keep their archive file names (unsafe names, `.` and `..` are
-  dropped); `.md` files under `assets/` stay attachments, never notes. Trashed notes are recreated in
+  vault is created: an unsupported manifest version, duplicate/unsafe ZIP paths,
+  a legacy entry claimed as both note and attachment, or an invalid history time.
+  Attachments retain names; unsafe names are refused, never guessed or overwritten.
+  V2 `.assets/*.md` stay attachments; legacy unversioned/v1 reads `assets/`.
+  V2 `assets/design.md` is an ordinary valid note, disjoint from `.assets/design.md`. Trashed notes are recreated in
   the trash, then live notes; each note with a history file gets the
   archive's revisions (new ids, original order and times; a revert's
   `sourceRevisionId` is pointed at the new id of the archived revision
@@ -3117,15 +3361,18 @@ is the history record, not Chapters).
 Authenticate with an MCP token as a Basic password or Bearer header.
 Use `git -c http.extraHeader="Authorization: Bearer $ELARA_TOKEN" clone
 https://<host>/git/vaults/<vaultId>`; keep tokens out of URLs, shell
-history and `.git/config`. Account tokens need live vault access; a vault
-pin must match the URL; repository pins get the same 404 as missing vaults.
+history and `.git/config`. Vault UUID URLs must be canonical lowercase.
+Account tokens need live vault access; a vault pin must match the URL;
+repository pins get the same 404 as missing vaults.
 An allow-list must include `read_note`. A push also needs write capability,
-writer-or-admin profile and live vault edit permission on its own POST.
+writer-or-admin profile and live vault edit permission. These checks repeat
+before each operation and final ref publication, not just discovery.
 Each changed note needs its corresponding create/edit/delete tool in an
 allow-list; deletion retains `delete_note`'s admin-profile requirement.
 
-**Edits keep history; explicit Purge removes server-managed content from
-history/indexes/caches synchronously before further reads.** This
+**“edits keep git history; Purge removes content everywhere, including history”**.
+For the selected note/revision/vault, server-managed history, indexes,
+retained answers and Git objects are removed before further Git reads. This
 [owner decision](https://github.com/PIIIX-org/chapters/issues/1087#issuecomment-6851891773)
 supersedes #1088's snapshot-only rule. The bare remote at
 `DATA_DIR/git-remotes/<vaultId>.git` retains incoming OIDs. A canonical
@@ -3145,24 +3392,69 @@ Pushes index real packs in disposable quarantine with read-only trusted
 base objects. Git verifies hashes/deltas/connectivity; the importer checks
 the complete incoming trees before mutation. Supported limits: SHA-1 packs
 v2/v3; one non-deleting, fast-forward `refs/heads/main` update; 32 commits,
-4096 packed objects/tree files, 128 changed files, 16 MiB HTTP/inflated
-request, 8 MiB per object and 64 MiB inflated pack/delta work or tree.
-Notes also obey the store's body/frontmatter limits and canonical slug
-paths; Git attachments use direct safe names under `.assets/` (disk/API
-paths stay `assets/`). Dot segments cannot name notes, so valid
-`assets/design` and nested notes cannot collide with attachments. Regular `100644`
-files only: no symlinks, executable bits, submodules or Git configuration.
-Upload negotiation has a 1 MiB gzip/plain cap; child processes have a 15 s
-deadline and bounded output, no hooks/global Git config/server secrets.
-Two imports may run across different vaults. Store imports stop between
-operations after 30 s and can resume from receipts.
+4096 untrusted pack entries or tree files, and 128 distinct file operations
+per `(vault, connection, incoming commit)` attempt. HTTP/decompressed
+receive requests are at most 16 MiB, individual objects 8 MiB, and expanded
+pack/delta work or rendered trees 64 MiB. Export counts files and source
+body/frontmatter/raw-format/path bytes in SQL before materialising rows;
+source bytes are also capped at 64 MiB. Paths are at most 1024 UTF-8 bytes,
+with a 1 MiB tree-listing budget.
+
+Notes obey existing body/frontmatter limits and canonical slug paths.
+`.assets/` is the reserved Git attachment namespace, not an ordinary note
+directory; valid `assets/design` and nested notes stay unchanged. Git-only
+attachment encoding escapes uppercase, leading/trailing dots and Windows
+device names with canonical uppercase `%XX`, decodes once and rejects
+aliases/separators/traversal before mutation. The codec escapes literal
+`%`, but imports still enforce the shipped `isSafeAssetName` policy:
+ASCII letters/digits/`._-`, no lone `.` or `..` substring. Percent and
+Unicode names remain unsupported. Physical files stay under
+`vaults/<id>/.assets/`; HTTP `/assets/<name>` names are unchanged.
+If escaping exceeds a 255-byte basename, `%00` framing and bounded `x…x`
+chunks keep every Git path component portable without truncating names.
+The framing is canonical and cannot alias a supported physical filename.
+Asset atomic writes use short, private `..` staging names, excluded from
+asset lists and Git export, so 255-byte names neither overflow a temp
+basename nor leak an upload's intermediate bytes.
+Older unencoded special-name Git paths are rejected, not guessed:
+fetch/rebase onto the encoded export before pushing. Regular `100644`
+files only: no symlinks, executable bits, submodules or imported Git config.
+
+Admission reserves at most two Git requests globally **before body
+parsing**, including requests queued on a vault or sending a response.
+Authentication/body arrival has a 15 s deadline; admitted work shares a
+60 s monotonic budget. Git children have at most 15 s, bounded output,
+one pack thread, bounded delta/window caches and no hooks, global config,
+server secrets or network protocols. Timeout kills the subprocess group.
+Store imports also stop between operations after at most 30 s. A failed
+ref publication gets one separate, bounded 15 s rollback window.
+
+Retained mappings and Git retry receipts have **no time-based expiry**.
+Per-vault admission limits are 4096 mappings, 65,536 operation/tombstone
+rows and 256 MiB of accounted metadata (`pg_column_size` payloads plus
+path bytes and fixed operation overhead). A manifest is at most 4 MiB;
+each operation reserves 8192 bytes. Git note proposals are bounded by
+4096 revisions/256 MiB body+frontmatter bytes; binary proposals by
+4096 files/128 MiB. SQL aggregates and bounded directory scans count
+crash-orphaned evidence too. Before any note, asset or proposal mutation,
+an import allows for one maximum-sized mapping, all pending receipts and
+worst-case proposed payloads. No age eviction or implicit proposal TTL
+frees capacity; full capacity refuses new admissions without changing
+content. Completed-operation retries do not reserve those effects again.
+This allowance is protected by the **single-process per-vault barrier**,
+not a distributed reservation service. Run one server process per shared
+Git data directory; database retention fences do not make Git multi-writer.
 
 For note edits the importer resolves the served UUID/revision and invokes
 `writeThroughCollab(base)`. Its three-way structural diff keeps concurrent
 typing, or stores an attributed `proposal` revision and leaves live text
 alone. Recreated paths never alias the served note. Git path moves import
-as a create plus a base-checked trash operation. Destructive comparisons
-fence CRDT appends through COMMIT. Asset additions/replacements/removals
+as a create plus a base-checked trash operation, with separate receipts
+and normal create/delete permissions. Unlike `rename_note`, a move does
+not preserve the note UUID or rewrite links; no copy/move heuristic
+reassigns identities. An edited or replaced source becomes a proposal,
+never a trash of the replacement. Destructive comparisons fence CRDT
+appends through COMMIT. Asset additions/replacements/removals
 compare blob identities under the same lock as ordinary asset uploads;
 atomic replacement avoids truncation and symlink following. Git attachment
 mutations synchronize the completed file before rename and the containing
@@ -3174,10 +3466,23 @@ as a conflict. An existing applied receipt skips replay of that mutation.
 Cross-note imports are **non-atomic**. `vault_git_push_operations` receipts
 commit with each note operation. Conflicts/failures return Git `ng`, name
 the report, and leave committed operations in place; retry skips those
-operations instead of overwriting subsequent human edits. No rollback
-pretends to undo concurrent typing. Git object promotion/ref CAS and
-success acknowledgement follow durable store operations, never precede
-them. Quarantine is removed on success or failure.
+operations instead of overwriting subsequent human edits. No note/asset
+rollback pretends to undo concurrent typing. After durable store effects,
+the server builds a real canonical child and its identity map privately.
+Compact, trusted parent/timestamp metadata reconstructs the same OID after
+quarantine loss; untrusted commit messages/fingerprints never establish an
+Elara state claim. Packs are atomically renamed, synced and made discoverable
+pack-before-index. Final publication rechecks permission; note purge epochs
+are checked under the existing shared vault database fence. Actual incoming
+`main`, then its optional real FF child, are synced before success ACK.
+Readers share the barrier and cannot observe the intermediate ref.
+
+If publication fails, CAS rollback restores the unacknowledged ref without
+undoing durable note/asset effects. A successful rollback returns honest
+Git `ng` with the partial-effects report. Failed rollback returns **HTTP503,
+uncertain outcome**, not a false `ng` or success; fetch to discover the real
+retained ref before retry. Quarantine is removed on ordinary completion;
+startup removes abandoned quarantines after a crash.
 
 `GET /git/vaults/:vaultId/pushes/:commitId` exposes this token's applied
 and conflicted operations to a writer with current edit access. Follow
@@ -3193,6 +3498,14 @@ write answers with content-free effect tombstones (a same-key retry cannot
 resurrect the purged write within its original 24 h window), drains accepted
 collab appends without holding note locks, compacts durable CRDT state and
 evicts loaded documents. Search cache generations reject in-flight fills.
+Git receipt tombstones are separate from that existing MCP 24 h contract:
+they retain only content-free replay fences with **no expiry**. Note purge
+redacts receipts for that note; revision purge redacts only matching
+revision/proposal payloads, including a proposal committed before its
+receipt. A mixed attempt is explicitly invalidated with a per-vault
+commit/connection tombstone. Unaffected note proposals and binary
+downloads remain available; note/revision purge does not erase unrelated
+proposal evidence. Whole-vault purge removes all its proposal artifacts.
 The internal `notes.purge_epoch` does not change the public `rev`. Reads and
 committed writes capture it before delayed retention callbacks. Retention
 writers take the database vault-shared fence before the note mutex and
@@ -3805,13 +4118,24 @@ crosses accounts (a 64-bit key is not where one account's rows stand in for
 another's), and another account's identical file is embedded again. A block's embedded text includes the file's path, so the same content at another path embeds again (sharing serves clones and forks, not moved files). The index is on `embed_key` alone: the account filter is a join, not an index column, so `(embed_key, container_id)` would not narrow it, and a text held by many repositories costs one row scan per holder, bounded by the repositories' count. A reused
 vector counts as new to the file for the semantic edge refresh (#1007), like
 an embedded one. `parsed()` keeps the symbols, imports and sites of a content
-in this process (2,000 entries, least recently used out), keyed by
+in this process, keyed by
 `EXTRACTOR_VERSION`, the language label, the grammar the extension selects
 and the content hash, so a second repository or branch with the same blob is
-not parsed again; `parseCacheStats` counts parses and reuses. A sync with no
+not parsed again. It is bounded by 2,000 entries and by bytes (#1148):
+`estimateExtractionBytes` sizes a result as two bytes per string character
+plus a fixed overhead per symbol, import and site (a cheap over-estimate, no
+serialization; a retained result's strings are first copied so they own their storage, because a name the parser cut from a 1 MiB file would otherwise keep the whole file alive, 0.75-0.9 MB per Python, Rust or Java result measured), and least recently used entries go until the total is within
+the budget, 64 MiB by default (`ELARA_PARSE_CACHE_MB`, a positive whole number
+of MiB, at most 1 TiB, read in `blob-cache.ts`; anything else warns at boot and uses the default). A result estimated
+over `PARSE_CACHE_ENTRY_BYTES` (4 MiB, or the budget when that is smaller) is
+returned to its caller and **not retained**, so the next call parses it again;
+it does not push out other entries. `parseCacheStats` counts parses, reuses,
+`skippedLarge` (results not retained) and the estimated `bytes` held;
+`elara_cache_lookups_total{cache="blob_parse"}` still counts a skipped result
+as a miss and its next lookup as another miss. A sync with no
 change parses and embeds nothing and a one-file change re-processes one
 file (#684 part A, `test/repository-git-mirror.test.ts`);
-`test/blob-sharing.test.ts` and `test/blob-parse-cache.test.ts` cover this part.
+`test/blob-sharing.test.ts` and `test/blob-parse-cache*.test.ts` cover this part.
 
 **Code edges** (`code-edge-rules.ts`, `code-edges.ts`, table `code_edges`,
 migration 0061, #469, ADR-004 §2.8): the symbol-level edges #470

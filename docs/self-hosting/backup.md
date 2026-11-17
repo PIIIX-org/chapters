@@ -2,13 +2,14 @@
 
 Chapters stores its state across two locations:
 1. **PostgreSQL Database (`db-data` volume)**: the authority for every note (body, frontmatter, every revision; since ADR-003 S2a), plus users, teams, access control, metadata, repository indexing, security events, notifications, and vector embeddings.
-2. **Disk Filesystem (`chapters-data` volume)**: attachments (`assets/`, which have no database rows), local repository mirrors, vault Git remotes (`git-remotes/`, #677/#1087: retain real accepted OIDs/history; include with a database/data-volume backup if clients must keep their existing Git bases), Git repository mirrors (`git-mirrors/`, #684: rebuildable cache; see [checklist.md](checklist.md) §6), binary push proposals (`vaults/<id>/.git-proposals/`) and Markdown projections of your vaults. Since S2a the database remains the note authority. A hand or `git` edit of a projected `.md` file is not imported; use the authenticated vault Git endpoint to push changes.
+2. **Disk Filesystem (`chapters-data` volume)**: attachments (`vaults/<id>/.assets/`, which have no database rows), their `.asset-storage.json` migration audit and `.asset-storage-ready` marker, local repository mirrors, vault Git remotes (`git-remotes/`, #677/#1087: retain real accepted OIDs/history; include with a database/data-volume backup if clients must keep their existing Git bases), Git repository mirrors (`git-mirrors/`, #684: rebuildable cache; see [checklist.md](checklist.md) §6), binary push proposals (`vaults/<id>/.git-proposals/`) and Markdown projections of your vaults. Since S2a the database remains the note authority. A hand or `git` edit of a projected `.md` file is not imported; use the authenticated vault Git endpoint to push changes.
 
 > **CRITICAL**: The database dump is the backup that matters for notes: the files alone no longer rebuild a vault exactly (revisions and anything not yet projected are only in the database). Back up both: the database, and the data volume for attachments.
 
-**Edits keep history; explicit Purge removes server-managed content from history/indexes/caches synchronously before further reads.**
-Purge removes the vault's entire served Git object database, including
-unreachable objects; the next clone rebuilds current notes/assets.
+**“edits keep git history; Purge removes content everywhere, including history”** ([owner decision](https://github.com/PIIIX-org/chapters/issues/1087#issuecomment-6851891773)).
+Explicit Purge removes server-managed content from history/indexes/caches
+synchronously before further reads, including the entire served Git object
+database and unreachable objects; the next clone rebuilds current notes/assets.
 Existing clients may need fetch/rebase or a new clone. The server cannot
 erase external already-downloaded clones, exports or independently kept
 backups. Restoring an older backup can restore its older content: protect
@@ -16,6 +17,13 @@ and dispose of backup copies according to your retention policy.
 The portable instance backup carries note state, not Git history/import
 retry metadata. Losing or omitting `git-remotes/` does not lose live note
 text, but loses accepted Git history and requires clients to refresh bases.
+Git served-base maps and import retry fences do not expire by age. Capacity
+admission refuses new work rather than deleting retained bases or pending
+evidence. Note/revision purge redacts only affected proposal/receipt
+payloads; unrelated note and binary proposals remain reviewable. The Git
+read/write/ref barrier assumes one server process per shared data directory.
+
+> **PUBLIC BETA BLOCKER #1139:** before upgrading attachment storage, stop every app/writing CLI and take a fresh verified backup of both stores. Follow [migration.md](migration.md#attachment-storage-upgrade-1139); deployment requires separate owner approval. Vault ZIP v2 uses `.assets/` attachments, while HTTP `/assets/` names and full-instance backup logical asset entries remain unchanged. Keep the raw volume backup to preserve migration audit/recovery files; logical instance restores reconstruct attachment storage, not the original migration audit.
 
 ---
 
@@ -129,16 +137,29 @@ Every revision of every note is kept until someone purges it (`purge_revision`, 
 
 ### Restoring via CLI
 
-The CLI runs inside the app container, so the server must be running (`docker compose up -d`) on the new, empty database and data volume:
+Restore is **offline**: stop every server or writing CLI using the target database, including other replicas. The CLI runs in a short-lived container with the app's configuration and data mount; do not start the server first. Keep PostgreSQL running.
+
+- **Fresh database and data volume:** provision the empty target and its app configuration first. The CLI runs migrations itself. Do not start the app or complete setup before restoring.
+- **Fresh database, kept data volume:** keep the original data mount attached to the one-off container. The database must still have no users. Restore prepares attachment storage before projecting note files; differing attachments are preserved and reported in the plan. Take a separate copy of the kept volume before applying. Do not delete it to make a restore pass.
+
+Both procedures use the same commands below. `./backup.zip` is a host-side archive; the read-only bind makes it available to the one-off container, not to a running server. Its file permissions must allow the image's `node` user to read it without making the archive public.
 
 ```bash
+docker compose stop app
+docker compose up -d db
 # Check the archive and see the plan, writing nothing:
-docker compose exec app pnpm restore-backup --dry-run /path/to/backup.zip
-# Restore:
-docker compose exec app pnpm restore-backup /path/to/backup.zip
-# Then restart the app: embeddings are only computed when the server starts.
-docker compose restart app
+docker compose run --rm --no-deps -T --volume "$PWD/backup.zip:/restore.zip:ro" \
+  app pnpm restore-backup --dry-run /restore.zip
+# Apply while the app remains stopped:
+docker compose run --rm --no-deps -T --volume "$PWD/backup.zip:/restore.zip:ro" \
+  app pnpm restore-backup /restore.zip
+# Only after a successful restore; boot computes embeddings:
+docker compose up -d app
 ```
+
+An actual restore while a server is running exits **2** with `Restore failed: the instance is in use: ...; stop it first`. That maintenance fence is distinct from the empty-instance check below: stopping the server does not permit overwriting an instance that already has users. A dry run takes only a shared lease and never prepares attachment storage.
+
+Archive vault IDs must be canonical lowercase UUIDs, as exported by PostgreSQL. Noncanonical IDs are refused before planning or preparing files, so database normalization cannot select a different filesystem root.
 
 The restore runs in three steps:
 
@@ -219,7 +240,7 @@ docker compose run --rm app pnpm rows-from-files --owner you@example.com       #
 docker compose start app
 ```
 
-It refuses to run while the app is up (exit 2). It first finishes any file moves the app had not done when it stopped (a rename or a delete), so it never brings back a note that was renamed or deleted. It never overwrites a note that exists: one whose file differs is listed and left alone. Each note is created exactly as its file says, so the files stay as they are (a file with no `type:` line gets one from its folder and is rewritten, its original copied to `.conflicts/`). Folders whose vault no longer exists are skipped unless you pass `--owner <email>` (an existing user, such as the administrator you just created), which recreates them as `Restored <id>` vaults owned by that user (rename and share them afterwards). The report lists `.crdt` files left beside recreated notes (`crdtBins`): they hold the lost database's editor state; delete the ones `pnpm doctor` reports as `crdt-bin-differs`. Run `pnpm doctor` afterwards.
+It refuses to run while the app is up (exit 2). It first finishes any file moves the app had not done when it stopped (a rename or a delete), so it never brings back a note that was renamed or deleted. It never overwrites a note that exists: one whose file differs is listed and left alone. Each note is created exactly as its file says, so the files stay as they are (a file with no `type:` line gets one from its folder and is rewritten, its original copied to `.conflicts/`). Folders whose vault no longer exists are skipped unless you pass `--owner <email>` (an existing user, such as the administrator you just created), which recreates them as `Restored <id>` vaults owned by that user (rename and share them afterwards). A vault whose attachment storage was rolled back for an older image (#1139, [migration.md](migration.md#no-clobber-rollback)) is skipped too and listed with that reason: nothing in its folder is written, moved or imported, and its unfinished file moves and other queued file work stay queued as they are. The other vaults are still rebuilt. The report lists `.crdt` files left beside recreated notes (`crdtBins`): they hold the lost database's editor state; delete the ones `pnpm doctor` reports as `crdt-bin-differs`. Run `pnpm doctor` afterwards.
 
 ### Files Elara set aside
 
@@ -367,7 +388,9 @@ docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc
 - **Migration 0062 (rebase record, #891)** is additive: two nullable `bigint` columns on `note_crdt`, `rebase_client` and `rebase_clock`: the Yjs client id and clock of the newest items a rebase wrote (a row changed behind the store, merged into the note's CRDT state at boot, on a write or when the editor loads the note). It rewrites no row, and every note starts with none recorded. The relay refuses a tab that lacks those items and holds typing it never got, with reason `note-rebased`, and the editor starts over and offers that tab's text instead of merging it. Older code runs on it with **no SQL**: it never reads or writes the columns, so a rebase it does while you run it is not recorded and a tab left open across it can still double the rebased text after you upgrade again, as before 0062. The database dump of §1 carries the columns; instance backups carry no CRDT state, so they are unaffected.
 - **Migration 0063 (index history, #471)** is additive: `repositories.version_seq` (integer, default 0) and two tables, `repository_versions` (the commit, tree hash and time of each index version a sync recorded) and `repository_changes` (the paths each version added, modified or deleted), deleted with their repository. Every existing repository that has been synced gets one baseline version from its recorded commit and tree; nothing else is rewritten. Older code runs on it with **no SQL**: it never reads or writes them, so while it runs no version is recorded and `changed_since` (newer code) lists nothing for the syncs in between; the rows stay until you upgrade again, and the files older code's syncs changed are not listed by the newer code's `changed_since` (its next sync lists only what that sync changed).
 - **Migration 0064 (code block vector index, #684)** is additive: the partial index `blocks_code_embed_key_idx` on `blocks (embed_key)` for code blocks that have a vector. It rewrites no row. Older code runs on it with **no SQL**: it never reads the index, and it only adds a little to its code block writes. The plain `CREATE INDEX` takes a `SHARE` lock on `blocks` at boot, so extraction and note embedding writes wait while it builds on a large table (no `CONCURRENTLY` inside the migration transaction; the same as 0061).
-- **Migration 0065 (vault Git pushes, #677/#1087)** adds private snapshot identity/revision maps, per-operation import receipts and internal `notes.purge_epoch` (unchanged public `rev`). Revision purge increments that epoch and clears retained plaintext inside its deletion transaction; delayed retention writers reject stale epochs under the same database note mutex. A vault-wide database fence precedes note mutexes for both writers and whole-vault purge. The write-idempotency note FK becomes `ON DELETE SET NULL`: content-free effect tombstones retain hashes/keys through deletion until the existing 24 h expiry. Git attachments use `.assets/` while disk/API paths remain `assets/`; acknowledged mutations sync bytes and directory entries before recording receipts. Older code lacks these purge boundaries; disable vault Git access before rollback. Database/data-volume backups preserve metadata and Git objects together; portable instance backups omit Git/import retry metadata and caller caches.
+- **Migration 0065 (vault Git pushes, #677/#1087)** adds private served-base maps, compact indexed export-recovery metadata, operation/replay receipts and internal `notes.purge_epoch` (unchanged public `rev`). Git maps and retry fences have no time-based expiry; full quota refuses new admissions. Revision purge increments that epoch and clears retained plaintext inside its deletion transaction; delayed retention writers reject stale epochs under the same database note mutex. A vault-wide fence precedes note mutexes for writers and whole-vault purge. The write-idempotency note FK becomes `ON DELETE SET NULL`: content-free MCP effect tombstones retain hashes/keys through deletion until the existing MCP 24 h expiry. Git-only attachment encoding does not change physical `.assets/` or HTTP `/assets/` names/policy. Acknowledged mutations sync bytes and directory entries before completion receipts. Older code lacks these purge boundaries; disable vault Git access before rollback. Database/data-volume backups preserve metadata and Git objects together; portable instance backups omit Git/import retry metadata and caller caches.
 - **Migration 0026 (revision compaction, #501)** adds three nullable columns to `note_revisions` (`body_delta`, `delta_base_id`, `body_bytes`), a check on them that older code never touches, a foreign key that refuses to delete a revision others are stored against, a table `note_revision_compaction` (how far each note's history has been compacted; older code ignores it), and two SQL functions. Older code records and lists revisions with no SQL, but it reads every revision's `body` column directly, and a compacted revision's `body` is empty, so it would show and revert to empty revisions. **Before starting older code, store every revision whole again**: step 3 of the procedure in the 0021 entry above (with the newer app stopped, so no compaction runs; this only adds back the space compaction saved).
 
   Older code's `purge_revision` of a revision others are still stored against fails instead of losing them (after step 3 there are none). When you upgrade again, the newer code compacts the history again (the `DELETE` lets it start from the oldest revision). An instance backup made by the newer code holds every body whole and restores on older releases (subject to the 0024 note above).
+
+  **Attachment exception (#1139):** older images still cannot safely represent a valid `assets/` note and an attachment at the colliding legacy path, even though an instance backup has disjoint logical entries. Restore those backups with the fixed image, not an older one. Follow the no-clobber rollback gate in [migration.md](migration.md#no-clobber-rollback); a nonzero/conflicting result is not permission to start an old image.

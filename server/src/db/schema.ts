@@ -1170,7 +1170,10 @@ export const vaultGitSnapshots = pgTable(
     manifest: jsonb('manifest').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.vaultId, t.commitId] })],
+  (t) => [
+    primaryKey({ columns: [t.vaultId, t.commitId] }),
+    index('vault_git_snapshots_prepared_parent_idx').on(t.vaultId, sql`((${t.manifest}->'prepared')->>'parent')`),
+  ],
 )
 
 /** An applied note receipt is committed atomically with that note's store write. */

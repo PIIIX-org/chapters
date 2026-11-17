@@ -7,6 +7,7 @@ import { checkRateLimit } from './rate-limit.js'
 import { rateLimitedError } from './errors.js'
 import { noteTransportLimit } from '../notes/size-cap.js'
 import { acceptClientEvents } from '../usage/routes.js'
+import { TOOL_DISCOVERY_HEADER } from './tool-discovery.js'
 
 /**
  * MCP endpoint: stateless Streamable HTTP — a fresh server+transport per
@@ -42,7 +43,18 @@ export function mcpRoutes(app: FastifyInstance) {
         .send({ jsonrpc: '2.0', id, error: { code: -32000, message: error.message, data: error } })
     }
 
-    const server = buildMcpServer(auth)
+    const discovery = req.headers[TOOL_DISCOVERY_HEADER]
+    if (discovery !== undefined && discovery !== '1') {
+      const body: unknown = req.body
+      const id = body && typeof body === 'object' && 'id' in body && (typeof body.id === 'string' || typeof body.id === 'number') ? body.id : null
+      return reply.code(400).send({
+        jsonrpc: '2.0', id,
+        error: { code: -32602, message: 'Elara-Tool-Discovery must be version 1 or omitted' },
+      })
+    }
+    // A new server is built for every POST. The header must accompany every
+    // request; initialize capabilities alone cannot persist negotiation.
+    const server = buildMcpServer(auth, discovery === '1')
     // A client's report of what the server cannot see (#678): a notification, recorded while the usage report is on.
     acceptClientEvents(server, auth)
     const transport = new StreamableHTTPServerTransport({

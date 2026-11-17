@@ -1,11 +1,25 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { inflateSync } from 'node:zlib'
+import { AsyncLocalStorage } from 'node:async_hooks'
 
 // Limits apply before Git sees an untrusted pack, including delta instructions, not just HTTP bytes.
-export const PACK_LIMITS = { request: 16 * 1024 * 1024, object: 8 * 1024 * 1024, expanded: 64 * 1024 * 1024, objects: 4096, milliseconds: 15_000 }
+export const PACK_LIMITS = { request: 16 * 1024 * 1024, object: 8 * 1024 * 1024, expanded: 64 * 1024 * 1024, objects: 4096, milliseconds: 15_000, workMilliseconds: 60_000 }
 const OID = /^[0-9a-f]{40}$/
 export const MAIN = 'refs/heads/main'
+const requestDeadline = new AsyncLocalStorage<number>()
+
+/** All subprocesses of one admitted request share a finite work window. */
+export function withGitBudget<T>(work: () => Promise<T>, milliseconds = PACK_LIMITS.workMilliseconds): Promise<T> {
+  return requestDeadline.run(performance.now() + milliseconds, work)
+}
+
+/** A phase may spend only what remains of the admitted request's monotonic budget. */
+export function gitTimeLimit(max = PACK_LIMITS.milliseconds): number {
+  const remaining = Math.min(max, (requestDeadline.getStore() ?? Infinity) - performance.now())
+  if (remaining <= 0) throw new GitPushError('Git request work limit exceeded')
+  return remaining
+}
 
 export class GitPushError extends Error {
   readonly statusCode = 400
@@ -110,17 +124,31 @@ export function validatePack(pack: Buffer): void {
 
 /** Minimal child environment; no server credentials, global Git configuration, hooks, replace refs, lazy fetch or prompts. */
 export function boundedGit(args: string[], cwd: string, input?: Buffer, maxOutput = PACK_LIMITS.expanded): Promise<Buffer> {
+  let remaining: number
+  try { remaining = gitTimeLimit() } catch (err) { return Promise.reject(err) }
   // The shared ES2023 type library does not expose Promise.withResolvers.
   return new Promise<Buffer>((resolve, reject) => {
-    const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never', ...args], {
+    const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never',
+      '-c', 'core.fsmonitor=false', '-c', 'core.attributesFile=/dev/null',
+      '-c', 'core.fsync=all', '-c', 'pack.threads=1', '-c', 'pack.windowMemory=16m',
+      '-c', 'core.deltaBaseCacheLimit=16m', ...args], {
       cwd,
+      detached: process.platform !== 'win32',
       env: { PATH: process.env.PATH, LANG: 'C', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' },
     })
     const out: Buffer[] = []
     let bytes = 0
     let failure: Error | null = null
-    const fail = (message: string) => { failure ??= new GitPushError(message); child.kill('SIGKILL') }
-    const timer = setTimeout(() => fail('Git time limit exceeded'), PACK_LIMITS.milliseconds)
+    const fail = (message: string) => {
+      failure ??= new GitPushError(message)
+      try {
+        if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL')
+        else child.kill('SIGKILL')
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ESRCH') child.kill('SIGKILL')
+      }
+    }
+    const timer = setTimeout(() => fail('Git time limit exceeded'), remaining)
     child.stdout.on('data', (chunk: Buffer) => {
       bytes += chunk.length
       if (bytes > maxOutput) fail('Git output limit exceeded')

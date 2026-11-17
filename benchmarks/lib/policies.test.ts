@@ -355,6 +355,20 @@ test('elara: the route a search took is read from its answer, conceptual when it
   assert.equal((await runElara('q', [{ path: 'src/b.ts', start: 40, end: 40 }], fakeElara([], []))).route, 'conceptual')
 })
 
+test('elara: an answer with hits and no `route` field is conceptual, with no attempted route (#1060: plain conceptual answers omit it)', async () => {
+  const plain: ElaraTools = {
+    ...fakeElara([], []),
+    async search() {
+      return { text: JSON.stringify({ status: 'ok', retrieval_mode: 'hybrid', degraded: false, results: [{ resourceType: 'code', path: 'src/b.ts', startLine: 40, endLine: 41, snippet: 'x' }] }), ms: 1, ok: true }
+    },
+  }
+  const run = await runElara('q', [{ path: 'src/b.ts', start: 40, end: 40 }], plain)
+  assert.equal(run.route, 'conceptual')
+  assert.equal(run.attemptedRoute, undefined)
+  assert.equal(run.abstained, false)
+  assert.deepEqual(run.ranking, ['src/b.ts'])
+})
+
 test('elara: a routed answer that lists several exact answers abstains from naming one (#1060 review)', async () => {
   const several: ElaraTools = {
     ...fakeElara([], []),
@@ -365,4 +379,19 @@ test('elara: a routed answer that lists several exact answers abstains from nami
   const run = await runElara('q', [{ path: 'a.ts', start: 1, end: 1 }], several)
   assert.equal(run.abstained, true)
   assert.equal(run.route, 'identifier')
+})
+
+test('elara records structural answers and conceptual fallbacks without relabelling a miss', async () => {
+  for (const head of [{ route: 'structural' }, { route: 'conceptual', attempted_route: 'identifier', retrieval_mode: 'fallback' }]) {
+    const tools: ElaraTools = {
+      ...fakeElara([], []),
+      async search() {
+        return { text: JSON.stringify({ status: 'no_match', ...head, results: [] }), ms: 1, ok: true }
+      },
+    }
+    const run = await runElara('q', [{ path: 'a', start: 1, end: 1 }], tools)
+    assert.equal(run.route, head.route)
+    assert.equal(run.attemptedRoute, Reflect.get(head, 'attempted_route'))
+    assert.equal(run.abstained, true)
+  }
 })

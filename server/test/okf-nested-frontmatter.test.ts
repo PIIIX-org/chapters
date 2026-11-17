@@ -6,7 +6,7 @@
 // deep. Known keys keep their type checks. A nested value survives every
 // path: MCP and REST writes, the `.md` projection, export -> import,
 // backup -> restore and the collab fold.
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import AdmZip from 'adm-zip'
@@ -23,9 +23,10 @@ import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { OkfValidationError, parseNote, serializeNote, validateNote, type Frontmatter } from '../src/notes/okf.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { assertFrontmatterFits } from '../src/notes/size-cap.js'
-import { getLiveNote, readNote } from '../src/notes/store.js'
+import { createNote, getLiveNote, readAsset, readNote, vaultDir } from '../src/notes/store.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { createActiveUser, loginCookie, loginToken, wipeInstance } from './helpers.js'
+import { runAssetStorage } from '../src/notes/asset-storage.js'
 
 /** The nested keys of the OKF sample bundle's computations/revenue-ytd.md and metrics/gross-margin.md. */
 const NESTED = {
@@ -277,15 +278,30 @@ describe('nested frontmatter on every path (#970, #563)', () => {
 
   // Last: a restore needs an empty instance, so it wipes what the tests above made.
   it('backup -> restore keeps nested notes', async () => {
+    const sourceResponse = await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'Independent nested backup source' } })
+    expect(sourceResponse.statusCode, sourceResponse.body).toBe(200)
+    const sourceId = sourceResponse.json<{ id: string }>().id
+    await createNote(sourceId, { path: 'computations/revenue-ytd', frontmatter: { type: 'Attested Computation', ...NESTED, verified: SPEC_VERIFIED }, body: 'Revenue for a fiscal year.\n' })
+    // Rehearse the production pre-backup upgrade, including a real legacy
+    // Markdown attachment left by an older physical-layout fixture.
+    const legacyResponse = await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'Legacy nested backup attachment' } })
+    expect(legacyResponse.statusCode, legacyResponse.body).toBe(200)
+    const legacyId = legacyResponse.json<{ id: string }>().id
+    await mkdir(join(vaultDir(legacyId), 'assets'), { recursive: true })
+    await writeFile(join(vaultDir(legacyId), 'assets/readme.md'), 'Legacy Markdown attachment must survive backup.\n')
+    await runAssetStorage('migrate')
+    expect((await readAsset(legacyId, 'readme.md'))!.buffer.toString()).toBe('Legacy Markdown attachment must survive backup.\n')
     await flushProjections()
-    const before = await readNote(vaultId, 'computations/revenue-ytd')
-    const beforeFile = await projected(vaultId, 'computations/revenue-ytd')
+    const before = await readNote(sourceId, 'computations/revenue-ytd')
+    expect(before).not.toBeNull()
+    const beforeFile = await projected(sourceId, 'computations/revenue-ytd')
     const archive = await buildInstanceBackup()
     await wipeInstance()
     const plan = await restoreBackup(archive)
     expect(plan.warnings.filter((w) => w.includes('skipped'))).toEqual([])
-    const after = await readNote(vaultId, 'computations/revenue-ytd')
-    expect(after?.frontmatter).toEqual(before?.frontmatter)
-    expect(await projected(vaultId, 'computations/revenue-ytd')).toBe(beforeFile)
+    const after = await readNote(sourceId, 'computations/revenue-ytd')
+    expect(after?.frontmatter).toEqual(before!.frontmatter)
+    expect(await projected(sourceId, 'computations/revenue-ytd')).toBe(beforeFile)
+    expect((await readAsset(legacyId, 'readme.md'))!.buffer.toString()).toBe('Legacy Markdown attachment must survive backup.\n')
   })
 })

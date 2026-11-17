@@ -14,6 +14,8 @@
 
 **Status: beta / self-hostable.** Elara has a live deployment and documented self-hosting setup. APIs and migrations may change; review the [self-hosting checklist](docs/self-hosting/checklist.md) and [backup guide](docs/self-hosting/backup.md) before upgrading. Retrieval accuracy and token-efficiency validation remain incomplete; see [open issues](https://github.com/PIIIX-org/chapters/issues). The repository keeps its original name, `chapters`; the product is Elara.
 
+**Release note — PUBLIC BETA BLOCKER #1139:** attachments now use hidden physical `.assets/` storage and vault ZIP format 2, so valid `assets/` notes cannot overwrite attachments. Upgrade only while all app writers are stopped, after a fresh verified database **and data-volume** backup, with owner approval for the production deployment. Review the [migration, verification and no-clobber rollback procedure](docs/self-hosting/migration.md#attachment-storage-upgrade-1139). This repository change does not authorize or execute a production migration.
+
 [Quickstart](#quickstart) • [Architectural Comparison](#architectural-comparison) • [Benchmarks (retracted)](#benchmarks-retracted) • [MCP Server](#model-context-protocol-mcp-interface)
 
 </div>
@@ -164,10 +166,20 @@ through the live document or remain as reviewable proposals. A rejected
 multi-note push can have committed partial effects; inspect its linked
 report before retrying. See the [protocol and limits](docs/agents/backend-reference.md).
 
-**Edits keep history; explicit Purge removes server-managed content from history/indexes/caches synchronously before further reads.**
+**“edits keep git history; Purge removes content everywhere, including history”**
+([owner decision](https://github.com/PIIIX-org/chapters/issues/1087#issuecomment-6851891773)).
+For the purged note/revision/vault, this includes server-managed history,
+indexes, retained answers and Git objects before further Git reads.
 The server cannot erase external already-downloaded clones, exports or
 independently retained backups. Purge rebuilds the remote; clients may
 need to fetch/rebase or clone again.
+Unrelated proposals remain reviewable. Git moves are delete plus create,
+not `rename_note`: they do not transfer note UUIDs or rewrite links.
+Attachments use canonical Git-only filename encoding under `.assets/`;
+their physical and HTTP names do not change. Served-base maps and Git
+retry receipts have no time-based expiry; explicit capacity limits refuse
+new admissions instead of evicting bases or pending evidence. Git serving
+requires one server process per shared data directory.
 
 
 ---

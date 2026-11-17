@@ -20,6 +20,7 @@ import { sql } from '../db/client.js'
 import { docState, sameDocState, type DocState } from '../sync/live-docs.js'
 import { parseNote, serializeNote, type OkfNote } from './okf.js'
 import { fileWinsContent } from './store-reconcile.js'
+import { isAssetStorageReady } from './asset-storage.js'
 
 const BATCH = 100
 
@@ -320,7 +321,8 @@ export async function planStoreMigration(options: { vaultId?: string } = {}): Pr
     const root = join(vaultsDir, vaultId)
     const live = livePaths.get(vaultId) ?? new Set<string>()
     const trashed = trashedIds.get(vaultId) ?? new Set<string>()
-    const files = await walk(root, (rel, isDir) => isDir && rel === 'assets')
+    const migrated = await isAssetStorageReady(vaultId)
+    const files = await walk(root, (rel, isDir) => isDir && !migrated && rel === 'assets')
     for (const rel of files) {
       if (TEMP_FILE.test(rel)) {
         report.counts.tempFiles++

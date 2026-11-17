@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, open, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 /** Persist directory entries (rename/unlink and newly created parent directories). */
 export async function syncDirectory(dir: string): Promise<void> {
@@ -17,6 +17,9 @@ export async function ensureDirectory(dir: string, durable = false): Promise<voi
     if (current === stop) break
   }
 }
+
+/** Contains `..`, which the existing asset-name policy forbids. Never an attachment. */
+export const isShortAtomicTempName = (name: string): boolean => /^\.atomic\.\.[0-9]+\.[0-9a-f]{12}\.tmp$/.test(name)
 
 /**
  * Replaces `file` all at once: the content goes to a sibling temp file that is
@@ -41,12 +44,15 @@ export async function ensureDirectory(dir: string, durable = false): Promise<voi
 export async function atomicWrite(
   file: string,
   content: string | Uint8Array,
-  options: { mode?: number; beforeRename?: () => void; durable?: boolean } = {},
+  options: { mode?: number; beforeRename?: () => void; durable?: boolean; shortTempName?: boolean } = {},
 ): Promise<void> {
-  await ensureDirectory(dirname(file), options.durable)
-  const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+  const directory = dirname(file)
+  await ensureDirectory(directory, options.durable)
+  // Asset basenames may occupy all 255 filesystem bytes; do not append to them.
+  const prefix = options.shortTempName ? join(directory, '.atomic.') : file
+  const tmp = `${prefix}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   try {
-    if (options.mode === undefined && !options.durable) {
+    if (options.mode === undefined && !options.durable && !options.shortTempName) {
       await writeFile(tmp, content)
     } else {
       const handle = await open(tmp, 'wx', options.mode ?? 0o666)
@@ -60,7 +66,7 @@ export async function atomicWrite(
     }
     options.beforeRename?.()
     await rename(tmp, file)
-    if (options.durable) await syncDirectory(dirname(file))
+    if (options.durable) await syncDirectory(directory)
   } catch (err) {
     await rm(tmp, { force: true })
     throw err
