@@ -2890,15 +2890,40 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     stops at 32 KiB (`VIEW_BLOCK_BOUNDS`; the live index passes no bounds).
     A view's call graph is refused, not truncated, past 250,000 edges or
     20,000,000 candidate scans (`VIEW_GRAPH_LIMITS`); orient scores definitions
-    from one pass over the edges. A reader-chosen commit is fetched into the
-    query mirror only up to 256 MiB of growth (`fetchQueryCommit` watches the
-    pack as git writes it and kills git's process group; git has no fetch cap of
-    its own), the query mirror is dropped past 1 GiB, and a mirror that fetched a
-    commit it then rejected (transfer or tree budget) is removed and the
-    commit refused without another transfer. Not bounded: the bandwidth of one
-    attempt (up to the cap, before it is stopped) per distinct commit and the
-    remote's own `ls-remote` answer; the sync fetch of the indexed branch is a
-    writer's, unchanged. `refCacheStats`/`refSearchStats` count real work.
+    from one pass over the edges; resolving an edge charges every pass over
+    the same-named candidates against the same budget (imported destinations
+    are one Set per file). Heading outlines (`outline.ts`, shared with the live
+    index) find each section's end with one stack pass. A tree build may create
+    at most 192 MiB / 400,000 blocks of generated text (`REF_LIMITS.generatedBytes`,
+    `blocks`), an overlay 32 MiB / 50,000 (`overlayGeneratedBytes`,
+    `overlayBlocks`): each file's whole block set is estimated and reserved
+    before any of it is built (`BlockBudget`), and a view over the allowance is
+    refused with `BUSY` naming the limit, never served partly.
+    Reader-chosen Git refs: `ls-remote` is read through a byte-capped
+    subprocess (8 MiB, git's process group killed past it; a v0 server's whole
+    advertisement is bounded only by the 30 s timeout, since git reads it, not
+    Node). A cache miss in the query mirror is *admitted* first
+    (`ref-fetch-admission.ts`): at most 2 fetches instance-wide (a third is
+    refused at once, `BUSY` "another ref fetch is running", no git launched,
+    no queue), and token buckets that refill continuously over an hour, per
+    account (`ELARA_REF_FETCH_ACCOUNT_MB`, default 1,024) and per instance
+    (`ELARA_REF_FETCH_INSTANCE_MB`, default 4,096); a fetch reserves its full
+    256 MiB budget from both buckets, and settles with the bytes the mirror
+    really grew by (the unused part is refunded, an overshoot debited). State
+    is per process and starts full. The fetch itself has a best-effort size cap,
+    not a hard quota: `fetchQueryCommit` polls the mirror every 100 ms and kills
+    git's process group past 256 MiB, so the overshoot is bounded by the poll
+    interval times the link's bandwidth (about 12 MiB at 1 Gbit/s, 119 MiB at
+    10 Gbit/s) plus event-loop stalls; git has no fetch size cap of its own.
+    Where `/bin/sh` has `ulimit -f` (Linux, macOS; tested on macOS) the fetch
+    also runs under it, a hard limit on the pack file (256 MiB, twice that in
+    shells that count 1,024-byte blocks); a shell without it just skips it. The
+    query mirror is dropped past 1 GiB, and a mirror that fetched a commit it
+    then rejected (transfer or tree budget) is removed and the commit refused
+    without another transfer (256 remembered). Not bounded: the bandwidth of an
+    admitted attempt up to the best-effort cap, and the instance's total over
+    its hourly allowance only by the refill rate (4 GiB per hour by default).
+    `refCacheStats`/`refSearchStats` count real work.
     Search keeps keyword+vector channels and existing per-file embedding
     budgets, reusing same-owner vectors by embed key.
     Exact routing uses the shared classifier, identifier-intent predicate and

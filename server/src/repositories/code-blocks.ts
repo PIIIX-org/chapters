@@ -58,7 +58,26 @@ export const SNIPPET_CHARS = 1500
 export interface BlockBounds {
   lineChars: number
   skeletonChars: number
+  /** One request's generated-text allowance, shared by every file it builds. */
+  budget?: BlockBudget
 }
+
+/** The generated block text and block count one view build may create, charged before each file's blocks exist. */
+export class BlockBudgetError extends Error {}
+export class BlockBudget {
+  constructor(readonly limits: { bytes: number; blocks: number }, public bytes = limits.bytes, public blocks = limits.blocks) {}
+  /** Takes the estimated size of a file's whole block set, or refuses the request: nothing is allocated for a refused file. */
+  reserve(bytes: number, blocks: number): void {
+    if (bytes > this.bytes || blocks > this.blocks) {
+      throw new BlockBudgetError(`generated block text over ${Math.round(this.limits.bytes / 1024 / 1024)} MiB or ${this.limits.blocks} blocks`)
+    }
+    this.bytes -= bytes
+    this.blocks -= blocks
+  }
+}
+
+/** Per-block constant text and bookkeeping charged on top of a block's snippet and embedded text. */
+const BLOCK_OVERHEAD = 512
 
 export interface CodeBlock {
   blockId: string
@@ -118,6 +137,28 @@ export function codeBlocks(
   // taken first, so a single huge line is never spread into an array of all its characters.
   const snippetOf = (start: number, end: number) =>
     [...sliceLines(content, start, Math.min(end, start + SNIPPET_LINES - 1), starts).slice(0, SNIPPET_CHARS * 2)].slice(0, SNIPPET_CHARS).join('')
+  if (bounds?.budget) {
+    // Reserve the whole file's block set from the request's allowance before any snippet, skeleton or embedded text is built.
+    const span = (from: number, to: number) => (starts[Math.min(to, total)] ?? content.length) - (starts[from - 1] ?? content.length)
+    const snippetBytes = (from: number, to: number) => Math.min(span(from, Math.min(to, from + SNIPPET_LINES - 1)), SNIPPET_CHARS)
+    let bytes = content.length + path.length + BLOCK_OVERHEAD
+    let blocks = 1
+    for (const s of symbols) {
+      // The snippet is stored on the block and again inside its embedded text.
+      bytes += 2 * snippetBytes(s.startLine, s.endLine) + path.length + s.name.length + BLOCK_OVERHEAD
+      blocks += 1
+    }
+    for (const s of sections) {
+      bytes += snippetBytes(s.startLine, s.ownEndLine) + path.length + s.innerPath.length + BLOCK_OVERHEAD
+      blocks += 1
+    }
+    if (!small && symbols.length + sections.length > 0) {
+      const classes = symbols.filter((s) => s.kind === 'class').length
+      bytes += Math.min(bounds.skeletonChars, content.length) + (classes + 1) * BLOCK_OVERHEAD
+      blocks += 1 + classes
+    }
+    bounds.budget.reserve(bytes, blocks)
+  }
   const methodsOf = new Map<string, ExtractedSymbol[]>()
   for (const m of small ? [] : symbols) {
     if (m.kind !== 'method' || !m.parent) continue

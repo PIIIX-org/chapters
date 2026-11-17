@@ -1,4 +1,4 @@
-import { RefError, viewId, type RepositoryView } from './ref-index.js'
+import { RefError, declarationIndex, viewId, type RepositoryView } from './ref-index.js'
 import type { CodeQueries } from './code-refs.js'
 import { IMPACT_FRONTIER, IMPACT_LEVEL_ROWS, MAX_IMPACT_DEPTH, SITE_KINDS, type CodeSite, type Definition, type ImpactLevel, type Target } from './code-queries.js'
 import { codeEdgeDrafts, isTestPath, type CodeEdgeDraft } from './code-edges.js'
@@ -6,7 +6,6 @@ import { buildResolutionContext, resolveImportPath } from './import-resolution.j
 import { ORIENT_ENTRIES, type OrientOptions, type OrientOffsets, type OrientFolder, type OrientSymbol } from './orient.js'
 
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0
-const inner = (s: { name: string; parent?: string }) => s.parent ? `${s.parent}.${s.name}` : s.name
 const directory = (path: string) => path.slice(0, Math.max(0, path.lastIndexOf('/')))
 interface Edge extends Omit<CodeSite, 'line'> {
   line: number
@@ -85,7 +84,7 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
   const byName = new Map<string, Definition[]>()
   const byFile = new Map<string, Definition[]>()
   for (const f of view.files.values()) {
-    const declared = new Map(f.structure.symbols.map((s) => [`${s.startLine}\0${inner(s)}`, s]))
+    const declared = declarationIndex(f)
     for (const b of f.blocks.filter((b) => b.kind === 'symbol')) {
       const symbol = declared.get(`${b.startLine}\0${b.innerPath}`)!
       const definition: Definition = { id: viewId(`${f.id}\0${b.blockId}`), fileId: f.id, blockIds: [b.blockId], path: f.path, name: symbol.name, symbol: b.innerPath, kind: b.symbolKind!, parent: b.symbolParent, line: b.startLine, endLine: b.endLine }
@@ -117,19 +116,34 @@ function buildViewQueries(view: RepositoryView): ViewQueries {
     const { drafts, note } = codeEdgeDrafts(f.path, f.content, blocks, f.structure.sites)
     // A cap may not make a removed call look absent. Fail the view instead of returning an incomplete graph.
     if (note) throw new RefError('BUSY', note)
+    // Every pass over a name's candidates is charged before it runs (`charge`), and the imported destinations are one Set per file.
+    const importedPaths = new Set<string>()
+    for (const destination of imports.values()) if (destination) importedPaths.add(destination)
+    const crossFile = ['c', 'cpp', 'ruby', 'php'].includes(f.language ?? '')
     const resolveEdge = (draft: CodeEdgeDraft): { target: Definition | null; confidence: Edge['confidence'] } => {
       if (draft.local !== null) return { target: byBlock.get(draft.local) ?? null, confidence: 'resolved' }
       const named = byName.get(draft.name) ?? []
-      resolveWork += named.length + 1
-      if (resolveWork > VIEW_GRAPH_LIMITS.resolveWork) throw new RefError('BUSY', 'the view call graph is too large to resolve; no partial graph was served: narrow the repository or use a smaller ref')
+      const charge = (passes: number) => {
+        resolveWork += named.length * passes + 1
+        if (resolveWork > VIEW_GRAPH_LIMITS.resolveWork) throw new RefError('BUSY', 'the view call graph is too large to resolve; no partial graph was served: narrow the repository or use a smaller ref')
+      }
+      charge(0)
       const scoped = (d: Definition) => d.fileId !== f.id && d.symbol === (draft.qualified ?? draft.name)
       let found: Definition | null = null
       if (!draft.member) {
-        const targets = draft.via !== null ? [imports.get(draft.via)] : ['c', 'cpp', 'ruby', 'php'].includes(f.language ?? '') ? [...imports.values()] : []
-        found = single(named.filter((d) => targets.includes(d.path) && scoped(d)))
-        if (!found && draft.via === null && ['go', 'java'].includes(f.language ?? '')) found = single(named.filter((d) => view.files.get(d.path)!.language === f.language && directory(d.path) === directory(f.path) && scoped(d)))
+        const via = draft.via !== null ? imports.get(draft.via) : undefined
+        const reachable = draft.via !== null ? (d: Definition) => d.path === via : crossFile ? (d: Definition) => importedPaths.has(d.path) : null
+        if (reachable) {
+          charge(1)
+          found = single(named.filter((d) => reachable(d) && scoped(d)))
+        }
+        if (!found && draft.via === null && ['go', 'java'].includes(f.language ?? '')) {
+          charge(1)
+          found = single(named.filter((d) => view.files.get(d.path)!.language === f.language && directory(d.path) === directory(f.path) && scoped(d)))
+        }
       }
       if (found) return { target: found, confidence: 'resolved' }
+      charge(draft.qualified === null ? 1 : 2)
       found = (draft.qualified === null ? null : single(named.filter((d) => d.symbol === draft.qualified))) ?? single(named)
       return { target: found, confidence: 'textual' }
     }

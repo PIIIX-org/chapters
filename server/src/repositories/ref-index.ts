@@ -8,11 +8,12 @@ import { repositories, repositoryFiles } from '../db/schema.js'
 import { config } from '../config.js'
 import { resolveRepositoryAccess, isSafeGitUrl } from './permissions.js'
 import { authenticatedUrl } from './git-remote.js'
+import { admitRefFetch, RefFetchRefused, type RefFetchSlot } from './ref-fetch-admission.js'
 import { decryptCredential } from './credentials.js'
-import { openQueryMirror, markMirrorSynced, scanMirrorTree, withMirrorLock, objectFormatOf, MirrorReadLimitError, QUERY_MIRROR_LIMITS, mirrorBytes, discardQueryMirror, fetchQueryCommit, type TreeEntry } from './git-mirror.js'
-import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractionResult } from './extraction.js'
+import { openQueryMirror, markMirrorSynced, scanMirrorTree, withMirrorLock, objectFormatOf, MirrorReadLimitError, QUERY_MIRROR_LIMITS, mirrorBytes, discardQueryMirror, fetchQueryCommit, listRemoteCapped, type TreeEntry } from './git-mirror.js'
+import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractedSymbol, type ExtractionResult } from './extraction.js'
 import { parsed } from './blob-cache.js'
-import { codeBlocks, type BlockBounds, type CodeBlock } from './code-blocks.js'
+import { BlockBudget, BlockBudgetError, codeBlocks, type BlockBounds, type CodeBlock } from './code-blocks.js'
 import { looksMinified } from './minified.js'
 import { hasOutline, outlineSections } from './outline.js'
 import { detectLanguage } from './language.js'
@@ -21,9 +22,28 @@ import { summarizeSkips, type SkippedFile } from './fs-scan.js'
 
 // A view is never installed in repository_files/blocks. Cache only committed, immutable trees;
 // an overlay and its parse results belong to the call, not to the tree or another session.
+const declarations = new WeakMap<ViewFile, ReadonlyMap<string, ExtractedSymbol>>()
+/** A file's declarations by start line and inner path (`Class.method`), first one winning: one map per file, never a scan per block. */
+export function declarationIndex(file: ViewFile): ReadonlyMap<string, ExtractedSymbol> {
+  let held = declarations.get(file)
+  if (!held) {
+    const map = new Map<string, ExtractedSymbol>()
+    for (const s of file.structure.symbols) {
+      const key = `${s.startLine}\0${s.parent ? `${s.parent}.${s.name}` : s.name}`
+      if (!map.has(key)) map.set(key, s)
+    }
+    declarations.set(file, held = map)
+  }
+  return held
+}
 /** A view's skeleton text per file: a declaration's first line cut to 240 characters, at most 32 KiB (and never more than the file). */
 export const VIEW_BLOCK_BOUNDS: BlockBounds = { lineChars: 240, skeletonChars: 32 * 1024 }
-export const REF_LIMITS = { files: 20_000, bytes: 32 * 1024 * 1024, cachedBytes: 64 * 1024 * 1024, trees: 8 }
+/**
+ * `generatedBytes`/`blocks`: block text (file, snippet, embedded text, skeleton) and blocks one tree build may create, charged per
+ * file before its blocks exist; `overlayGeneratedBytes`/`overlayBlocks` the same for the files an overlay changes.
+ * `cachedBytes` only governs what stays cached between requests.
+ */
+export const REF_LIMITS = { files: 20_000, bytes: 32 * 1024 * 1024, cachedBytes: 64 * 1024 * 1024, trees: 8, generatedBytes: 192 * 1024 * 1024, blocks: 400_000, overlayGeneratedBytes: 32 * 1024 * 1024, overlayBlocks: 50_000 }
 export class RefError extends Error {
   constructor(readonly code: 'INVALID_ARGUMENT' | 'NOT_FOUND' | 'BUSY', message: string, readonly field = 'ref') { super(message) }
 }
@@ -121,7 +141,7 @@ export function checkGitRef(ref: string): void {
     throw new RefError('INVALID_ARGUMENT', 'ref must be a branch, tag, HEAD or full commit SHA')
   }
 }
-async function fileIndex(repositoryId: string, path: string, content: string, overlay: boolean): Promise<ViewFile> {
+async function fileIndex(repositoryId: string, path: string, content: string, overlay: boolean, budget: BlockBudget): Promise<ViewFile> {
   const hash = contentHash(content)
   // The live index's rule, from the same predicate: a minified/generated file keeps its bytes and file block, no symbols,
   // imports or outline (its declarations would all start on one huge line).
@@ -134,7 +154,12 @@ async function fileIndex(repositoryId: string, path: string, content: string, ov
     : { symbols: [], imports: [], sites: [] }
   if (overlay && structured && isSupportedLanguage(language)) refCacheStats.overlayParses++
   const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, content) : []
-  return { id, path, content, contentHash: hash, language, size: Buffer.byteLength(content), structure, blocks: codeBlocks(id, path, content, structure.symbols, sections, VIEW_BLOCK_BOUNDS) }
+  try {
+    return { id, path, content, contentHash: hash, language, size: Buffer.byteLength(content), structure, blocks: codeBlocks(id, path, content, structure.symbols, sections, { ...VIEW_BLOCK_BOUNDS, budget }) }
+  } catch (err) {
+    if (err instanceof BlockBudgetError) throw new RefError('BUSY', `ref exceeds the generated index budget (${err.message}); no partial index was served`)
+    throw err
+  }
 }
 async function buildView(repositoryId: string, source: string, tree: string, files: Array<{ path: string; content: string }>, skipped: RepositoryView['skipped'], commit?: string, entries?: readonly TreeEntry[]): Promise<RepositoryView> {
   const bytes = files.reduce((n, f) => n + Buffer.byteLength(f.content), 0)
@@ -142,7 +167,8 @@ async function buildView(repositoryId: string, source: string, tree: string, fil
     throw new RefError('BUSY', `ref exceeds the bounded index (${REF_LIMITS.files} files, ${REF_LIMITS.bytes / 1024 / 1024} MiB); no partial index was served`)
   }
   const indexed = new Map<string, ViewFile>()
-  for (const f of files) indexed.set(f.path, await fileIndex(repositoryId, f.path, f.content, false))
+  const budget = new BlockBudget({ bytes: REF_LIMITS.generatedBytes, blocks: REF_LIMITS.blocks })
+  for (const f of files) indexed.set(f.path, await fileIndex(repositoryId, f.path, f.content, false, budget))
   // Charge metadata, parse records, block text and room for 384-dimensional JS vectors, not just source bytes.
   const weight = bytes + (entries?.reduce((sum, e) => sum + Buffer.byteLength(e.path) + 128, 0) ?? 0)
     + [...indexed.values()].reduce((sum, f) => sum + f.structure.sites.length * 256 + f.structure.symbols.length * 128 + f.blocks.reduce((n, b) => n + Buffer.byteLength(b.embedText) + Buffer.byteLength(b.snippet ?? '') + 4096, 0), 0)
@@ -179,6 +205,7 @@ async function overlayView(base: RepositoryView, diff: string): Promise<Reposito
   const files = new Map(base.files)
   const entries = base.entries ? new Map(base.entries) : undefined
   let bytes = 0
+  const budget = new BlockBudget({ bytes: REF_LIMITS.overlayGeneratedBytes, blocks: REF_LIMITS.overlayBlocks })
   for (const patch of parseOverlay(diff)) {
     if (patch.path.startsWith('/') || patch.path.split('/').some((p) => p === '..' || p === '.' || p === '') || patch.path.includes('\0')) throw new OverlayError('overlay paths must be repository-relative')
     const old = files.get(patch.path)
@@ -197,7 +224,7 @@ async function overlayView(base: RepositoryView, diff: string): Promise<Reposito
       files.delete(patch.path)
       entries?.delete(patch.path)
     } else {
-      files.set(patch.path, await fileIndex(base.repositoryId, patch.path, changed, true))
+      files.set(patch.path, await fileIndex(base.repositoryId, patch.path, changed, true, budget))
       const algorithm = base.commit?.length === 64 ? 'sha256' : 'sha1'
       const size = Buffer.byteLength(changed)
       const prior = entries?.get(patch.path)
@@ -224,10 +251,9 @@ export async function repositoryViewAt(userId: string, repositoryId: string, arg
       if (!ref) throw new RefError('NOT_FOUND', 'no indexed base commit; sync the repository first')
       // Never reveal URLs or credentials in source keys or command errors.
       const source = sourceIdentity(repo)
-      const git = simpleGit({ timeout: { block: 30_000 } })
       let commit = ref
       if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(ref)) {
-        commit = resolveAdvertisedRef(await git.listRemote([url, ref, `refs/heads/${ref}`, `refs/tags/${ref}`, `refs/tags/${ref}^{}`]), ref)
+        commit = resolveAdvertisedRef(await listRemoteCapped(url, [ref, `refs/heads/${ref}`, `refs/tags/${ref}`, `refs/tags/${ref}^{}`]), ref)
       }
       const format = objectFormatOf(commit)
       let dir = await openQueryMirror(repositoryId, source, format)
@@ -238,11 +264,24 @@ export async function repositoryViewAt(userId: string, repositoryId: string, arg
       }
       const rejectedKey = `${repositoryId}:${source}:${commit}`
       if (rejectedCommits.has(rejectedKey)) throw new RefError('BUSY', 'ref was refused before: it exceeds the transfer or index budget')
-      try {
+      const cached = await simpleGit(dir).raw(['cat-file', '-e', `${commit}^{commit}`]).then(() => true, () => false)
+      // A cache miss launches git: admitted first, refused without launching it when the instance or account is over its allowance.
+      let slot: RefFetchSlot | null = null
+      if (!cached) {
         try {
-          await simpleGit(dir).raw(['cat-file', '-e', `${commit}^{commit}`])
-        } catch {
-          await fetchQueryCommit(dir, url, commit)
+          slot = admitRefFetch(userId, QUERY_MIRROR_LIMITS.fetchBytes)
+        } catch (err) {
+          throw err instanceof RefFetchRefused ? new RefError('BUSY', err.message) : err
+        }
+      }
+      try {
+        if (slot) {
+          const before = await mirrorBytes(dir)
+          try {
+            await fetchQueryCommit(dir, url, commit)
+          } finally {
+            slot.settle(await mirrorBytes(dir) - before)
+          }
         }
         commit = (await simpleGit(dir).raw(['rev-parse', '--verify', `${commit}^{commit}`])).trim()
         base = await treeView(repositoryId, source, dir, commit)

@@ -36,10 +36,18 @@ export function outlineSections(language: string | null, content: string): Outli
   const found = language === 'markdown' ? markdownHeadings(content, starts) : language === 'html' ? htmlHeadings(content, starts) : []
   const total = starts.length
   const trail: FoundHeading[] = []
+  // The next heading of the same or a higher level, for each heading, in one pass: a heading waits on the stack until
+  // a heading of its level or above arrives (the stack holds strictly rising levels, so at most six entries wait).
+  const nextOf: number[] = new Array<number>(found.length).fill(-1)
+  const waiting: number[] = []
+  found.forEach((h, i) => {
+    while (waiting.length > 0 && found[waiting.at(-1)!]!.level >= h.level) nextOf[waiting.pop()!] = i
+    waiting.push(i)
+  })
   return found.map((h, i) => {
     while (trail.length > 0 && trail.at(-1)!.level >= h.level) trail.pop()
     trail.push(h)
-    const next = found.findIndex((o, j) => j > i && o.level <= h.level)
+    const next = nextOf[i]!
     // Two HTML headings can share a line: a section always spans its own.
     const before = (line: number | undefined) => Math.max(h.line, line === undefined ? total : line - 1)
     return {

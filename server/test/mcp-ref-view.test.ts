@@ -21,6 +21,7 @@ import { viewQueries, refQueryStats, VIEW_GRAPH_LIMITS } from '../src/repositori
 import { refSearchStats } from '../src/repositories/ref-search.js'
 import { MAX_ROUTED } from '../src/search/router.js'
 import { gitMirrorDir, removeGitMirror, withMirrorLock, QUERY_MIRROR_LIMITS } from '../src/repositories/git-mirror.js'
+import { resetRefFetchAdmission } from '../src/repositories/ref-fetch-admission.js'
 import { parseCacheStats } from '../src/repositories/blob-cache.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -694,5 +695,64 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     } finally { VIEW_GRAPH_LIMITS.edges = edges }
     clearRefCache()
     expect(JSON.stringify(await answer('orient', { ref: second }))).toContain('retained')
+  })
+  it('refuses a dense tree and a dense overlay by their generated-block budget, with no partial view', async () => {
+    const dense = Array.from({ length: 150 }, (_, row) => Array.from({ length: 30 }, (_, k) => `function d${row}_${k}(){}`).join(';').padEnd(900, ' ')).join('\n') + '\n'
+    await git().checkoutLocalBranch('dense')
+    await mkdir(join(root, 'dense'), { recursive: true })
+    for (let i = 0; i < 40; i++) await writeFile(join(root, `dense/d${i}.ts`), dense)
+    await git().add('.')
+    await git().commit('dense')
+    const tree = (await git().revparse(['HEAD'])).trim()
+    await git().checkout('feature')
+    const limits = { bytes: REF_LIMITS.generatedBytes, overlay: REF_LIMITS.overlayGeneratedBytes }
+    try {
+      REF_LIMITS.generatedBytes = 32 * 1024 * 1024
+      clearRefCache()
+      const refused = await call('browse_repository', { ref: tree })
+      expect(refused.error).toBe(true)
+      expect(refused.text).toMatch(/generated index budget \(generated block text over 32 MiB/)
+      // 40 x 135 KB of source is under the source limit: it is the generated text that is refused. A normal ref still works.
+      REF_LIMITS.generatedBytes = limits.bytes
+      clearRefCache()
+      expect((await answer('browse_repository', { ref: second })).commit).toBe(second)
+      REF_LIMITS.overlayGeneratedBytes = 256 * 1024
+      const overlay = `diff --git a/src/dense.ts b/src/dense.ts\n--- /dev/null\n+++ b/src/dense.ts\n@@ -0,0 +1,150 @@\n${dense.split('\n').slice(0, 150).map((l) => `+${l}`).join('\n')}\n`
+      const tooBig = await call('browse_repository', { ref: second, overlay })
+      expect(tooBig.error).toBe(true)
+      expect(tooBig.text).toMatch(/generated index budget/)
+    } finally {
+      REF_LIMITS.generatedBytes = limits.bytes
+      REF_LIMITS.overlayGeneratedBytes = limits.overlay
+      await git().raw(['branch', '-D', 'dense'])
+    }
+  })
+
+  it('admits a ref fetch only within the instance and account allowance, and refunds what it did not use', async () => {
+    await git().raw(['commit', '--allow-empty', '-m', 'admission only'])
+    const fresh = (await git().revparse(['HEAD'])).trim()
+    await git().raw(['reset', '--hard', sameTree])
+    const saved = process.env.ELARA_REF_FETCH_ACCOUNT_MB
+    try {
+      process.env.ELARA_REF_FETCH_ACCOUNT_MB = '100'
+      resetRefFetchAdmission()
+      clearRefCache()
+      const refused = await call('read_file', { ref: fresh, path: 'src/api.ts' })
+      expect(refused.error).toBe(true)
+      expect(refused.text).toMatch(/ref fetch allowance \(100 MiB per hour\) is used up/)
+      // Nothing was fetched: the query mirror does not hold the commit.
+      expect(await simpleGit(join(gitMirrorDir(repoId), 'elara-query.git')).raw(['cat-file', '-t', fresh]).catch(() => 'missing')).toBe('missing')
+      process.env.ELARA_REF_FETCH_ACCOUNT_MB = '300'
+      for (let i = 0; i < 3; i++) {
+        // 256 MiB is reserved per fetch against a 300 MiB allowance; the few KiB it used are refunded each time.
+        await answer('read_file', { ref: fresh, path: 'src/api.ts', outline: false })
+        await rm(join(gitMirrorDir(repoId), 'elara-query.git'), { recursive: true, force: true })
+        clearRefCache()
+      }
+    } finally {
+      if (saved === undefined) delete process.env.ELARA_REF_FETCH_ACCOUNT_MB
+      else process.env.ELARA_REF_FETCH_ACCOUNT_MB = saved
+      resetRefFetchAdmission()
+    }
   })
 })

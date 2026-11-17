@@ -2,7 +2,7 @@ import { config } from '../config.js'
 import { embedder, embedQuery, EMBEDDER_ID } from '../search/embeddings.js'
 import { CHUNK_VERSION, embedKey } from '../search/embed-key.js'
 import { vectorsInAccount } from './blob-cache.js'
-import { RefError, type RepositoryView, type ViewFile } from './ref-index.js'
+import { RefError, declarationIndex, type RepositoryView, type ViewFile } from './ref-index.js'
 import type { CodeBlock } from './code-blocks.js'
 
 type VectorMap = Map<string, readonly number[]>
@@ -102,7 +102,7 @@ export async function searchRef(view: RepositoryView, accountId: string, args: {
       const vector = embedded.get(b.blockId)
       const similarity = vector ? cosine(query, vector) : -1
       if (!keyword && 1 - similarity > config.searchMaxDistance) continue
-      const symbol = b.kind === 'symbol' ? f.structure.symbols.find((s) => s.startLine === b.startLine && (s.parent ? `${s.parent}.${s.name}` : s.name) === b.innerPath) : null
+      const symbol = b.kind === 'symbol' ? declarationIndex(f).get(`${b.startLine}\0${b.innerPath}`) : null
       const hit = hitOf(f, b, symbol?.name)
       const candidate = { hit, keyword, vector: 1 - similarity <= config.searchMaxDistance ? similarity : -1 }
       const previous = candidates.get(hit.id)
