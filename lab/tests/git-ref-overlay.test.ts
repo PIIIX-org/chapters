@@ -10,7 +10,7 @@ import { stringField } from '../lib/mcp.ts'
 const test: LabTest = {
   name: 'git-ref-overlay',
   tier: 'fast',
-  description: 'Real two-commit Git source: immutable ref reads/diff and private additions/deletions across code tools (#676/#471).',
+  description: 'Real two-commit Git source served over smart HTTP: immutable ref reads/diff of the synced commit, "not synced yet" for one the mirror lacks, and private additions/deletions across code tools (#676/#471).',
   async run(ctx) {
     const checks: Check[] = []
     const root = mkdtempSync(join(tmpdir(), 'lab-ref-overlay-'))
@@ -31,7 +31,7 @@ const test: LabTest = {
     git('commit', '-q', '--no-gpg-sign', '-m', 'feature')
     const commit = git('rev-parse', 'HEAD')
     git('clone', '-q', '--bare', work, join(root, 'fixture.git'))
-    git('-C', join(root, 'fixture.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main')
+    git('-C', join(root, 'fixture.git'), 'symbolic-ref', 'HEAD', 'refs/heads/feature')
     const server = await serveGit(root)
     let repositoryId: string | undefined
     const data: Record<string, unknown> = { base, commit }
@@ -65,12 +65,15 @@ const test: LabTest = {
       check('conceptual override remains inside the selected view', conceptual.ok && stringField(conceptual.json, 'route') === undefined && stringField(conceptual.json, 'commit') === commit && conceptual.text.includes('overlayOnly') && !conceptual.text.includes('"symbolName":"branchOnly"'), conceptual)
       const grep = await run('grep', { ref: commit, overlay, pattern: 'branchOnly|overlayOnly' })
       check('grep uses base plus overlay', grep.ok && grep.text.includes('overlayOnly') && !grep.text.includes('branchOnly'), grep)
-      const diff = await run('browse_repository', { ref: commit, diff: base, overlay })
-      check('diff names both commits and overlay bytes', diff.ok && diff.text.includes(base) && diff.text.includes(commit) && diff.text.includes('+export function overlayOnly'), diff)
+      const diff = await run('browse_repository', { ref: commit, diff: commit, overlay })
+      check('diff names the synced commit and the overlay bytes', diff.ok && diff.text.includes(commit) && diff.text.includes('+export function overlayOnly'), diff)
+      // Reader tools never fetch: the sync took the default branch (feature) only, so the earlier commit is not in the mirror.
+      const unsynced = await run('read_file', { ref: base, path: 'api.ts', outline: false })
+      check('a commit the sync did not bring is "not synced yet", not fetched', !unsynced.ok && unsynced.text.includes('NOT_SYNCED') && unsynced.text.includes('not synced yet'), unsynced)
       const plain = await run('read_file', { ref: commit, path: 'api.ts', outline: false })
       check('overlay did not persist in the next call', plain.ok && stringField(plain.json, 'content') === next, plain)
       const indexed = await run('read_file', { path: 'api.ts', outline: false })
-      check('default shared index remains on main', indexed.ok && stringField(indexed.json, 'content') === old && stringField(indexed.json, 'commit') === base, indexed)
+      check('default shared index is the synced tip', indexed.ok && stringField(indexed.json, 'content') === next && stringField(indexed.json, 'commit') === commit, indexed)
       return { summary: 'Real smart-HTTP ref/overlay acceptance, with raw MCP answers and exact base/target identities.', checks, data }
     } finally {
       if (repositoryId) await ctx.rest('admin').must('DELETE', `/api/repositories/${repositoryId}`)

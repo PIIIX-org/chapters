@@ -6,11 +6,9 @@ import { eq } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositories, repositoryFiles } from '../db/schema.js'
 import { config } from '../config.js'
-import { resolveRepositoryAccess, isSafeGitUrl } from './permissions.js'
-import { authenticatedUrl } from './git-remote.js'
-import { admitRefFetch, RefFetchRefused, type RefFetchSlot } from './ref-fetch-admission.js'
-import { decryptCredential } from './credentials.js'
-import { openQueryMirror, markMirrorSynced, scanMirrorTree, withMirrorLock, objectFormatOf, MirrorReadLimitError, QUERY_MIRROR_LIMITS, mirrorBytes, discardQueryMirror, fetchQueryCommit, listRemoteCapped, type TreeEntry } from './git-mirror.js'
+import { resolveRepositoryAccess } from './permissions.js'
+import { contentHash, sourceIdentity } from './source-identity.js'
+import { scanMirrorTree, withMirrorLock, gitMirrorDir, resolveMirrorRef, MirrorRefError, MirrorReadLimitError, type TreeEntry } from './git-mirror.js'
 import { EXTRACTOR_VERSION, extractStructure, isSupportedLanguage, type ExtractedSymbol, type ExtractionResult } from './extraction.js'
 import { parsed } from './blob-cache.js'
 import { BlockBudget, BlockBudgetError, codeBlocks, type BlockBounds, type CodeBlock } from './code-blocks.js'
@@ -37,6 +35,8 @@ export function declarationIndex(file: ViewFile): ReadonlyMap<string, ExtractedS
   return held
 }
 /** A view's skeleton text per file: a declaration's first line cut to 240 characters, at most 32 KiB (and never more than the file). */
+/** Outline paths in a view: each title cut to 200 characters, a path to 1,000, at most 20,000 headings per file (more: no outline for that file), each section charged to the request budget before it is built. */
+export const VIEW_OUTLINE_BOUNDS = { title: 200, path: 1000, sections: 20_000 }
 export const VIEW_BLOCK_BOUNDS: BlockBounds = { lineChars: 240, skeletonChars: 32 * 1024 }
 /**
  * `generatedBytes`/`blocks`: block text (file, snippet, embedded text, skeleton) and blocks one tree build may create, charged per
@@ -45,7 +45,7 @@ export const VIEW_BLOCK_BOUNDS: BlockBounds = { lineChars: 240, skeletonChars: 3
  */
 export const REF_LIMITS = { files: 20_000, bytes: 32 * 1024 * 1024, cachedBytes: 64 * 1024 * 1024, trees: 8, generatedBytes: 192 * 1024 * 1024, blocks: 400_000, overlayGeneratedBytes: 32 * 1024 * 1024, overlayBlocks: 50_000 }
 export class RefError extends Error {
-  constructor(readonly code: 'INVALID_ARGUMENT' | 'NOT_FOUND' | 'BUSY', message: string, readonly field = 'ref') { super(message) }
+  constructor(readonly code: 'INVALID_ARGUMENT' | 'NOT_FOUND' | 'BUSY' | 'NOT_SYNCED', message: string, readonly field = 'ref') { super(message) }
 }
 export interface ViewFile {
   id: string
@@ -69,15 +69,11 @@ export interface RepositoryView {
   bytes: number
 }
 const cache = new Map<string, RepositoryView>()
-/** Commits (by repository, source and id) whose fetch or tree went over a budget: refused without another transfer. */
-const rejectedCommits = new Set<string>()
 export const refCacheStats = { built: 0, reused: 0, blobsRead: 0, overlayParses: 0 }
 export function clearRefCache(): void {
   cache.clear()
-  rejectedCommits.clear()
   for (const key of Object.keys(refCacheStats) as Array<keyof typeof refCacheStats>) refCacheStats[key] = 0
 }
-export const contentHash = (text: string): string => createHash('sha256').update(text).digest('hex')
 /** Stable UUID-shaped identities for content-scoped files and symbols, never shared-index row ids. */
 export function viewId(text: string): string {
   const bytes = createHash('sha256').update(text).digest()
@@ -85,10 +81,6 @@ export function viewId(text: string): string {
   bytes[8] = (bytes[8]! & 63) | 128
   const hex = bytes.toString('hex', 0, 16)
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
-}
-
-function sourceIdentity(repo: typeof repositories.$inferSelect): string {
-  return contentHash(`${repo.ownerId}\0${repo.createdAt.toISOString()}\0${repo.ingestionMethod}\0${repo.gitUrl ?? ''}\0${repo.localPath ?? ''}`)
 }
 
 /** A purge/recreation, source replacement or permission change during slow work cannot publish held bytes. */
@@ -101,34 +93,6 @@ export async function requireViewAccess(userId: string, view: RepositoryView): P
 export function viewVersion(view: RepositoryView): Record<string, unknown> {
   const skipped = summarizeSkips(view.skipped)
   return { source: view.source, ...(view.commit ? { commit: view.commit } : {}), tree: view.tree, ...(view.overlay ? { overlay: true, overlay_hash: view.overlay } : {}), ...(view.skipped.length ? { skipped: { binary: skipped.binary, too_large: skipped.too_large, ignored: skipped.ignored, over_file_cap: skipped.over_file_cap } } : {}) }
-}
-/**
- * The one commit a branch/tag name names on the remote, from `ls-remote` rows for exactly `ref`, `refs/heads/ref` and `refs/tags/ref`.
- * An annotated tag is peeled to its commit, but never in place of a same-named branch or tag: competing refs that
- * end on different commits are an ambiguity the caller must settle with `refs/heads/` or `refs/tags/`.
- */
-export function resolveAdvertisedRef(listing: string, ref: string): string {
-  const wanted = new Set([ref, `refs/heads/${ref}`, `refs/tags/${ref}`])
-  const named = new Map<string, { direct?: string; peeled?: string }>()
-  for (const line of listing.trim().split('\n')) {
-    const [sha, name] = line.split('\t')
-    if (!sha || !name || !/^[a-f0-9]{40,64}$/.test(sha)) continue
-    const peeled = name.endsWith('^{}')
-    const base = peeled ? name.slice(0, -3) : name
-    if (!wanted.has(base)) continue
-    const entry = named.get(base) ?? {}
-    if (peeled) entry.peeled = sha
-    else entry.direct = sha
-    named.set(base, entry)
-  }
-  const commits = new Map<string, string[]>()
-  for (const [name, { direct, peeled }] of named) {
-    const sha = peeled ?? direct
-    if (sha) commits.set(sha, [...commits.get(sha) ?? [], name])
-  }
-  if (commits.size === 0) throw new RefError('INVALID_ARGUMENT', 'ref is not advertised by this repository')
-  if (commits.size > 1) throw new RefError('INVALID_ARGUMENT', `ambiguous ref: ${[...commits.values()].flat().sort().join(' and ')} name different commits; use refs/heads/ or refs/tags/`)
-  return commits.keys().next().value!
 }
 /** A snapshot key made specific to the view (and diff base) it was computed on; unchanged for the live index. */
 export function viewSnapshotKey(key: string | null, view: RepositoryView | null, base: RepositoryView | null): string | null {
@@ -153,8 +117,8 @@ async function fileIndex(repositoryId: string, path: string, content: string, ov
     ? overlay ? await extractStructure(language, content, path) : await parsed(language, content, path, hash)
     : { symbols: [], imports: [], sites: [] }
   if (overlay && structured && isSupportedLanguage(language)) refCacheStats.overlayParses++
-  const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, content) : []
   try {
+    const sections = hasOutline(language) && (structured || language === 'markdown') ? outlineSections(language, content, { ...VIEW_OUTLINE_BOUNDS, charge: (bytes) => budget.reserve(bytes, 0) }) : []
     return { id, path, content, contentHash: hash, language, size: Buffer.byteLength(content), structure, blocks: codeBlocks(id, path, content, structure.symbols, sections, { ...VIEW_BLOCK_BOUNDS, budget }) }
   } catch (err) {
     if (err instanceof BlockBudgetError) throw new RefError('BUSY', `ref exceeds the generated index budget (${err.message}); no partial index was served`)
@@ -245,56 +209,20 @@ export async function repositoryViewAt(userId: string, repositoryId: string, arg
     if (!repo) throw new RefError('NOT_FOUND', 'not found')
     let base: RepositoryView
     if (repo.ingestionMethod === 'git' && repo.gitUrl) {
-      if (!isSafeGitUrl(repo.gitUrl)) throw new RefError('INVALID_ARGUMENT', 'repository has no permitted Git source')
-      const url = authenticatedUrl(repo.gitUrl, repo.gitCredentialEncrypted ? decryptCredential(repo.gitCredentialEncrypted) : null)
-      const ref = args.ref ?? repo.lastSyncedCommit
-      if (!ref) throw new RefError('NOT_FOUND', 'no indexed base commit; sync the repository first')
-      // Never reveal URLs or credentials in source keys or command errors.
+      // Only what the server's own sync already put in the repository's mirror: no fetch, no ls-remote, no network.
       const source = sourceIdentity(repo)
-      let commit = ref
-      if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(ref)) {
-        commit = resolveAdvertisedRef(await listRemoteCapped(url, [ref, `refs/heads/${ref}`, `refs/tags/${ref}`, `refs/tags/${ref}^{}`]), ref)
-      }
-      const format = objectFormatOf(commit)
-      let dir = await openQueryMirror(repositoryId, source, format)
-      // The query mirror is a cache of reader-chosen commits: past its quota it is dropped, never grown.
-      if (await mirrorBytes(dir) > QUERY_MIRROR_LIMITS.mirrorBytes) {
-        await discardQueryMirror(dir)
-        dir = await openQueryMirror(repositoryId, source, format)
-      }
-      const rejectedKey = `${repositoryId}:${source}:${commit}`
-      if (rejectedCommits.has(rejectedKey)) throw new RefError('BUSY', 'ref was refused before: it exceeds the transfer or index budget')
-      const cached = await simpleGit(dir).raw(['cat-file', '-e', `${commit}^{commit}`]).then(() => true, () => false)
-      // A cache miss launches git: admitted first, refused without launching it when the instance or account is over its allowance.
-      let slot: RefFetchSlot | null = null
-      if (!cached) {
-        try {
-          slot = admitRefFetch(userId, QUERY_MIRROR_LIMITS.fetchBytes)
-        } catch (err) {
-          throw err instanceof RefFetchRefused ? new RefError('BUSY', err.message) : err
-        }
-      }
+      const dir = gitMirrorDir(repositoryId)
+      let commit: string
       try {
-        if (slot) {
-          const before = await mirrorBytes(dir)
-          try {
-            await fetchQueryCommit(dir, url, commit)
-          } finally {
-            slot.settle(await mirrorBytes(dir) - before)
-          }
-        }
-        commit = (await simpleGit(dir).raw(['rev-parse', '--verify', `${commit}^{commit}`])).trim()
-        base = await treeView(repositoryId, source, dir, commit)
+        commit = await resolveMirrorRef(dir, source, args.ref, repo.lastSyncedCommit, repo.defaultBranch)
       } catch (err) {
-        // Whatever this call brought in and could not serve is removed with the mirror, and not asked for again.
-        if (err instanceof MirrorReadLimitError || (err instanceof RefError && err.code === 'BUSY')) {
-          rejectedCommits.add(rejectedKey)
-          if (rejectedCommits.size > 256) rejectedCommits.delete(rejectedCommits.values().next().value!)
+        if (err instanceof MirrorRefError) {
+          if (err.kind === 'ambiguous') throw new RefError('INVALID_ARGUMENT', err.message)
+          throw new RefError('NOT_SYNCED', `${err.message}. Available: the default branch, HEAD, the last synced commit and refs the mirror holds${repo.lastSyncedAt ? `; last sync ${repo.lastSyncedAt.toISOString()}` : ''}`)
         }
-        await discardQueryMirror(dir)
         throw err
       }
-      await markMirrorSynced(dir, commit)
+      base = await treeView(repositoryId, source, dir, commit)
     } else if (repo.ingestionMethod === 'local_path' && repo.localPath && args.ref !== undefined) {
       // Only the registered source under LOCAL_REPOS_ROOT, never a caller-supplied directory.
       const root = await realpath(config.localReposRoot)

@@ -7,6 +7,8 @@ import { eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories } from '../src/db/schema.js'
 import { syncGitRepository } from '../src/repositories/git-sync.js'
+import { removeGitMirror } from '../src/repositories/git-mirror.js'
+import { repositoryViewAt } from '../src/repositories/ref-index.js'
 import { getRepositoryFile, listRepositoryFiles } from '../src/repositories/store.js'
 import { createActiveUser } from './helpers.js'
 
@@ -84,6 +86,16 @@ describe('git URL ingestion', () => {
     expect(files.map((f) => f.path).sort()).toEqual(['a.ts', 'c.ts'])
     const a = await getRepositoryFile(repo.id, 'a.ts')
     expect(a?.content).toContain('999')
+
+    // Ref views read the mirror this sync filled, never the network: the synced tip by HEAD, by commit and by the default branch's name.
+    const [synced] = await db.select().from(repositories).where(eq(repositories.id, repo.id))
+    for (const ref of ['HEAD', 'main', synced!.lastSyncedCommit!]) {
+      const view = await repositoryViewAt(synced!.ownerId, repo.id, { ref })
+      expect(view.commit, ref).toBe(synced!.lastSyncedCommit)
+      expect([...view.files.keys()].sort()).toEqual(['a.ts', 'c.ts'])
+    }
+    await expect(repositoryViewAt(synced!.ownerId, repo.id, { ref: 'elsewhere' })).rejects.toMatchObject({ code: 'NOT_SYNCED' })
+    await removeGitMirror(repo.id)
   })
 
   it('records a sync error without throwing the caller into an unhandled state', async () => {

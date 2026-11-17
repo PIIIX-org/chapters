@@ -1,7 +1,7 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { isUtf8 } from 'node:buffer'
 import { existsSync } from 'node:fs'
-import { lstat, mkdir, readdir, rm } from 'node:fs/promises'
+import { mkdir, readdir, rm } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
 import { simpleGit } from 'simple-git'
@@ -134,25 +134,6 @@ export async function openMirror(repositoryId: string, format: ObjectFormat | nu
   return dir
 }
 
-/** A separate object store inside the owned mirror: a replaced source must never borrow the old source's objects. */
-export async function openQueryMirror(repositoryId: string, source: string, format: ObjectFormat): Promise<string> {
-  const parent = await openMirror(repositoryId, null)
-  const dir = join(parent, 'elara-query.git')
-  if (existsSync(dir)) {
-    try {
-      const git = simpleGit(dir)
-      if ((await git.raw(['config', '--get', 'elara.source'])).trim() === source && (await git.raw(['rev-parse', '--show-object-format'])).trim() === format) return dir
-    } catch {
-      // Incomplete initialization is not evidence of the configured source.
-    }
-    await rm(dir, { recursive: true, force: true })
-  }
-  await simpleGit().raw(['init', '--bare', '--quiet', `--object-format=${format}`, dir])
-  for (const [key, value] of MIRROR_CONFIG) await simpleGit(dir).raw(['config', key, value])
-  await simpleGit(dir).raw(['config', 'elara.source', source])
-  return dir
-}
-
 /** The remote's default branch (null when the server does not advertise HEAD as a symref) and its commit. */
 export interface RemoteHead {
   branch: string | null
@@ -194,142 +175,75 @@ export async function fetchIntoMirror(dir: string, url: string, branch: string |
   return (await simpleGit(dir).raw(['rev-parse', '--verify', `${HEAD_REF}^{commit}`])).trim()
 }
 
+/** The source identity (source-identity.ts) of the repository whose sync filled this mirror: set by every sync, read by ref views. */
+export async function recordMirrorSource(dir: string, source: string): Promise<void> {
+  await simpleGit(dir).raw(['config', 'elara.source', source])
+}
+
+/** Why a ref cannot be served from the mirror: `unsynced` (no mirror, another source's, or the ref/commit is not in it) or `ambiguous` (names competing commits). */
+export class MirrorRefError extends Error {
+  constructor(readonly kind: 'unsynced' | 'ambiguous', message: string) { super(message) }
+}
+
 /**
- * What a reader-chosen ref may cost the query mirror (ref-index.ts), as a best-effort cap and not a hard quota.
- * `fetchBytes`: a fetch is watched while git runs and killed once the mirror has grown by this much; the overshoot is bounded
- * by the poll interval times the link's bandwidth (about 12 MiB per 100 ms at 1 Gbit/s, 119 MiB at 10 Gbit/s) and by event-loop
- * stalls. Where the platform has a shell `ulimit -f` (Linux, macOS) the fetch also runs under it, so the pack file itself cannot
- * grow past `fetchBytes` (twice that in shells that count 1,024-byte blocks): that part is a hard limit.
- * `mirrorBytes`: the most a repository's query mirror may hold before it is discarded and started again, checked per request.
- * The query mirror is a cache of reader-chosen commits: dropping it loses nothing but time.
+ * The one commit a branch/tag name names in `ls-remote`-shaped rows (`<sha>\t<refname>`; an annotated tag's peeled commit is the row
+ * `<sha>\t<refname>^{}`). Each tag is peeled without dropping a competing same-named branch or tag; competing refs that end on
+ * different commits are an ambiguity naming both, settled with `refs/heads/` or `refs/tags/`.
  */
-export const QUERY_MIRROR_LIMITS = { fetchBytes: 256 * 1024 * 1024, mirrorBytes: 1024 * 1024 * 1024, timeoutMs: 120_000, pollMs: 100 }
-/** The most bytes of a remote's `ls-remote` answer a ref lookup reads. */
-export const LS_REMOTE_MAX_BYTES = 8 * 1024 * 1024
-
-/** Bytes of regular files under `dir` (links not followed); a vanishing file counts as 0. */
-export async function mirrorBytes(dir: string): Promise<number> {
-  let total = 0
-  const walk = async (path: string): Promise<void> => {
-    let names: string[]
-    try {
-      names = await readdir(path)
-    } catch {
-      return
-    }
-    for (const name of names) {
-      const child = join(path, name)
-      try {
-        const info = await lstat(child)
-        if (info.isDirectory()) await walk(child)
-        else if (info.isFile()) total += info.size
-      } catch {
-        // Removed while counting.
-      }
-    }
+export function resolveRefListing(listing: string, ref: string): string | null {
+  const wanted = new Set([ref, `refs/heads/${ref}`, `refs/tags/${ref}`])
+  const named = new Map<string, { direct?: string; peeled?: string }>()
+  for (const line of listing.trim().split('\n')) {
+    const [sha, name] = line.split('\t')
+    if (!sha || !name || !/^[a-f0-9]{40,64}$/.test(sha)) continue
+    const peeled = name.endsWith('^{}')
+    const base = peeled ? name.slice(0, -3) : name
+    if (!wanted.has(base)) continue
+    const entry = named.get(base) ?? {}
+    if (peeled) entry.peeled = sha
+    else entry.direct = sha
+    named.set(base, entry)
   }
-  await walk(dir)
-  return total
+  const commits = new Map<string, string[]>()
+  for (const [name, { direct, peeled }] of named) {
+    const sha = peeled ?? direct
+    if (sha) commits.set(sha, [...commits.get(sha) ?? [], name])
+  }
+  if (commits.size === 0) return null
+  if (commits.size > 1) throw new MirrorRefError('ambiguous', `ambiguous ref: ${[...commits.values()].flat().sort().join(' and ')} name different commits; use refs/heads/ or refs/tags/`)
+  return commits.keys().next().value!
 }
 
-/** Removes a query mirror whose content was rejected or outgrew its quota; `openQueryMirror` starts it again. */
-export async function discardQueryMirror(dir: string): Promise<void> {
-  await rm(dir, { recursive: true, force: true })
-}
-
-/** Kills git and the helpers it started (own process group). */
-function killGroup(child: ChildProcess): void {
+/**
+ * The commit `ref` names in the mirror the normal sync maintains, never the network. Only commits the sync recorded are served:
+ * the fetched tip (`refs/elara/head`, also `HEAD`), the last indexed commit (`refs/elara/synced`) and what branches or tags the
+ * mirror holds. `ref` undefined is the caller's default commit. Throws `MirrorRefError`.
+ */
+export async function resolveMirrorRef(dir: string, source: string, ref: string | undefined, fallback: string | null, defaultBranch: string | null): Promise<string> {
+  const unsynced = () => new MirrorRefError('unsynced', 'not available: not synced yet; retry after the next sync')
+  if (!existsSync(dir)) throw unsynced()
+  const git = simpleGit(dir, { allowEnvironment: ['GIT_NO_REPLACE_OBJECTS'] }).env('GIT_NO_REPLACE_OBJECTS', '1')
   try {
-    if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL')
-  } catch {
-    child.kill('SIGKILL')
+    if ((await git.raw(['config', '--get', 'elara.source'])).trim() !== source) throw unsynced()
+    const rows = (await git.raw(['for-each-ref', '--format=%(objectname)\t%(refname)\t%(*objectname)', 'refs/'])).trim().split('\n').filter(Boolean).map((line) => line.split('\t'))
+    const listing = rows.flatMap(([sha, name, peeled]) => [`${sha}\t${name}`, ...(peeled ? [`${peeled}\t${name}^{}`] : [])])
+    const heads = new Map(rows.map(([sha, name]) => [name!, sha!]))
+    const synced = new Set(rows.flatMap(([sha, , peeled]) => [sha!, ...(peeled ? [peeled] : [])]))
+    let commit: string | null | undefined
+    if (ref === undefined) commit = fallback
+    else if (/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(ref)) commit = ref.toLowerCase()
+    else if (ref === 'HEAD') commit = heads.get(HEAD_REF)
+    else {
+      // The default branch's name is the row's; branches/tags are those the mirror holds (`refs/heads/*`, `refs/tags/*`).
+      const named = listing.filter((row) => /\trefs\/(?:heads|tags)\//.test(row)).join('\n')
+      commit = resolveRefListing(named, ref) ?? (ref === defaultBranch || ref === `refs/heads/${defaultBranch}` ? heads.get(HEAD_REF) : null)
+    }
+    if (!commit || !synced.has(commit)) throw unsynced()
+    return (await git.raw(['rev-parse', '--verify', '--end-of-options', `${commit}^{commit}`])).trim()
+  } catch (err) {
+    if (err instanceof MirrorRefError) throw err
+    throw unsynced()
   }
-}
-
-/**
- * The refs a remote advertises for `patterns`, as `ls-remote` rows, read through a byte-capped subprocess: output past
- * `maxBytes` (or `timeoutMs`) kills git's process group and refuses. Git's own messages are discarded, they carry the URL
- * and its credential. Protocol v2 is preferred so the server filters by the patterns; a v0 server's whole advertisement is
- * only bounded by the timeout (it is read by git, not buffered here).
- */
-export async function listRemoteCapped(url: string, patterns: readonly string[], maxBytes = LS_REMOTE_MAX_BYTES, timeoutMs = 30_000): Promise<string> {
-  const child = spawn('git', ['-c', 'protocol.version=2', 'ls-remote', url, ...patterns], {
-    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' },
-    stdio: ['ignore', 'pipe', 'ignore'],
-    detached: true,
-  })
-  const chunks: Buffer[] = []
-  let size = 0
-  let over = false
-  const timer = setTimeout(() => killGroup(child), timeoutMs)
-  child.stdout.on('data', (chunk: Buffer) => {
-    size += chunk.length
-    if (size > maxBytes) {
-      over = true
-      chunks.length = 0
-      killGroup(child)
-    } else if (!over) chunks.push(chunk)
-  })
-  const code = await new Promise<number | null>((resolve, reject) => {
-    child.on('error', reject)
-    child.on('close', resolve)
-  }).finally(() => clearTimeout(timer))
-  if (over) throw new MirrorReadLimitError(`the remote advertises more than ${maxBytes / 1024 / 1024} MiB of refs for this lookup`)
-  if (code !== 0) throw new Error(`git ls-remote exited with ${code}`)
-  return Buffer.concat(chunks).toString('utf8')
-}
-
-/**
- * `git fetch --depth=1` of one commit into the query mirror. Best-effort size cap: the mirror is polled every
- * `limits.pollMs` and git is killed (with its helpers) once it has grown by `limits.fetchBytes`; a fetch that ends between two
- * polls is caught by a final check. Git has no transfer cap of its own for fetch (`receive.maxInputSize` only guards pushes)
- * and the whole commit tree crosses the wire before any tree limit can be read. Where `sh` has `ulimit -f` the fetch is also
- * run under it, a hard limit on the pack file (see `QUERY_MIRROR_LIMITS`). Output is discarded: git's messages carry the remote
- * URL and its credential. On any failure the caller discards the mirror, which removes the partial pack. Resolves with the
- * bytes the mirror grew by.
- */
-export async function fetchQueryCommit(dir: string, url: string, commit: string, limits: { fetchBytes: number; timeoutMs: number; pollMs?: number } = QUERY_MIRROR_LIMITS): Promise<number> {
-  const before = await mirrorBytes(dir)
-  const fetchArgs = ['fetch', '--quiet', '--depth=1', '--no-tags', '--no-write-fetch-head', url, `+${commit}:refs/elara/query`]
-  // `ulimit -f` counts 512-byte blocks (1,024 in some shells); failing to set it must not stop the fetch.
-  const [command, args] = process.platform === 'win32' ? ['git', fetchArgs] : ['/bin/sh', ['-c', 'ulimit -f "$0" 2>/dev/null; exec "$@"', String(Math.ceil(limits.fetchBytes / 512)), 'git', ...fetchArgs]] as const
-  const child = spawn(command, args, {
-    cwd: dir,
-    env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' },
-    stdio: 'ignore',
-    detached: true,
-  })
-  let over = false
-  let timedOut = false
-  let measuring = false
-  const watch = setInterval(() => {
-    if (measuring) return
-    measuring = true
-    void mirrorBytes(dir).then((size) => {
-      if (size - before > limits.fetchBytes) {
-        over = true
-        killGroup(child)
-      }
-    }).finally(() => { measuring = false })
-  }, limits.pollMs ?? 100)
-  const timer = setTimeout(() => { timedOut = true; killGroup(child) }, limits.timeoutMs)
-  const code = await new Promise<number | null>((resolve, reject) => {
-    child.on('error', reject)
-    child.on('close', (exit) => resolve(exit))
-  }).finally(() => {
-    clearInterval(watch)
-    clearTimeout(timer)
-  })
-  const grown = await mirrorBytes(dir) - before
-  // A fetch that finished between two polls, or one the file-size limit stopped at the budget, is over budget too.
-  if (grown > limits.fetchBytes || (code !== 0 && grown >= limits.fetchBytes * 0.9)) over = true
-  if (over) {
-    await simpleGit(dir).raw(['update-ref', '-d', 'refs/elara/query']).catch(() => undefined)
-    throw new MirrorReadLimitError(`commit exceeds the ref transfer budget (${limits.fetchBytes / 1024 / 1024} MiB); nothing was kept`)
-  }
-  if (timedOut) throw new Error('git fetch timed out')
-  if (code !== 0) throw new Error(`git fetch exited with ${code}`)
-  return grown
 }
 
 /** Whether the mirror holds `commit` (with its tree): a diff base for the next sync. */

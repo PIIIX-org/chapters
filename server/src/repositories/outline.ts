@@ -27,13 +27,37 @@ interface FoundHeading {
   line: number
 }
 
+/**
+ * Bounds for outlines built per call (ref/overlay views); the live index passes none, so its sections are unchanged.
+ * Each title segment is cut to `title` characters and a section's path to `path`; a file with more than `sections` headings gets no
+ * outline at all (as a minified file gets no symbols); `charge` is told the bytes of each section's path and object before they are
+ * built, and may throw to refuse the request.
+ */
+export interface OutlineLimits {
+  title: number
+  path: number
+  sections: number
+  charge: (bytes: number) => void
+}
+
+/** Bytes charged for a section beyond its path: the object, its numbers and the block it becomes. */
+const SECTION_OVERHEAD = 512
+
+/** `text` cut to `max` UTF-16 units without leaving half of a surrogate pair. */
+function cut(text: string, max: number): string {
+  if (text.length <= max) return text
+  const end = max > 0 && text.charCodeAt(max - 1) >= 0xd800 && text.charCodeAt(max - 1) <= 0xdbff ? max - 1 : max
+  return text.slice(0, end)
+}
+
 export function hasOutline(language: string | null): boolean {
   return language === 'markdown' || language === 'html'
 }
 
-export function outlineSections(language: string | null, content: string): OutlineSection[] {
+export function outlineSections(language: string | null, content: string, limits?: OutlineLimits): OutlineSection[] {
   const starts = lineStarts(content)
-  const found = language === 'markdown' ? markdownHeadings(content, starts) : language === 'html' ? htmlHeadings(content, starts) : []
+  const found = language === 'markdown' ? markdownHeadings(content, starts, limits?.sections) : language === 'html' ? htmlHeadings(content, starts, limits?.sections) : []
+  if (limits && found.length > limits.sections) return []
   const total = starts.length
   const trail: FoundHeading[] = []
   // The next heading of the same or a higher level, for each heading, in one pass: a heading waits on the stack until
@@ -46,12 +70,18 @@ export function outlineSections(language: string | null, content: string): Outli
   })
   return found.map((h, i) => {
     while (trail.length > 0 && trail.at(-1)!.level >= h.level) trail.pop()
-    trail.push(h)
+    trail.push(limits ? { ...h, title: cut(h.title, limits.title) } : h)
     const next = nextOf[i]!
+    // The path's length is known from the segments before any of it is joined.
+    let path: string
+    if (limits) {
+      limits.charge(Math.min(limits.path, trail.reduce((n, t) => n + t.title.length, 0) + 3 * (trail.length - 1)) + SECTION_OVERHEAD)
+      path = cut(trail.map((t) => t.title).join(' > '), limits.path)
+    } else path = trail.map((t) => t.title).join(' > ')
     // Two HTML headings can share a line: a section always spans its own.
     const before = (line: number | undefined) => Math.max(h.line, line === undefined ? total : line - 1)
     return {
-      innerPath: trail.map((t) => t.title).join(' > '),
+      innerPath: path,
       startLine: h.line,
       ownEndLine: before(found[i + 1]?.line),
       endLine: before(next === -1 ? undefined : found[next]!.line),
@@ -72,10 +102,10 @@ function lineAt(starts: number[], offset: number): number {
 }
 
 /** ATX headings (text/blocks.ts `headings`, so none in a code fence) after a leading `---` front matter block. */
-function markdownHeadings(content: string, starts: number[]): FoundHeading[] {
+function markdownHeadings(content: string, starts: number[], max?: number): FoundHeading[] {
   const frontMatter = /^---\r?\n[\s\S]*?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(content)
   const from = frontMatter ? frontMatter[0].length : 0
-  return headings(content.slice(from)).map((h) => ({ level: h.level, title: h.title, line: lineAt(starts, from + h.start) }))
+  return headings(content.slice(from), max).map((h) => ({ level: h.level, title: h.title, line: lineAt(starts, from + h.start) }))
 }
 
 /** What no heading is read inside: comments, scripts, styles. Blanked (newlines kept) so offsets stay lines. */
@@ -93,12 +123,13 @@ function decodeEntities(text: string): string {
 }
 
 /** HTML `h1`-`h6` with their text: tags dropped, entities decoded, white space collapsed; empty ones skipped. */
-function htmlHeadings(content: string, starts: number[]): FoundHeading[] {
+function htmlHeadings(content: string, starts: number[], max = Infinity): FoundHeading[] {
   const visible = content.replace(HTML_OPAQUE, (opaque) => opaque.replace(/[^\n]/g, ' '))
   const out: FoundHeading[] = []
   for (const match of visible.matchAll(HTML_HEADING)) {
     const title = decodeEntities(match[2]!.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim()
     if (title) out.push({ level: Number(match[1]), title, line: lineAt(starts, match.index) })
+    if (out.length > max) break
   }
   return out
 }

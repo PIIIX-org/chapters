@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { existsSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,8 +19,8 @@ import { clearRefCache, REF_LIMITS, refCacheStats, repositoryViewAt, VIEW_BLOCK_
 import { viewQueries, refQueryStats, VIEW_GRAPH_LIMITS } from '../src/repositories/ref-queries.js'
 import { refSearchStats } from '../src/repositories/ref-search.js'
 import { MAX_ROUTED } from '../src/search/router.js'
-import { gitMirrorDir, removeGitMirror, withMirrorLock, QUERY_MIRROR_LIMITS } from '../src/repositories/git-mirror.js'
-import { resetRefFetchAdmission } from '../src/repositories/ref-fetch-admission.js'
+import { gitMirrorDir, openMirror, recordMirrorSource, removeGitMirror, withMirrorLock } from '../src/repositories/git-mirror.js'
+import { sourceIdentity } from '../src/repositories/source-identity.js'
 import { parseCacheStats } from '../src/repositories/blob-cache.js'
 import { resetRateLimits } from '../src/mcp/rate-limit.js'
 import { createActiveUser, loginCookie } from './helpers.js'
@@ -70,6 +69,13 @@ async function connect(email: string, name: string): Promise<Client> {
   const client = new Client({ name, version: '0.0.0' })
   await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), { requestInit: { headers: { authorization: `Bearer ${mint.json<{ token: string }>().token}` } } }))
   return client
+}
+/** What the server's own sync leaves in the repository's mirror (the reader tools never fetch): every branch and tag of the source, plus the source identity. */
+async function syncMirror(id = repoId, from = root) {
+  const [record] = await db.select().from(repositories).where(eq(repositories.id, id))
+  const dir = await openMirror(id, null)
+  await simpleGit(dir).raw(['fetch', '--quiet', '--prune', '--no-write-fetch-head', from, '+refs/heads/*:refs/heads/*', '+refs/tags/*:refs/tags/*'])
+  await recordMirrorSource(dir, sourceIdentity(record!))
 }
 const ROW = z.looseObject({ path: z.string().optional(), name: z.string().optional(), symbolName: z.string().optional(), snippet: z.string().optional(), at: z.string().optional(), to: z.string().optional(), startLine: z.number().optional(), endLine: z.number().optional(), edge: z.looseObject({ confidence: z.string(), kind: z.string(), col: z.number(), symbol: z.string().nullable() }).optional() })
 const BODY = z.looseObject({
@@ -129,6 +135,8 @@ beforeAll(async () => {
   await git().raw(['commit', '--allow-empty', '-m', 'same tree, another commit'])
   sameTree = (await git().revparse(['HEAD'])).trim()
   await git().addTag('same-tree')
+  // `second` is not a branch tip: the mirror serves tips, so pin it.
+  await git().raw(['branch', 'at-second', second])
   app = await buildApp()
   await app.listen({ port: 0, host: '127.0.0.1' })
   const address = app.server.address()
@@ -150,6 +158,7 @@ beforeAll(async () => {
   await simpleGit().clone(root, localRoot, ['--quiet'])
   const [local] = await db.insert(repositories).values({ ownerId: user.id, name: 'local-refs-676', ingestionMethod: 'local_path', localPath: localRoot }).returning()
   localId = local!.id
+  await syncMirror()
   clearRefCache()
 }, 120_000)
 
@@ -423,9 +432,12 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
   it('binds continuations to immutable commits even when a branch moves', async () => {
     const args = { ref: 'moving', path: 'large.txt', outline: false }
     await git().raw(['branch', 'moving', second])
+    await syncMirror()
+    clearRefCache()
     const paged = await answer('read_file', { ...args, budget_tokens: 256 })
     if (!paged.truncated) throw new Error('expected a continuation')
     await git().raw(['branch', '-f', 'moving', first])
+    await syncMirror()
     const changed = await call('read_file', { ...args, cursor: paged.truncated.cursor })
     expect(changed.error).toBe(true)
     expect(changed.text).toMatch(/cursor/i)
@@ -447,15 +459,18 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
       }
       // The same arguments, a branch that moved: the resolved view is different, so is the snapshot.
       await git().raw(['branch', '-f', 'cursor-moving', second])
+      await syncMirror()
       const moving = { ...args, ref: 'cursor-moving' }
       const movingPage = await rawPage(tool, moving)
       if (!movingPage.truncated || !movingPage.truncated.cursor) throw new Error(`expected a continuation from ${tool}`)
       await git().raw(['branch', '-f', 'cursor-moving', first])
+      await syncMirror()
       const stale = await call(tool, { ...moving, cursor: movingPage.truncated.cursor })
       expect(stale.error, tool).toBe(true)
       expect(stale.text).toMatch(/CURSOR_INVALID.*issued for other arguments/s)
     }
     await git().raw(['branch', '-D', 'cursor-moving'])
+    await syncMirror()
   })
 
   it('runs a literal `grep` over the view result set only, never the live index', async () => {
@@ -495,6 +510,8 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
   it('reports a branch and an annotated tag of the same name instead of serving the tag', async () => {
     await git().raw(['branch', 'release', first])
     await git().raw(['tag', '-a', 'release', '-m', 'annotated', second])
+    await syncMirror()
+    clearRefCache()
     try {
       const both = await call('read_file', { ref: 'release', path: 'src/api.ts' })
       expect(both.error).toBe(true)
@@ -504,10 +521,12 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
       expect((await answer('read_file', { ref: 'refs/tags/release', path: 'src/api.ts', outline: false })).commit).toBe(second)
       expect((await answer('read_file', { ref: 'refs/heads/release', path: 'src/api.ts', outline: false })).commit).toBe(first)
       await git().raw(['branch', '-D', 'release'])
+      await syncMirror()
       expect((await answer('read_file', { ref: 'release', path: 'src/api.ts', outline: false })).commit).toBe(second)
     } finally {
       await git().raw(['tag', '-d', 'release'])
       await git().raw(['branch', '-D', 'release']).catch(() => undefined)
+      await syncMirror()
     }
   })
 
@@ -587,6 +606,7 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     const [temporary] = await db.insert(repositories).values({ name: 'ref-purge', ownerId: source!.ownerId, ingestionMethod: 'git', gitUrl: `file://${root}` }).returning()
     const id = temporary!.id
     try {
+      await syncMirror(id)
       const old = await answer('read_file', { repositoryId: id, ref: second, path: 'src/api.ts' })
       const cookie = await loginCookie(app, ownerEmail)
       const deleted = await app.inject({ method: 'DELETE', url: `/api/repositories/${id}`, headers: { cookie } })
@@ -594,6 +614,9 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
       await withMirrorLock(id, async () => { expect(existsSync(gitMirrorDir(id))).toBe(false) })
       expect((await call('read_file', { repositoryId: id, ref: second, path: 'src/api.ts' })).error).toBe(true)
       await db.insert(repositories).values({ id, name: 'ref-recreated', ownerId: source!.ownerId, ingestionMethod: 'git', gitUrl: `file://${root}`, createdAt: new Date(temporary!.createdAt.getTime() + 1_000) })
+      // The recreated repository has no synced mirror: the old one went with the old source.
+      expect((await call('read_file', { repositoryId: id, ref: second, path: 'src/api.ts' })).text).toMatch(/not synced yet/)
+      await syncMirror(id)
       const before = refCacheStats.built
       const fresh = await answer('read_file', { repositoryId: id, ref: second, path: 'src/api.ts' })
       expect(fresh.source).not.toBe(old.source)
@@ -608,8 +631,11 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     const old = await answer('read_file', { ref: second, path: 'src/api.ts' })
     const otherRoot = await mkdtemp(join(tmpdir(), 'elara-ref-other-'))
     try {
-      await simpleGit().clone(root, otherRoot, ['--quiet'])
+      await simpleGit().clone(root, otherRoot, ['--quiet', '--mirror'])
       await db.update(repositories).set({ gitUrl: `file://${otherRoot}` }).where(eq(repositories.id, repoId))
+      // The mirror was filled for the old source: another source is not served from it until its own sync.
+      expect((await call('read_file', { ref: second, path: 'src/api.ts' })).text).toMatch(/not synced yet/)
+      await syncMirror(repoId, otherRoot)
       const next = await answer('read_file', { ref: second, path: 'src/api.ts' })
       expect(next.source).not.toBe(old.source)
       expect(next.commit).toBe(second)
@@ -621,47 +647,11 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
       } finally { REF_LIMITS.files = cap }
     } finally {
       await db.update(repositories).set({ gitUrl: `file://${root}` }).where(eq(repositories.id, repoId))
+      await syncMirror()
       await rm(otherRoot, { recursive: true, force: true })
     }
     expect(gitMirrorDir(repoId)).not.toContain(root)
   })
-  it('refuses a ref whose fetch outgrows the transfer budget, leaves no objects behind and does not fetch it again', async () => {
-    await git().checkoutLocalBranch('huge')
-    await writeFile(join(root, 'huge.txt'), randomBytes(2 * 1024 * 1024))
-    await git().add('.')
-    await git().commit('huge')
-    const huge = (await git().revparse(['HEAD'])).trim()
-    await git().checkout('feature')
-    const limit = QUERY_MIRROR_LIMITS.fetchBytes
-    try {
-      QUERY_MIRROR_LIMITS.fetchBytes = 256 * 1024
-      clearRefCache()
-      const refused = await call('browse_repository', { ref: huge })
-      expect(refused.error).toBe(true)
-      expect(refused.text).toMatch(/transfer budget/)
-      expect(existsSync(join(gitMirrorDir(repoId), 'elara-query.git'))).toBe(false)
-      QUERY_MIRROR_LIMITS.fetchBytes = limit
-      const again = await call('browse_repository', { ref: huge })
-      expect(again.error).toBe(true)
-      expect(again.text).toMatch(/refused before/)
-      clearRefCache()
-      expect((await answer('browse_repository', { ref: huge })).commit).toBe(huge)
-    } finally {
-      QUERY_MIRROR_LIMITS.fetchBytes = limit
-      await git().raw(['branch', '-D', 'huge'])
-    }
-  })
-
-  it('drops the query mirror past its quota instead of growing it', async () => {
-    const quota = QUERY_MIRROR_LIMITS.mirrorBytes
-    try {
-      await answer('read_file', { ref: second, path: 'src/api.ts' })
-      QUERY_MIRROR_LIMITS.mirrorBytes = 1
-      clearRefCache()
-      expect((await answer('read_file', { ref: first, path: 'src/api.ts', outline: false })).commit).toBe(first)
-    } finally { QUERY_MIRROR_LIMITS.mirrorBytes = quota }
-  })
-
   it('indexes a minified or declaration-dense overlay file within bounded generated text', async () => {
     const [record] = await db.select().from(repositories).where(eq(repositories.id, repoId))
     const owner = record!.ownerId
@@ -705,6 +695,7 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     await git().commit('dense')
     const tree = (await git().revparse(['HEAD'])).trim()
     await git().checkout('feature')
+    await syncMirror()
     const limits = { bytes: REF_LIMITS.generatedBytes, overlay: REF_LIMITS.overlayGeneratedBytes }
     try {
       REF_LIMITS.generatedBytes = 32 * 1024 * 1024
@@ -725,34 +716,65 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
       REF_LIMITS.generatedBytes = limits.bytes
       REF_LIMITS.overlayGeneratedBytes = limits.overlay
       await git().raw(['branch', '-D', 'dense'])
+      await syncMirror()
     }
   })
 
-  it('admits a ref fetch only within the instance and account allowance, and refunds what it did not use', async () => {
-    await git().raw(['commit', '--allow-empty', '-m', 'admission only'])
+  it('serves only what the sync put in the mirror: an unsynced commit is "not synced yet", names which refs exist, and nothing is fetched', async () => {
+    await git().raw(['commit', '--allow-empty', '-m', 'not synced'])
     const fresh = (await git().revparse(['HEAD'])).trim()
     await git().raw(['reset', '--hard', sameTree])
-    const saved = process.env.ELARA_REF_FETCH_ACCOUNT_MB
+    const lastSync = new Date('2026-01-02T03:04:05.000Z')
+    await db.update(repositories).set({ lastSyncedAt: lastSync }).where(eq(repositories.id, repoId))
     try {
-      process.env.ELARA_REF_FETCH_ACCOUNT_MB = '100'
-      resetRefFetchAdmission()
       clearRefCache()
-      const refused = await call('read_file', { ref: fresh, path: 'src/api.ts' })
-      expect(refused.error).toBe(true)
-      expect(refused.text).toMatch(/ref fetch allowance \(100 MiB per hour\) is used up/)
-      // Nothing was fetched: the query mirror does not hold the commit.
-      expect(await simpleGit(join(gitMirrorDir(repoId), 'elara-query.git')).raw(['cat-file', '-t', fresh]).catch(() => 'missing')).toBe('missing')
-      process.env.ELARA_REF_FETCH_ACCOUNT_MB = '300'
-      for (let i = 0; i < 3; i++) {
-        // 256 MiB is reserved per fetch against a 300 MiB allowance; the few KiB it used are refunded each time.
-        await answer('read_file', { ref: fresh, path: 'src/api.ts', outline: false })
-        await rm(join(gitMirrorDir(repoId), 'elara-query.git'), { recursive: true, force: true })
-        clearRefCache()
+      for (const ref of [fresh, 'no-such-branch', 'refs/tags/no-such-tag']) {
+        const refused = await call('read_file', { ref, path: 'src/api.ts' })
+        expect(refused.error, ref).toBe(true)
+        expect(refused.text).toContain('NOT_SYNCED')
+        expect(refused.text).toContain('not synced yet; retry after the next sync')
+        expect(refused.text).toContain('last sync 2026-01-02T03:04:05.000Z')
+        expect(refused.text).not.toContain(root)
+        expect(refused.text).not.toMatch(/file:\/\//)
       }
+      // The source has the commit, the mirror does not: the reader tool did not go and get it.
+      expect(await simpleGit(gitMirrorDir(repoId)).raw(['cat-file', '-t', fresh]).catch(() => 'missing')).toBe('missing')
+      await syncMirror()
+      expect((await answer('browse_repository', { ref: sameTree })).commit).toBe(sameTree)
     } finally {
-      if (saved === undefined) delete process.env.ELARA_REF_FETCH_ACCOUNT_MB
-      else process.env.ELARA_REF_FETCH_ACCOUNT_MB = saved
-      resetRefFetchAdmission()
+      await db.update(repositories).set({ lastSyncedAt: null }).where(eq(repositories.id, repoId))
+    }
+  })
+
+  it('answers from the mirror alone: an unreachable remote and a missing mirror are "not synced yet", at once and without a network attempt', async () => {
+    const [source] = await db.select().from(repositories).where(eq(repositories.id, repoId))
+    const [offline] = await db.insert(repositories).values({ name: 'ref-offline', ownerId: source!.ownerId, ingestionMethod: 'git', gitUrl: 'https://git.invalid/never-synced.git' }).returning()
+    try {
+      const started = Date.now()
+      const refused = await call('read_file', { repositoryId: offline!.id, ref: first, path: 'src/api.ts' })
+      expect(refused.error).toBe(true)
+      expect(refused.text).toContain('NOT_SYNCED')
+      expect(refused.text).not.toContain('git.invalid')
+      expect(Date.now() - started).toBeLessThan(5_000)
+      // A private overlay on the default commit needs the mirror too.
+      expect((await call('read_file', { repositoryId: offline!.id, path: 'src/api.ts', overlay: '--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-a\n+b\n' })).text).toContain('NOT_SYNCED')
+    } finally { await db.delete(repositories).where(eq(repositories.id, offline!.id)) }
+  })
+
+  it('resolves HEAD and the default branch name from the mirror\'s fetched tip, and nothing else', async () => {
+    const dir = gitMirrorDir(repoId)
+    try {
+      expect((await call('read_file', { ref: 'HEAD', path: 'src/api.ts' })).text).toContain('NOT_SYNCED')
+      await simpleGit(dir).raw(['update-ref', 'refs/elara/head', first])
+      await db.update(repositories).set({ defaultBranch: 'trunk' }).where(eq(repositories.id, repoId))
+      clearRefCache()
+      expect((await answer('read_file', { ref: 'HEAD', path: 'src/api.ts', outline: false })).commit).toBe(first)
+      expect((await answer('read_file', { ref: 'trunk', path: 'src/api.ts', outline: false })).commit).toBe(first)
+      expect((await answer('read_file', { ref: 'refs/heads/trunk', path: 'src/api.ts', outline: false })).commit).toBe(first)
+      expect((await call('read_file', { ref: 'other', path: 'src/api.ts' })).text).toContain('NOT_SYNCED')
+    } finally {
+      await simpleGit(dir).raw(['update-ref', '-d', 'refs/elara/head'])
+      await db.update(repositories).set({ defaultBranch: null }).where(eq(repositories.id, repoId))
     }
   })
 })

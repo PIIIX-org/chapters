@@ -1,15 +1,7 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { execFileSync } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { simpleGit } from 'simple-git'
+import { describe, expect, it } from 'vitest'
 import { BlockBudget, BlockBudgetError, codeBlocks } from '../src/repositories/code-blocks.js'
-import { VIEW_BLOCK_BOUNDS, declarationIndex, type ViewFile } from '../src/repositories/ref-index.js'
+import { VIEW_BLOCK_BOUNDS, VIEW_OUTLINE_BOUNDS, declarationIndex, type ViewFile } from '../src/repositories/ref-index.js'
 import { VIEW_GRAPH_LIMITS, scoreDefinitions, viewQueries } from '../src/repositories/ref-queries.js'
-import { MirrorReadLimitError, fetchQueryCommit, listRemoteCapped, mirrorBytes } from '../src/repositories/git-mirror.js'
-import { admitRefFetch, REF_FETCH_ADMISSION, RefFetchRefused, resetRefFetchAdmission } from '../src/repositories/ref-fetch-admission.js'
 import { outlineSections } from '../src/repositories/outline.js'
 import { headings } from '../src/text/blocks.js'
 import { lineStarts } from '../src/text/lines.js'
@@ -17,7 +9,7 @@ import { isTestPath } from '../src/repositories/code-edges.js'
 import type { Definition } from '../src/repositories/code-queries.js'
 import type { ExtractedSymbol } from '../src/repositories/extraction.js'
 
-// #676 security review: what a repository reader can make a ref view or a ref fetch cost.
+// #676 security review: what a repository reader can make a ref view cost.
 
 const symbol = (name: string, startLine: number): ExtractedSymbol => ({ name, kind: 'function', startLine, endLine: startLine, exported: true } as ExtractedSymbol)
 
@@ -81,41 +73,6 @@ describe('orient scoring', () => {
   })
 })
 
-describe('bounded query fetch', () => {
-  let root: string
-  let mirror: string
-  let url: string
-  let commit: string
-  beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), 'elara-bounds-'))
-    mirror = join(root, 'mirror.git')
-    const source = join(root, 'src')
-    execFileSync('git', ['init', '--quiet', '--initial-branch=main', source])
-    const git = simpleGit(source)
-    await git.addConfig('user.email', 'b@elara.local')
-    await git.addConfig('user.name', 'b')
-    await writeFile(join(source, 'huge.txt'), randomBytes(4 * 1024 * 1024))
-    await git.add('.')
-    await git.commit('huge blob')
-    commit = (await git.revparse(['HEAD'])).trim()
-    execFileSync('git', ['init', '--bare', '--quiet', mirror])
-    url = `file://${source}`
-  })
-  afterAll(async () => { await rm(root, { recursive: true, force: true }) })
-
-  it('stops a fetch that outgrows its budget and keeps no ref to it', async () => {
-    await expect(fetchQueryCommit(mirror, url, commit, { fetchBytes: 256 * 1024, timeoutMs: 60_000 })).rejects.toBeInstanceOf(MirrorReadLimitError)
-    expect(await simpleGit(mirror).raw(['for-each-ref', 'refs/elara/'])).toBe('')
-  })
-
-  it('fetches the commit when it fits (into a fresh mirror: a rejected one is discarded by its caller)', async () => {
-    await rm(mirror, { recursive: true, force: true })
-    execFileSync('git', ['init', '--bare', '--quiet', mirror])
-    await fetchQueryCommit(mirror, url, commit, { fetchBytes: 64 * 1024 * 1024, timeoutMs: 60_000 })
-    expect((await simpleGit(mirror).revparse(['refs/elara/query'])).trim()).toBe(commit)
-    expect(await mirrorBytes(mirror)).toBeGreaterThan(1024 * 1024)
-  })
-})
 
 describe('outline sections', () => {
   /** The implementation this replaced: a forward scan for each heading's next heading of the same or a higher level. */
@@ -225,100 +182,65 @@ describe('generated block budget', () => {
   })
 })
 
-describe('ref fetch admission', () => {
-  const MB = 1024 * 1024
-  const env = { account: process.env.ELARA_REF_FETCH_ACCOUNT_MB, instance: process.env.ELARA_REF_FETCH_INSTANCE_MB }
-  let now = 0
-  beforeEach(() => {
-    now = 1_000_000
-    resetRefFetchAdmission(() => now)
-    process.env.ELARA_REF_FETCH_ACCOUNT_MB = '300'
-    process.env.ELARA_REF_FETCH_INSTANCE_MB = '4096'
-  })
-  afterEach(() => {
-    for (const [key, value] of [['ELARA_REF_FETCH_ACCOUNT_MB', env.account], ['ELARA_REF_FETCH_INSTANCE_MB', env.instance]] as const) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
-    resetRefFetchAdmission()
+
+
+describe('outline bounds in views', () => {
+  const charged = () => {
+    const state = { bytes: 0 }
+    return { state, limits: { ...VIEW_OUTLINE_BOUNDS, charge: (n: number) => { state.bytes += n } } }
+  }
+
+  it('leaves ordinary documents identical to the live outline', () => {
+    const content = '# Guide\ntext\n## Install\nmore\n### Linux\nx\n## Use\ny\n# Appendix\nz\n'
+    expect(outlineSections('markdown', content, charged().limits)).toEqual(outlineSections('markdown', content))
   })
 
-  it('refuses a third concurrent fetch without queueing and admits it once one ends', () => {
-    process.env.ELARA_REF_FETCH_ACCOUNT_MB = '4096'
-    const a = admitRefFetch('a', 256 * MB)
-    admitRefFetch('b', 256 * MB)
-    expect(REF_FETCH_ADMISSION.maxConcurrent).toBe(2)
-    expect(() => admitRefFetch('c', 256 * MB)).toThrow(/another ref fetch is running/)
-    a.settle(0)
-    expect(() => admitRefFetch('c', 256 * MB)).not.toThrow()
+  it('cuts a 100,000-character title and charges every section before building its path', () => {
+    const content = `# ${'T'.repeat(100_000)}\n` + Array.from({ length: 8_000 }, (_, i) => `## s${i}\n`).join('')
+    const { state, limits } = charged()
+    const heapBefore = process.memoryUsage().heapUsed
+    const sections = outlineSections('markdown', content, limits)
+    expect(sections).toHaveLength(8_001)
+    expect(Math.max(...sections.map((s) => s.innerPath.length))).toBeLessThanOrEqual(VIEW_OUTLINE_BOUNDS.path)
+    expect(sections[1]!.innerPath.startsWith('T'.repeat(200) + ' > s0')).toBe(true)
+    expect(process.memoryUsage().heapUsed - heapBefore).toBeLessThan(64 * 1024 * 1024)
+    // 8,001 sections, each charged at least its path plus the per-section overhead.
+    expect(state.bytes).toBeGreaterThan(sections.reduce((n, s) => n + s.innerPath.length, 0))
+    // The live outline keeps the whole title (an ordinary document is unaffected; this one is not ordinary).
+    expect(outlineSections('markdown', '# ' + 'T'.repeat(5_000) + '\n')[0]!.innerPath).toHaveLength(5_000)
   })
 
-  it('gives an account its hourly allowance, refunds the unused part, and refills over time', () => {
-    const first = admitRefFetch('a', 256 * MB)
-    first.settle(10 * MB)
-    // 300 MiB allowance: 256 reserved, 246 refunded -> 290 left, enough again.
-    const second = admitRefFetch('a', 256 * MB)
-    expect(() => admitRefFetch('a', 256 * MB)).toThrow(RefFetchRefused)
-    second.settle(256 * MB)
-    expect(() => admitRefFetch('a', 256 * MB)).toThrow(/allowance \(300 MiB per hour\)/)
-    // 300 MiB per hour: 222 MiB are missing, 2,664 s.
-    now += 2_000 * 1000
-    expect(() => admitRefFetch('a', 256 * MB)).toThrow(RefFetchRefused)
-    now += 700 * 1000
-    expect(() => admitRefFetch('a', 256 * MB)).not.toThrow()
-    // Another account is unaffected.
-    expect(() => admitRefFetch('b', 256 * MB)).not.toThrow()
-  })
-
-  it('debits an overshoot and refuses on the instance allowance across accounts', () => {
-    const over = admitRefFetch('a', 256 * MB)
-    over.settle(400 * MB)
-    expect(() => admitRefFetch('a', 1 * MB)).toThrow(RefFetchRefused)
-    resetRefFetchAdmission(() => now)
-    process.env.ELARA_REF_FETCH_ACCOUNT_MB = '4096'
-    process.env.ELARA_REF_FETCH_INSTANCE_MB = '300'
-    admitRefFetch('a', 256 * MB).settle(0)
-    const held = admitRefFetch('a', 256 * MB)
-    expect(() => admitRefFetch('b', 256 * MB)).toThrow(/instance's ref fetch allowance/)
-    held.settle(0)
-    expect(() => admitRefFetch('b', 256 * MB)).not.toThrow()
+  it('refuses the request when the charge throws, before the path of that section exists, and skips an outline over its section cap', () => {
+    const content = Array.from({ length: 50 }, (_, i) => `# h${i}\n`).join('')
+    let calls = 0
+    expect(() => outlineSections('markdown', content, { ...VIEW_OUTLINE_BOUNDS, charge: () => { if (++calls === 10) throw new BlockBudgetError('over') } })).toThrow(BlockBudgetError)
+    expect(calls).toBe(10)
+    expect(outlineSections('markdown', content, { ...VIEW_OUTLINE_BOUNDS, sections: 49, charge: () => undefined })).toEqual([])
   })
 })
 
-describe('bounded remote lookups and fetches', () => {
-  let root: string
-  let source: string
-  beforeAll(async () => {
-    root = await mkdtemp(join(tmpdir(), 'elara-remote-'))
-    source = join(root, 'src')
-    execFileSync('git', ['init', '--quiet', '--initial-branch=main', source])
-    const git = simpleGit(source)
-    await git.addConfig('user.email', 'b@elara.local')
-    await git.addConfig('user.name', 'b')
-    await writeFile(join(source, 'a.txt'), 'a\n')
-    await git.add('.')
-    await git.commit('one')
-    const head = (await git.revparse(['HEAD'])).trim()
-    execFileSync('git', ['update-ref', '--stdin'], { cwd: source, input: Array.from({ length: 3_000 }, (_, i) => `create refs/heads/many/branch-number-${i} ${head}\n`).join('') })
-    await writeFile(join(source, 'blob.bin'), randomBytes(4 * 1024 * 1024))
-    await git.add('.')
-    await git.commit('blob')
-  })
-  afterAll(async () => { await rm(root, { recursive: true, force: true }) })
-
-  it('refuses an advertisement over the byte cap, killing git, and returns a small one whole', async () => {
-    await expect(listRemoteCapped(`file://${source}`, ['refs/heads/many/*'], 4 * 1024)).rejects.toBeInstanceOf(MirrorReadLimitError)
-    await expect(listRemoteCapped(`file://${source}`, ['refs/heads/many/*'], 4 * 1024)).rejects.not.toThrow(source)
-    const rows = (await listRemoteCapped(`file://${source}`, ['refs/heads/many/*'])).trim().split('\n')
-    expect(rows).toHaveLength(3_000)
+describe('block estimator', () => {
+  const MIB = 1024 * 1024
+  it('counts qualified names: 950-character class names x 9,000 methods x 4 files exceed 32 MiB and the request is refused', () => {
+    const klass = 'C'.repeat(950)
+    const content = `class ${klass} {\n` + Array.from({ length: 9_000 }, (_, i) => `  m${i}() {}\n`).join('') + '}\n'
+    const symbols: ExtractedSymbol[] = [{ name: klass, kind: 'class', startLine: 1, endLine: 9_002, exported: true } as ExtractedSymbol, ...Array.from({ length: 9_000 }, (_, i) => ({ name: `m${i}`, parent: klass, kind: 'method', startLine: i + 2, endLine: i + 2, exported: false }) as ExtractedSymbol)]
+    const budget = new BlockBudget({ bytes: 32 * MIB, blocks: 50_000 })
+    let built = 0
+    expect(() => { for (let i = 0; i < 4; i++) { codeBlocks(`f${i}`, `src/f${i}.ts`, content, symbols, [], { ...VIEW_BLOCK_BOUNDS, budget }); built++ } }).toThrow(BlockBudgetError)
+    expect(built).toBeLessThan(4)
+    // What one file really built is below what was charged for it.
+    const one = new BlockBudget({ bytes: 1e10, blocks: 1e6 })
+    const blocks = codeBlocks('f', 'src/f.ts', content, symbols, [], { ...VIEW_BLOCK_BOUNDS, budget: one })
+    const real = blocks.reduce((n, b) => n + Buffer.byteLength(b.embedText) + Buffer.byteLength(b.innerPath) + Buffer.byteLength(b.snippet ?? ''), 0)
+    expect(1e10 - one.bytes).toBeGreaterThanOrEqual(real)
   })
 
-  it.skipIf(process.platform === 'win32')('stops a fetch at the pack-file size limit even when the poll never runs', async () => {
-    const commit = (await simpleGit(source).revparse(['HEAD'])).trim()
-    const mirror = join(root, 'hard.git')
-    execFileSync('git', ['init', '--bare', '--quiet', mirror])
-    await expect(fetchQueryCommit(mirror, `file://${source}`, commit, { fetchBytes: 512 * 1024, timeoutMs: 60_000, pollMs: 3_600_000 })).rejects.toBeInstanceOf(MirrorReadLimitError)
-    // One file cannot grow past the limit (twice it, in shells that count 1,024-byte blocks).
-    expect(await mirrorBytes(mirror)).toBeLessThan(2 * 512 * 1024 + 256 * 1024)
+  it('counts multibyte text at its UTF-8 size', () => {
+    const content = Array.from({ length: 200 }, (_, i) => `export function ${'é'.repeat(300)}${i}() {}`).join('\n') + '\n'
+    const symbols = Array.from({ length: 200 }, (_, i) => symbol('é'.repeat(300) + i, i + 1))
+    const budget = new BlockBudget({ bytes: 1e10, blocks: 1e6 })
+    const blocks = codeBlocks('f', 'src/u.ts', content, symbols, [], { ...VIEW_BLOCK_BOUNDS, budget })
+    expect(1e10 - budget.bytes).toBeGreaterThanOrEqual(blocks.reduce((n, b) => n + Buffer.byteLength(b.embedText) + Buffer.byteLength(b.innerPath) + Buffer.byteLength(b.snippet ?? ''), 0))
   })
 })

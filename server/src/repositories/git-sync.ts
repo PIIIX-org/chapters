@@ -9,11 +9,13 @@ import {
   mirrorHasCommit,
   objectFormatOf,
   openMirror,
+  recordMirrorSource,
   remoteHead,
   scanMirrorTree,
   withMirrorLock,
   type RemoteHead,
 } from './git-mirror.js'
+import { sourceIdentity } from './source-identity.js'
 import { authenticatedUrl, redactGitSecrets, splitGitUrlCredential } from './git-remote.js'
 import { isSafeGitUrl } from './permissions.js'
 import { listRepositoryFiles, syncRepositoryFiles } from './store.js'
@@ -119,6 +121,8 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       if (!current) return false
       const dir = await openMirror(repositoryId, remote ? objectFormatOf(remote.commit) : null)
       const headCommit = await fetchIntoMirror(dir, cloneUrl, remote?.branch ?? null)
+      // Ref views serve this mirror only for the source that filled it.
+      await recordMirrorSource(dir, sourceIdentity(current))
       // A row with no skip report predates #465 (see above): read every file once.
       const previous =
         current.lastSyncedCommit && current.skippedFiles && (await mirrorHasCommit(dir, current.lastSyncedCommit))

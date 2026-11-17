@@ -139,23 +139,27 @@ export function codeBlocks(
     [...sliceLines(content, start, Math.min(end, start + SNIPPET_LINES - 1), starts).slice(0, SNIPPET_CHARS * 2)].slice(0, SNIPPET_CHARS).join('')
   if (bounds?.budget) {
     // Reserve the whole file's block set from the request's allowance before any snippet, skeleton or embedded text is built.
+    // Every generated string is counted at its UTF-8 upper bound (3 bytes per UTF-16 unit); the file text, whose bytes are known, exactly.
+    const utf8 = (units: number) => 3 * units
     const span = (from: number, to: number) => (starts[Math.min(to, total)] ?? content.length) - (starts[from - 1] ?? content.length)
-    const snippetBytes = (from: number, to: number) => Math.min(span(from, Math.min(to, from + SNIPPET_LINES - 1)), SNIPPET_CHARS)
-    let bytes = content.length + path.length + BLOCK_OVERHEAD
+    const snippetUnits = (from: number, to: number) => Math.min(span(from, Math.min(to, from + SNIPPET_LINES - 1)), 2 * SNIPPET_CHARS)
+    let bytes = Buffer.byteLength(content) + utf8(path.length) + BLOCK_OVERHEAD
     let blocks = 1
     for (const s of symbols) {
-      // The snippet is stored on the block and again inside its embedded text.
-      bytes += 2 * snippetBytes(s.startLine, s.endLine) + path.length + s.name.length + BLOCK_OVERHEAD
+      const inner = (s.parent ? s.parent.length + 1 : 0) + s.name.length
+      // innerPath is stored on the block and again in the embedded text, which also holds kind, path, line and the snippet; the snippet is stored too.
+      bytes += utf8(2 * inner + 2 * snippetUnits(s.startLine, s.endLine) + path.length + 32) + BLOCK_OVERHEAD
       blocks += 1
     }
     for (const s of sections) {
-      bytes += snippetBytes(s.startLine, s.ownEndLine) + path.length + s.innerPath.length + BLOCK_OVERHEAD
+      bytes += utf8(2 * s.innerPath.length + snippetUnits(s.startLine, s.ownEndLine) + path.length + 32) + BLOCK_OVERHEAD
       blocks += 1
     }
     if (!small && symbols.length + sections.length > 0) {
-      const classes = symbols.filter((s) => s.kind === 'class').length
-      bytes += Math.min(bounds.skeletonChars, content.length) + (classes + 1) * BLOCK_OVERHEAD
-      blocks += 1 + classes
+      // The file skeleton and each class skeleton share the file's skeleton text allowance; each adds a header (kind, qualified name, path) and a block.
+      const classes = symbols.filter((s) => s.kind === 'class')
+      bytes += utf8(bounds.skeletonChars + path.length + classes.reduce((n, s) => n + (s.parent ? s.parent.length + 1 : 0) + s.name.length + path.length + 16, 0)) + (classes.length + 1) * BLOCK_OVERHEAD
+      blocks += 1 + classes.length
     }
     bounds.budget.reserve(bytes, blocks)
   }

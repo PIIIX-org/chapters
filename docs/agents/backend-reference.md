@@ -2732,8 +2732,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
   every parameter, so the driver error is logged with the statement
   alone, `{query}`, no parameters), a Node system
   error (`INTERNAL`, its code only, the error logged), anything else
-  (`INTERNAL` with its message). `CONFLICT`, `BUSY` and `QUARANTINED`
-  extend ADR-004's list, and `field` its envelope. The SDK's own
+  (`INTERNAL` with its message). `CONFLICT`, `BUSY`, `QUARANTINED` and `NOT_SYNCED`
+  (a Git ref the sync has not brought in, #676) extend ADR-004's list, and `field` its envelope. The SDK's own
   refusals (arguments its schema check rejects, an unknown tool, an
   answer failing its outputSchema) are isError text it makes itself; a
   wrapper on `CallToolRequestSchema` (next to the tools/list one) turns
@@ -2863,9 +2863,8 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     that end on different commits are an ambiguity naming both, settled with
     `refs/heads/` or `refs/tags/`, never resolved silently;
     immutable bytes, symbols and edges come from that tree, not the shared
-    current rows. Git refs use existing credentials, a separately isolated
-    query object store nested in the owned mirror, the mirror lock and purge
-    lifecycle. Registered local Git roots support committed refs only; a
+    current rows. Git refs read the owned mirror under its lock and purge
+    lifecycle, never the network (below). Registered local Git roots support committed refs only; a
     plain folder/agent push has no Git refs and reports that explicitly.
     Without `ref`, an overlay uses the indexed Git commit when retrievable;
     non-Git indexed sources name their actual content tree, not a claimed
@@ -2899,30 +2898,27 @@ UI hides `+ Save view` and `Delete` from users these rules refuse.
     `overlayBlocks`): each file's whole block set is estimated and reserved
     before any of it is built (`BlockBudget`), and a view over the allowance is
     refused with `BUSY` naming the limit, never served partly.
-    Reader-chosen Git refs: `ls-remote` is read through a byte-capped
-    subprocess (8 MiB, git's process group killed past it; a v0 server's whole
-    advertisement is bounded only by the 30 s timeout, since git reads it, not
-    Node). A cache miss in the query mirror is *admitted* first
-    (`ref-fetch-admission.ts`): at most 2 fetches instance-wide (a third is
-    refused at once, `BUSY` "another ref fetch is running", no git launched,
-    no queue), and token buckets that refill continuously over an hour, per
-    account (`ELARA_REF_FETCH_ACCOUNT_MB`, default 1,024) and per instance
-    (`ELARA_REF_FETCH_INSTANCE_MB`, default 4,096); a fetch reserves its full
-    256 MiB budget from both buckets, and settles with the bytes the mirror
-    really grew by (the unused part is refunded, an overshoot debited). State
-    is per process and starts full. The fetch itself has a best-effort size cap,
-    not a hard quota: `fetchQueryCommit` polls the mirror every 100 ms and kills
-    git's process group past 256 MiB, so the overshoot is bounded by the poll
-    interval times the link's bandwidth (about 12 MiB at 1 Gbit/s, 119 MiB at
-    10 Gbit/s) plus event-loop stalls; git has no fetch size cap of its own.
-    Where `/bin/sh` has `ulimit -f` (Linux, macOS; tested on macOS) the fetch
-    also runs under it, a hard limit on the pack file (256 MiB, twice that in
-    shells that count 1,024-byte blocks); a shell without it just skips it. The
-    query mirror is dropped past 1 GiB, and a mirror that fetched a commit it
-    then rejected (transfer or tree budget) is removed and the commit refused
-    without another transfer (256 remembered). Not bounded: the bandwidth of an
-    admitted attempt up to the best-effort cap, and the instance's total over
-    its hourly allowance only by the refill rate (4 GiB per hour by default).
+    Outline paths in a view are cut (`VIEW_OUTLINE_BOUNDS`: 200 characters per
+    title, 1,000 per path, a file with more than 20,000 headings gets no
+    outline) and each section's path and object are charged to the request
+    budget before they are built; the live index passes no limits. The block
+    estimator counts every generated string (qualified `parent.name` twice,
+    skeleton headers, section text) at 3 bytes per UTF-16 unit, the file text
+    at its exact bytes.
+    Reader tools never use the network: no `git fetch`, no `ls-remote`. A Git
+    ref is served only from the repository's own mirror (git-mirror.ts, filled
+    by the server's sync, which records the source identity in the mirror): the
+    fetched tip (`refs/elara/head`, also `HEAD` and, through the row's
+    `default_branch`, the default branch's name), the last indexed commit
+    (`refs/elara/synced`) and any branch or tag the mirror holds; a full SHA
+    must be the tip of one of those. Anything else, a mirror that does not
+    exist yet, or a mirror filled for another source answers `NOT_SYNCED`
+    ("not available: not synced yet; retry after the next sync", naming what is
+    available and the row's `last_synced_at`; no URL, credential or other
+    account's data), retryable. Today's sync keeps only the default branch's
+    tip (`--depth 1 --no-tags`): other branches, tags and older commits become
+    available when the sync records them (#1151). Annotated tags are peeled
+    without hiding a same-named branch.
     `refCacheStats`/`refSearchStats` count real work.
     Search keeps keyword+vector channels and existing per-file embedding
     budgets, reusing same-owner vectors by embed key.
