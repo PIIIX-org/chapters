@@ -85,7 +85,7 @@ export async function searchView(view: RepositoryView, accountId: string, args: 
   })
   const retrieval = /[\p{L}\p{N}]/u.test(args.query) ? 'hybrid' : 'none'
   const fallback = attempted !== undefined
-  return { head: { ...viewVersion(view), status: hits.length ? 'ok' : 'no_match', retrieval_mode: fallback && retrieval !== 'none' ? 'fallback' : retrieval, degraded: false, ...(!symbolsOnly ? { route: 'conceptual', ...(fallback ? { attempted_route: attempted, ...(retrieval !== 'none' ? { underlying_retrieval_mode: retrieval } : {}) } : {}) } : {}) }, sections: [ranked({ name: 'results', items, id: (h) => h.id, limit, ladder: { no_context: (h) => ({ ...h, snippet: undefined }), locations: (h) => h.startLine === undefined || h.endLine === undefined ? h.path : location(h.path, h.startLine, h.endLine), group: (h) => h.path } })] }
+  return { head: { ...viewVersion(view), status: hits.length ? 'ok' : 'no_match', retrieval_mode: fallback && retrieval !== 'none' ? 'fallback' : retrieval, degraded: false, ...(fallback ? { route: 'conceptual', attempted_route: attempted, ...(retrieval !== 'none' ? { underlying_retrieval_mode: retrieval } : {}) } : {}) }, sections: [ranked({ name: 'results', items, id: (h) => h.id, limit, ladder: { no_context: (h) => ({ ...h, snippet: undefined }), locations: (h) => h.startLine === undefined || h.endLine === undefined ? h.path : location(h.path, h.startLine, h.endLine), group: (h) => h.path } })] }
 }
 
 /** PostgreSQL's bounded regex engine, exactly as normal grep; input is data, never a SQL fragment or JS regexp. */

@@ -32,7 +32,7 @@ export interface SearchResult {
 export interface SearchResponse {
   status: 'ok' | 'no_match' | 'index_building' | 'unavailable'
   retrieval_mode: 'hybrid' | 'keyword_only' | 'vector_only' | 'none' | 'exact' | 'fallback'
-  /** Actual route; a missed lookup stays conceptual. */
+  /** Present when the answer did not take the default conceptual path; absent means conceptual. A missed lookup is `conceptual` with `attempted_route`. */
   route?: SearchRoute
   attempted_route?: Exclude<SearchRoute, 'conceptual'>
   underlying_retrieval_mode?: 'hybrid' | 'keyword_only' | 'vector_only' | 'none'

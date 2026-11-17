@@ -18,9 +18,9 @@
 //          covers (the rest of server/src/mcp/**: tool definitions and
 //          contracts, the rest of repositories/, schema, start-up, the image's
 //          dependencies, the lab plumbing, the workflow, the gate); else none.
-//   golds  true with bench=all by path: bench-gate then also requires every
-//          suite to reach at least the reference's goldReached
-//          (bench-gate.mjs --require-golds).
+//   golds  true with bench=all by path: require every base suite in the run
+//          (bench-gate.mjs --require-golds). Gold counts and previously reached
+//          questions are protected even when this flag is false.
 //
 //   reuse  a review-record head (#1071): a PR head whose only change from its
 //          single parent is under docs/reviews/** and whose parent's lab,

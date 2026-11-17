@@ -8,11 +8,11 @@ import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 
 /**
  * The caching contract (ADR-004 §2.9, #680; backend-reference.md, "Caching
- * contract"). Every cache in Elara keys its entries with `cacheKey`, built
+ * contract"). Every cached answer keys its entries with `cacheKey`, built
  * from epochs read with `readEpochs` before the answer's own queries, and
  * looks an entry up only after the call's live checks (token, capability,
- * scope, access) passed. Nothing is cached yet: #685 adds the first cache,
- * its hit/miss metrics and the test that a cached answer is never served stale.
+ * scope, access) passed. Search uses this contract in cache/search.ts;
+ * content-only computation caches use their input/model versions, not answer epochs.
  */
 
 /** The vaults and repositories an answer is computed over: the call's resolved set, `everywhere` expanded. */

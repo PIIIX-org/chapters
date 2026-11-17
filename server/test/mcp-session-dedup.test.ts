@@ -33,6 +33,7 @@ import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { flushExtraction } from '../src/repositories/extraction-queue.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { createActiveUser, loginCookie } from './helpers.js'
+import { metricsSnapshot } from '../src/monitoring/metrics.js'
 
 type Json = Record<string, unknown>
 interface Result {
@@ -205,6 +206,7 @@ describe('without session_id (#683): byte for byte as before', () => {
 describe('session_id (#683)', () => {
   it('answers a passage the session already got with `same_as`: call, lines and version', async () => {
     const session = newSession()
+    const before = metricsSnapshot()
     const whole = await readFile({ path: 'src/store.ts', session_id: session })
     expect(whole.json.call).toBe(1)
     expect(whole.json.content).toBe(STORE_TS)
@@ -226,6 +228,10 @@ describe('session_id (#683)', () => {
       truncated: false,
     })
     expect(again.texts.join('\n').length).toBeLessThan(whole.texts.join('\n').length / 2)
+    const after = metricsSnapshot()
+    expect(after).toHaveProperty('caches.session_passage', { hit: expect.any(Number), miss: expect.any(Number) })
+    expect(after.caches.session_passage!.hit - before.caches.session_passage!.hit).toBeGreaterThan(0)
+    expect(after.caches.session_passage!.miss - before.caches.session_passage!.miss).toBeGreaterThan(0)
     // The outline twice: the second is a reference to the first.
     const outline = await readFile({ path: 'src/store.ts', session_id: session, outline: true })
     expect(outline.json.outline).toEqual(expect.any(Array))

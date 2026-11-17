@@ -40,7 +40,7 @@ name: Elara lab
 #             text/{blocks,lines,targets}.ts, notes/note-blocks.ts,
 #             config.ts) or the benchmark's premise inputs
 #             (benchmarks/{run.ts,lib/,questions/,baseline.json}); the gate then also requires every
-#             suite to reach at least the base's golds (--require-golds).
+#             base suite in the run (--require-golds). Gold-loss checks apply on every path.
 #             Also nightly on dev, every PR to prod, and by hand (-f bench=...)
 #             (86 to 176 min with six suites: embedding throughput varies between runners).
 # The path rules are .github/scripts/lab-plan.mjs (unit-tested). Every job
@@ -400,8 +400,8 @@ jobs:
       # the PR's labels and body are read now (not from the event), so
       # re-running this job after adding an override label picks it up.
       # Overrides: bench-suite-change, bench-baseline-lowered (see the gate's
-      # header). With plan's golds=true (search, MCP or benchmark changed)
-      # every suite must also reach at least the base's golds.
+      # header). Gold-loss checks always apply; plan's golds=true additionally
+      # requires every base suite in the run.
       - name: Gate against benchmarks/baseline.json (median of 3 instances)
         if: needs.plan.outputs.reuse == ''
         env:

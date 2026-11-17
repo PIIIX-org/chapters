@@ -3,7 +3,7 @@
 // empty instance, and the comparison covers every row of every backed-up table.
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createHash, randomBytes } from 'node:crypto'
-import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
 import * as OTPAuth from 'otpauth'
@@ -40,9 +40,10 @@ import { buildInstanceBackup } from '../src/export/archive.js'
 import { flushProjections } from '../src/notes/projector.js'
 import { restoreBackup } from '../src/export/restore.js'
 import { issueBackupCodes } from '../src/auth/mfa.js'
-import { createNote, readNote, saveAsset, softDeleteNote, trashFile, updateNote } from '../src/notes/store.js'
+import { createNote, noteFile, readAsset, readNote, saveAsset, softDeleteNote, trashFile, updateNote, vaultDir, writeAsset } from '../src/notes/store.js'
 import { flushEmbeddings } from '../src/search/embedding-queue.js'
 import { repositoryChanges, repositoryVersions } from '../src/db/schema.js'
+import { runAssetStorage } from '../src/notes/asset-storage.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import { createSyncToken, resolveSyncToken } from '../src/repositories/sync-tokens.js'
 import { createActiveUser, loginCookie, TEST_PASSWORD, uniqueEmail, wipeInstance } from './helpers.js'
@@ -307,7 +308,7 @@ describe('instance backup round trip (#409)', () => {
   it('restores every entity class with its ids after a wipe', async () => {
     expect(Object.keys(sourceFiles)).toEqual(
       expect.arrayContaining([
-        `${fixture.vaultId}/assets/${fixture.assetName}`,
+        `${fixture.vaultId}/.assets/${fixture.assetName}`,
         `${fixture.vaultId}/.trash/${fixture.trashedNoteId}.md`,
         `${fixture.vaultId}/concepts/deep/a/b/leaf.md`,
         `${fixture.vaultId}/concepts/index.md`,
@@ -380,7 +381,7 @@ describe('instance backup round trip (#409)', () => {
     await db
       .delete(vaultShares)
       .where(and(eq(vaultShares.vaultId, fixture.vaultId), eq(vaultShares.granteeType, 'team')))
-    await unlink(join(config.dataDir, 'vaults', fixture.vaultId, 'assets', fixture.assetName))
+    await unlink(join(config.dataDir, 'vaults', fixture.vaultId, '.assets', fixture.assetName))
     // Rotating the backup codes deletes the old ones: a re-run must not revive them.
     await issueBackupCodes(fixture.mfaUserId)
     const before = await snapshotDb()
@@ -609,4 +610,41 @@ describe('instance backup round trip (#409)', () => {
     expect(await db.select().from(repositoryChanges).where(eq(repositoryChanges.repositoryId, fixture.repoId))).toEqual([])
     expect((await db.select().from(repositoryVersions).where(eq(repositoryVersions.repositoryId, fixture.repoId))).map((v) => v.seq)).toEqual([1])
   }, 60_000)
+})
+
+it.each([false, true])('full-instance root-collision restore prepares the namespace before publication (kept legacy volume: %s)', async keptVolume => {
+  await wipeInstance()
+  const owner = await createActiveUser()
+  const [vault] = await db.insert(vaults).values({ name: 'Root collision restore', ownerId: owner.id }).returning()
+  const id = vault!.id
+  try {
+    await createNote(id, { path: 'assets/design', body: 'Authoritative design note.\n' })
+    await writeAsset(id, 'design.md', Buffer.from('Distinct archived attachment'))
+    await flushProjections()
+    const bytes = await buildInstanceBackup()
+    await wipeInstance()
+    if (keptVolume) {
+      await mkdir(join(vaultDir(id), 'assets'), { recursive: true })
+      await writeFile(join(vaultDir(id), 'assets/design.md'), 'Kept newer legacy attachment')
+      await writeFile(join(vaultDir(id), 'assets/extra.bin'), 'Kept unowned legacy bytes')
+    }
+    const plan = await restoreBackup(bytes)
+    expect((await readNote(id, 'assets/design'))!.body).toBe('Authoritative design note.\n')
+    expect(await readFile(noteFile(id, 'assets/design'), 'utf8')).toContain('Authoritative design note.')
+    const attachment = keptVolume ? 'Kept newer legacy attachment' : 'Distinct archived attachment'
+    expect((await readAsset(id, 'design.md'))!.buffer.toString()).toBe(attachment)
+    if (keptVolume) {
+      expect(plan.warnings).toContainEqual(expect.stringContaining('attachment(s) already on disk differ'))
+      expect((await readAsset(id, 'extra.bin'))!.buffer.toString()).toBe('Kept unowned legacy bytes')
+    }
+    const [startup] = await runAssetStorage('migrate', id)
+    expect(startup).toMatchObject({ state: 'complete', ready: true })
+    expect((await restoreBackup(bytes)).alreadyRestored).toEqual(expect.any(String))
+    expect((await readNote(id, 'assets/design'))!.body).toBe('Authoritative design note.\n')
+    expect((await readAsset(id, 'design.md'))!.buffer.toString()).toBe(attachment)
+  } finally {
+    // Its deliberate note/attachment collision would make a later file's instance-wide attachment rollback report a conflict.
+    await db.delete(vaults).where(eq(vaults.id, id))
+    await rm(vaultDir(id), { recursive: true, force: true })
+  }
 })

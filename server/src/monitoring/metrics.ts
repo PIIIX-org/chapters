@@ -37,6 +37,15 @@ export const JOB_KINDS = ['embedding', 'extraction', 'sync', 'collab-store', 'ba
 export type JobKind = (typeof JOB_KINDS)[number]
 export type ActorKind = 'user' | 'token' | 'anonymous'
 
+/** Fixed labels only: never expose a query, account, token or content hash. */
+export const CACHE_NAMES = ['search', 'query_embedding', 'blob_parse', 'blob_vector', 'git_mirror', 'session_passage'] as const
+type CacheName = (typeof CACHE_NAMES)[number]
+const caches = Object.fromEntries(CACHE_NAMES.map((name) => [name, { hit: 0, miss: 0 }])) as Record<CacheName, { hit: number; miss: number }>
+
+export function recordCacheLookup(name: CacheName, hit: boolean, count = 1): void {
+  caches[name][hit ? 'hit' : 'miss'] += count
+}
+
 /** Route key for requests no route matched (404s, the SPA fallback). */
 export const OTHER_ROUTE = '(other)'
 const METHODS: Record<string, true> = { GET: true, POST: true, PUT: true, PATCH: true, DELETE: true, HEAD: true, OPTIONS: true }
@@ -291,6 +300,7 @@ export function metricsSnapshot(now = Date.now()) {
     totals: { ...totals },
     jobs: Object.fromEntries(JOB_KINDS.map((k) => [k, { ...jobs[k] }])) as Record<JobKind, { succeeded: number; failed: number; repeated: number }>,
     conflictCopies: { copies: conflicts.copies, paths: conflicts.paths.size },
+    caches: Object.fromEntries(CACHE_NAMES.map((name) => [name, { ...caches[name] }])),
     routes,
     errors: errors.map((e) => ({ ...e })),
     lastSeq: seq,
@@ -306,6 +316,7 @@ export function resetMetrics(): void {
   totals.serverErrors = 0
   totals.jobFailures = 0
   for (const k of JOB_KINDS) jobs[k] = { succeeded: 0, failed: 0, repeated: 0 }
+  for (const name of CACHE_NAMES) caches[name] = { hit: 0, miss: 0 }
   conflicts.copies = 0
   conflicts.paths.clear()
 }
@@ -488,6 +499,10 @@ export function metricsText(): string {
   counter(out, 'elara_requests_total', totals.requests)
   counter(out, 'elara_request_server_errors_total', totals.serverErrors)
   counter(out, 'elara_job_failures_total', totals.jobFailures)
+  out.push('# HELP elara_cache_lookups_total Cache lookups since boot, by fixed cache name and hit or miss.', '# TYPE elara_cache_lookups_total counter')
+  for (const name of CACHE_NAMES) {
+    for (const outcome of ['hit', 'miss'] as const) out.push(`elara_cache_lookups_total{cache="${name}",outcome="${outcome}"} ${caches[name][outcome]}`)
+  }
   out.push(`# HELP elara_jobs_total ${HELP.elara_jobs_total}`, '# TYPE elara_jobs_total counter')
   for (const kind of JOB_KINDS) {
     const j = jobs[kind]

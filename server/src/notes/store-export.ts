@@ -48,10 +48,11 @@ import { join } from 'node:path'
 import { sql } from 'drizzle-orm'
 import { config } from '../config.js'
 import { db } from '../db/client.js'
-import { holdInstanceLock } from './maintenance-lock.js'
+import { holdInstanceLock, holdsExclusiveLock } from './maintenance-lock.js'
 import { STORE_JOBS, conflictCopies, flushProjections, verifyAllProjections } from './projector.js'
 import { reconcileStore, storeMigrated } from './store-reconcile.js'
 import { exportCrdtBins, type CrdtBinExport } from '../sync/collab-backfill.js'
+import { runAssetStorage } from './asset-storage.js'
 // Also registers the rename refactor runner the projector calls for `store_rename_refactor` jobs.
 import { foldPendingCollab } from './store.js'
 
@@ -83,11 +84,12 @@ export interface LegacyExportReport {
 
 export async function exportLegacyFiles(): Promise<LegacyExportReport> {
   let lost = false
-  const lock = await holdInstanceLock('exclusive', { onLost: () => (lost = true) })
+  const lock = holdsExclusiveLock() ? null : await holdInstanceLock('exclusive', { onLost: () => (lost = true) })
   const startedAt = new Date().toISOString()
   const conflictsBefore = conflictCopies.length
   try {
     if (!(await storeMigrated())) throw new BackfillPendingError()
+    await runAssetStorage('migrate')
     const reconciled = await reconcileStore()
     // Boot steps 4-5: acked typing reaches the rows before they are rendered for the old image.
     const folded = await foldPendingCollab()
@@ -117,7 +119,7 @@ export async function exportLegacyFiles(): Promise<LegacyExportReport> {
       last_error: string | null
     }>
     const bins = await exportCrdtBins()
-    if (lost) throw new Error('the exclusive instance lock was lost during the export: run it again')
+    if (lost || !holdsExclusiveLock()) throw new Error('the exclusive instance lock was lost during the export: run it again')
     const finishedAt = new Date().toISOString()
     const reportFile = join(config.dataDir, `store-export-legacy-${finishedAt.replace(/[:.]/g, '-')}.json`)
     const report: LegacyExportReport = {
@@ -136,6 +138,6 @@ export async function exportLegacyFiles(): Promise<LegacyExportReport> {
     await writeFile(reportFile, `${JSON.stringify(report, null, 2)}\n`)
     return report
   } finally {
-    await lock.release()
+    await lock?.release()
   }
 }

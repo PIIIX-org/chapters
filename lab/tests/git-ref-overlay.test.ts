@@ -62,7 +62,7 @@ const test: LabTest = {
       const path = await run('search', { ref: commit, overlay, query: 'api.ts', route: 'path' })
       check('public path route reads overlaid bytes', path.ok && stringField(path.json, 'route') === 'path' && path.text.includes('overlayOnly') && !path.text.includes('branchOnly'), path)
       const conceptual = await run('search', { ref: commit, overlay, query: 'overlayOnly', route: 'conceptual' })
-      check('conceptual override remains inside the selected view', conceptual.ok && stringField(conceptual.json, 'route') === 'conceptual' && stringField(conceptual.json, 'commit') === commit && conceptual.text.includes('overlayOnly') && !conceptual.text.includes('"symbolName":"branchOnly"'), conceptual)
+      check('conceptual override remains inside the selected view', conceptual.ok && stringField(conceptual.json, 'route') === undefined && stringField(conceptual.json, 'commit') === commit && conceptual.text.includes('overlayOnly') && !conceptual.text.includes('"symbolName":"branchOnly"'), conceptual)
       const grep = await run('grep', { ref: commit, overlay, pattern: 'branchOnly|overlayOnly' })
       check('grep uses base plus overlay', grep.ok && grep.text.includes('overlayOnly') && !grep.text.includes('branchOnly'), grep)
       const diff = await run('browse_repository', { ref: commit, diff: base, overlay })

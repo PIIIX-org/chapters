@@ -17,7 +17,8 @@
     "profile-usage-report": "tsx src/scripts/profile-usage-report.ts",
     "restore-backup": "tsx src/scripts/restore-backup.ts",
     "migrate-store": "tsx src/scripts/migrate-store.ts",
-    "store-export-legacy": "tsx src/scripts/store-export-legacy.ts"
+    "store-export-legacy": "tsx src/scripts/store-export-legacy.ts",
+    "asset-storage": "tsx src/scripts/asset-storage.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",

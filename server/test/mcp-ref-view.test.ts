@@ -249,14 +249,16 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     const imports = await answer('search', { query: 'what imports empty.ts', route: 'structural', ref: second, overlay })
     expect(imports.results).toEqual([expect.objectContaining({ path: 'side.ts', startLine: 1, edge: expect.objectContaining({ kind: 'import' }) })])
     const conceptual = await answer('search', { query: 'retained', route: 'conceptual', ref: second, overlay })
-    expect(conceptual).toMatchObject({ route: 'conceptual', retrieval_mode: 'hybrid', commit: second })
+    expect(conceptual).toMatchObject({ retrieval_mode: 'hybrid', commit: second })
+    expect(conceptual).not.toHaveProperty('route')
     expect(conceptual.results.some((r) => r.symbolName === 'retained')).toBe(true)
     for (const [query, route] of [['retained', 'path'], ['src/api.ts', 'identifier']] as const) {
       const fallback = await answer('search', { query, route, ref: second, overlay })
       expect(fallback).toMatchObject({ route: 'conceptual', attempted_route: route, retrieval_mode: 'fallback', underlying_retrieval_mode: 'hybrid' })
     }
     const deleted = await answer('search', { query: 'inserted', ref: second, overlay })
-    expect(deleted).toMatchObject({ route: 'conceptual', retrieval_mode: 'hybrid' })
+    expect(deleted).toMatchObject({ retrieval_mode: 'hybrid' })
+    expect(deleted).not.toHaveProperty('route')
     expect(deleted).not.toHaveProperty('attempted_route')
     expect(deleted.results.some((r) => r.symbolName === 'inserted')).toBe(false)
     const privateMiss = await answer('search', { query: 'overlayOnly', ref: second })
@@ -272,7 +274,8 @@ diff --git a/src/retained.test.ts b/src/retained.test.ts
     const args = { ...input, ref: second }
     const automatic = await answer('search', args)
     const conceptual = await answer('search', { ...args, route: 'conceptual' })
-    expect(automatic).toMatchObject({ route: 'conceptual', retrieval_mode: conceptual.retrieval_mode, commit: second })
+    expect(automatic).toMatchObject({ retrieval_mode: conceptual.retrieval_mode, commit: second })
+    expect(automatic).not.toHaveProperty('route')
     expect(automatic.results).toEqual(conceptual.results)
     expect(automatic).not.toHaveProperty('attempted_route')
     expect(automatic).not.toHaveProperty('underlying_retrieval_mode')
