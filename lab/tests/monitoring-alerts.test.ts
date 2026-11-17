@@ -42,6 +42,11 @@ interface MonitorRun {
   stdout: string
 }
 
+interface MonitoringSnapshot {
+  jobs: Record<string, { failed: number }>
+  errors: Array<{ type: string; job?: string; subjectId?: string | null }>
+}
+
 function monitoringToken(): string {
   if (process.env.ELARA_MONITORING_TOKEN) return process.env.ELARA_MONITORING_TOKEN
   const line = readFileSync('.env', 'utf8')
@@ -99,6 +104,8 @@ const test: LabTest = {
     // threshold is out of reach here and only errors and jobs are asserted.
     const env = { ELARA_MONITORING_TOKEN: token, ALERT_WEBHOOK_URL: `http://127.0.0.1:${sink.port}/hook`, ALERT_SLOW_MS: '3600000' }
     const admin = ctx.rest('admin')
+    const readMonitoring = async () =>
+      (await (await fetch(`${ctx.baseUrl}${ENDPOINT}`, { headers: { authorization: `Bearer ${token}` } })).json()) as MonitoringSnapshot
     let noteDir: string | null = null
     let assetsDir: string | null = null
     try {
@@ -135,11 +142,21 @@ const test: LabTest = {
       // commits (the database is the authority, ADR-003); the file write fails
       // in the projector, a `projection` job failure.
       const vault = await ctx.createVault('admin', ctx.uniq('lab-monitoring'))
-      await admin.must('POST', `/api/vaults/${vault.id}/notes`, {
+      const note = await admin.must<{ id: string }>('POST', `/api/vaults/${vault.id}/notes`, {
         type: 'docs',
         name: marker,
         body: `note text ${marker} with ${secret}`,
       })
+      const awaitProjection = async () => {
+        const complete = await poll(async () => {
+          const pending = await ctx.docker.psql(`SELECT count(*) FROM note_projections
+            WHERE note_id = '${note.id}' AND projection IN ('file', 'dir_index') AND applied_seq < target_seq`)
+          return pending === '0' ? true : undefined
+        }, 60_000, 500)
+        if (!complete) throw new Error('note file/directory-index projections did not finish in 60 s')
+      }
+      await awaitProjection()
+      const beforeProjection = await readMonitoring()
       noteDir = `/data/elara/vaults/${vault.id}/docs`
       const chmod = await ctx.docker.appExec(['chmod', '0555', noteDir])
       if (chmod.code !== 0) throw new Error(`chmod failed: ${chmod.stderr}`)
@@ -147,10 +164,9 @@ const test: LabTest = {
         body: `edited note text ${marker} ${secret}`,
       })
       const projectionFailed = await poll(async () => {
-        const m = (await (await fetch(`${ctx.baseUrl}${ENDPOINT}`, { headers: { authorization: `Bearer ${token}` } })).json()) as {
-          jobs?: Record<string, { failed?: number }>
-        }
-        return (m.jobs?.projection?.failed ?? 0) > 0 ? true : undefined
+        const m = await readMonitoring()
+        return m.jobs.projection!.failed > beforeProjection.jobs.projection!.failed &&
+          m.errors.some((e) => e.type === 'job' && e.job === 'projection' && e.subjectId === note.id) ? true : undefined
       }, 60_000, 500)
       await ctx.docker.appExec(['chmod', '0755', noteDir])
       noteDir = null
@@ -162,6 +178,10 @@ const test: LabTest = {
         ok: put.status === 200 && projectionFailed === true && repaired.status === 200,
         severity: 'high',
       })
+      // A PUT also queues directory-index projections; drain the repair before
+      // either monitor snapshot so a late failure cannot become a second alert.
+      if (!projectionFailed) throw new Error('injected note projection failure was not counted in 60 s')
+      await awaitProjection()
 
       // Injected server error: an attachment upload into the read-only physical `.assets`
       // directory. Attachments are not projections: the upload writes the file
@@ -189,6 +209,7 @@ const test: LabTest = {
       })
 
       // Failing job: the first sync of an unresolvable remote.
+      const beforeSync = await readMonitoring()
       const repo = await admin.must<{ id: string }>('POST', '/api/repositories', {
         name: ctx.uniq('lab-monitoring-repo'),
         ingestionMethod: 'git',
@@ -197,7 +218,10 @@ const test: LabTest = {
       const syncStatus = await poll(async () => {
         const list = await admin.must<Array<{ id: string; syncStatus: string }>>('GET', '/api/repositories')
         const s = list.find((r) => r.id === repo.id)?.syncStatus
-        return s === 'error' || s === 'idle' ? s : undefined
+        if (s !== 'error') return undefined // `idle` is also the not-yet-started state.
+        const m = await readMonitoring()
+        return m.jobs.sync!.failed > beforeSync.jobs.sync!.failed &&
+          m.errors.some((e) => e.type === 'job' && e.job === 'sync' && e.subjectId === repo.id) ? s : undefined
       }, 90_000, 1_000)
       checks.push({
         name: 'failing job: the first sync of an unresolvable remote fails',
@@ -206,6 +230,7 @@ const test: LabTest = {
         ok: syncStatus === 'error',
         severity: 'high',
       })
+      if (syncStatus !== 'error') throw new Error('injected sync failure did not finish in 90 s')
 
       const alerted = await monitor(ctx, state, env)
       const jobs = alerted.alerts.find((a) => a.kind === 'jobs')
