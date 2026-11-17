@@ -51,7 +51,7 @@ export async function parsed(language: string, content: string, path: string, co
     return hit
   }
   const result = await extractStructure(language, content, path)
-  // A skipped file (the Swift child timed out or died) is not a result of its content: the next try parses it again.
+  // A skipped file (its Swift parse passed the child's deadline or its answer passed the limits) is not cached: the next try parses it again.
   if (result.skipped) return result
   parseCacheStats.parsed++
   parseCache.set(key, result)

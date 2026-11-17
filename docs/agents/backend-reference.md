@@ -3518,7 +3518,10 @@ What a caller gets from `extractStructure` for Swift:
   an answer over 8 MiB: a 200 KB source can name a class with 8,000
   characters and give it 5,000 methods), and the server checks the size and
   shape of what it receives before it reads it. A cut result stores what is
-  right and says in `embeddingNote` that some symbols are missing;
+  right and says in `embeddingNote` how many symbols or imports were left
+  out; when the symbol embedding budget also applies, the note keeps both,
+  the cut first (the budget's "keyword-searchable" does not cover what the
+  cut left out);
 - a result with `skipped`: the content itself cannot be read within the
   limits (the child's own parse deadline, or an answer over the limits or
   malformed). The file keeps its file block with no symbols; its
@@ -3533,7 +3536,9 @@ What a caller gets from `extractStructure` for Swift:
   boot), and the file keeps the rows it had. An overlay lists the file as
   unparsed instead (below).
 
-The deadline, `ELARA_ISOLATED_PARSE_TIMEOUT_MS` (default 10,000 ms), is the
+The deadline, `ELARA_ISOLATED_PARSE_TIMEOUT_MS` (default 10,000 ms, at most
+one hour: the server's timers run at up to twice it, and Node's stop at
+2^31 - 1 ms), is the
 child's: it counts on its own monotonic clock from when its grammar is
 loaded and cancels the parse and the query itself, so a stalled event loop
 in the server cannot skip a file the child answered. The server only runs a
@@ -3577,8 +3582,9 @@ child at 90 to 109 MB; the child peaks at 220 MB for one 1 MB file
 (`MAX_FILE_BYTES`) of 16,910 symbols, parsed in about 0.8 s with its start;
 1.6 ms per small file through IPC. The first Linux numbers are from CI
 (`checks` job of run 43691927161, test `extraction-languages.test.ts`):
-server 389 MB after warm-up, growth 0, child 102 MB. [INFERENCE] The 389 MB
-is the test runner's inherited peak (Linux keeps the high-water mark across
+server 389 MB after warm-up, growth 0, child 102 MB; the next head's run
+gave 478 MB, growth 0, child 109 MB. [INFERENCE] The 389 and 478 MB are
+the test runner's inherited peak (Linux keeps the high-water mark across
 exec), not the server's own size, so on Linux the test sees growth only
 above that. The Linux production image, and a real Swift repository there,
 are unmeasured. The child's memory is not in the server's RSS alert, only

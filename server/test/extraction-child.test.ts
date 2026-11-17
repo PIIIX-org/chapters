@@ -9,6 +9,7 @@ import { extractStructure } from '../src/repositories/extraction.js'
 import {
   DEFAULT_ISOLATED_PARSE_TIMEOUT_MS,
   IsolatedUnavailable,
+  MAX_ISOLATED_PARSE_TIMEOUT_MS,
   MAX_NAME_CHARS,
   MAX_OVERLAY_PER_CALLER,
   MAX_OVERLAY_QUEUE,
@@ -108,6 +109,10 @@ describe('Swift in a child process (#988)', () => {
       expect(isolatedParseTimeoutMs(undefined)).toBe(DEFAULT_ISOLATED_PARSE_TIMEOUT_MS)
       expect(isolatedParseTimeoutMs('2500')).toBe(2500)
       for (const bad of ['0', '-5', 'ten', '1.5', ' ']) expect(isolatedParseTimeoutMs(bad)).toBe(DEFAULT_ISOLATED_PARSE_TIMEOUT_MS)
+      // Node's timers stop at 2^31 - 1 ms and the server's run at up to twice the deadline: a huge setting is cut to the maximum.
+      for (const huge of ['2147483647', '99999999999', String(MAX_ISOLATED_PARSE_TIMEOUT_MS + 1)]) expect(isolatedParseTimeoutMs(huge)).toBe(MAX_ISOLATED_PARSE_TIMEOUT_MS)
+      expect(watchdogMs(MAX_ISOLATED_PARSE_TIMEOUT_MS)).toBeLessThan(2 ** 31 - 1)
+      expect(MAX_ISOLATED_PARSE_TIMEOUT_MS * 2).toBeLessThan(2 ** 31 - 1)
     })
 
     it('does not cache a skipped file: the same content is parsed again', async () => {

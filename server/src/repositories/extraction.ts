@@ -93,7 +93,7 @@ export interface ExtractionResult {
   sites: ExtractedSite[]
   /** Why the file got no symbols or imports although its language is parsed: its Swift parse passed the deadline, or its result passed a size limit. Final for that content, but not cached. */
   skipped?: string
-  /** Set when the Swift process cut the result to its limits (extraction-child.ts `capResult`): what is here is right, some symbols are missing. */
+  /** Set when the Swift process cut the result to its limits (extraction-child.ts `encodeResult`): what is here is right, some symbols are missing. */
   truncated?: string
 }
 

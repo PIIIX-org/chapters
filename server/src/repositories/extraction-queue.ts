@@ -608,12 +608,16 @@ async function processFile(fileId: string): Promise<void> {
     .flatMap((b, i) => (b.budgetTier === null ? [] : [{ i, tier: b.budgetTier }]))
     .sort((a, b) => a.tier - b.tier)
   const budgeted = new Set(symbolOrder.slice(0, budget).map(({ i }) => i))
-  // Shown by `read_file` as `embeddingNote`: why the file has no symbols or not all of them (a Swift parse over its deadline or limits), or that they are only partly embedded.
-  let embeddingNote: string | null = skipped ?? truncated ?? null
+  // Shown by `read_file` as `embeddingNote`: why the file has no symbols or not all of them (a Swift parse over its deadline
+  // or limits), and that they are only partly embedded. Both are kept when both hold, the cut first: the budget's "keyword-searchable"
+  // does not cover symbols the cut left out.
+  const cutNote = skipped ?? truncated ?? null
+  let budgetNote: string | null = null
   if (symbolOrder.length > budget) {
-    embeddingNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolOrder.length} symbols embedded, the rest are keyword-searchable only`
-    console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${embeddingNote}`)
+    budgetNote = `symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: ${budget} of ${symbolOrder.length} symbols embedded, the rest are keyword-searchable only`
+    console.warn(`[extraction] ${row.path} (repository file ${fileId}): ${budgetNote}`)
   }
+  const embeddingNote = cutNote !== null && budgetNote !== null ? `${cutNote}; ${budgetNote}` : (cutNote ?? budgetNote)
   // The file-level blocks first, then the symbols in budget order, then the class skeletons. Sections
   // (Markdown/HTML outline blocks, #464) are never embedded: their rows keep a null embed_key.
   const embedOrder = [

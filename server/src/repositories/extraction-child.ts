@@ -88,11 +88,14 @@ export class IsolatedUnavailable extends Error {
   }
 }
 
-/** `ELARA_ISOLATED_PARSE_TIMEOUT_MS` -> a positive whole number of milliseconds; anything else is the default. */
+/** The longest deadline accepted: the server's timers run at 2 and 1.5 times it, and Node's stop at 2^31 - 1 ms (about 24.8 days). */
+export const MAX_ISOLATED_PARSE_TIMEOUT_MS = 3_600_000
+
+/** `ELARA_ISOLATED_PARSE_TIMEOUT_MS` -> a positive whole number of milliseconds, at most `MAX_ISOLATED_PARSE_TIMEOUT_MS`; anything else is the default. */
 export function isolatedParseTimeoutMs(raw: string | undefined = process.env.ELARA_ISOLATED_PARSE_TIMEOUT_MS): number {
   if (raw === undefined || raw === '') return DEFAULT_ISOLATED_PARSE_TIMEOUT_MS
   const ms = Number(raw)
-  if (Number.isSafeInteger(ms) && ms > 0) return ms
+  if (Number.isSafeInteger(ms) && ms > 0) return Math.min(ms, MAX_ISOLATED_PARSE_TIMEOUT_MS)
   if (!warnedTimeout) {
     warnedTimeout = true
     console.warn(`ELARA_ISOLATED_PARSE_TIMEOUT_MS=${JSON.stringify(raw)} is not a positive whole number of milliseconds: using ${DEFAULT_ISOLATED_PARSE_TIMEOUT_MS}`)

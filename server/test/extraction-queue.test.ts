@@ -391,6 +391,27 @@ describe('extraction queue', () => {
     expect((await fileByPath(repo.id, 'src/many.ts')).embeddingNote).toBeNull()
   })
 
+  it('keeps both notes for a Swift file the parser process cut and the embedding budget capped: the cut first (#988)', async () => {
+    vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '3')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = await makeRepo()
+    // Five ordinary functions, and two whose names are over the 200-character limit: the child leaves those two out.
+    const content = [...Array.from({ length: 5 }, (_, i) => `func f${i}() {}`), `func ${'a'.repeat(250)}() {}`, `func ${'b'.repeat(250)}() {}`].join('\n')
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'Sources/Cut.swift', content }], ['Sources/Cut.swift'])
+      await flushExtraction()
+    } finally {
+      warnSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+    const file = await fileByPath(repo.id, 'Sources/Cut.swift')
+    expect((await symbolBlocks(file.id)).map((s) => s.name).sort()).toEqual(['f0', 'f1', 'f2', 'f3', 'f4'])
+    expect(file.embeddingNote).toBe(
+      '2 symbols or imports left out: names over 200 characters, or over 30000 items or 8388608 bytes of answer; ' +
+        'symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: 3 of 5 symbols embedded, the rest are keyword-searchable only',
+    )
+  })
+
   it('under the per-file budget, embeds exported then other top-level symbols before methods (#450)', async () => {
     vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '3')
     const repo = await makeRepo()
