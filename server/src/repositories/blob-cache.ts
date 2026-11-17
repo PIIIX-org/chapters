@@ -14,7 +14,6 @@
  *   entries, least recently used out.
  */
 import { sql } from 'drizzle-orm'
-import { config } from '../config.js'
 import { db } from '../db/client.js'
 import { textArray } from '../search/block-rows.js'
 import { recordCacheLookup } from '../monitoring/metrics.js'
@@ -36,6 +35,27 @@ export async function vectorsInAccount(repositoryId: string, keys: readonly stri
 }
 
 const PARSE_CACHE_ENTRIES = 2_000
+
+/** Default ELARA_PARSE_CACHE_MB (#1148): the byte budget of the parse cache, in MiB. */
+export const DEFAULT_PARSE_CACHE_MB = 64
+
+/** `ELARA_PARSE_CACHE_MB` -> a positive whole number of MiB (at most 1 TiB), or null when it is not one. */
+export function readParseCacheMb(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '') return DEFAULT_PARSE_CACHE_MB
+  if (raw.trim() === '') return null
+  const mb = Number(raw)
+  return Number.isSafeInteger(mb) && mb > 0 && mb <= 1024 * 1024 ? mb : null
+}
+
+if (readParseCacheMb(process.env.ELARA_PARSE_CACHE_MB) === null) {
+  console.warn(`ELARA_PARSE_CACHE_MB=${JSON.stringify(process.env.ELARA_PARSE_CACHE_MB)} is not a positive whole number of MiB: using ${DEFAULT_PARSE_CACHE_MB}`)
+}
+
+/** The byte budget now, read per call so tests can set the variable after the module loads. */
+export function parseCacheBudgetBytes(): number {
+  return (readParseCacheMb(process.env.ELARA_PARSE_CACHE_MB) ?? DEFAULT_PARSE_CACHE_MB) * 1024 * 1024
+}
+
 /** The largest estimated size of one retained result (#1148): a larger one is returned and not kept. Never above the total budget. */
 export const PARSE_CACHE_ENTRY_BYTES = 4 * 1024 * 1024
 
@@ -95,7 +115,7 @@ export async function parsed(language: string, content: string, path: string, co
   }
   const result = await extractStructure(language, content, path)
   parseCacheStats.parsed++
-  const budget = config.parseCacheBytes
+  const budget = parseCacheBudgetBytes()
   const bytes = estimateExtractionBytes(result)
   if (bytes > Math.min(PARSE_CACHE_ENTRY_BYTES, budget)) {
     parseCacheStats.skippedLarge++

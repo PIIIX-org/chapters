@@ -1,7 +1,15 @@
 // #1148: the parse cache's byte accounting, its size estimate and the ELARA_PARSE_CACHE_MB reader.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PARSE_CACHE_ENTRY_BYTES, clearParseCache, estimateExtractionBytes, parseCacheStats, parsed } from '../src/repositories/blob-cache.js'
-import { DEFAULT_PARSE_CACHE_MB, config, readParseCacheMb } from '../src/config.js'
+import {
+  DEFAULT_PARSE_CACHE_MB,
+  PARSE_CACHE_ENTRY_BYTES,
+  clearParseCache,
+  estimateExtractionBytes,
+  parseCacheBudgetBytes,
+  parseCacheStats,
+  parsed,
+  readParseCacheMb,
+} from '../src/repositories/blob-cache.js'
 import type { ExtractionResult } from '../src/repositories/extraction.js'
 
 vi.mock('../src/repositories/extraction.js', async (importOriginal) => ({
@@ -128,8 +136,8 @@ describe('readParseCacheMb (#1148)', () => {
   })
 
   it('reaches the cache as bytes, and a bad value falls back to the default', () => {
-    expect(config.parseCacheBytes).toBe(8 * MIB)
+    expect(parseCacheBudgetBytes()).toBe(8 * MIB)
     process.env.ELARA_PARSE_CACHE_MB = 'nope'
-    expect(config.parseCacheBytes).toBe(DEFAULT_PARSE_CACHE_MB * MIB)
+    expect(parseCacheBudgetBytes()).toBe(DEFAULT_PARSE_CACHE_MB * MIB)
   })
 })

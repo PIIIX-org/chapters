@@ -94,21 +94,6 @@ if (readEmbedMaxSymbolsPerFile(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE) === null) {
   console.warn(`ELARA_EMBED_MAX_SYMBOLS_PER_FILE=${JSON.stringify(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE)} is not a whole number >= 0: using ${DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE}`)
 }
 
-/** Default ELARA_PARSE_CACHE_MB (#1148): the byte budget of the per-process parse cache (repositories/blob-cache.ts). */
-export const DEFAULT_PARSE_CACHE_MB = 64
-
-/** `ELARA_PARSE_CACHE_MB` -> a positive whole number of MiB (at most 1 TiB), or null when it is not one. */
-export function readParseCacheMb(raw: string | undefined): number | null {
-  if (raw === undefined || raw === '') return DEFAULT_PARSE_CACHE_MB
-  if (raw.trim() === '') return null
-  const mb = Number(raw)
-  return Number.isSafeInteger(mb) && mb > 0 && mb <= 1024 * 1024 ? mb : null
-}
-
-if (readParseCacheMb(env.ELARA_PARSE_CACHE_MB) === null) {
-  console.warn(`ELARA_PARSE_CACHE_MB=${JSON.stringify(env.ELARA_PARSE_CACHE_MB)} is not a positive whole number of MiB: using ${DEFAULT_PARSE_CACHE_MB}`)
-}
-
 /**
  * Search's relevance gate (#441): a vector hit counts only when its cosine
  * distance to the query is below this; a keyword hit always counts.
@@ -231,14 +216,6 @@ export const config = {
    */
   get embedMaxSymbolsPerFile(): number {
     return readEmbedMaxSymbolsPerFile(env.ELARA_EMBED_MAX_SYMBOLS_PER_FILE) ?? DEFAULT_EMBED_MAX_SYMBOLS_PER_FILE
-  },
-  /**
-   * `ELARA_PARSE_CACHE_MB` (#1148): the byte budget of the per-process parse
-   * cache, in bytes (default 64 MiB); see repositories/blob-cache.ts. A getter
-   * so tests can set it after the config loads.
-   */
-  get parseCacheBytes(): number {
-    return (readParseCacheMb(env.ELARA_PARSE_CACHE_MB) ?? DEFAULT_PARSE_CACHE_MB) * 1024 * 1024
   },
   /** Search's relevance gate (#441): see `readSearchMaxDistance`. */
   get searchMaxDistance(): number {

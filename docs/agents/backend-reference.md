@@ -3827,7 +3827,7 @@ not parsed again. It is bounded by 2,000 entries and by bytes (#1148):
 plus a fixed overhead per symbol, import and site (a cheap over-estimate, no
 serialization), and least recently used entries go until the total is within
 the budget, 64 MiB by default (`ELARA_PARSE_CACHE_MB`, a positive whole number
-of MiB; anything else warns at boot and uses the default). A result estimated
+of MiB, at most 1 TiB, read in `blob-cache.ts`; anything else warns at boot and uses the default). A result estimated
 over `PARSE_CACHE_ENTRY_BYTES` (4 MiB, or the budget when that is smaller) is
 returned to its caller and **not retained**, so the next call parses it again;
 it does not push out other entries. `parseCacheStats` counts parses, reuses,
