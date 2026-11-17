@@ -54,6 +54,13 @@ and `zzz-usage-report` (last: the run's report, numbers per tool, session and
 search, never-read notes, a client-reported fallback; no stored row holds note
 or query text; accounts separated; off again writes nothing; its summary is the
 report's).
+
+For `monitoring-alerts`, wait for the injected repository's `error` plus new
+sync failure accounting, and the injected note's projection failure and
+repaired file/directory-index projections before taking monitor snapshots
+(#799). `lab/lib/monitoring-alerts.test.ts` exercises `idle` → `syncing` →
+`error` without wall-clock sleeps.
+
 Full tier adds `attachments`, `backup-restore`, `big-notes`, `browser`
 (Playwright/Chromium), `collab-s2b` (ADR-003 §11 S2b scenarios: rename and
 a new note at the old path, a pre-S2b tab across the upgrade, a re-seeded
