@@ -10,6 +10,7 @@ import { fieldKeywords, fileKeywords, symbolKeywords } from '../search/identifie
 import { queueSemanticEdgeRefresh, runSemanticEdgeRefresh } from '../search/semantic-edges.js'
 import { parsed, vectorsInAccount } from './blob-cache.js'
 import { codeBlocks } from './code-blocks.js'
+import { looksMinified } from './minified.js'
 import {
   blockDefinitions,
   changedDefinitions,
@@ -92,27 +93,6 @@ export function hasCurrentBlocksSql(): SQL {
 /** Turn number each repository last got; repositories never served count as 0. */
 const lastTurn = new Map<string, number>()
 let turn = 0
-
-/**
- * A line this long means minified, bundled or generated code (prettier-style
- * source stays far below it). Tree-sitter parses such files fine (742 KB
- * bundle: ~190 ms), but every declaration in it starts on the same few lines,
- * so its symbols are minified names with snippets cut from one huge line —
- * hundreds of meaningless rows, each costing an embedding. Such a file keeps
- * its content, file embedding and keyword search, but gets no symbols/imports.
- */
-const MAX_STRUCTURED_LINE_LENGTH = 1000
-
-function looksMinified(content: string): boolean {
-  let lineStart = 0
-  while (lineStart < content.length) {
-    let lineEnd = content.indexOf('\n', lineStart)
-    if (lineEnd === -1) lineEnd = content.length
-    if (lineEnd - lineStart > MAX_STRUCTURED_LINE_LENGTH) return true
-    lineStart = lineEnd + 1
-  }
-  return false
-}
 
 interface RepoSiblings {
   pathToId: Map<string, string>

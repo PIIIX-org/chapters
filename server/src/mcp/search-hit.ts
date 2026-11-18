@@ -14,7 +14,9 @@ export type LeanHit = Omit<SearchResult, 'containerId' | 'frontmatter' | 'block'
  * - the digits of `score` after the fifth decimal (the list is already in score order; REST keeps the full value).
  * A hit keeps its `id`: the usage report (#678) reads hits by it.
  */
-export function leanHit(hit: SearchResult, singleContainer: boolean): LeanHit {
+export function leanHit(hit: SearchResult, singleContainer: boolean): LeanHit
+export function leanHit(hit: Omit<SearchResult, 'updated'>, singleContainer: boolean): Omit<LeanHit, 'updated'>
+export function leanHit(hit: Omit<SearchResult, 'updated'> & { updated?: string }, singleContainer: boolean): Omit<LeanHit, 'updated'> & { updated?: string } {
   const { containerId, type, heading, ...rest } = hit
   const typeRepeats = (hit.resourceType === 'code' && type === hit.language) || (hit.resourceType === 'symbol' && type === hit.symbolKind)
   return {

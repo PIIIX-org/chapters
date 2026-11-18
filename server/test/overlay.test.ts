@@ -42,7 +42,7 @@ deleted file mode 100644
 -export const gone = 1
 `)
     expect(patches.map((p) => [p.path, p.status])).toEqual([['new.ts', 'added'], ['old.ts', 'deleted']])
-    expect(applyHunks('new.ts', '', patches[0]!.hunks)).toBe('export const a = 1\nexport const b = 2')
+    expect(applyHunks('new.ts', '', patches[0]!.hunks)).toBe('export const a = 1\nexport const b = 2\n')
   })
 
   it('refuses a hunk whose context is not the indexed content, naming the file', () => {
@@ -65,5 +65,32 @@ deleted file mode 100644
     expect(patches.map((p) => p.path)).toEqual(['src/café.ts', 'src/say "hi".ts'])
     expect(parseOverlay('diff --git "a/\\346\\227\\245.ts" "b/\\346\\227\\245.ts"\n--- /dev/null\n+++ "b/\\346\\227\\245.ts"\n@@ -0,0 +1,1 @@\n+x\n')[0]).toMatchObject({ path: '日.ts', status: 'added' })
     expect(() => parseOverlay('--- "a/bad\\q.ts"\n+++ "b/bad\\q.ts"\n@@ -1,1 +1,1 @@\n-a\n+b\n')).toThrow(/quoted path/)
+  })
+
+  it('preserves final-newline bytes and rejects malformed counts and positions', () => {
+    const diff = '--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n one\n-last\n\\ No newline at end of file\n+next\n\\ No newline at end of file\n'
+    const [patch] = parseOverlay(diff)
+    expect(applyHunks('a.txt', 'one\nlast', patch!.hunks)).toBe('one\nnext')
+    expect(() => applyHunks('a.txt', 'one\nlast\n', patch!.hunks)).toThrow(/newline/)
+    expect(() => parseOverlay(diff.replace('+1,2', '+1,3'))).toThrow(/counts/)
+    const [shifted] = parseOverlay(diff.replace('+1,2', '+3,2'))
+    expect(() => applyHunks('a.txt', 'one\nlast', shifted!.hunks)).toThrow(/position/)
+  })
+
+  it('never silently drops unsupported metadata or replaces invalid path/text bytes', () => {
+    expect(() => parseOverlay(MODIFIED + 'diff --git a/mode.ts b/mode.ts\nold mode 100644\nnew mode 100755\n')).toThrow(/no supported text patch/)
+    expect(() => parseOverlay('diff --git a/link b/link\nnew file mode 120000\n')).toThrow(/symlink/)
+    expect(() => parseOverlay(MODIFIED + '\ud800')).toThrow(/UTF-8/)
+    expect(() => parseOverlay('--- "a/\\377.ts"\n+++ "b/\\377.ts"\n@@ -1,1 +1,1 @@\n-a\n+b\n')).toThrow(/UTF-8/)
+    expect(parseOverlay('--- "a/🙂.ts"\n+++ "b/🙂.ts"\n@@ -1,1 +1,1 @@\n-a\n+b\n')[0]!.path).toBe('🙂.ts')
+  })
+
+  it('keeps the regular-file mode the diff states and still refuses a mode-only change', () => {
+    const added = parseOverlay('diff --git a/run.sh b/run.sh\nnew file mode 100755\nindex 0000000..1111111\n--- /dev/null\n+++ b/run.sh\n@@ -0,0 +1,1 @@\n+echo hi\n')
+    expect(added[0]).toMatchObject({ path: 'run.sh', status: 'added', mode: '100755' })
+    const both = parseOverlay('diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\nindex 1111111..2222222\n--- a/run.sh\n+++ b/run.sh\n@@ -1,1 +1,1 @@\n-echo hi\n+echo bye\n')
+    expect(both[0]).toMatchObject({ status: 'modified', oldMode: '100644', mode: '100755' })
+    expect(parseOverlay(MODIFIED)[0]).not.toHaveProperty('mode')
+    expect(() => parseOverlay('diff --git a/run.sh b/run.sh\nold mode 100644\nnew mode 100755\n')).toThrow(/mode-only/)
   })
 })

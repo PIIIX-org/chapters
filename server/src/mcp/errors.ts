@@ -27,6 +27,7 @@ import { IdempotencyKeyReusedError } from './write-result.js'
  * - CONFLICT: the target's state refuses the call (not trashed, an
  *   idempotency key used for another call, an agent-push repository).
  * - BUSY: the store or the resource is busy now; retryable.
+ * - NOT_SYNCED: a Git ref or commit the server's own sync has not brought in yet; retry after the next sync.
  * - QUARANTINED: a suspicious write kept out of the note (`rule`: growth or
  *   repeated-block); send it again with allowGrowth if intended.
  * - RATE_LIMITED: retryable after `retryAfterMs` (#440 answers it on HTTP 429).
@@ -47,6 +48,7 @@ export type ErrorCode =
   | 'AMBIGUOUS'
   | 'CONFLICT'
   | 'BUSY'
+  | 'NOT_SYNCED'
   | 'QUARANTINED'
   | 'RATE_LIMITED'
   | 'INTERNAL'
@@ -65,6 +67,7 @@ const RETRYABLE: Record<ErrorCode, boolean> = {
   AMBIGUOUS: false,
   CONFLICT: false,
   BUSY: true,
+  NOT_SYNCED: true,
   QUARANTINED: false,
   RATE_LIMITED: true,
   INTERNAL: false,

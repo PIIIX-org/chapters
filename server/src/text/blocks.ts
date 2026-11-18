@@ -76,7 +76,7 @@ export function atxHeading(line: string): { level: number; title: string } | nul
 }
 
 /** ATX headings (`#` to `######`) outside fenced code blocks. */
-export function headings(text: string): Heading[] {
+export function headings(text: string, max = Infinity): Heading[] {
   const out: Heading[] = []
   let fence: string | null = null
   for (let start = 0; start < text.length; ) {
@@ -90,6 +90,7 @@ export function headings(text: string): Heading[] {
     else if (fence === null) {
       const atx = atxHeading(line)
       if (atx) out.push({ start, end, ...atx, line: line.trim() })
+      if (out.length > max) return out
     }
     start = end
   }

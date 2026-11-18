@@ -14,7 +14,7 @@ export type SearchRoute = typeof SEARCH_ROUTES[number]
 /** Words of a query that may surround the identifier it asks for. */
 const MAX_WORDS = 6
 /** The most hits of a route: more than this is not an answer. */
-const MAX_ROUTED = 10
+export const MAX_ROUTED = 10
 /** Words that ask for a definition without naming anything. */
 const FILLER = new Set(
   "where is are the a an defined definition declared implemented implementation of find show me locate function class method interface type symbol what does in code for where's file".split(' '),

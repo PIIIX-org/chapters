@@ -9,11 +9,13 @@ import {
   mirrorHasCommit,
   objectFormatOf,
   openMirror,
+  recordMirrorSource,
   remoteHead,
   scanMirrorTree,
   withMirrorLock,
   type RemoteHead,
 } from './git-mirror.js'
+import { sourceIdentity } from './source-identity.js'
 import { authenticatedUrl, redactGitSecrets, splitGitUrlCredential } from './git-remote.js'
 import { isSafeGitUrl } from './permissions.js'
 import { listRepositoryFiles, syncRepositoryFiles } from './store.js'
@@ -117,8 +119,22 @@ export async function syncGitRepository(repositoryId: string): Promise<void> {
       // mirror goes after this, and none may be created again).
       const current = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
       if (!current) return false
-      const dir = await openMirror(repositoryId, remote ? objectFormatOf(remote.commit) : null)
+      // The URL fetched from and the identity stamped must come from one row: a source replaced since this sync began is not
+      // synced under the old row's URL (the message is plain text, no URL or credential; the next sync starts from the new row).
+      if (sourceIdentity(current) !== sourceIdentity(repo) || current.gitCredentialEncrypted !== repo.gitCredentialEncrypted) {
+        throw new Error('the repository source changed during this sync; it is synced again from the new source')
+      }
+      const source = sourceIdentity(current)
+      // A mirror recorded for another source is deleted before anything is fetched into it, so none of its refs stay resolvable.
+      const dir = await openMirror(repositoryId, remote ? objectFormatOf(remote.commit) : null, source)
       const headCommit = await fetchIntoMirror(dir, cloneUrl, remote?.branch ?? null)
+      // The fetch took time: the row is read again, and nothing is stamped (nor indexed) for a source that was replaced meanwhile.
+      const latest = (await db.select().from(repositories).where(eq(repositories.id, repositoryId)))[0]
+      if (!latest || sourceIdentity(latest) !== source || latest.gitCredentialEncrypted !== current.gitCredentialEncrypted) {
+        throw new Error('the repository source changed during this sync; it is synced again from the new source')
+      }
+      // Ref views serve this mirror only for the source that filled it: stamped once the fetch has succeeded and the source still stands.
+      await recordMirrorSource(dir, source)
       // A row with no skip report predates #465 (see above): read every file once.
       const previous =
         current.lastSyncedCommit && current.skippedFiles && (await mirrorHasCommit(dir, current.lastSyncedCommit))

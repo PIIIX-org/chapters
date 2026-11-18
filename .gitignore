@@ -16,3 +16,8 @@ lab-env.json
 
 # Premise benchmark runs (benchmarks/run.ts)
 bench-results/
+
+# Local test scratch (DATA_DIR / TMPDIR for test runs; node compile cache lands here)
+.test-data/
+.test-tmp/
+node-compile-cache/

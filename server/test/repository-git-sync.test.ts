@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { simpleGit } from 'simple-git'
@@ -7,6 +8,9 @@ import { eq } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
 import { repositories } from '../src/db/schema.js'
 import { syncGitRepository } from '../src/repositories/git-sync.js'
+import { gitMirrorDir, openMirror, recordMirrorSource, removeGitMirror, resolveMirrorRef } from '../src/repositories/git-mirror.js'
+import { sourceIdentity } from '../src/repositories/source-identity.js'
+import { repositoryViewAt } from '../src/repositories/ref-index.js'
 import { getRepositoryFile, listRepositoryFiles } from '../src/repositories/store.js'
 import { createActiveUser } from './helpers.js'
 
@@ -84,6 +88,63 @@ describe('git URL ingestion', () => {
     expect(files.map((f) => f.path).sort()).toEqual(['a.ts', 'c.ts'])
     const a = await getRepositoryFile(repo.id, 'a.ts')
     expect(a?.content).toContain('999')
+
+    // Ref views read the mirror this sync filled, never the network: the synced tip by HEAD, by commit and by the default branch's name.
+    const [synced] = await db.select().from(repositories).where(eq(repositories.id, repo.id))
+    for (const ref of ['HEAD', 'main', synced!.lastSyncedCommit!]) {
+      const view = await repositoryViewAt(synced!.ownerId, repo.id, { ref })
+      expect(view.commit, ref).toBe(synced!.lastSyncedCommit)
+      expect([...view.files.keys()].sort()).toEqual(['a.ts', 'c.ts'])
+    }
+    await expect(repositoryViewAt(synced!.ownerId, repo.id, { ref: 'elsewhere' })).rejects.toMatchObject({ code: 'NOT_SYNCED' })
+    await removeGitMirror(repo.id)
+  })
+
+  it('never lets a replaced source resolve the old source\'s commits, even when the new source fails to sync', async () => {
+    const { remoteUrl, bareDir, workDir, git } = await makeBareRemote()
+    await writeFile(join(workDir, 'a.ts'), 'export const a = 1')
+    await git.add('.')
+    await git.commit('initial')
+    await git.push('origin', 'HEAD:refs/heads/main')
+    await simpleGit(bareDir).raw(['symbolic-ref', 'HEAD', 'refs/heads/main'])
+    const repo = await makeRepo(remoteUrl)
+    await syncGitRepository(repo.id)
+    const [synced] = await db.select().from(repositories).where(eq(repositories.id, repo.id))
+    const old = synced!.lastSyncedCommit!
+    expect(await resolveMirrorRef(gitMirrorDir(repo.id), sourceIdentity(synced!), old, null, null)).toBe(old)
+    // The row now names another source (a different URL, so a different identity) that cannot be reached.
+    const [moved] = await db.update(repositories).set({ gitUrl: `file://${bareDir}-gone` }).where(eq(repositories.id, repo.id)).returning()
+    await expect(syncGitRepository(repo.id)).rejects.toThrow()
+    for (const source of [sourceIdentity(synced!), sourceIdentity(moved!)]) {
+      for (const ref of [old, 'main', 'HEAD', undefined]) await expect(resolveMirrorRef(gitMirrorDir(repo.id), source, ref, old, 'main'), `${source.slice(0, 6)} ${String(ref)}`).rejects.toMatchObject({ kind: 'unsynced' })
+    }
+    await removeGitMirror(repo.id)
+  })
+
+  it('stamps and indexes nothing when the source is replaced while the fetch runs', async () => {
+    const { remoteUrl, bareDir, workDir, git } = await makeBareRemote()
+    await writeFile(join(workDir, 'a.ts'), 'export const a = 1')
+    await git.add('.')
+    await git.commit('initial')
+    await git.push('origin', 'HEAD:refs/heads/main')
+    await simpleGit(bareDir).raw(['symbolic-ref', 'HEAD', 'refs/heads/main'])
+    const repo = await makeRepo(remoteUrl)
+    // A mirror of this source already exists, with a hook that holds the fetch's ref update until the test has replaced the source.
+    const dir = await openMirror(repo.id, 'sha1', sourceIdentity(repo))
+    await recordMirrorSource(dir, sourceIdentity(repo))
+    const signals = await makeTempDir('chapters-hook-')
+    await mkdir(join(dir, 'hooks'), { recursive: true })
+    await writeFile(join(dir, 'hooks', 'reference-transaction'), `#!/bin/sh\n[ "$1" = prepared ] || exit 0\ntouch '${signals}/started'\ni=0\nwhile [ ! -f '${signals}/go' ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done\n`)
+    await chmod(join(dir, 'hooks', 'reference-transaction'), 0o755)
+    const running = syncGitRepository(repo.id)
+    const outcome = running.then(() => null, (err: unknown) => err)
+    for (let i = 0; i < 400 && !existsSync(join(signals, 'started')); i++) await new Promise((r) => setTimeout(r, 25))
+    expect(existsSync(join(signals, 'started'))).toBe(true)
+    await db.update(repositories).set({ gitUrl: `${remoteUrl}?moved` }).where(eq(repositories.id, repo.id))
+    await writeFile(join(signals, 'go'), '')
+    expect(String(await outcome)).toMatch(/source changed during this sync/)
+    expect(await listRepositoryFiles(repo.id)).toEqual([])
+    await removeGitMirror(repo.id)
   })
 
   it('records a sync error without throwing the caller into an unhandled state', async () => {

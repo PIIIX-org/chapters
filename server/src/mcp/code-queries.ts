@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { CodeQueryError, askCode, checkRefsArguments, type RefsArgs, type Row } from '../repositories/code-refs.js'
+import { CodeQueryError, askCode, checkRefsArguments, type CodeQueries, type RefsArgs, type Row } from '../repositories/code-refs.js'
 import { McpToolError } from './errors.js'
 import { keyset, ranked, type Budgeted, type Ladder, type Page } from './response.js'
 
@@ -35,12 +35,12 @@ const ROWS: Ladder<Row> = {
 const LINE: Ladder<{ kind: string; name: string }> = { locations: (r) => r.name, group: (r) => r.kind }
 
 /** The answer to a `refs` call in `repositoryId`, which the caller has checked the account may read. */
-export async function refsAnswer(repositoryId: string, args: RefsArgs, page: Page): Promise<Budgeted> {
+export async function refsAnswer(repositoryId: string, args: RefsArgs, page: Page, queries?: CodeQueries): Promise<Budgeted> {
   // The cursor holds the offset the next page starts at.
   const offset = page.after(0, z.number().int().min(0)) ?? 0
   let answer
   try {
-    answer = await askCode(repositoryId, { ...args, offset })
+    answer = await askCode(repositoryId, { ...args, offset }, queries)
   } catch (err) {
     throw toolError(err)
   }
