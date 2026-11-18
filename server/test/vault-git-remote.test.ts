@@ -1372,3 +1372,66 @@ it('Git boundary: concurrent attachment staging is never listed, cloned or treat
   }
   expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('future published bytes')
 }, 30_000)
+
+it('Git boundary: candidate review follows current vault access after credential revocation/deletion without an existence oracle', async () => {
+  const f = await pushFixture()
+  const original = await connectionFor(f.id)
+  await writeFile(join(f.dir, '.assets/proof.txt'), 'persistent candidate bytes')
+  const oid = await commit(f.dir)
+  await writeAsset(f.id, 'proof.txt', Buffer.from('human current bytes'))
+  expect((await git(['push', 'origin', 'HEAD:main'], f.dir)).ok).toBe(false)
+  const url = `/git/vaults/${f.id}/pushes/${oid}/assets/proof.txt`
+  const absent = `/git/vaults/${f.id}/pushes/${oid}/assets/absent.txt`
+  const request = (token: string, path: string) => app.inject({ method: 'GET', url: path, headers: { authorization: `Bearer ${token}` } })
+  const refuseBoth = async (token: string, status: number) => {
+    const existing = await request(token, url)
+    const missing = await request(token, absent)
+    expect(existing.statusCode, existing.body).toBe(status)
+    expect(missing.statusCode, missing.body).toBe(status)
+    expect(existing.body).toBe(missing.body)
+  }
+  expect((await app.inject({ method: 'POST', url: `/api/mcp-connections/${original}/revoke`, headers: { cookie } })).statusCode).toBeLessThan(300)
+  await refuseBoth(f.token, 401)
+  const replacement = await mint({ name: 'replacement reviewer', scope: 'vault', vaultId: f.id, access: 'write', profile: 'writer', allowedTools: ['read_note', 'edit_note'] })
+  const preview = await request(replacement, url)
+  expect(preview.statusCode, preview.body).toBe(200)
+  expect(preview.rawPayload.toString()).toBe('persistent candidate bytes')
+  await db.delete(mcpConnections).where(eq(mcpConnections.id, original))
+  await refuseBoth(f.token, 401)
+  expect((await request(replacement, url)).rawPayload.toString()).toBe('persistent candidate bytes')
+  expect((await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}`, headers: { authorization: `Bearer ${replacement}` } })).statusCode).toBe(404)
+  const wrong = await mint({ name: 'wrong vault reviewer', scope: 'vault', vaultId: otherVaultId, access: 'write' })
+  const read = await mint({ name: 'read-only reviewer', scope: 'vault', vaultId: f.id, access: 'read' })
+  const disallowed = await mint({ name: 'no read-note reviewer', scope: 'vault', vaultId: f.id, access: 'write', allowedTools: ['search'] })
+  const repo = (await app.inject({ method: 'POST', url: '/api/repositories', headers: { cookie }, body: { name: 'candidate pin control', ingestionMethod: 'agent_push' } })).json<{ id: string }>().id
+  const pinned = await mint({ name: 'repository reviewer', scope: 'repository', repositoryId: repo, access: 'write' })
+  await refuseBoth(wrong, 404)
+  await refuseBoth(pinned, 404)
+  await refuseBoth(read, 403)
+  await refuseBoth(disallowed, 404)
+  const shared = await createActiveUser()
+  const sharedCookie = await loginCookie(app, shared.email)
+  const sharedToken = (await app.inject({ method: 'POST', url: '/api/mcp-connections', headers: { cookie: sharedCookie }, body: { name: 'shared candidate reviewer', scope: 'account', access: 'write', profile: 'writer', allowedTools: ['read_note', 'edit_note'] } })).json<{ token: string }>().token
+  const grant = await app.inject({ method: 'POST', url: `/api/vaults/${f.id}/shares`, headers: { cookie }, body: { granteeType: 'user', granteeId: shared.id, permission: 'edit' } })
+  expect((await request(sharedToken, url)).statusCode).toBe(200)
+  await app.inject({ method: 'DELETE', url: `/api/vaults/${f.id}/shares/${grant.json<{ id: string }>().id}`, headers: { cookie } })
+  await refuseBoth(sharedToken, 404)
+  expect((await request(replacement, `/git/vaults/${f.id}/pushes/${oid}/assets/%2e%2e`)).statusCode).toBe(404)
+  const link = join(config.dataDir, 'vaults', f.id, '.git-proposals', oid, 'linked.txt')
+  await symlink(assetFile(f.id, 'proof.txt'), link)
+  try {
+    expect((await request(replacement, `/git/vaults/${f.id}/pushes/${oid}/assets/linked.txt`)).statusCode).toBe(404)
+  } finally { await rm(link, { force: true }) }
+  const alias = join(config.dataDir, 'vaults', f.id, '.git-proposals', '0'.repeat(40))
+  await symlink(join(config.dataDir, 'vaults', f.id, '.git-proposals', oid), alias)
+  try {
+    expect((await request(replacement, `/git/vaults/${f.id}/pushes/${'0'.repeat(40)}/assets/proof.txt`)).statusCode).toBe(404)
+  } finally { await rm(alias, { force: true }) }
+  const isolated = await pushFixture()
+  const foreignRoot = join(config.dataDir, 'vaults', isolated.id, '.git-proposals')
+  await symlink(join(config.dataDir, 'vaults', f.id, '.git-proposals'), foreignRoot)
+  try {
+    expect((await request(isolated.token, `/git/vaults/${isolated.id}/pushes/${oid}/assets/proof.txt`)).statusCode).toBe(404)
+  } finally { await rm(foreignRoot, { force: true }) }
+  expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('human current bytes')
+}, 30_000)

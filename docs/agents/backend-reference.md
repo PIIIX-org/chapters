@@ -3492,6 +3492,14 @@ change through the normal base-aware edit API. `.../assets/:name` downloads
 a conflicting asset proposal as an attachment; asset delete conflicts
 record the unapplied delete intent. Proposed binary files live under the
 vault's `.git-proposals/` directory.
+Binary review follows existing History access: a current writer-capable
+token with `read_note` and vault edit access can download a real candidate
+by commit/name even after its original connection is revoked or deleted.
+The lookup does not enumerate candidates or follow symlinks, and reads at
+most 8 MiB. Revoked tokens, wrong pins, read-only/disallowed tokens and
+removed edit grants fail before candidate lookup, identically for an
+existing and missing candidate. Reports and import idempotency remain
+connection-scoped.
 
 Purge also clears search snippets and caller-read text, replaces cached
 write answers with content-free effect tombstones (a same-key retry cannot
