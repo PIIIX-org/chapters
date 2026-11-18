@@ -39,6 +39,54 @@ async function metadataUsage(vaultId: string) {
   return usage
 }
 
+/** Match retained jsonb::text bytes, saturating without expanded decimal allocations. */
+export function proposalFrontmatterBytes(frontmatter: Record<string, unknown>, limit: number): number {
+  const json = JSON.stringify(frontmatter)
+  let bytes = Buffer.byteLength(json)
+  if (bytes > limit) return limit + 1
+  let quoted = false
+  for (let i = 0; i < json.length; i++) {
+    const char = json[i]!
+    if (quoted) {
+      if (char === '\\') i++
+      else if (char === '"') quoted = false
+      continue
+    }
+    if (char === '"') { quoted = true; continue }
+    if (char === ',' || char === ':') {
+      if (++bytes > limit) return limit + 1
+      continue
+    }
+    if (char !== '-' && !(char >= '0' && char <= '9')) continue
+    const negative = char === '-'
+    let cursor = i + Number(negative)
+    let whole = 0
+    while (json[cursor]! >= '0' && json[cursor]! <= '9') { whole++; cursor++ }
+    let fraction = 0
+    if (json[cursor] === '.') {
+      cursor++
+      while (json[cursor]! >= '0' && json[cursor]! <= '9') { fraction++; cursor++ }
+    }
+    if (json[cursor] === 'e' || json[cursor] === 'E') {
+      cursor++
+      const sign = json[cursor] === '-' ? -1 : 1
+      if (json[cursor] === '-' || json[cursor] === '+') cursor++
+      let exponent = 0
+      while (json[cursor]! >= '0' && json[cursor]! <= '9') {
+        exponent = exponent * 10 + json.charCodeAt(cursor) - 48
+        cursor++
+      }
+      const digits = whole + fraction
+      const point = whole + sign * exponent
+      const expanded = Number(negative) + (point <= 0 ? 2 - point + digits : point >= digits ? point : digits + 1)
+      bytes += Math.max(0, expanded - (cursor - i))
+      if (bytes > limit) return limit + 1
+    }
+    i = cursor - 1
+  }
+  return bytes
+}
+
 /** UNDER withVaultGit: no other Git allocator can consume this allowance before the import finishes. */
 export async function admitImport(vaultId: string, operations: number, proposalBytes: number, noteOperations: number): Promise<void> {
   const usage = await metadataUsage(vaultId)

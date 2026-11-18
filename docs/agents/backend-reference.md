@@ -3442,7 +3442,10 @@ each operation reserves 8192 bytes. Git note proposals are bounded by
 4096 files/128 MiB. SQL aggregates and bounded directory scans count
 crash-orphaned evidence too. Before any note, asset or proposal mutation,
 an import allows for one maximum-sized mapping, all pending receipts and
-worst-case proposed payloads. No age eviction or implicit proposal TTL
+worst-case proposed payloads. Frontmatter reservations match retained
+PostgreSQL JSONB-text bytes, including separator spaces and decimal
+exponent expansion; a bounded, saturating scan never allocates expanded
+decimal strings. No age eviction or implicit proposal TTL
 frees capacity; full capacity refuses new admissions without changing
 content. Completed-operation retries do not reserve those effects again.
 This allowance is protected by the **single-process per-vault barrier**,
@@ -3466,6 +3469,8 @@ directory after rename/unlink, before their database receipt and ref ACK.
 A crash before a receipt leaves an honest partial failure: retry verifies
 desired bytes/absence and completes sync, or keeps a later human version
 as a conflict. An existing applied receipt skips replay of that mutation.
+Git proposal deduplication includes incoming commit and operation kind, so
+each distinct attempt retains its own purge provenance before its receipt.
 
 Cross-note imports are **non-atomic**. `vault_git_push_operations` receipts
 commit with each note operation. Conflicts/failures return Git `ng`, name

@@ -14,8 +14,9 @@ import { db, sql } from '../src/db/client.js'
 import { noteReads, writeIdempotency } from '../src/db/schema.js'
 import { advanceRead, confirmRead, rememberRead } from '../src/mcp/last-read.js'
 import { runWrite, writeAnswer } from '../src/mcp/write-result.js'
-import { createNote, getBaseRevision, getLiveNote, purgeRevision, readLiveNote, updateNote } from '../src/notes/store.js'
+import { createNote, getBaseRevision, getLiveNote, purgeNote, purgeRevision, readLiveNote, softDeleteNote, updateNote } from '../src/notes/store.js'
 import { writeThroughCollab } from '../src/sync/crdt-write.js'
+import { INSTANCE_LOCK_KEY } from '../src/notes/maintenance-lock.js'
 import { startCollabServer, type CollabRelay } from '../src/sync/collab-server.js'
 import { purgeVaultRecord, trashVaultRecord } from '../src/vaults/routes.js'
 import { createActiveUser, loginCookie, loginToken } from './helpers.js'
@@ -256,3 +257,44 @@ it('turns a real delayed post-write fallback into a content-free effect when its
     expect(JSON.stringify(replay)).not.toContain('Fallback secret')
   } finally { resume.release(); await writing.catch(() => undefined) }
 }, 30_000)
+
+describe.each([false, true])('a later busy store step after a committed effect (purged=%s)', (purged) => {
+  it('returns the existing receipt or purge tombstone without a new writable completion transaction', async () => {
+    const id = await vault()
+    const path = 'docs/committed-before-busy'
+    const reached = gate()
+    const resume = gate()
+    const held = await sql.reserve()
+    const call = { connectionId, target: id, tool: 'create_note', args: { path, body: 'Committed before busy.\n' }, key: `busy-after-commit-${purged}` }
+    const writing = runWrite(call, async (keyed) => {
+      const row = await createNote(id, call.args, { type: 'mcp', id: connectionId }, {
+        recordKey: keyed(value => writeAnswer(value, { status: 'applied', before: null }, false)),
+      })
+      reached.release()
+      await resume.promise
+      await createNote(id, { path: 'docs/must-not-follow-busy', body: 'Must not be written.\n' })
+      return writeAnswer(row, { status: 'applied', before: null }, false)
+    })
+    let locked = false
+    try {
+      await reached.promise
+      if (purged) {
+        const note = (await getLiveNote(id, path))!
+        await softDeleteNote(id, path)
+        expect(await purgeNote(id, note.id)).toBe(true)
+      }
+      await held`SELECT pg_advisory_lock(${INSTANCE_LOCK_KEY.toString()}::bigint)`
+      locked = true
+      resume.release()
+      const result = await writing
+      expect(result).toMatchObject(purged ? { status: 'conflicted', purged: true } : { status: 'applied', rev: 1 })
+      if (purged) expect(JSON.stringify(result)).not.toContain('Committed before busy')
+      expect(await getLiveNote(id, 'docs/must-not-follow-busy')).toBeNull()
+    } finally {
+      resume.release()
+      if (locked) await held`SELECT pg_advisory_unlock(${INSTANCE_LOCK_KEY.toString()}::bigint)`
+      held.release()
+      await writing.catch(() => undefined)
+    }
+  }, 30_000)
+})

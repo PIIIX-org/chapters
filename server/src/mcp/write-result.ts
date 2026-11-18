@@ -219,14 +219,20 @@ export async function runWrite(
         .onConflictDoUpdate({ target: [writeIdempotency.connectionId, writeIdempotency.key], set: { ...entry, noteId: row.id, result, createdAt: sql`now()` } })
     }
     const result = await attempt(keyed)
+    if (result.status === 'retry') {
+      // No new retention write is needed, even during exclusive maintenance.
+      const committed = await recorded()
+      if (!committed) return result
+      if (committed.argsHash !== hash) throw new IdempotencyKeyReusedError(key, call.tool)
+      return storedAnswer(committed.result)
+    }
     // Completion is a retention writer too: fence the vault before note mutexes, and never replace a purge tombstone.
     return storeTransaction(written ? [written.id] : [], async (tx) => {
       const [committed] = await tx.select({ argsHash: writeIdempotency.argsHash, result: writeIdempotency.result }).from(writeIdempotency).where(thisKey)
       if (committed) {
         if (committed.argsHash !== hash) throw new IdempotencyKeyReusedError(key, call.tool)
-        return result.status === 'retry' || (committed.result as Record<string, unknown>).purged === true ? storedAnswer(committed.result) : result
+        return (committed.result as Record<string, unknown>).purged === true ? storedAnswer(committed.result) : result
       }
-      if (result.status === 'retry') return result
       const live = await tx.execute(sql`SELECT id FROM vaults WHERE id = ${call.target} AND deleted_at IS NULL`)
       const valid = written ? await tx.execute(sql`SELECT id FROM notes WHERE id = ${written.id} AND vault_id = ${call.target} AND purge_epoch = ${written.purgeEpoch}`) : null
       const erased = live.length === 0 || (valid !== null && valid.length === 0)

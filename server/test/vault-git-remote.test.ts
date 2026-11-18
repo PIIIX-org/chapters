@@ -30,7 +30,7 @@ import type * as GitMetadata from '../src/git-remote/metadata.js'
 import type * as NoteProjector from '../src/notes/projector.js'
 import { config } from '../src/config.js'
 import { assetBlobId } from '../src/notes/store.js'
-import { GIT_QUOTAS, loadManifest, operationResults } from '../src/git-remote/metadata.js'
+import { GIT_QUOTAS, loadManifest, operationResults, proposalFrontmatterBytes } from '../src/git-remote/metadata.js'
 import { assetGitPath, assetNameFromGitPath, type Manifest } from '../src/git-remote/tree.js'
 import { boundedGit, PACK_LIMITS, pkt, withGitBudget } from '../src/git-remote/pack.js'
 
@@ -1288,6 +1288,152 @@ describe('Git boundary regressions (#1087)', () => {
       }
       expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('base asset')
     }
+  }, 30_000)
+
+  it('matches PostgreSQL proposal JSONB byte sizing on a bounded corpus and saturates exponent expansion', async () => {
+    const corpus: Record<string, unknown>[] = [
+      { values: [1e-308, -1e-308, 1e308, -1e308, Number.MIN_VALUE, -Number.MIN_VALUE, Number.MAX_VALUE,
+        1.25e-7, -1.25e-7, 1.25e21, -1.25e21, 0, -0, 0.125, 42], yes: true, no: false, nil: null },
+      { text: '1e-308, 1e+308: "quoted" \\"still text"', unicode: 'é😀', controls: '\b\f\n\r\t\u0001' },
+      { nested: [{ 'a:b,c': ['1e-308', { number: -5e-324, string: '\\":,1e+308' }] }], empty: {}, array: [] },
+    ]
+    for (const frontmatter of corpus) {
+      const [actual] = (await db.execute(sql`SELECT octet_length(${JSON.stringify(frontmatter)}::jsonb::text)::int AS bytes`)) as unknown as Array<{ bytes: number }>
+      expect(proposalFrontmatterBytes(frontmatter, GIT_QUOTAS.noteProposalBytes)).toBe(actual!.bytes)
+      for (const limit of [0, 16, actual!.bytes - 1, actual!.bytes]) {
+        expect(proposalFrontmatterBytes(frontmatter, limit)).toBe(Math.min(actual!.bytes, limit + 1))
+      }
+    }
+    const count = 131_072
+    const attack = { type: 'docs', samples: Array<number>(count).fill(1e-308) }
+    const bytes = proposalFrontmatterBytes(attack, GIT_QUOTAS.noteProposalBytes)
+    // 1e-308 is "0." + 307 zeroes + "1"; no expanded array reaches PostgreSQL.
+    expect(bytes).toBe(Buffer.byteLength('{"samples": [], "type": "docs"}') + count * 310 + (count - 1) * 2)
+    expect(bytes * 6).toBeLessThan(GIT_QUOTAS.noteProposalBytes)
+    expect(bytes * 7).toBeGreaterThan(GIT_QUOTAS.noteProposalBytes)
+    expect(proposalFrontmatterBytes(attack, 1024)).toBe(1025)
+  })
+
+  it('refuses numeric-exponent proposal overflow before every effect while admitting the near-limit valid control', async () => {
+    const f = await pushFixture()
+    const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+    for (const name of names.slice(2)) await createNote(f.id, { path: `docs/${name}`, body: `Baseline ${name}.\n` })
+    const client = await clone(f.token, f.id)
+    expect(client.ok, client.out).toBe(true)
+    await git(['config', 'user.name', 'Git proof'], client.dir)
+    await git(['config', 'user.email', 'git-proof@localhost'], client.dir)
+    const originalG = await readFile(join(client.dir, 'docs/g.md'))
+    const frontmatter = { type: 'docs', samples: Array<number>(512).fill(1e-308) }
+    const source = JSON.stringify(frontmatter)
+    for (const name of names) {
+      await writeFile(join(client.dir, `docs/${name}.md`), `---\n${source}\n---\nAgent ${name}.\n`)
+      await updateNote(f.id, `docs/${name}`, { body: `Human ${name}.\n` })
+    }
+    await writeFile(join(client.dir, 'docs/zz-created.md'), '---\ntype: docs\n---\nMust be admitted before creation.\n')
+    await writeFile(join(client.dir, '.assets/proof.txt'), 'admitted asset bytes')
+    await commit(client.dir)
+    const connection = await connectionFor(f.id)
+    const remaining = 1024 * 1024
+    const seedCount = 256
+    const tag = JSON.stringify({ kind: 'git_push', commit: 'd'.repeat(40), quotaFixture: 'exponent-boundary' })
+    try {
+      // Each retained body is about 1MiB, compressible on disk. Quota reads
+      // octet_length(body), not a hundreds-of-MiB JSONB numeric expansion.
+      await db.execute(sql`INSERT INTO note_revisions (note_id, frontmatter, body, actor_type, actor_id, action, actor_detail)
+        SELECT ${f.a.id}, '{}'::jsonb, repeat('q', ${Math.floor((GIT_QUOTAS.noteProposalBytes - remaining) / seedCount) - 2}),
+          'mcp', ${connection}, 'proposal', ${tag}::jsonb FROM generate_series(1, ${seedCount})`)
+      const refused = await git(['push', 'origin', 'HEAD:main'], client.dir)
+      expect(refused.ok, refused.out).toBe(false)
+      expect(refused.out).toContain('capacity')
+      const [untouched] = (await db.execute(sql`SELECT count(*)::int AS n FROM note_revisions r
+        JOIN notes n ON n.id = r.note_id WHERE n.vault_id = ${f.id} AND r.action = 'proposal'`)) as unknown as Array<{ n: number }>
+      expect(untouched!.n).toBe(seedCount)
+      expect(await getLiveNote(f.id, 'docs/zz-created')).toBeNull()
+      expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('base asset')
+      const [receipts] = (await db.execute(sql`SELECT count(*)::int AS n FROM vault_git_push_operations WHERE vault_id = ${f.id}`)) as unknown as Array<{ n: number }>
+      expect(receipts!.n).toBe(0)
+      for (const name of names) expect((await readLiveNote(f.id, `docs/${name}`))!.body).toBe(`Human ${name}.\n`)
+
+      await writeFile(join(client.dir, 'docs/g.md'), originalG)
+      const controlId = await commit(client.dir)
+      const control = await git(['push', 'origin', 'HEAD:main'], client.dir)
+      expect(control.ok, control.out).toBe(false) // Six real conflicts, not quota refusal.
+      expect(control.out).toContain('non-atomic')
+      expect(control.out).not.toContain('capacity')
+      const [retained] = (await db.execute(sql`SELECT count(*)::int AS n,
+          sum(octet_length(r.body) + octet_length(r.frontmatter::text))::float8 AS bytes,
+          count(*) FILTER (WHERE r.actor_detail->>'commit' = ${controlId})::int AS added
+        FROM note_revisions r JOIN notes n ON n.id = r.note_id
+        WHERE n.vault_id = ${f.id} AND r.action = 'proposal'`)) as unknown as Array<{ n: number; bytes: number; added: number }>
+      expect(retained!.n).toBe(seedCount + 6)
+      expect(retained!.added).toBe(6)
+      expect(retained!.bytes).toBeLessThanOrEqual(GIT_QUOTAS.noteProposalBytes)
+      expect(retained!.bytes).toBeGreaterThan(GIT_QUOTAS.noteProposalBytes - remaining / 8)
+      expect((await readLiveNote(f.id, 'docs/zz-created'))!.body).toBe('Must be admitted before creation.\n')
+      expect((await readAsset(f.id, 'proof.txt'))!.buffer.toString()).toBe('admitted asset bytes')
+      for (const name of names) expect((await readLiveNote(f.id, `docs/${name}`))!.body).toBe(`Human ${name}.\n`)
+    } finally {
+      await db.execute(sql`DELETE FROM note_revisions WHERE note_id = ${f.a.id} AND actor_detail->>'quotaFixture' = 'exponent-boundary'`)
+    }
+  }, 30_000)
+
+  it('keeps each incoming commit provenance durable before its receipt so purging two identical candidates fences both native retries', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now())
+    try {
+      const id = (await app.inject({ method: 'POST', url: '/api/vaults', headers: { cookie }, body: { name: 'distinct proposal attempts' } })).json<{ id: string }>().id
+      const token = await mint({ name: 'distinct attempt writer', scope: 'vault', vaultId: id, access: 'write', profile: 'admin' })
+      const client = await clone(token, id)
+      expect(client.ok, client.out).toBe(true)
+      const base = (await git(['rev-parse', 'HEAD'], client.dir)).out.trim()
+      await git(['config', 'user.name', 'Git proof'], client.dir)
+      await git(['config', 'user.email', 'git-proof@localhost'], client.dir)
+      await mkdir(join(client.dir, 'docs'))
+      await writeFile(join(client.dir, 'docs/new.md'), '---\ntype: docs\n---\nCandidate that must stay purged.\n')
+      const firstId = await commit(client.dir)
+      const collision = await createNote(id, { path: 'docs/new', body: 'Human collision.\n' })
+      expect((await git(['push', 'origin', 'HEAD:main'], client.dir)).ok).toBe(false)
+      const empty = await git(['commit', '--allow-empty', '--quiet', '-m', 'Distinct commit with identical candidate'], client.dir)
+      expect(empty.ok, empty.out).toBe(true)
+      const secondId = (await git(['rev-parse', 'HEAD'], client.dir)).out.trim()
+      expect(secondId).toMatch(/^[0-9a-f]{40}$/)
+      expect(secondId).not.toBe(firstId)
+      const connection = await connectionFor(id)
+      const trigger = `git_receipt_${id.replaceAll('-', '')}`
+      const fn = sql.identifier(trigger)
+      await db.execute(sql`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.commit_id = TG_ARGV[0] THEN RAISE EXCEPTION 'injected second-attempt receipt failure'; END IF;
+          RETURN NEW;
+        END; $$`)
+      try {
+        await db.execute(sql`CREATE TRIGGER ${fn} BEFORE INSERT ON vault_git_push_operations
+          FOR EACH ROW EXECUTE FUNCTION ${fn}(${sql.raw(`'${secondId}'`)})`)
+        const interrupted = await git(['push', 'origin', 'HEAD:main'], client.dir)
+        expect(interrupted.ok, interrupted.out).toBe(false)
+        const proposals = (await db.execute(sql`SELECT actor_detail->>'commit' AS commit, actor_detail->>'operation' AS operation
+          FROM note_revisions WHERE note_id = ${collision.id} AND action = 'proposal' ORDER BY ord`)) as unknown as Array<{ commit: string; operation: string }>
+        expect(proposals).toEqual([{ commit: firstId, operation: 'create' }, { commit: secondId, operation: 'create' }])
+        expect(await operationResults(id, connection, secondId)).toEqual([])
+      } finally {
+        await db.execute(sql`DROP TRIGGER IF EXISTS ${fn} ON vault_git_push_operations`)
+        await db.execute(sql`DROP FUNCTION IF EXISTS ${fn}()`)
+      }
+      await softDeleteNote(id, 'docs/new')
+      expect(await purgeNote(id, collision.id)).toBe(true)
+      const rebuilt = await clone(token, id)
+      expect(rebuilt.ok, rebuilt.out).toBe(true)
+      expect((await git(['rev-parse', 'HEAD'], rebuilt.dir)).out.trim()).toBe(base)
+      for (const incoming of [firstId, secondId]) {
+        const fences = await operationResults(id, connection, incoming)
+        expect(fences.some(entry => entry.result.purged)).toBe(true)
+        expect(JSON.stringify(fences)).not.toContain('Candidate that must stay purged')
+        expect(JSON.stringify(fences)).not.toContain('docs/new')
+      }
+      const retry = await git(['push', 'origin', 'HEAD:main'], client.dir)
+      expect(retry.ok, retry.out).toBe(false)
+      expect(retry.out).toContain('purged')
+      expect(await getLiveNote(id, 'docs/new')).toBeNull()
+    } finally { clock.mockRestore() }
   }, 30_000)
 
   it('refuses the exact 256 MiB retained note-proposal byte boundary before changing notes or assets', async () => {

@@ -305,6 +305,7 @@ export async function recordProposal(
       frontmatter: noteRevisions.frontmatter,
       body: revisionBody,
       sourceRevisionId: noteRevisions.sourceRevisionId,
+      actorDetail: sql<Record<string, unknown> | null>`${noteRevisions}.actor_detail`,
     })
     .from(noteRevisions)
     .where(
@@ -317,7 +318,12 @@ export async function recordProposal(
     )
     .orderBy(desc(noteRevisions.ord))
     .limit(1)
-  if (latest?.sourceRevisionId === baseRevisionId && latest.body === proposal.body && isDeepStrictEqual(latest.frontmatter, frontmatter)) {
+  // A Git proposal must preserve its own attempt's purge/replay provenance.
+  const sameAttempt = actorDetail?.kind !== 'git_push' || (
+    latest?.actorDetail?.kind === 'git_push' &&
+    latest.actorDetail.commit === actorDetail.commit && latest.actorDetail.operation === actorDetail.operation
+  )
+  if (sameAttempt && latest?.sourceRevisionId === baseRevisionId && latest.body === proposal.body && isDeepStrictEqual(latest.frontmatter, frontmatter)) {
     return latest.id
   }
   const [inserted] = (await db.execute(sql`

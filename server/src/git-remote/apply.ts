@@ -11,7 +11,7 @@ import {
 import { NoteEditConflictError, writeThroughCollab, type EditBase } from '../sync/crdt-write.js'
 import type { McpAuth } from '../vaults/mcp-connection-routes.js'
 import { GitPushError, gitTimeLimit, PACK_LIMITS } from './pack.js'
-import { admitAssetProposals, admitImport, operationResults, recordOperation, type OperationResult } from './metadata.js'
+import { admitAssetProposals, admitImport, GIT_QUOTAS, operationResults, proposalFrontmatterBytes, recordOperation, type OperationResult } from './metadata.js'
 import { ASSET_PREFIX, assetNameFromGitPath, type Manifest, type NoteBase, type TreeFile } from './tree.js'
 
 async function baseRevision(vaultId: string, base: NoteBase): Promise<EditBase | null> {
@@ -65,9 +65,13 @@ export async function applyTree(vaultId: string, auth: McpAuth, commitId: string
   const pending = changed.filter(path => !done.has(path))
   if (pending.length === 0) return { complete: existing.every(entry => entry.result.status === 'applied'), results: existing }
   const notePaths = pending.filter(path => !path.startsWith(ASSET_PREFIX))
+  const proposalLimit = GIT_QUOTAS.noteProposalBytes
   const proposalBytes = notePaths.reduce((total, path) => {
+    if (total > proposalLimit) return total
     const proposed = tree.get(path)?.note
-    return total + Buffer.byteLength(proposed?.body ?? '') + Buffer.byteLength(JSON.stringify(proposed?.frontmatter ?? bases.get(path)?.frontmatter ?? {}))
+    const bodyBytes = Buffer.byteLength(proposed?.body ?? '')
+    if (bodyBytes > proposalLimit - total) return proposalLimit + 1
+    return total + bodyBytes + proposalFrontmatterBytes(proposed?.frontmatter ?? bases.get(path)?.frontmatter ?? {}, proposalLimit - total - bodyBytes)
   }, 0)
   await admitImport(vaultId, pending.length, proposalBytes, notePaths.length)
   const assetCandidates = new Map(pending.filter(path => path.startsWith(ASSET_PREFIX) && tree.has(path))
@@ -99,18 +103,18 @@ export async function applyTree(vaultId: string, auth: McpAuth, commitId: string
           if (!collision) throw err
           const collisionBase = await baseRevision(vaultId, { id: collision.row.id, rev: collision.row.seq, blob: '' })
           if (!collisionBase) throw err
-          const proposalId = await recordProposal(collision.row.id, proposed!.note!, actor, collisionBase.id, { kind: 'git_push', commit: commitId })
+          const proposalId = await recordProposal(collision.row.id, proposed!.note!, actor, collisionBase.id, { kind: 'git_push', commit: commitId, operation: action })
           await recordOperation(db, vaultId, connectionId, commitId, path, { action, status: 'conflicted', noteId: collision.row.id, proposalId, error: 'a live note already occupies the new path' })
         }
       } else {
         const live = await getLiveNote(vaultId, path.slice(0, -3))
         if (!live || live.id !== base.id) {
           // Identity is pinned to the served note, not the current occupant of its old path.
-          const proposalId = await recordProposal(base.id, proposed?.note ?? { frontmatter: revision!.frontmatter, body: '' }, actor, revision!.id, { kind: 'git_push', commit: commitId })
+          const proposalId = await recordProposal(base.id, proposed?.note ?? { frontmatter: revision!.frontmatter, body: '' }, actor, revision!.id, { kind: 'git_push', commit: commitId, operation: action })
           await recordOperation(db, vaultId, connectionId, commitId, path, { action, status: 'conflicted', noteId: base.id, proposalId, error: 'the served note was renamed or deleted; no replacement note was touched' })
         } else if (proposed) {
           const written = await writeThroughCollab(vaultId, live.path, { ...proposed.note!, frontmatterMode: 'replace', base: revision }, actor,
-            { expectedNoteId: base.id, recordKey: record, actorDetail: { kind: 'git_push', commit: commitId } })
+            { expectedNoteId: base.id, recordKey: record, actorDetail: { kind: 'git_push', commit: commitId, operation: action } })
           if (!written) throw new GitPushError('the note moved during import; retry to create a proposal')
         } else {
           try {
@@ -118,7 +122,7 @@ export async function applyTree(vaultId: string, auth: McpAuth, commitId: string
             if (!written) throw new GitPushError('the note moved during import; retry to create a proposal')
           } catch (err) {
             if (!(err instanceof NoteCompareError)) throw err
-            const proposalId = await recordProposal(base.id, { frontmatter: revision!.frontmatter, body: '' }, actor, revision!.id, { kind: 'git_push', commit: commitId })
+            const proposalId = await recordProposal(base.id, { frontmatter: revision!.frontmatter, body: '' }, actor, revision!.id, { kind: 'git_push', commit: commitId, operation: action })
             await recordOperation(db, vaultId, connectionId, commitId, path, { action, status: 'conflicted', noteId: base.id, proposalId, error: 'deletion conflicts with a changed note; review the delete intent in this push report' })
           }
         }
