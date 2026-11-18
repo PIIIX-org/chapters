@@ -1,5 +1,6 @@
-import { open } from 'node:fs/promises'
+import { lstat, open } from 'node:fs/promises'
 import { constants } from 'node:fs'
+import { dirname } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { logSecurityEvent } from '../auth/security-events.js'
@@ -14,7 +15,6 @@ import { getRevision, isSafeAssetName } from '../notes/store.js'
 import { withVaultGit } from './lifecycle.js'
 import { advertisement, boundedGit, GitPushError, PACK_LIMITS, withGitBudget } from './pack.js'
 import { receiveHead, receivePush } from './receive.js'
-import { assetGitPath } from './tree.js'
 
 const MAX_UPLOAD_REQUEST = 1024 * 1024
 let admitted = 0
@@ -188,9 +188,18 @@ export function vaultGitRoutes(app: FastifyInstance) {
         const { commitId } = req.params
         const name = req.params['*']
         if (!/^[0-9a-f]{40}$/.test(commitId) || !isSafeAssetName(name)) return reply.code(404).send({ error: 'not found' })
-        const operations = await operationResults(allowed.vaultId, allowed.auth.connection.id, commitId)
-        if (!operations.some((entry) => entry.path === assetGitPath(name) && entry.result.status === 'conflicted')) return reply.code(404).send({ error: 'not found' })
-        const handle = await open(assetProposalFile(allowed.vaultId, commitId, name), constants.O_RDONLY | constants.O_NOFOLLOW).catch((err: NodeJS.ErrnoException) => {
+        // Like note History, review follows current vault edit access, not
+        // a credential that may have been revoked/deleted since the proposal.
+        const candidate = assetProposalFile(allowed.vaultId, commitId, name)
+        const directory = dirname(candidate)
+        for (const path of [dirname(directory), directory]) {
+          const info = await lstat(path).catch((err: NodeJS.ErrnoException) => {
+            if (err.code === 'ENOENT' || err.code === 'ELOOP' || err.code === 'ENOTDIR') return null
+            throw err
+          })
+          if (!info?.isDirectory()) return reply.code(404).send({ error: 'not found' })
+        }
+        const handle = await open(candidate, constants.O_RDONLY | constants.O_NOFOLLOW).catch((err: NodeJS.ErrnoException) => {
           if (err.code === 'ENOENT' || err.code === 'ELOOP' || err.code === 'ENOTDIR') return null
           throw err
         })
