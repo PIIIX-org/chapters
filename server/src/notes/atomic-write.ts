@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import { mkdir, open, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
+/** Persist directory entries (rename/unlink and newly created parent directories). */
 export async function syncDirectory(dir: string): Promise<void> {
   const handle = await open(dir, 'r')
   try { await handle.sync() } finally { await handle.close() }
@@ -17,6 +18,9 @@ export async function ensureDirectory(dir: string, durable = false): Promise<voi
   }
 }
 
+/** Contains `..`, which the existing asset-name policy forbids. Never an attachment. */
+export const isShortAtomicTempName = (name: string): boolean => /^\.atomic\.\.[0-9]+\.[0-9a-f]{12}\.tmp$/.test(name)
+
 /**
  * Replaces `file` all at once: the content goes to a sibling temp file that is
  * then renamed over it, so a crash never leaves a half-written file.
@@ -31,8 +35,8 @@ export async function ensureDirectory(dir: string, durable = false): Promise<voi
  * created with them and chmodded before any content goes in, so the content
  * is never on disk with looser permissions (#493).
  *
- * `durable`: fsync the completed file before rename and its parent afterward,
- * including newly created parent directories.
+ * `durable`: sync the completed file before rename and directory entries
+ * afterward (including newly created parents), before an external durable receipt.
  *
  * `beforeRename`: runs once the temp file is complete, before the rename (the
  * projector's `projector.after-tmp-before-rename` failpoint, ADR-003 §11).
@@ -40,12 +44,15 @@ export async function ensureDirectory(dir: string, durable = false): Promise<voi
 export async function atomicWrite(
   file: string,
   content: string | Uint8Array,
-  options: { mode?: number; beforeRename?: () => void; durable?: boolean } = {},
+  options: { mode?: number; beforeRename?: () => void; durable?: boolean; shortTempName?: boolean } = {},
 ): Promise<void> {
-  await ensureDirectory(dirname(file), options.durable)
-  const tmp = `${file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+  const directory = dirname(file)
+  await ensureDirectory(directory, options.durable)
+  // Asset basenames may occupy all 255 filesystem bytes; do not append to them.
+  const prefix = options.shortTempName ? join(directory, '.atomic.') : file
+  const tmp = `${prefix}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
   try {
-    if (options.mode === undefined && !options.durable) {
+    if (options.mode === undefined && !options.durable && !options.shortTempName) {
       await writeFile(tmp, content)
     } else {
       const handle = await open(tmp, 'wx', options.mode ?? 0o666)
@@ -59,7 +66,7 @@ export async function atomicWrite(
     }
     options.beforeRename?.()
     await rename(tmp, file)
-    if (options.durable) await syncDirectory(dirname(file))
+    if (options.durable) await syncDirectory(directory)
   } catch (err) {
     await rm(tmp, { force: true })
     throw err

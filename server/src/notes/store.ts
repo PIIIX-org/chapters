@@ -1,7 +1,7 @@
-import { constants } from 'node:fs'
-import { open, readdir, stat } from 'node:fs/promises'
+import { open, readdir, rm, stat } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import * as Y from 'yjs'
 import { and, asc, desc, eq, inArray, isNotNull, isNull, like, lt, ne, notInArray, notLike, or, sql, type SQL } from 'drizzle-orm'
@@ -11,7 +11,7 @@ import { recordJob } from '../monitoring/metrics.js'
 import { INSTANCE_LOCK_KEY, writesPaused } from './maintenance-lock.js'
 import { config } from '../config.js'
 import { assetDirectory, initializeAssetStorage, storedAssetFile } from './asset-storage.js'
-import { atomicWrite } from './atomic-write.js'
+import { atomicWrite, isShortAtomicTempName, syncDirectory } from './atomic-write.js'
 import { embeddingJobKey, kickEmbeddings } from '../search/embedding-queue.js'
 import { kickSemanticEdges, queueSemanticEdgeRestore, removeSemanticNodes } from '../search/semantic-edges.js'
 import {
@@ -33,6 +33,7 @@ import {
   markFolded,
   notesNeedingFold,
   readNoteCrdt,
+  readNoteCrdtAppendLocked,
   recordRebase,
   rememberStoredState,
   seedDocument,
@@ -65,6 +66,7 @@ import {
   StoreBusyError,
   applyRowChange,
   collabNoteMigrated,
+  clearNoteRetention,
   enqueueEmbeddingTx,
   insertRevision,
   insertStoreJob,
@@ -83,6 +85,7 @@ import {
 import { STORE_JOBS, registerRenameRefactor, wakeProjector, type RenameRefactorPayload } from './projector.js'
 import { completeJob } from '../jobs/durable.js'
 import { expandDependents, kickRevisionCompaction } from './revision-compaction.js'
+import { invalidateVaultGit, withVaultGit } from '../git-remote/lifecycle.js'
 
 export { splitPath, resolveNotePath, type ResolvedNotePath }
 
@@ -293,6 +296,7 @@ export async function recordProposal(
   proposal: { frontmatter: Record<string, unknown>; body: string },
   actor: Actor,
   baseRevisionId: string,
+  actorDetail?: Record<string, unknown>,
 ): Promise<string> {
   const frontmatter = JSON.parse(JSON.stringify(proposal.frontmatter)) as Record<string, unknown>
   const [latest] = await db
@@ -301,6 +305,7 @@ export async function recordProposal(
       frontmatter: noteRevisions.frontmatter,
       body: revisionBody,
       sourceRevisionId: noteRevisions.sourceRevisionId,
+      actorDetail: sql<Record<string, unknown> | null>`${noteRevisions}.actor_detail`,
     })
     .from(noteRevisions)
     .where(
@@ -313,21 +318,19 @@ export async function recordProposal(
     )
     .orderBy(desc(noteRevisions.ord))
     .limit(1)
-  if (latest?.sourceRevisionId === baseRevisionId && latest.body === proposal.body && isDeepStrictEqual(latest.frontmatter, frontmatter)) {
+  // A Git proposal must preserve its own attempt's purge/replay provenance.
+  const sameAttempt = actorDetail?.kind !== 'git_push' || (
+    latest?.actorDetail?.kind === 'git_push' &&
+    latest.actorDetail.commit === actorDetail.commit && latest.actorDetail.operation === actorDetail.operation
+  )
+  if (sameAttempt && latest?.sourceRevisionId === baseRevisionId && latest.body === proposal.body && isDeepStrictEqual(latest.frontmatter, frontmatter)) {
     return latest.id
   }
-  const [inserted] = await db
-    .insert(noteRevisions)
-    .values({
-      noteId,
-      actorType: actor.type,
-      actorId: actor.id,
-      action: PROPOSAL_ACTION,
-      frontmatter,
-      body: proposal.body,
-      sourceRevisionId: baseRevisionId,
-    })
-    .returning({ id: noteRevisions.id })
+  const [inserted] = (await db.execute(sql`
+    INSERT INTO note_revisions (note_id, actor_type, actor_id, action, frontmatter, body, source_revision_id, actor_detail)
+    VALUES (${noteId}, ${actor.type}, ${actor.id ?? null}, ${PROPOSAL_ACTION}, ${JSON.stringify(frontmatter)}::jsonb,
+      ${proposal.body}, ${baseRevisionId}, ${actorDetail ? JSON.stringify(actorDetail) : null}::jsonb)
+    RETURNING id`)) as unknown as Array<{ id: string }>
   return inserted!.id
 }
 
@@ -358,14 +361,14 @@ export function noteLock(vaultId: string, path: string): string {
   return `note:${vaultId}/${path}`
 }
 
-/** A note row as writes and reads return it: the model's columns plus `seq`, the note's `rev` (#477). */
-export type WrittenNote = NoteRow & { seq: number }
+/** Internal read/write row: `seq` is the public rev; `purgeEpoch` is only a delayed-retention token. */
+export type WrittenNote = NoteRow & { seq: number; purgeEpoch: number }
 
-/** A row as callers see it: the model's columns and `seq` (`frontmatter_src` stays internal). */
+/** Remove rendering metadata; reply serializers separately allow-list public note fields. */
 function plainRow(row: StoredNote): WrittenNote {
   const plain: Partial<StoredNote> = { ...row }
   delete plain.frontmatterSrc
-  // Only the internal field was removed: the rest is the model's row and seq.
+  // Keep the captured purge epoch for internal retention callers, never for noteReply.
   return plain as WrittenNote
 }
 
@@ -618,6 +621,9 @@ export async function createNote(
     try {
       // One transaction (ADR-003 §5.3): row, revision at seq 1, links, projection targets, embedding job.
       row = await storeTransaction([id], async (tx) => {
+        // Fence delayed creates against trash/purge; the vault purge's FOR UPDATE waits for an already admitted insert.
+        const liveVault = await tx.execute(sql`SELECT id FROM vaults WHERE id = ${vaultId} AND deleted_at IS NULL FOR KEY SHARE`)
+        if (liveVault.length === 0) throw new OkfValidationError('vault not found or in the trash')
         const [inserted] = await tx
           .insert(notes)
           .values({ id, vaultId, type: resolved.type, name: resolved.name, path: resolved.fullPath, frontmatter, body })
@@ -629,10 +635,10 @@ export async function createNote(
         // Written by the store: nothing for the S2a backfill to do.
         await tx.execute(sql`INSERT INTO note_projections (note_id, projection, target_seq, applied_seq) VALUES (${id}, ${BACKFILL_MARKER}, 1, 1)`)
         await enqueueEmbeddingTx(tx, id, 1)
-        const created = { ...inserted!, seq: 1 }
+        const created = { ...inserted!, seq: 1, purgeEpoch: 0 }
         await options.recordKey?.(tx, created)
         return created
-      })
+      }, [vaultId])
     } catch (err) {
       if (isUniqueViolation(err)) {
         throw new NoteExistsError(resolved.fullPath)
@@ -879,6 +885,8 @@ export interface WriteOptions {
   outcome?: WriteOutcome
   /** The call's idempotency key (#477), recorded inside the write's transaction: see RecordKey. */
   recordKey?: RecordKey
+  /** A path read from an external snapshot must still belong to this note, never a replacement at the same path. */
+  expectedNoteId?: string
 }
 
 /**
@@ -927,6 +935,7 @@ export async function writeNote(
 ): Promise<WrittenNote | null> {
   const resolved = resolveNotePath(path)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
+    if (options.relay?.doc.isDestroyed) return null
     for (let round = 0; round < WRITE_ROUNDS; round++) {
       const seen = await readStored(vaultId, resolved.fullPath)
       if (!seen || (options.relay && seen.id !== options.relay.noteId)) return null
@@ -947,7 +956,7 @@ export async function writeNote(
       try {
         committed = await storeTransaction([seen.id], async (tx) => {
           const locked = await lockedNote(tx, seen.id)
-          if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
+          if (!locked || locked.deletedAt || locked.path !== resolved.fullPath || (options.expectedNoteId && locked.id !== options.expectedNoteId)) return null
           if (locked.seq !== seen.seq) return 'moved' as const
           // With the open document in hand, its cached stored state spares materialising snapshot ⊕ tail.
           const crdt = await readNoteCrdt(tx, locked.id, fold ? { live: fold.live, base: fold.base, seq: locked.seq } : undefined)
@@ -1295,6 +1304,14 @@ async function linkReferrers(
   return [...new Map(rows.map((r) => [r.id, r])).values()]
 }
 
+/** A destructive external-snapshot operation no longer matches its exact base. Nothing was deleted. */
+export class NoteCompareError extends Error {
+  readonly statusCode = 409
+  constructor(readonly noteId: string) {
+    super('the note changed since the served Git base; deletion was not applied')
+  }
+}
+
 /**
  * Soft delete (spec 6: one consistent delete behavior): the row keeps
  * everything; the projector moves the file to `.trash/<id>.md` and
@@ -1306,7 +1323,7 @@ export async function softDeleteNote(
   vaultId: string,
   path: string,
   actor: Actor = SYSTEM_ACTOR,
-  options: Pick<WriteOptions, 'recordKey'> = {},
+  options: Pick<WriteOptions, 'recordKey'> & { expected?: { id: string; frontmatter: Record<string, unknown>; body: string } } = {},
 ): Promise<WrittenNote | null> {
   const resolved = resolveNotePath(path)
   return withKeyLock(noteLock(vaultId, resolved.fullPath), async () => {
@@ -1314,16 +1331,23 @@ export async function softDeleteNote(
     if (!seen) return null
     const fold = foldSource(seen.id)
     try {
-      const deleted = await storeTransaction([seen.id], async (tx) => {
+      const remove = () => storeTransaction([seen.id], async (tx) => {
         const locked = await lockedNote(tx, seen.id)
         if (!locked || locked.deletedAt || locked.path !== resolved.fullPath) return null
-        const { row, rebased } = await catchUp(tx, locked, await readNoteCrdt(tx, locked.id), fold, { storeRow: true })
+        const crdt = options.expected ? await readNoteCrdtAppendLocked(tx, locked.id) : await readNoteCrdt(tx, locked.id)
+        const { row, rebased } = await catchUp(tx, locked, crdt, fold, { storeRow: true })
+        const live = crdt ? docState(crdt.doc) : { frontmatter: row.frontmatter, body: row.body }
+        if (options.expected && (row.id !== options.expected.id || live.body !== options.expected.body || !isDeepStrictEqual(live.frontmatter, options.expected.frontmatter))) {
+          throw new NoteCompareError(row.id)
+        }
         const deleted = (await applyRowChange(tx, row, { deletedAt: new Date() }, { action: 'delete', actor })).row
         // A trashed note leaves every node's top-k and keeps no rows; the nodes that held it recompute (#1015).
         await removeSemanticNodes(tx, 'note', vaultId, [row.id])
         await options.recordKey?.(tx, plainRow(deleted))
         return { row: deleted, rebased }
       })
+      // A destructive CAS fences appends through COMMIT: later typing is refused unacked, never silently deleted.
+      const deleted = options.expected ? await withKeyLock(appendGate(seen.id), remove) : await remove()
       if (!deleted) return null
       pushToLiveDocument(seen.id, deleted.rebased)
       // §5.5: the note's editors are closed now (`note-deleted`); a reconnect is refused until a restore.
@@ -1837,27 +1861,43 @@ function revertedFrontmatter(revision: { frontmatter: unknown }, folder: string,
  * none loses its base, and the note's CRDT state is compacted: only a
  * re-encoded snapshot drops deleted text (ADR-003 §5.4, §5.5).
  */
-export async function purgeRevision(vaultId: string, revisionId: string): Promise<boolean> {
-  const [found] = (await db.execute(sql`
-    SELECT r.note_id, r.seq = n.seq AS current,
-      (c.folded_seq IS NOT NULL AND r.seq = c.folded_seq AND n.seq > c.folded_seq) AS base
-    FROM note_revisions r JOIN notes n ON n.id = r.note_id LEFT JOIN note_crdt c ON c.note_id = n.id
-    WHERE r.id = ${revisionId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ note_id: string; current: boolean | null; base: boolean }>
-  if (!found) return false
-  // ADR-003 §5.5: the note's text still holds what this revision holds (invariant I2).
-  if (found.current) {
-    throw new OkfValidationError('this revision is the note as it is now; edit the note first, then purge the revision')
-  }
-  if (found.base) {
-    throw new OkfValidationError('this revision is the base of a pending merge of the note; open or edit the note first, then purge the revision')
-  }
-  await storeTransaction([found.note_id], async (tx) => {
+export function purgeRevision(vaultId: string, revisionId: string): Promise<boolean> {
+  return withVaultGit(vaultId, () => purgeRevisionLocked(vaultId, revisionId))
+}
+
+async function purgeRevisionLocked(vaultId: string, revisionId: string): Promise<boolean> {
+  const [note] = await db.select({ id: notes.id, path: notes.path }).from(notes).innerJoin(noteRevisions, eq(noteRevisions.noteId, notes.id))
+    .where(and(eq(notes.vaultId, vaultId), eq(noteRevisions.id, revisionId)))
+  if (!note) return false
+  closeNoteEditors(note.id)
+  // No note/SQL lock is held while the already accepted appends finish their durable acknowledgement path.
+  await drainCollabAppends(note.id)
+  return withKeyLock(noteLock(vaultId, note.path), () => purgeRevisionOfLockedNote(vaultId, note.id, revisionId))
+}
+
+async function purgeRevisionOfLockedNote(vaultId: string, noteId: string, revisionId: string): Promise<boolean> {
+  const purged = await storeTransaction([noteId], async (tx) => {
+    const locked = await lockedNote(tx, noteId)
+    if (!locked || locked.vaultId !== vaultId) return false
+    const [found] = (await tx.execute(sql`
+      SELECT r.seq AS rev, r.seq = n.seq AS current,
+        (c.folded_seq IS NOT NULL AND r.seq = c.folded_seq AND n.seq > c.folded_seq) AS base
+      FROM note_revisions r JOIN notes n ON n.id = r.note_id LEFT JOIN note_crdt c ON c.note_id = n.id
+      WHERE r.id = ${revisionId} AND n.id = ${noteId} AND n.vault_id = ${vaultId}`)) as unknown as Array<{ rev: string; current: boolean | null; base: boolean }>
+    if (!found) return false
+    if (found.current) throw new OkfValidationError('this revision is the note as it is now; edit the note first, then purge the revision')
+    if (found.base) throw new OkfValidationError('this revision is the base of a pending merge of the note; open or edit the note first, then purge the revision')
+    await invalidateVaultGit(vaultId, tx, { noteId, revision: { id: revisionId, rev: Number(found.rev) } })
+    // Same database note mutex/transaction as delayed retention writers: seq stays, the purge generation changes.
+    await clearNoteRetention(tx, [noteId])
     await expandDependents(tx, revisionId)
     await tx.delete(noteRevisions).where(eq(noteRevisions.id, revisionId))
-    const crdt = await readNoteCrdt(tx, found.note_id)
+    const crdt = await readNoteCrdt(tx, noteId)
     if (crdt) await compactNoteCrdt(tx, crdt)
+    return true
   })
-  return true
+  if (purged) closeNoteEditors(noteId, true)
+  return purged
 }
 
 /**
@@ -1867,11 +1907,17 @@ export async function purgeRevision(vaultId: string, revisionId: string): Promis
  * removal of its files (`store_remove_file`, ADR-003 §5.5), which the
  * projector runs under the file ownership rules.
  */
-export async function purgeNote(vaultId: string, noteId: string): Promise<boolean> {
+export function purgeNote(vaultId: string, noteId: string): Promise<boolean> {
+  return withVaultGit(vaultId, () => purgeNoteLocked(vaultId, noteId))
+}
+
+async function purgeNoteLocked(vaultId: string, noteId: string): Promise<boolean> {
   const purged = await withTrashedNote(vaultId, noteId, async (row) => {
     const done = await storeTransaction([row.id], async (tx) => {
       const locked = await lockedNote(tx, row.id)
       if (!locked || !locked.deletedAt) return false
+      await invalidateVaultGit(vaultId, tx, { noteId: row.id })
+      await clearNoteRetention(tx, [row.id])
       await tx.delete(notes).where(eq(notes.id, row.id))
       // semanticEdges is polymorphic and has no FK (spec 9), so it does not
       // cascade — clear it by hand or the rows leak (#92). The trash removed
@@ -1884,7 +1930,7 @@ export async function purgeNote(vaultId: string, noteId: string): Promise<boolea
     })
     if (!done) return false
     failpoint('purge.after-commit-before-remove')
-    closeNoteEditors(row.id)
+    closeNoteEditors(row.id, true)
     wakeProjector()
     kickSemanticEdges()
     return true
@@ -1961,10 +2007,16 @@ export function appendCollabUpdate(vaultId: string, noteId: string, update: Uint
   }
   // Backpressure: past the bound the relay closes the socket unacked (retryable) instead of queueing without end.
   if (queue.waiting.length + queue.inFlight >= MAX_PENDING_APPENDS) return Promise.reject(new StoreBusyError('too many collab updates are waiting for this note'))
+  // The shared ES2023 type library does not expose Promise.withResolvers.
   const waiting = queue
   const promise = new Promise<LoggedUpdate | null>((resolve, reject) => waiting.waiting.push({ vaultId, update, actor, resolve, reject }))
-  if (!queue.running) void drainAppends(noteId, queue)
+  if (!queue.running) queue.drained = drainAppends(noteId, queue)
   return promise
+}
+
+/** Close the note's connections first; then await every already queued append without holding its note or SQL locks. */
+export async function drainCollabAppends(noteId: string): Promise<void> {
+  await appendQueues.get(noteId)?.drained
 }
 
 interface PendingAppend {
@@ -1978,6 +2030,7 @@ interface PendingAppend {
 /** Per note: the collab appends waiting for the next group commit, those in the running one, and whether one is running. */
 interface AppendQueue {
   waiting: PendingAppend[]
+  drained?: Promise<void>
   inFlight: number
   running: boolean
 }
@@ -2208,7 +2261,7 @@ export async function writeAsset(
 ): Promise<{ fileName: string; size: number; mimeType: string }> {
   if (!isSafeAssetName(fileName)) throw new OkfValidationError('unsafe asset filename')
   await initializeAssetStorage(vaultId)
-  await withKeyLock(`asset:${vaultId}/${fileName}`, () => atomicWrite(assetFile(vaultId, fileName), buffer, { mode: 0o600, durable: true }))
+  await withKeyLock(`asset:${vaultId}/${fileName}`, () => atomicWrite(assetFile(vaultId, fileName), buffer, { mode: 0o600, durable: true, shortTempName: true }))
   const ext = extname(fileName).toLowerCase()
   const mimeType = ASSET_MIME_TYPES[ext] ?? 'application/octet-stream'
   return { fileName, size: buffer.length, mimeType }
@@ -2222,15 +2275,19 @@ export function isSafeAssetName(filename: string): boolean {
 export async function readAsset(
   vaultId: string,
   filename: string,
+  maxBytes = Infinity,
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
   if (!isSafeAssetName(filename)) return null
   await initializeAssetStorage(vaultId)
   const filePath = assetFile(vaultId, filename)
   try {
-    const handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW)
+    const handle = await open(filePath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
     try {
-      if (!(await handle.stat()).isFile()) return null
-      return { buffer: await handle.readFile(), mimeType: ASSET_MIME_TYPES[extname(filename).toLowerCase()] ?? 'application/octet-stream' }
+      const info = await handle.stat()
+      if (!info.isFile() || info.size > maxBytes) return null
+      const buffer = await handle.readFile()
+      if (buffer.length > maxBytes) return null
+      return { buffer, mimeType: ASSET_MIME_TYPES[extname(filename).toLowerCase()] ?? 'application/octet-stream' }
     } finally { await handle.close() }
   } catch {
     return null
@@ -2246,7 +2303,7 @@ export async function listAssets(
     const entries = await readdir(targetDir, { withFileTypes: true })
     const results: { fileName: string; size: number; modifiedAt: string }[] = []
     for (const entry of entries) {
-      if (!entry.isFile()) continue
+      if (!entry.isFile() || isShortAtomicTempName(entry.name)) continue
       const stats = await stat(join(targetDir, entry.name)).catch(() => null)
       if (stats) {
         results.push({
@@ -2260,4 +2317,54 @@ export async function listAssets(
   } catch {
     return []
   }
+}
+
+/** Git's object identity for an asset, also used as the expected value of an asset CAS. */
+export function assetBlobId(buffer: Buffer): string {
+  return createHash('sha1').update(`blob ${buffer.length}\0`).update(buffer).digest('hex')
+}
+
+/** Shared with ordinary asset writes: compare under the same key lock, then atomically replace/remove, never truncate. */
+export async function compareAndSetAsset(
+  vaultId: string,
+  fileName: string,
+  expected: string | null,
+  proposed: Buffer | null,
+  maxReadBytes = Infinity,
+): Promise<boolean> {
+  if (!isSafeAssetName(fileName)) throw new OkfValidationError('unsafe asset filename')
+  await initializeAssetStorage(vaultId)
+  return withKeyLock(`asset:${vaultId}/${fileName}`, async () => {
+    const file = assetFile(vaultId, fileName)
+    let current: string | null = null
+    const handle = await open(file, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW).catch((err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') return null
+      throw err
+    })
+    const desired = proposed ? assetBlobId(proposed) : null
+    if (handle) {
+      try {
+        const stats = await handle.stat()
+        if (!stats.isFile()) throw new OkfValidationError('assets must be regular files')
+        if (stats.size > maxReadBytes) return false
+        const hash = createHash('sha1').update(`blob ${stats.size}\0`)
+        for await (const chunk of handle.createReadStream({ autoClose: false })) hash.update(chunk)
+        current = hash.digest('hex')
+        // Retry after filesystem publication but before the DB receipt:
+        // verify the desired bytes and finish durability before acknowledging.
+        if (current === desired) await handle.sync()
+      } finally { await handle.close() }
+    }
+    if (current === desired) {
+      await syncDirectory(assetDirectory(vaultId))
+      return true
+    }
+    if (current !== expected) return false
+    if (proposed) await atomicWrite(file, proposed, { mode: 0o600, durable: true, shortTempName: true })
+    else {
+      await rm(file)
+      await syncDirectory(assetDirectory(vaultId))
+    }
+    return true
+  })
 }

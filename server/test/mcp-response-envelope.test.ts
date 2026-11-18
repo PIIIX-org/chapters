@@ -435,6 +435,8 @@ describe('reads cut at line boundaries and continue with the cursor', () => {
     await syncRepositoryFiles(repoId, [{ path: 'src/alpha.ts', content: changed }], REPO_PATHS)
     await refused('read_file', { repositoryId: repoId, path: 'src/alpha.ts', budget_tokens: 256, outline: false, cursor: inOutline }, /stale cursor/)
     await syncRepositoryFiles(repoId, [{ path: 'src/alpha.ts', content: symbolFile }], REPO_PATHS)
+    // sync queues extraction; finish the restored producer before later stable cursor walks.
+    await flushExtraction()
   })
 })
 
@@ -472,9 +474,12 @@ describe('graph, find_graph_path and find_symbols page a stable ranking', () => 
     const all = await page('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 50, budget_tokens: 25_000 })
     expect(all.truncated).toBe(false)
     expect((all.results as unknown[]).length).toBe(30)
+    const resources = { vaultIds: [], repositoryIds: [repoId] }
+    const epoch = await cache.readEpochs(resources)
     const pages = await walk('find_symbols', { repositoryId: repoId, query: 'alphaHandler', kind: 'function', limit: 50, budget_tokens: LIST_PAGE })
     expect(pages.length).toBeGreaterThan(2)
     expect(ids(pages, 'results')).toEqual(ids([all], 'results'))
+    expect(await cache.readEpochs(resources)).toEqual(epoch)
     await refused('find_symbols', { repositoryId: repoId, query: 'other', limit: 50, budget_tokens: LIST_PAGE, cursor: cursorOf(pages[0]!) }, /invalid cursor/)
 
     // `limit` bounds the ranking, not each page: a walk of a limit + 1 fetch shows exactly `limit` results, the

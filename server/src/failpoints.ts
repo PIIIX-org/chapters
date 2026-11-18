@@ -35,6 +35,9 @@ export const FAILPOINTS = [
   'assets.after-unlink',
   'assets.after-complete-journal',
   'assets.rollback-after-copy',
+  'git.after-mapping-before-publication',
+  'git.after-incoming-ref-before-canonical',
+  'git.before-ref-rollback',
 ] as const
 
 export type Failpoint = (typeof FAILPOINTS)[number]

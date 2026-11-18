@@ -157,6 +157,31 @@ A token's `tools/list` shows only the tools it can call: its allow-list, its acc
   - `summarize_concept_chain` — explains how two notes or code files connect, via `find_graph_path`.
   - `active_project_companion` — records decisions and notes in the project vault during a work session.
 
+### Vault Git workflow
+
+Clone notes and attachments with an MCP token, edit locally, then commit
+and push to `main`. Reads enforce vault access and token pins; pushes also
+require a write token and vault edit permission. Concurrent edits merge
+through the live document or remain as reviewable proposals. A rejected
+multi-note push can have committed partial effects; inspect its linked
+report before retrying. See the [protocol and limits](docs/agents/backend-reference.md).
+
+**“edits keep git history; Purge removes content everywhere, including history”**
+([owner decision](https://github.com/PIIIX-org/chapters/issues/1087#issuecomment-6851891773)).
+For the purged note/revision/vault, this includes server-managed history,
+indexes, retained answers and Git objects before further Git reads.
+The server cannot erase external already-downloaded clones, exports or
+independently retained backups. Purge rebuilds the remote; clients may
+need to fetch/rebase or clone again.
+Unrelated proposals remain reviewable. Git moves are delete plus create,
+not `rename_note`: they do not transfer note UUIDs or rewrite links.
+Attachments use canonical Git-only filename encoding under `.assets/`;
+their physical and HTTP names do not change. Served-base maps and Git
+retry receipts have no time-based expiry; explicit capacity limits refuse
+new admissions instead of evicting bases or pending evidence. Git serving
+requires one server process per shared data directory.
+
+
 ---
 
 ## Codebase Architecture

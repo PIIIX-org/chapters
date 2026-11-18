@@ -6,7 +6,7 @@ import type { SearchRoute } from '../search/router.js'
 import { cacheKey, readEpochs, type CacheCaller } from './key.js'
 
 // A process-local namespace also versions client-held revisions across builds/restarts.
-const generation = randomUUID()
+let generation = randomUUID()
 const CAPACITY = 128
 const entries = new Map<string, { answer: SearchResponse<SearchResult>; version: IndexedVersion }>()
 
@@ -44,7 +44,8 @@ export async function cachedSearch(resources: SearchResourceSet, args: SearchArg
   return { answer, version, rev: before }
 }
 
-/** Test-only; restarting the process discards the same derived data. */
+/** Explicit purge evicts retained plaintext and invalidates in-flight fills; also used by isolated tests. */
 export function clearSearchCache(): void {
+  generation = randomUUID()
   entries.clear()
 }

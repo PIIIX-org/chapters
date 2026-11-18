@@ -152,6 +152,7 @@ class NoteDeletedRefusal extends Error {
 
 /** Documents whose editors were closed because the note was deleted: their unload stores nothing and reports nothing. */
 const deletedDocuments = new WeakSet<Y.Doc>()
+const purgedDocuments = new WeakSet<Y.Doc>()
 
 /**
  * Thrown from `onAuthenticate` for a note the store migration has not
@@ -619,6 +620,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
      * nothing.
      */
     async onStoreDocument({ documentName, document, lastContext }) {
+      if (purgedDocuments.has(document)) return
       // The #487 window: acked typing is in the log, the fold has not run yet.
       failpoint('collab.after-ack-before-fold')
       const name = parseDocName(documentName)
@@ -636,6 +638,7 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
         // editors' older state back over an acknowledged write.
         // The note is looked up by id each round: a rename between the lookup and the lock finds it at its new path.
         for (let round = 0; ; round++) {
+          if (purgedDocuments.has(document)) return
           const [note] = noteId
             ? await db.select({ path: notes.path, deletedAt: notes.deletedAt }).from(notes).where(eq(notes.id, noteId))
             : []
@@ -775,11 +778,17 @@ export function startCollabServer(httpServer: HttpServer): CollabRelay {
       }
       return null
     },
-    closeNote(noteId) {
+    closeNote(noteId, evict = false) {
       for (const [name, doc] of hocuspocus.documents) {
         if (documentNotes.get(doc) !== noteId) continue
         deletedDocuments.add(doc)
         doc.getConnections().forEach((connection) => connection.close(new NoteDeletedRefusal(name)))
+        if (evict) {
+          purgedDocuments.add(doc)
+          hocuspocus.documents.delete(name)
+          forgetLivePath(noteId)
+          doc.destroy()
+        }
       }
     },
   })

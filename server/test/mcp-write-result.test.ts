@@ -363,7 +363,7 @@ describe('write results (#477)', () => {
     })
   })
 
-  it('keys older than 24 h are pruned, and a purged note takes its keys with it', async () => {
+  it('prunes expired keys but preserves content-free effect tombstones when a note is purged', async () => {
     const path = 'docs/result-prune'
     await must('create_note', { vaultId, path, body: BODY })
     await must('append_note', { vaultId, path, text: 'kept for a day', idempotency_key: 'prune-1' })
@@ -374,6 +374,34 @@ describe('write results (#477)', () => {
     const { id } = await must<{ id: string }>('delete_note', { vaultId, path })
     expect(await db.select().from(writeIdempotency).where(eq(writeIdempotency.key, 'prune-2'))).toHaveLength(1)
     await must('purge_note', { vaultId, noteId: id })
-    expect(await db.select().from(writeIdempotency).where(eq(writeIdempotency.key, 'prune-2'))).toHaveLength(0)
+    const kept = await db.select().from(writeIdempotency).where(eq(writeIdempotency.key, 'prune-2'))
+    expect(kept).toHaveLength(1)
+    expect(kept[0]!.noteId).toBeNull()
+    expect(kept[0]!.result).toMatchObject({ status: 'conflicted', purged: true })
+    expect(JSON.stringify(kept[0]!.result)).not.toContain(BODY)
+    const retried = await must<Record<string, unknown>>('append_note', { vaultId, path, text: 'another', idempotency_key: 'prune-2' })
+    expect(retried).toMatchObject({ status: 'conflicted', purged: true, replayed: true })
+    expect(await getLiveNote(vaultId, path)).toBeNull()
+  })
+
+  it('never resurrects an applied keyed create after purge, and a revision purge cannot replay its old payload', async () => {
+    const path = 'docs/result-purged-create'
+    const args = { vaultId, path, body: 'Purged payload: create secret.\n', idempotency_key: 'purged-create' }
+    const created = await must<{ id: string }>('create_note', args)
+    await must('delete_note', { vaultId, path })
+    await must('purge_note', { vaultId, noteId: created.id })
+    const replay = await must<Record<string, unknown>>('create_note', args)
+    expect(replay).toMatchObject({ status: 'conflicted', purged: true, replayed: true })
+    expect(JSON.stringify(replay)).not.toContain('create secret')
+    expect(await getLiveNote(vaultId, path)).toBeNull()
+    const other = 'docs/result-purged-revision'
+    await must('create_note', { vaultId, path: other, body: BODY })
+    const edit = { vaultId, path: other, body: 'Old sensitive body.\n', idempotency_key: 'purged-edit' }
+    await must('edit_note', edit)
+    const [revision] = await db.select({ id: noteRevisions.id }).from(noteRevisions).where(eq(noteRevisions.body, 'Old sensitive body.\n'))
+    await must('edit_note', { vaultId, path: other, body: 'Current safe body.\n' })
+    await must('purge_revision', { vaultId, revisionId: revision!.id })
+    expect(await must<Record<string, unknown>>('edit_note', edit)).toMatchObject({ status: 'conflicted', purged: true, replayed: true })
+    expect((await getLiveNote(vaultId, other))!.body).toBe('Current safe body.\n')
   })
 })
