@@ -820,7 +820,9 @@ describe('Git boundary regressions (#1087)', () => {
     expect(alias).not.toBe(vaultId)
     const attempted = await clone(token, alias)
     expect(attempted.ok, attempted.out).toBe(false)
-    expect(existsSync(vaultRemoteDir(alias))).toBe(false)
+    // The managed directory may already exist under its canonical spelling on
+    // case-insensitive hosts; refusing the alias must not create a second entry.
+    expect(await readdir(join(config.dataDir, 'git-remotes'))).not.toContain(`${alias}.git`)
   })
 
   it('uses a canonical one-pass attachment codec without widening the existing store filename policy', async () => {
@@ -970,7 +972,7 @@ describe('Git boundary regressions (#1087)', () => {
     const report = (await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}`, headers })).json<{ operations: Array<{ path: string; result: { proposalId?: string; purged?: boolean } }> }>()
     const other = report.operations.find(entry => entry.path === 'docs/b.md')!.result.proposalId!
     await softDeleteNote(f.id, 'docs/a')
-    expect(await purgeNote(f.id, 'docs/a')).toBe(true)
+    expect(await purgeNote(f.id, f.a.id)).toBe(true)
     const retained = await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/pushes/${oid}`, headers })
     expect(retained.statusCode, retained.body).toBe(200)
     expect(retained.body).not.toContain('docs/a.md')
@@ -1090,7 +1092,7 @@ describe('Git boundary regressions (#1087)', () => {
       await git(['config', 'user.name', 'Git proof'], a.dir)
       await git(['config', 'user.email', 'git-proof@localhost'], a.dir)
       await mkdir(join(a.dir, 'docs'))
-      await writeFile(join(a.dir, 'docs/new.md'), 'Agent candidate secret.\n')
+      await writeFile(join(a.dir, 'docs/new.md'), '---\ntype: docs\n---\nAgent candidate secret.\n')
       const oid = await commit(a.dir)
       const collision = await createNote(first, { path: 'docs/new', body: 'Human collision text.\n' })
       const [connection] = await db.select({ id: mcpConnections.id }).from(mcpConnections).where(eq(mcpConnections.name, 'purge retry scope')).limit(1)
@@ -1102,7 +1104,7 @@ describe('Git boundary regressions (#1087)', () => {
       const interrupted = await git(['push', 'origin', 'HEAD:main'], a.dir)
       expect(interrupted.ok, interrupted.out).toBe(false)
       const [count] = (await db.execute(sql`SELECT count(*)::int AS n FROM note_revisions WHERE note_id = ${collision.id} AND action = 'proposal'`)) as unknown as Array<{ n: number }>
-      expect(count!.n).toBe(GIT_QUOTAS.noteProposals)
+      expect(count!.n, interrupted.out).toBe(GIT_QUOTAS.noteProposals)
       const history = await app.inject({ method: 'GET', url: `/api/vaults/${first}/history/docs/new`, headers: { cookie } })
       expect(history.statusCode, history.body).toBe(200)
       expect(history.body).toContain('proposal')
@@ -1117,7 +1119,7 @@ describe('Git boundary regressions (#1087)', () => {
       expect(full.out).toContain('capacity')
       expect((await readLiveNote(first, 'docs/new'))!.body).toBe('Human collision text.\n')
       await softDeleteNote(first, 'docs/new')
-      expect(await purgeNote(first, 'docs/new')).toBe(true)
+      expect(await purgeNote(first, collision.id)).toBe(true)
       const clean = await clone(token, first)
       expect(clean.ok, clean.out).toBe(true)
       expect((await git(['rev-parse', 'HEAD'], clean.dir)).out.trim()).toBe(base)

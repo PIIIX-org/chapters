@@ -128,10 +128,11 @@ export function boundedGit(args: string[], cwd: string, input?: Buffer, maxOutpu
   try { remaining = gitTimeLimit() } catch (err) { return Promise.reject(err) }
   // The shared ES2023 type library does not expose Promise.withResolvers.
   return new Promise<Buffer>((resolve, reject) => {
+    // Promotion moves packs/indexes, so private canonical exports must never unpack into loose objects.
     const child = spawn('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never',
       '-c', 'core.fsmonitor=false', '-c', 'core.attributesFile=/dev/null',
       '-c', 'core.fsync=all', '-c', 'pack.threads=1', '-c', 'pack.windowMemory=16m',
-      '-c', 'core.deltaBaseCacheLimit=16m', ...args], {
+      '-c', 'core.deltaBaseCacheLimit=16m', '-c', 'fastimport.unpackLimit=0', ...args], {
       cwd,
       detached: process.platform !== 'win32',
       env: { PATH: process.env.PATH, LANG: 'C', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1' },

@@ -166,7 +166,7 @@ export async function purgePushReports(tx: Tx, vaultId: string, scope: GitPurgeS
     INSERT INTO vault_git_push_operations (vault_id, connection_id, commit_id, path, result)
     SELECT DISTINCT n.vault_id, c.id, r.actor_detail->>'commit', '', ${JSON.stringify(tombstone)}::jsonb
     FROM note_revisions r JOIN notes n ON n.id = r.note_id
-    JOIN mcp_connections c ON c.id::text = r.actor_id
+    JOIN mcp_connections c ON c.id = r.actor_id
     WHERE n.vault_id = ${vaultId} AND r.actor_type = 'mcp' AND r.action = 'proposal'
       AND r.actor_detail->>'kind' = 'git_push'
       AND r.actor_detail->>'commit' ~ '^[0-9a-f]{40}$' AND ${proposalAffected}

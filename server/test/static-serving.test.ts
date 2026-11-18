@@ -106,6 +106,20 @@ describe('what the SPA shell must never answer for', () => {
     expect(res.json()).toEqual({ error: 'not found' })
   })
 
+  it('keeps Git machine paths out of the SPA without reserving frontend names that share their prefix', async () => {
+    for (const url of ['/git', '/git/missing', '/git/vaults/not-a-vault/missing',
+      '/git/vaults/not-a-vault/pushes/not-a-commit/assets/%2e%2e']) {
+      const res = await app.inject({ method: 'GET', url })
+      expect(res.statusCode, url).toBe(404)
+      expect(res.json(), url).toEqual({ error: 'not found' })
+    }
+    for (const url of ['/github', '/gitbook', '/vaults/v1/notes/docs/readme']) {
+      const res = await app.inject({ method: 'GET', url })
+      expect(res.statusCode, url).toBe(200)
+      expect(res.body, url).toBe(SHELL)
+    }
+  })
+
   it('404s an unknown API route on a non-GET method too', async () => {
     const res = await app.inject({
       method: 'POST',
