@@ -1,0 +1,18 @@
+{
+  "package": "tree-sitter-swift",
+  "version": "0.7.1",
+  "license": "MIT",
+  "upstream": "https://github.com/alex-pinkus/tree-sitter-swift",
+  "commit": "88bfd19a89be9d0481b14566fb6160cccea2fe0a",
+  "source": "https://registry.npmjs.org/tree-sitter-swift/-/tree-sitter-swift-0.7.1.tgz",
+  "sourceSha256": "abd89284f1b0f1375ba5efaa9ddf99ad4b16ac91fc7751ef10c5f013cca06f8c",
+  "parserSha256": "6755b1673b0e364e51a137b98e62ba0937c30a461e96767b22f259a267f25207",
+  "scannerSha256": "a30d8d36c2cd5201b5c7d2bf87e3159a7ab9b239c74b910bde37ba51ffae2bc4",
+  "treeSitterCli": "0.25.10",
+  "emscripten": "3.1.74",
+  "emsdkCommit": "708dcbcc9ee23bc7d2dad44fc90db377e38b771c",
+  "emscriptenRelease": "c2655005234810c7c42e02a18e4696554abe0352",
+  "abi": 14,
+  "bytes": 3327287,
+  "sha256": "d02624463e749beafd4cb5f9b3065ef429abec71c4dcec103cb489ac0ed0dd0c"
+}

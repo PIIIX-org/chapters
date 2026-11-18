@@ -89,7 +89,7 @@ change moves.
 | Full-text search | native Postgres `tsvector`/GIN (generated columns) | no separate search engine (Elasticsearch etc.) for a single-instance app |
 | ORM / migrations | Drizzle ORM + `drizzle-kit generate`, hand-edited SQL for vector/FTS/HNSW extras Drizzle can't express | typed queries, SQL-level control when needed |
 | Embeddings | Transformers.js (`@huggingface/transformers`) running `Xenova/bge-small-en-v1.5` fully local via ONNX | notes/code never leave the instance; no external API dependency |
-| Code parsing | `web-tree-sitter` (WASM) + per-language grammar packages (TS, JS, Python, Go, Rust, Java, C, C++, C#, Kotlin, Ruby, PHP) | native `tree-sitter` bindings fail to compile against current Node's V8 headers (see §11); WASM sidesteps native compilation entirely |
+| Code parsing | `web-tree-sitter` (WASM) + per-language grammar packages (TS, JS, Python, Go, Rust, Java, C, C++, C#, Kotlin, Ruby, PHP) and source-built Swift | native `tree-sitter` bindings fail to compile against current Node's V8 headers (see §11); WASM sidesteps native compilation entirely |
 | Graph analysis | `graphology` + `graphology-communities-louvain` | community detection (Louvain now, Leiden tracked as a future upgrade) |
 | AI access | `@modelcontextprotocol/sdk`, Streamable HTTP transport | official SDK, stateless-per-request transport (no server-side session state to leak across connections) |
 | Auth | `@node-rs/argon2` (passwords), `otpauth` (TOTP/MFA), Node `crypto` (session/reset tokens, SHA-256 hashed at rest) | |
@@ -3606,10 +3606,10 @@ either (#577). A query-string token stays at rest in `gitUrl`: it is
 not userinfo, so nothing moves it.
 
 **Code extraction** (`extraction.ts`, `extraction-languages.ts`):
-`web-tree-sitter` (WASM), twelve parsed languages, and heading outlines
-for two more (#464):
+`web-tree-sitter` (WASM), thirteen parsed languages, and heading outlines
+for two more (#464, #988):
 
-| label (`language.ts`) | extensions | parsed with (npm package, pinned in the lockfile) | `.wasm` |
+| label (`language.ts`) | extensions | parsed with (npm package pinned in the lockfile, or recorded source build) | `.wasm` |
 | :--- | :--- | :--- | ---: |
 | `typescript` | `.ts` `.tsx` `.mts` `.cts` | `tree-sitter-typescript` 0.23.2 (`.tsx`: its TSX grammar) | 1.41 MB (TSX 1.45 MB) |
 | `javascript` | `.js` `.jsx` `.mjs` `.cjs` | `tree-sitter-javascript` 0.25.0 | 0.41 MB |
@@ -3625,10 +3625,155 @@ for two more (#464):
 | `php` | `.php` | `tree-sitter-php` 0.24.2 (`tree-sitter-php.wasm`: PHP in HTML) | 1.06 MB |
 | `markdown` | `.md` `.markdown` | heading outline (`outline.ts`), no grammar | — |
 | `html` | `.html` `.htm` | heading outline (`outline.ts`), no grammar | — |
-| `swift` | `.swift` | labelled only: the npm `tree-sitter-swift` ships no `.wasm` (#988) | — |
+| `swift` | `.swift` | official `tree-sitter-swift` 0.7.1, built from its MIT C sources (#988) | 3.33 MB (3,327,287 bytes; ABI 14) |
 
-All grammar packages are MIT and load in `web-tree-sitter` 0.27 (ABI 14
-and 15). Their native build never runs (`allowBuilds: false` in
+Swift's npm package ships no Wasm. Its grammar is therefore committed at
+`server/grammars/tree-sitter-swift.wasm`, alongside the upstream MIT
+`swift.LICENSE` and `swift.json` provenance. Only the official source
+tarball is used, never a third-party vendored grammar binary. The published
+source commit is `88bfd19a89be9d0481b14566fb6160cccea2fe0a`; the tarball's
+SHA-256 is `abd89284f1b0f1375ba5efaa9ddf99ad4b16ac91fc7751ef10c5f013cca06f8c`.
+The output SHA-256 is
+`d02624463e749beafd4cb5f9b3065ef429abec71c4dcec103cb489ac0ed0dd0c`.
+
+To reproduce it, install official `tree-sitter-cli@0.25.10` in an isolated
+directory, and use the [official Emscripten SDK](https://github.com/emscripten-core/emsdk)
+at commit `708dcbcc9ee23bc7d2dad44fc90db377e38b771c` to install and activate
+`3.1.74` (Python 3.10+ is required by that SDK installer). Source its
+`emsdk_env.sh`, put that CLI's `node_modules/.bin` on `PATH`, then run
+`node scripts/build-swift-grammar.mjs` from the repository root. The script
+checks tool versions and the downloaded source hash, builds with native
+`tree-sitter build --wasm` (no Docker), checks the output size/hash and
+license before copying the artifact, and removes its temporary sources.
+The extraction fixture also checks the committed bytes, runtime ABI
+compatibility and error-free parsing in `web-tree-sitter` 0.27.
+
+Swift classes and structs map to `class`, enums to `enum`, protocols to
+`interface`, and their functions (including protocol requirements and
+extension functions) to `method` with the bare type name in `parent`.
+Extensions do not duplicate the type symbol. Nested functions/types are
+excluded by the #450 scope contract. `public`/`open` top-level declarations
+are exported; methods never are. Imports record their module (`Models`
+for `import struct Models.Entry`), including attributed imports.
+
+A declaration whose name tree-sitter had to invent while recovering from
+half-typed code (`func ( ) {}`, which `find_symbols` overlays can see
+mid-edit) is skipped, for every language's scoped query.
+
+Swift runs in a child process (#988, `extraction-child.ts`,
+`extraction-worker.ts`). V8 tiers hot Wasm functions up with TurboFan, and
+the Swift lexer is one 340 KB function: in the server process that took 1.3
+to 1.9 GB of resident memory after a few hundred 1 KB parses (macOS arm64,
+Node 24: 1.8 GB at 300 parses, 1.9 GB at 3,000; Kotlin 0.64 GB, the next
+largest, the others under 0.4 GB). The flags that stop it,
+`--no-wasm-tier-up --no-wasm-dynamic-tiering`, are V8 start-up flags:
+`NODE_OPTIONS` does not accept them, and switching them with
+`v8.setFlagsFromString` in a running server is process-global and unsafe, so
+nothing does. A grammar marked `isolated` (`extraction-languages.ts`; only
+Swift) is parsed by a long-lived child started lazily on the first Swift
+file with those flags and `--max-old-space-size=512` on its command line
+(through the same `tsx` loader as the server, from the same source, with
+only `PATH`, `HOME`, `TMPDIR`, `NODE_ENV` and the two child limits below of
+the server's environment). The server never loads the Swift grammar.
+
+What a caller gets from `extractStructure` for Swift:
+
+- a result, possibly `truncated`: the child cuts every answer before it
+  sends it (names over 200 characters, more than 30,000 symbols or imports,
+  an answer over 8 MiB: a 200 KB source can name a class with 8,000
+  characters and give it 5,000 methods), and the server checks the size and
+  shape of what it receives before it reads it. A cut result stores what is
+  right and says in `embeddingNote` how many symbols or imports were left
+  out; when the symbol embedding budget also applies, the note keeps both,
+  the cut first (the budget's "keyword-searchable" does not cover what the
+  cut left out);
+- a result with `skipped`: the content itself cannot be read within the
+  limits (the child's own parse deadline, or an answer over the limits or
+  malformed). The file keeps its file block with no symbols; its
+  `embeddingNote`, as `read_file` reports it, says why; it is final for
+  that content, and not cached, so the same content is parsed again on a
+  later extraction;
+- a rejection, `IsolatedUnavailable`: the child exited, could not be
+  reached or started, stayed silent, is backing off after repeated failures,
+  or the queue is full. Nothing is known about the content, so nothing is
+  stored: the extraction job fails and is retried like any other failed
+  job (`MAX_JOB_ATTEMPTS`, its backoff, `extractionFailures`, and again at
+  boot), and the file keeps the rows it had. An overlay lists the file as
+  unparsed instead (below).
+
+The deadline, `ELARA_ISOLATED_PARSE_TIMEOUT_MS` (default 10,000 ms, at most
+one hour: the server's timers run at up to twice it, and Node's stop at
+2^31 - 1 ms), is the
+child's: it counts on its own monotonic clock from when its grammar is
+loaded and cancels the parse and the query itself, so a stalled event loop
+in the server cannot skip a file the child answered. The server only runs a
+watchdog at 1.5 times the deadline plus 2 s, looks once more after the
+event loop's I/O before it acts, and then kills the child and counts a
+failure. After three failures in a row the child is started again only
+after 1, 2, 4 ... 30 s.
+
+Requests go one at a time over the IPC channel as JSON. The index lane (the
+extraction queue, itself one file at a time) is served before the overlay
+lane (`find_symbols` overlays), so a reader cannot starve indexing. The
+overlay lane holds at most 4 waiting requests, an account at most 2 in
+flight, and a request waits at most twice the deadline; past any of those
+the file is answered as unparsed with a reason that says to try again (not
+stored). A queued overlay request is not cancelled when its caller goes
+away: it costs one more parse at most.
+
+A tree-sitter Wasm heap slows down with use: the same 64 KB file parsed in
+37 ms in a new process and 362 ms after a hundred small files, 100 KB in 94
+and 850 ms, 400 KB in 250 ms and 13 s, and a second 1 MB file did not finish
+in 60 s (a new process parses it in 0.8 s). So a file over 16 KiB is parsed
+by a child that has parsed nothing before, and that exits after it
+(`FRESH_CHILD_CHARS`); a cold start costs about 0.3 s. The other grammars
+share the slowdown, and still parse in the server with no deadline (#1146).
+
+`--max-old-space-size` caps only the child's JS heap, not its Wasm memory,
+so the cap is best effort. After each answer the child retires itself when
+its RSS is over `ELARA_ISOLATED_CHILD_RSS_MB` (default 400; a 1 MB file
+peaks near 220) or it has parsed `ELARA_ISOLATED_CHILD_MAX_PARSES` files
+(default 2,000); its answer says so, and the next request starts a new
+child. It exits when the server does (a closed channel, or the server's exit
+hook), also when the server is killed during a parse. The `find_symbols`
+overlay takes the same route, with `lane: 'overlay'` and the account as its
+caller; a Swift file it could not parse is listed in the head's `skipped`
+with the reason in `skippedBecause`, and its indexed hits stay in the
+answer.
+
+Swift results and the parse cache (`parsed`, #1148): a result arrives over
+IPC as JSON, so its strings are already this process's own (never views
+into the source, which stays in the child); the cache still estimates and
+detaches them like any other result, which costs a copy of a few short
+names. A result with `skipped` is not kept. A result cut at the child's
+30,000-item limit estimates above the 4 MiB per-entry cap, so it is
+returned with its `truncated` note and not kept (the same content is parsed
+again the next time). `blob-parse-cache-swift.test.ts` covers those cases
+and `blob-parse-cache-retention.test.ts` has a Swift case for the heap
+retained per result.
+
+Measured on macOS arm64 (Node 24): over 300 parses of the 1 KB fixture the
+server process stays at 83 MB (its size without Swift, growth 0) and the
+child at 90 to 109 MB; the child peaks at 220 MB for one 1 MB file
+(`MAX_FILE_BYTES`) of 16,910 symbols, parsed in about 0.8 s with its start;
+1.6 ms per small file through IPC. The first Linux numbers are from CI
+(`checks` job of run 43691927161, test `extraction-languages.test.ts`):
+server 389 MB after warm-up, growth 0, child 102 MB; the next head's run
+gave 478 MB, growth 0, child 109 MB. [INFERENCE] The 389 and 478 MB are
+the test runner's inherited peak (Linux keeps the high-water mark across
+exec), not the server's own size, so on Linux the test sees growth only
+above that. The Linux production image, and a real Swift repository there,
+are unmeasured. The child's memory is not in the server's RSS alert, only
+in the container's total. `extraction-languages.test.ts` fails when the
+server grows by 150 MB or more over 300 parses, or the child is at 600 MB
+or more; `extraction-child.test.ts` covers the deadline, a stalled server,
+an unstartable, killed and stuck child, the backoff, the size limits, the
+lanes, retiring and the fresh child for large files; `extraction-queue.test.ts`
+the stored note and that an unreachable child leaves the file unextracted;
+`mcp-overlay.test.ts` the overlay's report.
+
+All grammars are MIT and load in `web-tree-sitter` 0.27 (ABI 14
+and 15). The npm grammars' native build never runs (`allowBuilds: false` in
 `pnpm-workspace.yaml`), two dependencies only a native or grammar build
 reads are overridden away (`npm-check-updates` under Kotlin, a second
 `tree-sitter-c` under C++), and the image deletes their C sources and
@@ -3647,7 +3792,7 @@ the extension, not the label: `.tsx` parses with TSX
 TypeScript grammar reads `<div>` as a type assertion; the other TypeScript
 files keep the TypeScript grammar, which accepts the `<T>value` casts TSX
 refuses. Each grammar is loaded from its npm package's `.wasm` file
-(`tree-sitter-typescript` ships both TypeScript ones) the first time a file
+(`tree-sitter-typescript` ships both TypeScript ones), or Swift's committed source build, the first time a file
 needs it, and cached; the TSX and TypeScript queries are the same. Per
 grammar, a tree-sitter
 query finds import specifiers and candidate symbol declarations, and
@@ -5291,7 +5436,10 @@ CI (`.github/workflows/ci.yml`) runs all three steps against a
     reports and metrics, above), `ELARA_NOTE_MAX_BYTES` (note body size
     cap, §5.3; a reverse proxy must pass bodies up to 6 × it + 64 KiB),
     `ELARA_EMBED_MAX_SYMBOLS_PER_FILE` (per-file symbol embedding budget,
-    default 256, §5.10 extraction queue).
+    default 256, §5.10 extraction queue), `ELARA_ISOLATED_PARSE_TIMEOUT_MS`
+    (milliseconds the Swift parser process gets per file, default 10000),
+    `ELARA_ISOLATED_CHILD_RSS_MB` and `ELARA_ISOLATED_CHILD_MAX_PARSES` (when
+    that process retires itself: default 400 MB of RSS, 2000 files).
 - **Migrations**: `drizzle-kit generate` produces SQL under
   `server/drizzle/`; a few migrations were hand-edited afterward for
   things Drizzle can't express directly (pgvector extension + HNSW

@@ -138,6 +138,8 @@ export async function parsed(language: string, content: string, path: string, co
     return hit.result
   }
   const result = await extractStructure(language, content, path)
+  // A skipped file (its Swift parse passed the child's deadline or its answer passed the limits) is not cached: the next try parses it again.
+  if (result.skipped) return result
   parseCacheStats.parsed++
   const budget = parseCacheBudgetBytes()
   const bytes = estimateExtractionBytes(result)

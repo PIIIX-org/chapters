@@ -109,6 +109,12 @@ services:
       - ELARA_NOTE_MAX_BYTES
       # Symbols per repository file that get an embedding (default 256).
       - ELARA_EMBED_MAX_SYMBOLS_PER_FILE
+      # Milliseconds the Swift parser process may take to parse one file before the file is
+      # indexed without symbols (default 10000), and the RSS in MB (default 400) or the number of
+      # files (default 2000) after which it retires itself and a new one is started.
+      - ELARA_ISOLATED_PARSE_TIMEOUT_MS
+      - ELARA_ISOLATED_CHILD_RSS_MB
+      - ELARA_ISOLATED_CHILD_MAX_PARSES
       # Byte budget of the in-process parse cache in MiB (default 64).
       - ELARA_PARSE_CACHE_MB
     volumes:

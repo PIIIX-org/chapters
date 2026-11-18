@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { extractInChild, type IsolatedLane } from './extraction-child.js'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { Parser, Language, Query, Tree, type Node, type QueryMatch } from 'web-tree-sitter'
@@ -45,8 +46,10 @@ const require = createRequire(import.meta.url)
  * 8: call, reference, import and test sites, stored as `code_edges` (#469,
  * code-edge-rules.ts, code-edges.ts). No block text changes, so no vector is
  * embedded again: the bump only fills the new table.
+ * 9: Swift symbols and imports from the official source-built grammar (#988).
+ * Unchanged file blocks keep their vectors; the new symbols are embedded.
  */
-export const EXTRACTOR_VERSION = 8
+export const EXTRACTOR_VERSION = 9
 
 /**
  * What a symbol declares (#450; the contract more languages, #464, and the
@@ -88,6 +91,10 @@ export interface ExtractionResult {
   symbols: ExtractedSymbol[]
   /** Calls, references and imported names (#469), in no particular order. */
   sites: ExtractedSite[]
+  /** Why the file got no symbols or imports although its language is parsed: its Swift parse passed the deadline, or its result passed a size limit. Final for that content, but not cached. */
+  skipped?: string
+  /** Set when the Swift process cut the result to its limits (extraction-child.ts `encodeResult`): what is here is right, some symbols are missing. */
+  truncated?: string
 }
 
 type SupportedLanguage = 'typescript' | 'javascript' | 'python' | 'go' | NewLanguage
@@ -102,7 +109,9 @@ const wasmPath = (pkg: string, file: string): string =>
   join(dirname(require.resolve(`${pkg}/package.json`)), file)
 
 interface GrammarConfig {
-  wasm: string
+  wasm: string | URL
+  /** Parsed in a child process started with fixed V8 flags, under a deadline (extraction-child.ts): for a grammar too costly in memory to load in the server process. */
+  isolated?: boolean
   /** `@src` captures; none: the language's imports name no file (C# `using`). */
   importQuery?: string
   /** The specifiers of an `@src` node whose text is not just one (a Rust `use` tree, a Java `import`); none: not an import of a file. */
@@ -226,7 +235,7 @@ const GRAMMARS: Record<Grammar, GrammarConfig> = {
   },
   // #464's grammars, each loaded the first time a file of its language is extracted.
   ...(Object.fromEntries(
-    Object.entries(LANGUAGE_GRAMMARS).map(([language, { wasm, ...grammar }]) => [language, { ...grammar, wasm: wasmPath(...wasm) }]),
+    Object.entries(LANGUAGE_GRAMMARS).map(([language, { wasm, ...grammar }]) => [language, { ...grammar, wasm: Array.isArray(wasm) ? wasmPath(...wasm) : wasm }]),
   ) as Record<NewLanguage, GrammarConfig>),
 }
 
@@ -385,22 +394,47 @@ async function loadLanguage(grammar: Grammar): Promise<Language> {
 }
 
 /**
+ * The grammar comes from the extension, not the label: a `.tsx` file is
+ * labelled `typescript` (language.ts) but JSX only parses with TSX, and TSX
+ * cannot parse the `<T>value` casts `.ts/.mts/.cts` allow. A `.h` header is
+ * labelled `c` but may be C++ (most C++ projects name headers `.h`): the C++
+ * grammar reads C declarations alike and also C++ classes and namespaces.
+ */
+function grammarFor(language: SupportedLanguage, path: string): Grammar {
+  return language === 'typescript' && /\.tsx$/i.test(path) ? 'tsx' : language === 'c' && /\.h$/i.test(path) ? 'cpp' : language
+}
+
+/**
  * Tree-sitter, file-level extraction (spec 9): import edges + cheap
  * "contains" symbols, those at module level and the methods of module-level
  * classes (#450), by line. `path` picks the grammar where a language has several. `edges: false` skips the code
  * edge sites (`sites` is empty): the overlay of `find_symbols` (#676) wants symbols only.
+ * A grammar marked `isolated` (Swift) is parsed in a child process (extraction-child.ts), which owns the deadline.
+ * A file whose parse exceeds it comes back with no symbols and `skipped` saying why (permanent for that content);
+ * a parser process that cannot answer makes this reject with `IsolatedUnavailable` (transient: nothing to store).
+ * `lane` and `caller` only matter to that process's admission: `overlay` work is bounded, per caller too.
  */
-export async function extractStructure(language: string, content: string, path: string, options: { edges?: boolean } = {}): Promise<ExtractionResult> {
+export async function extractStructure(
+  language: string,
+  content: string,
+  path: string,
+  options: { edges?: boolean; lane?: IsolatedLane; caller?: string } = {},
+): Promise<ExtractionResult> {
   if (!isSupportedLanguage(language)) {
     throw new Error(`unsupported language for extraction: ${language}`)
   }
-  // The grammar comes from the extension, not the label: a `.tsx` file is
-  // labelled `typescript` (language.ts) but JSX only parses with TSX, and TSX
-  // cannot parse the `<T>value` casts `.ts/.mts/.cts` allow. A `.h` header is
-  // labelled `c` but may be C++ (most C++ projects name headers `.h`): the C++
-  // grammar reads C declarations alike and also C++ classes and namespaces.
-  const grammar: Grammar =
-    language === 'typescript' && /\.tsx$/i.test(path) ? 'tsx' : language === 'c' && /\.h$/i.test(path) ? 'cpp' : language
+  if (GRAMMARS[grammarFor(language, path)].isolated) return extractInChild(language, content, path, options)
+  return extractHere(language, content, path, options)
+}
+
+/** `extractStructure` in this process. `budgetMs` cancels a parse or query still running that long after the grammar is loaded: the child's own limit. */
+export async function extractHere(
+  language: SupportedLanguage,
+  content: string,
+  path: string,
+  options: { edges?: boolean; budgetMs?: number } = {},
+): Promise<ExtractionResult> {
+  const grammar = grammarFor(language, path)
   const config = GRAMMARS[grammar]
   const lang = await loadLanguage(grammar)
   const parser = new Parser()
@@ -408,14 +442,18 @@ export async function extractStructure(language: string, content: string, path: 
 
   let tree: Tree | null = null
   try {
-    tree = parser.parse(content)
-    if (!tree) return { imports: [], symbols: [], sites: [] }
+    const deadline = options.budgetMs === undefined ? undefined : performance.now() + options.budgetMs
+    let cancelled = false
+    const cancel = deadline === undefined ? undefined : { progressCallback: () => (cancelled = performance.now() > deadline) }
+    const exceeded = (): ExtractionResult => ({ imports: [], symbols: [], sites: [], skipped: 'parse deadline exceeded' })
+    tree = parser.parse(content, null, cancel)
+    if (!tree) return deadline !== undefined && performance.now() > deadline ? exceeded() : { imports: [], symbols: [], sites: [] }
 
     // Told apart by their captures: `@src` (imports), `@decl.*` (symbols), the others code edges'.
     const imports: ExtractedImport[] = []
     const matches: QueryMatch[] = []
     const edgeMatches: QueryMatch[] = []
-    for (const match of grammarQuery(lang, grammar).matches(tree.rootNode)) {
+    for (const match of grammarQuery(lang, grammar).matches(tree.rootNode, cancel)) {
       if (match.captures.some((c) => c.name.startsWith('decl.'))) matches.push(match)
       else if (match.captures.some((c) => c.name === 'src')) {
         for (const capture of match.captures) {
@@ -425,6 +463,7 @@ export async function extractStructure(language: string, content: string, path: 
         }
       } else edgeMatches.push(match)
     }
+    if (cancelled) return exceeded()
 
     const { scopes } = config
     const symbols = scopes

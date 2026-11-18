@@ -1,16 +1,18 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
-import { and, count, eq } from 'drizzle-orm'
+import { and, count, eq, sql } from 'drizzle-orm'
 import { db } from '../src/db/client.js'
-import { blocks, repositories, repositoryFileImports, repositoryFiles } from '../src/db/schema.js'
+import { blocks, jobs, repositories, repositoryFileImports, repositoryFiles } from '../src/db/schema.js'
 import { syncRepositoryFiles } from '../src/repositories/store.js'
 import {
   backfillUnresolvedImports,
   countPendingExtractions,
+  extractionWork,
   flushExtraction,
   scheduleMissingExtractions,
 } from '../src/repositories/extraction-queue.js'
 import { EXTRACTOR_VERSION } from '../src/repositories/extraction.js'
+import { resetIsolatedChild } from '../src/repositories/extraction-child.js'
 import { embedder } from '../src/search/embeddings.js'
 import { createActiveUser, fileEmbedding, symbolBlocks } from './helpers.js'
 
@@ -192,13 +194,102 @@ describe('extraction queue', () => {
 
   it('embeds an unsupported-language file without producing import/symbol rows', async () => {
     const repo = await makeRepo()
-    await syncRepositoryFiles(repo.id, [{ path: 'Sources/main.swift', content: 'func main() {}' }], ['Sources/main.swift'])
+    await syncRepositoryFiles(repo.id, [{ path: 'Sources/main.txt', content: 'plain text' }], ['Sources/main.txt'])
     await flushExtraction()
 
-    const file = await fileByPath(repo.id, 'Sources/main.swift')
+    const file = await fileByPath(repo.id, 'Sources/main.txt')
     expect(await fileEmbedding(file.id)).not.toBeNull()
     const symbols = await symbolBlocks(file.id)
     expect(symbols).toHaveLength(0)
+  })
+
+  it('persists Swift methods with their parent and imports, and embeds their real source (#988)', async () => {
+    const repo = await makeRepo()
+    const content =
+      'import Foundation\npublic struct Store {\n    func load() -> String { "value" }\n}\nextension Store {\n    func save() {}\n}'
+    await syncRepositoryFiles(
+      repo.id,
+      [{ path: 'Sources/Store.swift', content }],
+      ['Sources/Store.swift'],
+    )
+    await flushExtraction()
+
+    const file = await fileByPath(repo.id, 'Sources/Store.swift')
+    expect(file.language).toBe('swift')
+    expect(file.extractorVersion).toBe(EXTRACTOR_VERSION)
+    expect(await fileEmbedding(file.id)).not.toBeNull()
+    const symbols = await symbolBlocks(file.id)
+    expect(symbols.map((s) => [s.name, s.kind, s.parent])).toEqual([
+      ['Store', 'class', null],
+      ['load', 'method', 'Store'],
+      ['save', 'method', 'Store'],
+    ])
+    expect(symbols.every((s) => s.embedding !== null)).toBe(true)
+    const imports = await db
+      .select()
+      .from(repositoryFileImports)
+      .where(eq(repositoryFileImports.sourceFileId, file.id))
+    expect(imports.map((i) => i.targetPath)).toEqual(['Foundation'])
+  })
+
+  // A big source the parser cannot read within a 1 ms deadline: the file's own doing.
+  const bigSwift = () => Array.from({ length: 6_000 }, () => 'struct Store { func load() {} func save() {} }\nenum Event { case a, b }\n').join('')
+
+  it('keeps a Swift file whose parse runs past the deadline as a file block with a note, and extracts it once it is fixed (#988)', async () => {
+    vi.stubEnv('ELARA_ISOLATED_PARSE_TIMEOUT_MS', '1')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = await makeRepo()
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'Sources/Huge.swift', content: bigSwift() }], ['Sources/Huge.swift'])
+      await flushExtraction()
+    } finally {
+      warnSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+    const file = await fileByPath(repo.id, 'Sources/Huge.swift')
+    expect(file.extractorVersion).toBe(EXTRACTOR_VERSION)
+    expect(await fileEmbedding(file.id)).not.toBeNull()
+    expect(await symbolBlocks(file.id)).toHaveLength(0)
+    expect(file.embeddingNote).toMatch(/^swift symbols not extracted: the parse took longer than 1 ms/)
+
+    await syncRepositoryFiles(repo.id, [{ path: 'Sources/Huge.swift', content: 'struct Store { func load() {} }' }], ['Sources/Huge.swift'])
+    await flushExtraction()
+    expect((await fileByPath(repo.id, 'Sources/Huge.swift')).embeddingNote).toBeNull()
+    expect((await symbolBlocks(file.id)).map((s) => s.name).sort()).toEqual(['Store', 'load'])
+  })
+
+  it('does not store a Swift file as extracted while its parser process cannot answer, and extracts it once it can (#988)', async () => {
+    const realExecPath = process.execPath
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const repo = await makeRepo()
+    const path = 'Sources/Store.swift'
+    const content = 'import Foundation\nstruct Store { func load() {} }'
+    resetIsolatedChild()
+    Object.defineProperty(process, 'execPath', { value: '/usr/bin/false' })
+    try {
+      await syncRepositoryFiles(repo.id, [{ path, content }], [path])
+      await flushExtraction()
+    } finally {
+      Object.defineProperty(process, 'execPath', { value: realExecPath })
+    }
+    // Not extracted at this version, no symbols, no note claiming none: the job failed and waits for its retry.
+    const failed = await fileByPath(repo.id, path)
+    expect(failed.extractorVersion).not.toBe(EXTRACTOR_VERSION)
+    expect(failed.embeddingNote).toBeNull()
+    expect(await symbolBlocks(failed.id)).toHaveLength(0)
+    const [job] = await db.select().from(jobs).where(and(eq(jobs.kind, 'extract'), sql`payload->>'fileId' = ${failed.id}`))
+    expect(job?.lastError).toMatch(/Swift parser process/)
+    expect(job?.doneAt).toBeNull()
+
+    // The process works again: the retry (here run directly, as the drainer does after its backoff) gives the file its symbols.
+    resetIsolatedChild()
+    await extractionWork.processFile(failed.id)
+    const fixed = await fileByPath(repo.id, path)
+    expect(fixed.extractorVersion).toBe(EXTRACTOR_VERSION)
+    expect(fixed.embeddingNote).toBeNull()
+    expect((await symbolBlocks(failed.id)).map((s) => s.name).sort()).toEqual(['Store', 'load'])
+    expect(vi.mocked(console.error)).toHaveBeenCalled()
   })
 
   it('does not re-trigger extraction for an unchanged resync', async () => {
@@ -298,6 +389,27 @@ describe('extraction queue', () => {
     await syncRepositoryFiles(repo.id, [{ path: 'src/many.ts', content: 'export function only() {}' }], ['src/many.ts'])
     await flushExtraction()
     expect((await fileByPath(repo.id, 'src/many.ts')).embeddingNote).toBeNull()
+  })
+
+  it('keeps both notes for a Swift file the parser process cut and the embedding budget capped: the cut first (#988)', async () => {
+    vi.stubEnv('ELARA_EMBED_MAX_SYMBOLS_PER_FILE', '3')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const repo = await makeRepo()
+    // Five ordinary functions, and two whose names are over the 200-character limit: the child leaves those two out.
+    const content = [...Array.from({ length: 5 }, (_, i) => `func f${i}() {}`), `func ${'a'.repeat(250)}() {}`, `func ${'b'.repeat(250)}() {}`].join('\n')
+    try {
+      await syncRepositoryFiles(repo.id, [{ path: 'Sources/Cut.swift', content }], ['Sources/Cut.swift'])
+      await flushExtraction()
+    } finally {
+      warnSpy.mockRestore()
+      vi.unstubAllEnvs()
+    }
+    const file = await fileByPath(repo.id, 'Sources/Cut.swift')
+    expect((await symbolBlocks(file.id)).map((s) => s.name).sort()).toEqual(['f0', 'f1', 'f2', 'f3', 'f4'])
+    expect(file.embeddingNote).toBe(
+      '2 symbols or imports left out: names over 200 characters, or over 30000 items or 8388608 bytes of answer; ' +
+        'symbol embeddings capped by ELARA_EMBED_MAX_SYMBOLS_PER_FILE: 3 of 5 symbols embedded, the rest are keyword-searchable only',
+    )
   })
 
   it('under the per-file budget, embeds exported then other top-level symbols before methods (#450)', async () => {

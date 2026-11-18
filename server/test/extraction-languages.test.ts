@@ -1,10 +1,13 @@
-// #464: structure for Rust, Java, C, C++, C#, Kotlin, Ruby and PHP, on the
+// #464 and #988: structure for Rust, Java, C, C++, C#, Kotlin, Ruby, PHP and Swift, on the
 // #450 contract: module-level declarations, the methods (and public or
 // static fields) of module-level classes with their class in `parent`,
 // namespace members with their namespace; nothing nested in a body. Each
 // fixture under fixtures/languages is a small real-code file.
-import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { readFileSync, writeSync } from 'node:fs'
+import { describe, expect, it, vi } from 'vitest'
+import { Language, Parser, LANGUAGE_VERSION, MIN_COMPATIBLE_VERSION } from 'web-tree-sitter'
 import { extractStructure, isSupportedLanguage, type ExtractedSymbol } from '../src/repositories/extraction.js'
 import { detectLanguage } from '../src/repositories/language.js'
 
@@ -25,15 +28,114 @@ async function extract(name: string) {
 describe('labels (#464)', () => {
   it('labels the new languages by extension, and Markdown and HTML', () => {
     expect(
-      ['a.rs', 'A.java', 'a.c', 'a.h', 'a.cpp', 'a.cc', 'a.cxx', 'a.hpp', 'a.hh', 'A.cs', 'A.kt', 'a.kts', 'a.rb', 'a.php', 'README.md', 'a.markdown', 'a.html', 'a.htm'].map(
+      ['a.rs', 'A.java', 'a.c', 'a.h', 'a.cpp', 'a.cc', 'a.cxx', 'a.hpp', 'a.hh', 'A.cs', 'A.kt', 'a.kts', 'a.rb', 'a.php', 'Store.swift', 'README.md', 'a.markdown', 'a.html', 'a.htm'].map(
         detectLanguage,
       ),
-    ).toEqual(['rust', 'java', 'c', 'c', 'cpp', 'cpp', 'cpp', 'cpp', 'cpp', 'csharp', 'kotlin', 'kotlin', 'ruby', 'php', 'markdown', 'markdown', 'html', 'html'])
+    ).toEqual(['rust', 'java', 'c', 'c', 'cpp', 'cpp', 'cpp', 'cpp', 'cpp', 'csharp', 'kotlin', 'kotlin', 'ruby', 'php', 'swift', 'markdown', 'markdown', 'html', 'html'])
   })
 
-  it('parses the new languages; Swift, Markdown and HTML get no symbols', () => {
-    for (const language of ['rust', 'java', 'c', 'cpp', 'csharp', 'kotlin', 'ruby', 'php']) expect(isSupportedLanguage(language)).toBe(true)
-    for (const language of ['swift', 'markdown', 'html']) expect(isSupportedLanguage(language)).toBe(false)
+  it('parses the code languages; Markdown and HTML use heading outlines', () => {
+    for (const language of ['rust', 'java', 'c', 'cpp', 'csharp', 'kotlin', 'ruby', 'php', 'swift']) expect(isSupportedLanguage(language)).toBe(true)
+    for (const language of ['markdown', 'html']) expect(isSupportedLanguage(language)).toBe(false)
+  })
+})
+
+describe('Swift (#988)', () => {
+  it('loads the recorded source-built bytes at a supported ABI and parses the complete fixture without errors', async () => {
+    const provenance = JSON.parse(
+      readFileSync(new URL('../grammars/swift.json', import.meta.url), 'utf8'),
+    )
+    const bytes = readFileSync(
+      new URL('../grammars/tree-sitter-swift.wasm', import.meta.url),
+    )
+    expect(bytes.byteLength).toBe(provenance.bytes)
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+      provenance.sha256,
+    )
+    await Parser.init()
+    const language = await Language.load(bytes)
+    expect(language.abiVersion).toBe(provenance.abi)
+    expect(language.abiVersion).toBeGreaterThanOrEqual(MIN_COMPATIBLE_VERSION)
+    expect(language.abiVersion).toBeLessThanOrEqual(LANGUAGE_VERSION)
+    const parser = new Parser().setLanguage(language)
+    const tree = parser.parse(fixture('Store.swift'))
+    try {
+      expect(tree).not.toBeNull()
+      expect(tree!.rootNode.hasError).toBe(false)
+    } finally {
+      tree?.delete()
+      parser.delete()
+    }
+  })
+
+  it('extracts functions, nominal types, protocol requirements and extension methods on the #450 parent contract', async () => {
+    const { symbols, imports } = await extract('Store.swift')
+    expect(symbols).toEqual([
+      '5-8 function openStore (exported)',
+      '10-21 class Store (exported)',
+      '11-14 method Store.load',
+      '16-16 method Store.create',
+      '23-25 class Entry',
+      '24-24 method Entry.key',
+      '27-30 enum Event (exported)',
+      '29-29 method Event.label',
+      '32-35 interface Backend (exported)',
+      '33-33 method Backend.load',
+      '34-34 method Backend.create',
+      '38-41 method Store.save',
+      '45-45 method Backend.close',
+      '49-49 method Entry.normalized',
+      '53-53 method Array.keys',
+      '56-56 function helper',
+      '57-59 class DiskStore (exported)',
+      '58-58 method DiskStore.read',
+      '61-65 function localTypes',
+    ])
+    expect(imports).toEqual(['1 Foundation', '2 Models', '3 Storage'])
+  })
+
+  it('gives no symbol a name tree-sitter made up while recovering from half-typed code', async () => {
+    const names = async (src: string) => brief((await extractStructure('swift', src, 'src/Draft.swift')).symbols)
+    expect(await names('func ( ) {}\nfunc ok() {}\n')).toEqual(['2-2 function ok'])
+    expect(await names('struct S { func () {} }\n')).toEqual(['1-1 class S'])
+    expect(await names('class { func ( ) }\n')).toEqual([])
+    expect(await names('protocol P { func () }\n')).toEqual(['1-1 interface P'])
+  })
+
+  // V8 re-compiles the grammar's 340 KB lexer function with TurboFan while parsing: 1.3 to 1.9 GB
+  // resident after a few hundred parses on macOS arm64 (110 to 130 MB with tier-up off). Swift is parsed in a
+  // child process started with tier-up off (extraction-child.ts), so the server process does not grow and the
+  // child stays small. Run in a process of its own: RSS peaks are per process. The bounds are relative (growth
+  // after one warm-up parse, which loads the module graph and starts the child) because a tsx-loaded Node
+  // process starts larger on Linux than on macOS (457 MB peak on the CI runner against 100 MB); the absolute
+  // numbers are printed for the CI log. The grammar loaded in the server grows it by well over 1 GB.
+  it('parses hundreds of files without growing the server process, and with a small child', async ({ annotate }) => {
+    const script = `
+      import { execFileSync } from 'node:child_process'
+      import { readFileSync } from 'node:fs'
+      import { extractStructure } from ${JSON.stringify(new URL('../src/repositories/extraction.ts', import.meta.url).href)}
+      import { isolatedChildPid } from ${JSON.stringify(new URL('../src/repositories/extraction-child.ts', import.meta.url).href)}
+      const source = readFileSync(new URL(${JSON.stringify(new URL('./fixtures/languages/Store.swift', import.meta.url).href)}), 'utf8')
+      await extractStructure('swift', source, 'Store.swift')
+      const warmKb = process.resourceUsage().maxRSS
+      for (let i = 0; i < 300; i++) await extractStructure('swift', source + '// ' + i, 'Store.swift')
+      const pid = isolatedChildPid()
+      const childKb = pid === null ? -1 : Number(execFileSync('ps', ['-o', 'rss=', '-p', String(pid)], { encoding: 'utf8' }))
+      console.log(JSON.stringify({ pid, warmKb, peakKb: process.resourceUsage().maxRSS, childKb }))
+    `
+    const out = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], { encoding: 'utf8', timeout: 90_000 })
+    const { pid, warmKb, peakKb, childKb } = JSON.parse(out.trim().split('\n').at(-1)!) as { pid: number | null; warmKb: number; peakKb: number; childKb: number }
+    const mb = (kb: number) => Math.round(kb / 1024)
+    const numbers = `Swift memory over 300 parses: server ${mb(warmKb)} MB after warm-up, ${mb(peakKb)} MB peak (growth ${mb(peakKb - warmKb)} MB); child ${mb(childKb)} MB`
+    console.info(numbers)
+    // The reporter hides a passing test's console output unless it is verbose; CI logs should keep the first Linux numbers.
+    writeSync(2, `${numbers}\n`)
+    await annotate(numbers)
+    expect(pid, 'the grammar must be parsed by a child process').not.toBeNull()
+    expect(mb(peakKb - warmKb), numbers).toBeLessThan(150)
+    expect(mb(childKb), numbers).toBeLessThan(600)
+    // The server exited: its child went with it.
+    await vi.waitFor(() => expect(() => process.kill(pid!, 0)).toThrow(), { timeout: 5_000 })
   })
 })
 
@@ -157,6 +259,24 @@ describe('C and C++ (#464)', () => {
     ].join('\n')
     const { symbols } = await extractStructure('cpp', src, 'src/store.cc')
     expect(brief(symbols)).toEqual(['1-6 namespace ns (exported)', '2-5 class ns.Store (exported)', '7-7 method Store.load', '8-8 method Inner.run'])
+  })
+
+  // The parent is the bare type name (#988), so a specialization's method defined out of line
+  // belongs to `Store` like the primary template's; it is not a second `Store<int>` parent.
+  it('gives a method of an explicit specialization the bare class name as parent', async () => {
+    const src = [
+      'template <typename T> class Store {',
+      ' public:',
+      '  void f();',
+      '};',
+      'template <> class Store<int> {',
+      ' public:',
+      '  void f();',
+      '};',
+      'void Store<int>::f() {}',
+    ].join('\n')
+    const { symbols } = await extractStructure('cpp', src, 'src/store.cc')
+    expect(brief(symbols)).toEqual(['1-4 class Store (exported)', '9-9 method Store.f'])
   })
 
   it('captures a C function returning a pointer to a pointer', async () => {

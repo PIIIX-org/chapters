@@ -9,7 +9,8 @@ import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '../db/client.js'
 import { repositoryFiles } from '../db/schema.js'
 import { detectLanguage } from './language.js'
-import { extractStructure, isSupportedLanguage, type ExtractedSymbol } from './extraction.js'
+import { extractStructure, isSupportedLanguage, type ExtractedSymbol, type ExtractionResult } from './extraction.js'
+import { IsolatedUnavailable } from './extraction-child.js'
 
 /** Bytes of diff and files it changes one call takes. */
 export const OVERLAY_MAX_BYTES = 200_000
@@ -153,19 +154,25 @@ export interface OverlaySymbol extends ExtractedSymbol {
  * The symbols of the overlay's added and modified files, computed in memory from the indexed content plus the
  * hunks (`path` order, then line), and the paths whose indexed symbols the overlay replaces (every changed file).
  * A file the extractor does not read has no symbols. `skipped`: changed files that are not in the index (nothing to
- * apply the diff to; left out, the rest is answered). `stale`: files whose stored content is not the blob the diff
+ * apply the diff to; left out, the rest is answered), and files whose Swift parse could not be had (`unparsed` says
+ * why: over its deadline or limits, or the parser process busy or failing); those keep their indexed symbols
+ * (not in `changed`): an answer must not tell an agent that a symbol does not exist because a parse was missing.
+ * `stale`: files whose stored content is not the blob the diff
  * says it was made against (git's `index` line), so the diff is against another commit; their hunks applied anyway.
- * At most `OVERLAY_MAX_PARSED` characters are parsed, edge sites are not extracted.
+ * At most `OVERLAY_MAX_PARSED` characters are parsed, edge sites are not extracted. `caller` (an MCP connection)
+ * limits how many Swift parses one reader has waiting (extraction-child.ts).
  */
 export async function overlaySymbols(
   repositoryId: string,
   patches: readonly FilePatch[],
-): Promise<{ symbols: OverlaySymbol[]; changed: Set<string>; skipped: string[]; stale: string[] }> {
+  options: { caller?: string } = {},
+): Promise<{ symbols: OverlaySymbol[]; changed: Set<string>; skipped: string[]; unparsed: Record<string, string>; stale: string[] }> {
   const modified = patches.filter((p) => p.status !== 'added').map((p) => p.path)
   const stored = modified.length === 0 ? [] : await db.select({ path: repositoryFiles.path, content: repositoryFiles.content }).from(repositoryFiles).where(and(eq(repositoryFiles.repositoryId, repositoryId), inArray(repositoryFiles.path, modified)))
   const contents = new Map(stored.map((f) => [f.path, f.content]))
   const symbols: OverlaySymbol[] = []
   const skipped: string[] = []
+  const unparsed: Record<string, string> = Object.create(null)
   const stale: string[] = []
   let parsed = 0
   for (const p of [...patches].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))) {
@@ -182,8 +189,19 @@ export async function overlaySymbols(
     parsed += content.length
     if (parsed > OVERLAY_MAX_PARSED) throw new OverlayError(`the files the overlay changes are over ${OVERLAY_MAX_PARSED / (1024 * 1024)} MiB of source to read: leave some out`)
     const lines = content.split('\n')
-    const { symbols: found } = await extractStructure(language, content, p.path, { edges: false })
-    for (const s of found) symbols.push({ ...s, path: p.path, snippet: [...lines.slice(s.startLine - 1, Math.min(s.endLine, s.startLine + 7)).join('\n')].slice(0, 400).join('') })
+    let found: ExtractionResult
+    try {
+      found = await extractStructure(language, content, p.path, { edges: false, lane: 'overlay', caller: options.caller })
+    } catch (err) {
+      if (!(err instanceof IsolatedUnavailable)) throw err
+      found = { imports: [], symbols: [], sites: [], skipped: err.reason }
+    }
+    if (found.skipped) {
+      skipped.push(p.path)
+      unparsed[p.path] = found.skipped
+      continue
+    }
+    for (const s of found.symbols) symbols.push({ ...s, path: p.path, snippet: [...lines.slice(s.startLine - 1, Math.min(s.endLine, s.startLine + 7)).join('\n')].slice(0, 400).join('') })
   }
-  return { symbols, changed: new Set(patches.map((p) => p.path)), skipped, stale }
+  return { symbols, changed: new Set(patches.map((p) => p.path).filter((path) => !Object.hasOwn(unparsed, path))), skipped, unparsed, stale }
 }

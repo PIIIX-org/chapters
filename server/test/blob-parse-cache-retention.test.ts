@@ -25,6 +25,9 @@ const CASES: Array<{ language: string; path: string; source: (i: number) => stri
   { language: 'rust', path: 'a.rs', source: (i) => `${PAD('// c', i)}use crate::mod${i}::helper_one;\npub fn name_number${i}() { helper_one(); self.member_call${i}() }\n` },
   { language: 'java', path: 'A.java', source: (i) => `${PAD('// c', i)}import mod${i}.HelperOne;\nclass NameNumber${i} { void m() { HelperOne.run(); this.memberCall${i}(); } }\n` },
   { language: 'typescript', path: 'a.ts', source: (i) => `${PAD('// c', i)}import { helperOne } from './mod${i}'\nexport function nameNumber${i}() { helperOne(); this.memberCall${i}() }\n` },
+  // Swift is parsed in a child process and arrives over IPC as JSON: its strings are already this process's own,
+  // never views into the 0.9 MB source (which stays in the child), and `parsed` detaches them like the others.
+  { language: 'swift', path: 'A.swift', source: (i) => `${PAD('// c', i)}import Mod${i}\npublic func nameNumber${i}() { helperOne(); self.memberCall${i}() }\n` },
 ]
 const SOURCES = 25
 const SOURCE_BYTES = 800_000
