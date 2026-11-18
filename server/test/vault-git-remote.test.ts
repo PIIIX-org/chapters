@@ -32,7 +32,7 @@ import { config } from '../src/config.js'
 import { assetBlobId } from '../src/notes/store.js'
 import { GIT_QUOTAS, loadManifest, operationResults } from '../src/git-remote/metadata.js'
 import { assetGitPath, assetNameFromGitPath, type Manifest } from '../src/git-remote/tree.js'
-import { boundedGit, PACK_LIMITS, withGitBudget } from '../src/git-remote/pack.js'
+import { boundedGit, PACK_LIMITS, pkt, withGitBudget } from '../src/git-remote/pack.js'
 
 // setup-jobs imports the projector/atomic-write before test mocks; reload those modules
 // so the instrumentation observes real filesystem calls in the actual store path.
@@ -47,6 +47,9 @@ const boundary = vi.hoisted(() => ({
   beforeAssetRename: null as null | (() => Promise<void>),
   countRenders: false,
   renders: 0,
+  replyGate: null as Promise<void> | null,
+  replySeen: null as (() => void) | null,
+  afterReceipt: null as null | ((vaultId: string, path: string) => Promise<void>),
 }))
 vi.mock('../src/notes/projector.js', async (importOriginal) => {
   const real = await importOriginal<typeof NoteProjector>()
@@ -105,6 +108,7 @@ vi.mock('../src/git-remote/metadata.js', async (importOriginal) => {
         throw new Error('injected loss after proposal durability and before operation receipt')
       }
       await real.recordOperation(...args)
+      await boundary.afterReceipt?.(args[1], args[4])
       if (durability.enabled && args[1] === durability.vaultId && args[4] === '.assets/proof.txt' && args[5].status === 'applied') durability.events.push('receipt')
     },
   }
@@ -162,6 +166,10 @@ beforeAll(async () => {
     if (typeof marker === 'string') bodyAborted.add(marker)
   })
   app.addHook('onSend', async (req, reply, payload) => {
+    if (req.headers['x-git-response-proof'] === 'held') {
+      boundary.replySeen?.()
+      await boundary.replyGate
+    }
     if (req.url.endsWith('/git-receive-pack') && reply.statusCode >= 400 && typeof payload === 'string') gitErrors.push(payload)
     return payload
   })
@@ -812,6 +820,127 @@ describe('Git boundary regressions (#1087)', () => {
     }
     const available = await app.inject({ method: 'GET', url: `/git/vaults/${vaultId}/info/refs?service=git-receive-pack`, headers: { authorization: `Bearer ${token}` } })
     expect(available.statusCode, available.body).toBe(200)
+  }, 30_000)
+
+  it('bounds stalled real responses under the purge barrier and restores both admission slots at the work deadline', async () => {
+    // Snapshot native I/O polling before faking only the request's wall timers.
+    const nativeSleep = sleep
+    const waitNative = async (check: () => boolean) => {
+      const deadline = Date.now() + 10_000
+      while (!check()) {
+        if (Date.now() > deadline) throw new Error('timed out waiting for real request cleanup')
+        await nativeSleep(10)
+      }
+    }
+    const token = await mint({ name: 'response deadline proof', scope: 'account', access: 'read' })
+    for (const id of [vaultId, otherVaultId]) {
+      const prepared = await clone(token, id)
+      expect(prepared.ok, prepared.out).toBe(true)
+    }
+    const held: ClientRequest[] = []
+    const closed = new Set<string>()
+    const received = new Set<string>()
+    let seen = 0
+    let releaseGate!: () => void
+    boundary.replyGate = new Promise<void>(resolve => { releaseGate = resolve })
+    boundary.replySeen = () => { seen++ }
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let fakeClock = true
+    try {
+      for (const id of [vaultId, otherVaultId]) {
+        const request = httpRequest(`${baseUrl}/git/vaults/${id}/info/refs?service=git-upload-pack`, {
+          headers: { authorization: `Bearer ${token}`, 'x-git-response-proof': 'held' },
+        })
+        request.on('response', response => { received.add(id); response.resume() })
+        request.on('error', () => { closed.add(id) })
+        request.on('close', () => { closed.add(id) })
+        held.push(request)
+        request.end()
+      }
+      await waitNative(() => seen === 2)
+      const busy = await app.inject({ method: 'GET', url: `/git/vaults/${vaultId}/info/refs?service=git-upload-pack`, headers: { authorization: `Bearer ${token}` } })
+      expect(busy.statusCode).toBe(429)
+      await vi.advanceTimersByTimeAsync(PACK_LIMITS.workMilliseconds)
+      await waitNative(() => closed.size === 2)
+      expect(received.size).toBe(0)
+      vi.useRealTimers()
+      fakeClock = false
+      // Drain native socket-close callbacks before probing both reclaimed slots.
+      await new Promise<void>(resolve => setImmediate(resolve))
+      const available = await Promise.all([vaultId, otherVaultId].map(id =>
+        app.inject({ method: 'GET', url: `/git/vaults/${id}/info/refs?service=git-upload-pack`, headers: { authorization: `Bearer ${token}` } })))
+      for (const reply of available) expect(reply.statusCode, reply.body).toBe(200)
+    } finally {
+      if (fakeClock) vi.useRealTimers()
+      releaseGate()
+      boundary.replyGate = null
+      boundary.replySeen = null
+      held.forEach(request => request.destroy())
+    }
+    // A timeout closes transport, not an in-flight store transaction. Keep its
+    // barrier/slot until that operation settles, then refuse every later effect.
+    const f = await pushFixture()
+    const oldHead = (await git(['rev-parse', 'HEAD'], f.dir)).out.trim()
+    await editFile(f.dir, 'docs/a.md', 'Middle line.', 'Agent before timeout.')
+    await editFile(f.dir, 'docs/b.md', 'Another first.', 'Must never be applied.')
+    const incoming = await commit(f.dir)
+    // Use a real Git-produced pack in one HTTP attempt: this isolates the
+    // timed-out request from any transport retries made by a Git CLI client.
+    const pack = await boundedGit(['pack-objects', '--stdout', '--revs'], f.dir, Buffer.from(`${incoming}\n^${oldHead}\n`))
+    const body = Buffer.concat([pkt(`${oldHead} ${incoming} refs/heads/main\0report-status object-format=sha1\n`), Buffer.from('0000'), pack])
+    let paused = false
+    let releaseWrite!: () => void
+    const writeGate = new Promise<void>(resolve => { releaseWrite = resolve })
+    boundary.afterReceipt = async (id, path) => {
+      if (id === f.id && path === 'docs/a.md') {
+        paused = true
+        await writeGate
+      }
+    }
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    fakeClock = true
+    let queued: Promise<unknown> | undefined
+    let writing: ClientRequest | undefined
+    try {
+      let ended = false
+      let acknowledged = false
+      writing = httpRequest(`${baseUrl}/git/vaults/${f.id}/git-receive-pack`, {
+        method: 'POST', headers: { authorization: `Bearer ${f.token}`,
+          'content-type': 'application/x-git-receive-pack-request', 'content-length': body.length },
+      })
+      writing.on('response', response => { acknowledged = true; response.resume() })
+      writing.on('error', () => { ended = true })
+      writing.on('close', () => { ended = true })
+      writing.end(body)
+      await waitNative(() => paused)
+      await vi.advanceTimersByTimeAsync(PACK_LIMITS.workMilliseconds)
+      await waitNative(() => ended)
+      expect(acknowledged).toBe(false)
+      vi.useRealTimers()
+      fakeClock = false
+      let finished = false
+      const marker = 'waiting-for-timed-out-writer'
+      const pending = app.inject({ method: 'GET', url: `/git/vaults/${f.id}/info/refs?service=git-receive-pack`,
+        headers: { authorization: `Bearer ${f.token}`, 'x-git-body-proof': marker } }).then(reply => { finished = true; return reply })
+      queued = pending
+      await waitNative(() => bodySeen.has(marker))
+      expect(finished).toBe(false)
+      const busy = await app.inject({ method: 'GET', url: `/git/vaults/${f.id}/info/refs?service=git-receive-pack`, headers: { authorization: `Bearer ${f.token}` } })
+      expect(busy.statusCode).toBe(429)
+      releaseWrite()
+      expect((await pending).statusCode).toBe(200)
+      expect((await git(['rev-parse', 'refs/heads/main'], vaultRemoteDir(f.id))).out.trim()).toBe(oldHead)
+      expect((await readLiveNote(f.id, 'docs/a'))!.body).toContain('Agent before timeout.')
+      expect((await readLiveNote(f.id, 'docs/b'))!.body).toBe('Another first.\nAnother last.\n')
+      const receipts = await operationResults(f.id, await connectionFor(f.id), incoming)
+      expect(receipts.map(entry => entry.path)).toEqual(['docs/a.md'])
+    } finally {
+      releaseWrite()
+      writing?.destroy()
+      boundary.afterReceipt = null
+      if (fakeClock) vi.useRealTimers()
+      await queued
+    }
   }, 30_000)
 
   it('refuses noncanonical UUID aliases rather than creating a differently fenced repository', async () => {

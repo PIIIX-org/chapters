@@ -34,6 +34,12 @@ async function gitRequest<T>(req: FastifyRequest<{ Params: { vaultId: string } }
   if (!state) throw new GitPushError('Git request was not admitted')
   state.started = true
   clearTimeout(state.timer)
+  state.timer = setTimeout(() => {
+    state.aborted = true
+    // The request body may already be complete; close the socket so a stalled
+    // reply cannot hold admission and the purge barrier indefinitely.
+    req.raw.socket.destroy()
+  }, PACK_LIMITS.workMilliseconds)
   try {
     return await withGitBudget(() => withVaultGit(req.params.vaultId, async () => {
       if (state.aborted) throw new GitPushError('Git request was aborted')
@@ -110,7 +116,9 @@ export function vaultGitRoutes(app: FastifyInstance) {
         service === 'git-receive-pack'
       await authorise(req as FastifyRequest<{ Params: { vaultId: string } }>, reply, Boolean(write), true)
     })
-    instance.addHook('onResponse', async req => { release(req) })
+    instance.addHook('onResponse', async req => {
+      if (!requests.get(req)?.started) release(req)
+    })
     instance.addHook('onRequestAbort', async req => {
       const state = requests.get(req)
       if (!state) return
@@ -150,8 +158,9 @@ export function vaultGitRoutes(app: FastifyInstance) {
         const allowed = await authorise(req, reply, true)
         if (!allowed) return reply
         const checkWrite = async (): Promise<McpAuth> => {
+          if (requests.get(req)?.aborted) throw new GitPushError('Git request was aborted')
           const latest = await authorise(req, undefined, true)
-          if (!latest) throw new GitPushError('write authorisation changed')
+          if (!latest || requests.get(req)?.aborted) throw new GitPushError('write authorisation changed or request aborted')
           return latest.auth
         }
         const body = await receivePush(allowed.vaultId, requestBody(req, PACK_LIMITS.request), checkWrite)

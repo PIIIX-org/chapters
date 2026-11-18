@@ -3423,7 +3423,11 @@ files only: no symlinks, executable bits, submodules or imported Git config.
 Admission reserves at most two Git requests globally **before body
 parsing**, including requests queued on a vault or sending a response.
 Authentication/body arrival has a 15 s deadline; admitted work shares a
-60 s monotonic budget. Git children have at most 15 s, bounded output,
+60 s monotonic budget and wall deadline, including queued/stalled replies.
+Expiry closes the transport but keeps admission and the purge barrier until
+owned store/ref work settles; later operations refuse the aborted request.
+Already-applied operations remain durable, and failed ACK delivery is not a
+claim that the ref or notes stayed unchanged. Git children have at most 15 s, bounded output,
 one pack thread, bounded delta/window caches and no hooks, global config,
 server secrets or network protocols. Timeout kills the subprocess group.
 Store imports also stop between operations after at most 30 s. A failed
