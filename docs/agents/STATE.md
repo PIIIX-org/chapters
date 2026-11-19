@@ -6,14 +6,14 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
 <!-- Built by .github/scripts/state-md.mjs from GitHub data (workflow .github/workflows/state-md.yml). Edits between these markers are overwritten. -->
 - **Last promotion to `prod`**: #920 Promote: phase 2 step B (prod ← d3b210e: ADR-003 S2a-2/S2b/S3/S6, compaction, whole-body… (merged 2026-10-23, `d3b210e`).
 - **Checks on `dev`**: CI (latest push run) success; nightly lab (full tier) **failure**; bench-gate (all suites) **failure**. History: [CI](https://github.com/PIIIX-org/chapters/actions/workflows/ci.yml?query=branch%3Adev), [lab](https://github.com/PIIIX-org/chapters/actions/workflows/elara-lab.yml?query=branch%3Adev+event%3Aschedule).
-- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/7, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 83/101, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/37, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 4/52, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/47.
-- **Open issues**: [185](https://github.com/PIIIX-org/chapters/issues): P0 17, P1 87, P2 61, no priority 20; `bug` 59, `security` 13, `decision` 2, `deferred` 3.
+- **Phases** (milestones, closed of total): [Phase 0: owner actions](https://github.com/PIIIX-org/chapters/milestone/1) 4/7, [Phase 1: guardrails and security](https://github.com/PIIIX-org/chapters/milestone/2) 25/25, [Phase 2: stop data loss](https://github.com/PIIIX-org/chapters/milestone/3) 52/52, [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4) 85/101, [Phase 4: knowledge truth and memory](https://github.com/PIIIX-org/chapters/milestone/5) 0/37, [Phase 5: everything else](https://github.com/PIIIX-org/chapters/milestone/6) 4/52, [Phase 6: rendered views and data attachments](https://github.com/PIIIX-org/chapters/milestone/7) 1/6, [Phase 7: new capabilities](https://github.com/PIIIX-org/chapters/milestone/8) 0/8, [Phase 8: UI and UX](https://github.com/PIIIX-org/chapters/milestone/9) 0/47.
+- **Open issues**: [183](https://github.com/PIIIX-org/chapters/issues): P0 17, P1 86, P2 61, no priority 19; `bug` 59, `security` 13, `decision` 2, `deferred` 3.
 - **Owner actions** (label `owner`):
   - #589 [fix 192] Revoke the 5 GitHub tokens exposed before #383 (P0)
   - #664 Production deploys on the push to prod, before CI publishes the gated image (#590 is… (P1)
   - #1062 Owner: activate the agent trial (API key and model) so real-agent exact-answer numbers… (P2)
   - #636 Production uptime
-- **In progress: [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4)** (18 open, owner actions excluded):
+- **In progress: [Phase 3: the premise (fewer tokens, exact answers)](https://github.com/PIIIX-org/chapters/milestone/4)** (16 open, owner actions excluded):
   - #423 [fix 20] Very large results become a pageable, greppable handle instead of inline text (P0)
   - #471 [fix 69] Git awareness: indexed commit SHA everywhere, changed_since(commit or date,… (P0)
   - #1060 [phase 3] Query router: identifiers, paths and structural questions answered by exact… (P0)
@@ -25,8 +25,8 @@ Resume anchor. The block between the `state:generated` markers is rebuilt from G
   - #674 [phase 3] Elara tells the agent when not to use it (P1)
   - #675 [phase 3] One budgeted call for compound questions: where, who calls it, why, is it still… (P1)
   - #676 [phase 3] Answer for the code the agent is editing: branch, ref and working-tree overlay (P1)
-  - #677 [phase 3] Vault as a git remote: clone, grep locally, push back (P1)
-  - … and 6 more: https://github.com/PIIIX-org/chapters/milestone/4
+  - #680 [phase 3] Caching contract: every cache key carries the caller's scope and the content… (P1)
+  - … and 4 more: https://github.com/PIIIX-org/chapters/milestone/4
 - **Open bugs** (label `bug`):
   - #1146 [phase 3] Parse deadline for every grammar: a hostile file can stall the event loop (P0)
   - #713 [ui] Landing page says "No notes" to a user with notes (P1)
